@@ -27,6 +27,7 @@ interface ChatThreadProps {
   readonly canRetrySend: boolean;
   readonly policyBusy: boolean;
   readonly attachments: readonly ChatAttachmentDraft[];
+  readonly attachmentsEnabled?: boolean;
   readonly attachmentNotice?: string | null | undefined;
   readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
   readonly onAttachFiles: (files: readonly File[]) => void;
@@ -52,6 +53,7 @@ export function ChatThread({
   canRetrySend,
   policyBusy,
   attachments,
+  attachmentsEnabled,
   attachmentNotice,
   loadMedia,
   onAttachFiles,
@@ -232,6 +234,7 @@ export function ChatThread({
         busy={busy === 'send'}
         forbidden={forbidden}
         attachments={attachments}
+        attachmentsEnabled={attachmentsEnabled}
         attachmentNotice={attachmentNotice}
         onAttachFiles={onAttachFiles}
         onRemoveAttachment={onRemoveAttachment}

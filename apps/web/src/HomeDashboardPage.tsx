@@ -340,12 +340,14 @@ export type MainNavigationSection = 'home' | 'games' | 'chats' | 'notifications'
 
 interface MainBottomNavigationProps {
   readonly readOnly?: boolean;
+  readonly chatsAvailable?: boolean;
   readonly active?: MainNavigationSection;
   readonly gamesDestination?: 'bookings' | 'games';
 }
 
 export function MainBottomNavigation({
   readOnly = false,
+  chatsAvailable = !readOnly,
   active,
   gamesDestination = 'bookings',
 }: MainBottomNavigationProps): React.JSX.Element {
@@ -372,21 +374,23 @@ export function MainBottomNavigation({
               <BottomNavIcon name="create" />
             </span>
           </a>
-          <a
-            href="/chats"
-            aria-current={active === 'chats' || active === 'notifications' ? 'page' : undefined}
-            aria-label={
-              chatsUnreadCount > 0 ? `Чаты, непрочитанных сообщений: ${chatsUnreadCount}` : 'Чаты'
-            }
-          >
-            <BottomNavIcon name="chat" />
-            {chatsUnreadCount > 0 ? (
-              <span className="fh-nav-badge" aria-hidden="true">
-                {chatsUnreadCount > 99 ? '99+' : chatsUnreadCount}
-              </span>
-            ) : null}
-          </a>
         </>
+      ) : null}
+      {chatsAvailable ? (
+        <a
+          href="/chats"
+          aria-current={active === 'chats' || active === 'notifications' ? 'page' : undefined}
+          aria-label={
+            chatsUnreadCount > 0 ? `Чаты, непрочитанных сообщений: ${chatsUnreadCount}` : 'Чаты'
+          }
+        >
+          <BottomNavIcon name="chat" />
+          {chatsUnreadCount > 0 ? (
+            <span className="fh-nav-badge" aria-hidden="true">
+              {chatsUnreadCount > 99 ? '99+' : chatsUnreadCount}
+            </span>
+          ) : null}
+        </a>
       ) : null}
       <a
         href="/profile"

@@ -70,9 +70,10 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       read = CabinetRead(resource: resource, id: call.getString("resourceId"), query: query)
     }
     let notification = operation == .notification ? NotificationCommand(resource:call.getString("resource") ?? "",id:call.getString("resourceId")) : nil
+    let messaging = operation == .messaging ? MessagingCommand(resource: call.getString("resource") ?? "", id: call.getString("resourceId")) : nil
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"), read: read, notification: notification)
+      headers: headers, body: call.getString("body"), read: read, notification: notification, messaging: messaging)
     Task {
       do {
         let response = try await transport.request(request)

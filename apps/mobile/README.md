@@ -200,10 +200,31 @@ result. History and public games retain their existing query contracts. There is
 read-job POST, arbitrary URL fetch, browser-cookie fallback or new backend endpoint.
 
 Home, upcoming bookings, history, public games, own profile/subscriptions and locations are
-available for viewing. Settings are disabled without save callbacks; game/payment/chat commands,
-friends and notifications are not connected yet. Unsupported links show an explicit unavailable
+available for viewing. Settings are disabled without save callbacks; game/payment commands and
+friends are not connected yet. Unsupported links show an explicit unavailable
 screen with navigation back. This is an implementation stage toward the full cabinet, not a
 permanent reduction of the mobile product.
+
+The existing DIRECT/GAME text-chat consumer adds `/chats` and `/chats/{conversationUuid}`.
+It reuses the Web list/thread/composer and the same native session. Native GETs allow only
+`conversations` (`limit <= 100`) and `{uuid}/messages` (`afterSequence`, `limit <= 100`).
+Named native commands allow text send, read cursor, bounded notification policy, and an empty-body
+realtime ticket. Swift reconstructs each URL/method, validates bodies/headers and rejects all other
+chat/media/provider operations. The read-only navigation can show Chats without enabling CREATE.
+GAME-only users do not need the direct-create permission to load their authorized conversations.
+
+An unconfirmed message retains its `clientMessageId`/idempotency key in the current mounted thread.
+HTTP reconciliation checks for that ID before enabling/repeating the same command. There is no
+background/offline send queue and no automatic resend after reconnect or a new login. Realtime
+starts only after initial history; tickets go in the first frame, fresh tickets are obtained on
+reconnect, and HTTP sequence recovery/polling remains active. Logout/account changes discard late
+results, stop sockets/polling and clear the shared unread badge. Read cursors advance only for a
+visible thread after history loads. Unread totals cover the existing bounded conversation list.
+
+This increment does not create new personal/game conversations, change membership, send or fetch
+attachments, or enable community/tournament writes. Existing media is explicitly unavailable on
+iOS; it never falls back to a protected browser fetch. Server messaging gates remain authoritative.
+Signing, provider/device acceptance and full B07 closure remain separate requirements.
 
 Private reads require an active native credential. Session generations discard obsolete UI
 responses; logout and the next authentication wait for pending SDK reads/refreshes. Final 401s

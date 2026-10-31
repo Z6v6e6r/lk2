@@ -5,6 +5,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IOSAuthApp } from './IOSAuthApp.js';
 import type { IOSSessionPlugin } from './session.js';
+import { chatFixture } from './testing/chat-fixtures.js';
+import { getChatsUnreadCount } from '../../../web/src/chats-unread.js';
 import {
   fixtureReply,
   homeDashboard,
@@ -56,6 +58,26 @@ afterEach(() => {
 });
 
 describe('iOS cabinet with the real shared screens and one native session', () => {
+  it('opens existing chats without direct-create permission and clears unread on logout', async () => {
+    const fixture = chatFixture();
+    const request = vi.fn<IOSSessionPlugin['request']>(
+      async (input) => await Promise.resolve(fixture.reply(input)),
+    );
+    const session = syntheticSession(request);
+    await session.restore();
+    render(<IOSAuthApp session={session} />);
+    await screen.findByRole('main', { name: 'Главная' });
+    const link = await screen.findByRole('link', { name: 'Чаты, непрочитанных сообщений: 5' });
+    fireEvent.click(link);
+    await screen.findByRole('heading', { name: 'Чаты' });
+    await screen.findByText('Тестовая игра');
+    expect(screen.queryByRole('link', { name: 'Создать игру' })).toBeNull();
+    fireEvent.click(screen.getByRole('link', { name: 'Профиль' }));
+    await screen.findByRole('heading', { name: 'Анна Петрова' });
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти из аккаунта' }));
+    await screen.findByLabelText('Номер телефона');
+    expect(getChatsUnreadCount()).toBe(0);
+  });
   it('restores home, navigates profile/bookings/games/location, and logs out without browser or provider commands', async () => {
     let markDashboardRequested!: () => void;
     const dashboardRequested = new Promise<void>((resolve) => {
@@ -79,9 +101,9 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     await screen.findByRole('main', { name: 'Главная' });
     const nav = screen.getByRole('navigation', { name: 'Основная навигация' });
     expect(nav).toBeInTheDocument();
-    expect(within(nav).getAllByRole('link')).toHaveLength(3);
+    expect(within(nav).getAllByRole('link')).toHaveLength(4);
     expect(screen.queryByRole('link', { name: 'Создать игру' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Чаты' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Чаты' })).toHaveAttribute('href', '/chats');
     fireEvent.click(within(nav).getByRole('link', { name: 'Профиль' }));
     // Home and Profile share the name heading; await a region unique to the destination.
     const subscriptions = await screen.findByRole('region', { name: 'Подписки и абонементы' });

@@ -2,6 +2,7 @@ import { registerPlugin } from '@capacitor/core';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type { AuthenticatedSession, UserContext } from '@phub/api-sdk';
 import { cabinetReadRequest } from './cabinet-routes.js';
+import { messagingRequest } from './messaging-routes.js';
 
 export interface IOSConfiguration {
   readonly apiBaseUrl: string;
@@ -12,7 +13,14 @@ export interface IOSConfiguration {
 
 interface NativeRequest {
   readonly operation:
-    'challenge' | 'verify' | 'refresh' | 'logout' | 'context' | 'read' | 'notification';
+    | 'challenge'
+    | 'verify'
+    | 'refresh'
+    | 'logout'
+    | 'context'
+    | 'read'
+    | 'notification'
+    | 'messaging';
   readonly challengeId?: string;
   readonly resource?: string;
   readonly resourceId?: string;
@@ -48,7 +56,10 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
     if (read) operation = 'read';
-    else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
+    else if (path.startsWith('/conversations/') || path === '/messaging/realtime-ticket') {
+      operation = 'messaging';
+      notification = messagingRequest(path, method, init);
+    } else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
     else if (path === '/auth/session/refresh' && method === 'POST') operation = 'refresh';
     else if (path === '/auth/session' && method === 'DELETE') operation = 'logout';
     else if (path === '/context' && method === 'GET') operation = 'context';
