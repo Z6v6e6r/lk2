@@ -244,7 +244,7 @@ describe('closed migration custody validators', () => {
         filename,
         checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
       }));
-    expect(currentPackage).toHaveLength(frozenLedger.length + 8);
+    expect(currentPackage).toHaveLength(frozenLedger.length + 9);
     expect(
       currentPackage
         .filter((row) => !frozenLedger.some((approved) => approved.filename === row.filename))
