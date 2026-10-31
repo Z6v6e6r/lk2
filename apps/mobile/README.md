@@ -165,8 +165,12 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 This uses local ad-hoc simulator signing; it does not use distribution certificates or an
 Apple Developer account. The synthetic Keychain test creates and removes only a unique test
-namespace. Current automatic Linux CI covers JS/source checks; Swift/simulator results are
-separate **LOCAL** evidence. The manually triggered iOS workflow is still a signing placeholder.
+namespace. Automatic Linux CI covers JS/source checks. The path-filtered iOS workflow also runs
+synthetic Swift package tests and an unsigned iOS Simulator build on macOS for relevant PRs.
+Its build has no API target, runtime push disabled and `CODE_SIGNING_ALLOWED=NO`. It does not
+boot a simulator or execute App-hosted Keychain tests. These remain separate device/simulator
+acceptance. The workflow refuses tag or manually requested signed releases with
+`IOS_SIGNED_RELEASE_NOT_IMPLEMENTED`; an unsigned build is not a signing or TestFlight result.
 
 ## Integration order and remaining scope
 
@@ -229,3 +233,30 @@ Commit Swift, storyboards, asset catalogs, Xcode metadata, and the resolved Swif
 lockfile. Capacitor's generated `public/`, `capacitor.config.json`, `config.xml`, DerivedData,
 archives, and user-specific Xcode state are ignored by `ios/.gitignore`.
 Never commit tokens, provisioning profiles, certificates, or generated application bundles.
+
+## iOS APNs signing readiness
+
+The App target uses `App.Debug.entitlements` (`aps-environment=development`) for Debug and
+`App.Release.entitlements` (`aps-environment=production`) for Release. AppTests has no application
+push entitlement. The capability supports visible alerts; no silent/background execution mode
+is added. Native registration remains disabled unless the approved build explicitly sets
+`PADLHUB_IOS_PUSH_ENABLED=true` for the whole prepare/build command. Capability source wiring
+alone neither enables runtime registration nor configures the backend provider.
+
+Before a separately authorized signed candidate, its owner must supply/confirm the existing Apple
+team and App ID `ru.padlhub.app`, APNs capability in that App ID, matching certificate/profile,
+release version/build number, public API origin/tenant and backend APNs topic/environment.
+Signing material belongs in the approved protected environment, never Git or a build-time web
+variable. A development-signed device build uses development APNs; a distribution/TestFlight build
+must contain production APNs. Custom export/signing must not silently change this alignment.
+
+After an authorized archive/export, inspect the **final signed app**, not only these source files:
+`codesign -d --entitlements :- <App.app>` and `security cms -D -i <App.app>/embedded.mobileprovision`.
+Compare the final `aps-environment`, application/team identity and profile capability; record the
+source SHA, artifact hash, bundle version/build and signature identity without publishing profile
+contents or credentials. A mismatched/missing entitlement is a release stop. Then verify on an
+approved physical device: installation/upgrade, token registration/rotation, foreground,
+background and cold-start alert receipt, account switch/logout/revocation and opt-out behavior.
+Provider acceptance and device receipt are distinct evidence. No unsigned simulator result closes
+either. Archive/export, credential installation, provider sends, TestFlight and store publication
+require their own exact authority; this source workflow performs none of them.
