@@ -117,7 +117,9 @@ final class PadlHubBridgeViewController: CAPBridgeViewController {
   override func viewDidLoad() {
     // CAPBridgeViewController's super implementation performs the first web load.
     // Do not call it until the content blocker is installed. Failure stays blank.
-    let rules = #"[{"trigger":{"url-filter":"^(https?|wss?)://"},"action":{"type":"block"}}]"#
+    // WebKit content filters accept a strict regex subset, without alternation.
+    // Keep each network scheme literal so compilation cannot reject a JS-only operator.
+    let rules = #"[{"trigger":{"url-filter":"^http://"},"action":{"type":"block"}},{"trigger":{"url-filter":"^https://"},"action":{"type":"block"}},{"trigger":{"url-filter":"^ws://"},"action":{"type":"block"}},{"trigger":{"url-filter":"^wss://"},"action":{"type":"block"}}]"#
     WKContentRuleListStore.default().compileContentRuleList(
       forIdentifier: "padlhub-b07-test-egress-deny", encodedContentRuleList: rules
     ) { [weak self] list, error in

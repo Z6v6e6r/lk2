@@ -53,7 +53,10 @@ final class PadlHubDirectIntegrationTests: XCTestCase {
     while !controller.directIntegrationEgressReady && Date() < deadline {
       try await Task.sleep(nanoseconds: 50_000_000)
     }
-    XCTAssertTrue(controller.directIntegrationEgressReady, "No web load is allowed without the egress gate")
+    guard controller.directIntegrationEgressReady else {
+      XCTFail("No web load is allowed without the egress gate")
+      throw NSError(domain: "B07NativeAcceptance", code: 2)
+    }
     let plugin = try XCTUnwrap(controller.bridge?.plugin(withName: "PadlHubSession") as? PadlHubSessionPlugin)
     XCTAssertEqual(Set(plugin.pluginMethods.map(\.name)), ["configuration", "request"])
     // Clear the previous document's timers before replacing its synthetic transport.
