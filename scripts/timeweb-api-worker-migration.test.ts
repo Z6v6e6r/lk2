@@ -244,7 +244,7 @@ describe('closed migration custody validators', () => {
         filename,
         checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
       }));
-    expect(currentPackage).toHaveLength(frozenLedger.length + 6);
+    expect(currentPackage).toHaveLength(frozenLedger.length + 7);
     expect(
       currentPackage
         .filter((row) => !frozenLedger.some((approved) => approved.filename === row.filename))
@@ -256,6 +256,7 @@ describe('closed migration custody validators', () => {
       '0102_location_recommendation_photos.sql',
       '0103_game_start_notification_scenarios.sql',
       '0104_identity_external_subject_link_commands.sql',
+      '0105_game_create_location_bindings.sql',
     ]); // gitleaks:allow - public migration filenames, not credentials
     expect(() => validateApiWorkerLedger(currentPackage, currentPackage)).toThrow(
       'API_WORKER_LEDGER',

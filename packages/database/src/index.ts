@@ -93,6 +93,7 @@ export type {
   BookedOperationAdmissionTargetRepository,
   BookedOperationCreateAdmissionTargetRepository,
   BookedOperationCreateDraftTarget,
+  BookedOperationCreateLocationTargetRepository,
 } from './booked-operation-admission-target-repository.js';
 
 export type {

@@ -74,6 +74,40 @@ export interface LegacyGamesMongoAdapterOptions {
   }) => void;
 }
 
+/** Private Mongo evidence; deliberately separate from public LegacyGameSourceSnapshot. */
+export interface LegacyCreateLocationEvidence {
+  readonly gameAliases: readonly string[];
+  readonly stationAliases: readonly string[];
+  readonly courtAliases: readonly string[];
+  readonly studioId: string;
+  readonly roomId: string;
+  readonly sourceUpdatedAt: string;
+}
+
+export function parseLegacyCreateLocationEvidence(row: unknown): LegacyCreateLocationEvidence {
+  if (!row || typeof row !== 'object' || Array.isArray(row))
+    throw new Error('CREATE_LOCATION_SOURCE_INVALID');
+  const value = row as RawLegacyGame;
+  const id = value.id;
+  const studioId = value.booking?.studioId;
+  const roomId = value.booking?.roomId;
+  const validId = (input: unknown): input is string =>
+    typeof input === 'string' &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input) &&
+    !/[\r\n]/.test(input);
+  const sourceUpdatedAt = isoInstant(value.updatedAt);
+  if (!validId(id) || !validId(studioId) || !validId(roomId) || !sourceUpdatedAt)
+    throw new Error('CREATE_LOCATION_SOURCE_INVALID');
+  return {
+    gameAliases: [id, pseudonymousId('game', id)],
+    stationAliases: [studioId, pseudonymousId('station', studioId)],
+    courtAliases: [roomId, pseudonymousId('court', roomId)],
+    studioId,
+    roomId,
+    sourceUpdatedAt,
+  };
+}
+
 export interface VivaExerciseOccurrence {
   readonly exerciseExternalId: string;
   readonly startsAt: string;
@@ -617,6 +651,56 @@ export class LegacyGamesMongoAdapter {
     const attempts = options.maxAttempts ?? 2;
     if (!Number.isInteger(attempts) || attempts < 1 || attempts > 2) {
       throw new Error('LEGACY_GAMES_MAX_ATTEMPTS_INVALID');
+    }
+  }
+
+  /** Exact historical source rows, including archived/cancelled games. No participants or cache. */
+  public async readCreateLocationEvidence(
+    externalIds: readonly string[],
+  ): Promise<readonly LegacyCreateLocationEvidence[]> {
+    if (externalIds.length === 0) return [];
+    if (
+      externalIds.length > 10_000 ||
+      externalIds.some(
+        (id) =>
+          typeof id !== 'string' ||
+          !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(id) ||
+          /[\r\n]/.test(id),
+      )
+    )
+      throw new Error('CREATE_LOCATION_SOURCE_INPUT_INVALID');
+    const client = new MongoClient(this.options.uri, {
+      serverSelectionTimeoutMS: 5_000,
+      connectTimeoutMS: 5_000,
+      socketTimeoutMS: 5_000,
+      maxPoolSize: 1,
+      retryReads: false,
+      readPreference: 'primary',
+      readConcern: { level: 'majority' },
+    });
+    try {
+      await client.connect();
+      const rows = await client
+        .db(this.options.dbName ?? 'games')
+        .collection(this.options.collectionName ?? 'lk_games')
+        .find(
+          { id: { $in: [...new Set(externalIds)] } },
+          {
+            projection: { _id: 0, id: 1, updatedAt: 1, 'booking.studioId': 1, 'booking.roomId': 1 },
+            maxTimeMS: 5_000,
+          },
+        )
+        .limit(10_001)
+        .toArray();
+      if (rows.length > 10_000) throw new Error('CREATE_LOCATION_SOURCE_LIMIT');
+      const evidence = rows.map(parseLegacyCreateLocationEvidence);
+      if (new Set(evidence.map((row) => row.gameAliases[0])).size !== evidence.length)
+        throw new Error('CREATE_LOCATION_SOURCE_AMBIGUOUS');
+      return evidence;
+    } catch {
+      throw new Error('CREATE_LOCATION_SOURCE_UNAVAILABLE');
+    } finally {
+      await client.close();
     }
   }
 

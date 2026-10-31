@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -11,7 +11,11 @@ import {
   NOTIFICATION_CATALOG_SQL,
   NOTIFICATION_NEW_TABLES,
 } from '../../../scripts/notification-migration-catalog.js';
-import { closedNewTables, verifyClosedCatalog } from './closed-single-migration.js';
+import {
+  assertClosedPackagedCatalog,
+  closedNewTables,
+  verifyClosedCatalog,
+} from './closed-single-migration.js';
 import {
   CLOSED_APPLICATION_CATALOG_SQL,
   CLOSED_APPLICATION_CATALOG_TABLES,
@@ -686,10 +690,24 @@ const rolePasswords = {
           } finally {
             client.release();
           }
-          await symlink(
-            resolve(root, 'packages/database/migrations'),
-            resolve(directory, 'migrations'),
+          // Rehearse the immutable 0103/0104 package, not the expanded current directory.
+          // The exact count + catalog digest below reject renamed, reordered or changed SQL.
+          const source = resolve(root, 'packages/database/migrations');
+          const packagedFiles = (await readdir(source))
+            .filter((filename) => filename.endsWith('.sql'))
+            .sort()
+            .slice(0, 108);
+          assertClosedPackagedCatalog(
+            await Promise.all(
+              packagedFiles.map(async (filename) => ({
+                filename,
+                checksum: hash(await readFile(resolve(source, filename))),
+              })),
+            ),
           );
+          await mkdir(resolve(directory, 'migrations'));
+          for (const filename of packagedFiles)
+            await symlink(resolve(source, filename), resolve(directory, 'migrations', filename));
           const roleUrl = new URL(adminUrl);
           roleUrl.username = 'phub_migrator';
           roleUrl.password = rolePasswords.phub_migrator;

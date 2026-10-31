@@ -252,6 +252,10 @@ const environmentSchema = z.object({
   ACTIVITY_HISTORY_PROVIDER_PAGE_SIZE: z.coerce.number().int().min(1).max(100).default(50),
   // The old LK can supply roster changes through either a safe local public clone or the staged
   // Mongo migration mirror. Source selection is process-only and is never exposed to clients.
+  // Dedicated CREATE identity evidence only. Never enables roster writes or CREATE commands.
+  GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED: booleanFromEnvironment,
+  GAME_CREATE_LOCATION_BINDING_TENANT_ID: z.string().uuid().optional(),
+  GAME_CREATE_LOCATION_BINDING_ADMIN_CREDENTIAL_FILE: z.string().min(1).optional(),
   LEGACY_GAMES_ROSTER_SYNC_ENABLED: booleanFromEnvironment,
   LEGACY_GAME_COMMAND_BRIDGE_ENABLED: booleanFromEnvironment,
   LEGACY_GAME_COMMAND_BRIDGE_TOKEN: z.string().min(32).optional(),
@@ -1727,6 +1731,16 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env): 
     },
     { profilePhotoStorage: true },
   );
+  if (
+    config.GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED &&
+    (!config.GAME_CREATE_LOCATION_BINDING_TENANT_ID ||
+      !config.LEGACY_GAMES_MONGODB_URI ||
+      !config.GAME_CREATE_LOCATION_BINDING_ADMIN_CREDENTIAL_FILE?.startsWith('/'))
+  ) {
+    throw new Error(
+      'CREATE location binding worker requires tenant, Mongo source and absolute dedicated credential reference',
+    );
+  }
   const { JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, ...workerConfig } = config;
   void JWT_ACCESS_SECRET;
   void JWT_REFRESH_SECRET;
