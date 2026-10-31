@@ -1,5 +1,13 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Android tournament checkpoint — 2026-11-01
+
+Android#530 retains the same#529 original request/key/generation custody. On rollback, preserve pending WebView storage and server journals; unavailable older clients may require manual recovery but must not replace original keys or reinterpret HTTP404 as no dispatch. Keep native tenant/origin and public credential isolation; no destructive storage cleanup or automatic retry migration.
+
+## LK2 tournament journal retention — 2026-11-01
+
+LK2#529 adds0109 command custody without a second roster. Disable new commands while retaining the journal, original owner key, actor/mapping pins, original JOIN link and canonical receipts. Do not drop0109, rewrite pending operations, erase browser custody on404/409 or create a new key to recover an ambiguous command. Disabled status may expose historical own receipts but cannot claim fresh membership. CUP's permanent adoption/legacy-writer fences remain required after rollback. No physical runtime rollback has been executed.
+
 ## Tournament and quarter rollback constraints — 2026-11-01
 
 For CUP#64 retain canonical localParticipationOperations and localParticipationTenantKey, including terminal receipts, actor identity and generation. Disable admission without removing permanent legacy-writer/restore guards. An old unguarded writer is not a safe rollback for adopted documents. Historical receipt readback must remain reachable after phone changes; it does not authorize transferring identity or deleting a later rejoin.

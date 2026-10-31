@@ -1,5 +1,15 @@
 # LK2 R1 — E2E и acceptance matrix
 
+## Android tournament checkpoint — 2026-11-01
+
+Android#5304406a3b2: LOCAL209regression/67focused/final41subset overlap and must not be added together; actualJava policy/engine12passed with a synthetic sender. Actual App synthetic list→detail→UNKNOWN→reload→same-key manualretry→original-generationLEAVE, strict native credential/path/query/body negatives and immediate outerlogout fence passed. Rendered390/1280 verified. FullCI41252711408 pending; host JVM and browser preview do not prove Android package, OS process-death, device or provider acceptance.
+
+## LK2 tournament consumer evidence — 2026-11-01
+
+LK2#529 `40d450c0`: LOCAL119passed covers actor/tenant identity, immutable replay, denied modes, disabled/unready status, original JOIN recovery after a later rejection, late logout/refresh, blocked browser storage, original-key offline/reload and manual retry. Synthetic rendered390/1280 UI and two generated-bundle cases passed. Seven physical PostgreSQL cases passed in fullCI41250686400: independent-pool same-key/lease race; lost ACK and receipt integrity; original LEAVE/rejoin; revoked identity/FK; historical JOIN candidate; actual non-superuser RLS denial; audit/outbox transaction rollback. The first full run still failed only the stale current-migration catalog assertion (111 versus113); test-only3041f0d9 corrects it and fullCI41251823614 SUCCESS with7622passed/126skipped; closed-migrationPG4/4 and required27physical+8guards zeroSKIP. The seven actual PostgreSQL cases are distinct from local skips. No provider/device acceptance.
+
+Training evidence reuse: #529 run41250686400 executed all11 `training-registration-postgres.test.ts` cases successfully. Git diff from#52826c5ceaa to#5293041f0d9 is empty for the training API/runtime/repository/test files,0108 migration and station worker files. This is physical CI evidence for those unchanged sources from the descendant run, not a green overall#528 run or resolution of#528 parent conflict.
+
 ## Tournament/quarter evidence delta — 2026-11-01
 
 CUP#64 `9d728414`: CI41246247607 SUCCESS. Six actual Mongo subcases executed: two-connection last-preimage winner with atomic roster/audit/receipt; lost response and stale retry; legacy writer losing to adoption; legacy writer winning before adoption; LEAVE/rejoin with immutable original generation; adopted restore refusal. LOCAL24 focused cases and11 compatibility scripts additionally cover actor/tenant/phone changes, forbidden target modes, capacity, bounded journal and legacy guards. Full typecheck/build/artifact checks passed. No LK2/native/provider journey is implied.

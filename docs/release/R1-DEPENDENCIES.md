@@ -1,5 +1,17 @@
 # LK2 R1 — зависимости и критический путь
 
+## Android tournament checkpoint — 2026-11-01
+
+CUP#64 → LK2#5293041f0d9 (fullCI/iOSgreen) → Android#5304406a3b2 (LOCAL/review;CIpending) → approved native build integration#526 and device acceptance. iOS tournament capability is a separate bounded consumer. Android changes overlap pending TRAINING in App/auth-gateway/MobileApp/native-api-fetch/AndroidSessionPolicy; only the approved integration owner resolves them. No existing integration request is bypassed.
+
+## Community message prerequisite — 2026-11-01
+
+Durable LK community message owner/commit receipt → stable authenticated message read contract → LK2 Web/native send and original-key recovery → realtime/unread/reconnect and device acceptance. Existing station membership packets do not supply this message owner. Tournament chat also needs a concrete canonical membership consumer; the database enum alone is insufficient.
+
+## Concrete consumer dependency — 2026-11-01
+
+CUP#64 `9d728414` → LK2#529 `40d450c0` Web/API/0109 consumer (LOCAL/review accepted; corrected-head fullCI41251823614 SUCCESS) → compatible native consumers → coordinated runtime and device acceptance. Migration0109 follows0108 and retains the operation journal on rollback. #529 is based on#528; it supplies no authority or workaround for the pending#528/#525 local integrations. Paid/provider tournament ownership remains a separate prerequisite.
+
 ## New bounded P0 paths — 2026-11-01
 
 1. CUP#61 preparation → #62 canonical gender → **#64 LOCAL_ONLY owner (CI41246247607 SUCCESS)** → LK2 authenticated tournament command/read/recovery consumer → native journey and tournament membership acceptance. Provider-backed and monetary paths require separate attributable owner/compensation contracts; do not downgrade them into LOCAL_ONLY.

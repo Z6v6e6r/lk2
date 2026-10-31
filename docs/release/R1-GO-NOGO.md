@@ -1,10 +1,18 @@
 # LK2 R1 — GO / NO-GO
 
+## Android tournament checkpoint — 2026-11-01
+
+**NO-GO remains.** Web/API#5293041f0d9 now has green fullCI41251823614/iOS41251823658 and tournamentPG7/7. Android#5304406a3b2 adds reviewed LOCAL source, fullCI41252711408 pending; package/device and iOS tournament journeys remain unaccepted. CREATE paired owner work is ongoing, monetary settlement and community-message commit contracts remain open. No new main merge, publication, migration, runtime activation or live action occurred.
+
+## Web tournament source decision — 2026-11-01
+
+**NO-GO.** LK2#529 `40d450c0` now implements the bounded LOCAL_ONLY Web/API consumer for CUP#64; LOCAL119tests, scoped checks, rendered UI, independent review and outgoing scan passed. Corrected-head3041f0d9 fullCI41251823614 and iOS41251823658 SUCCESS;7622passed/126skipped and tournamentPG7/7. First run41250686400 failed only the corrected current-inventory assertion. This removes the claim that the bounded consumer source is absent; native/paid/provider journeys and runtime acceptance remain open. Schema4 adoption source is already supplied by CUP#66; authenticated quarter intake and durable LK CREATE owner are in implementation, not completed evidence. No additional merge or live action occurred.
+
 ## Latest P0 decision — 2026-11-01
 
 **NO-GO remains.** CUP#64 `9d728414` passed full CI41246247607 including six real Mongo concurrency/recovery cases for LOCAL_ONLY tournament JOIN/LEAVE/read. CUP#65 `5812113c` completed reviewed LOCAL quarter-provenance checks; CI41247998877 SUCCESS (full build and physical quarter target/reserve/replay case). Both are Draft PRs, not merged or activated.
 
-Open source gates include LK2 tournament consumer, paid/provider tournament ownership and compensation, schema4 instance adoption, authenticated quarter producer and durable CREATE owner. Existing station/native/provider/device/store and release-custody gaps remain. New source evidence advances readiness without claiming full user-journey or production acceptance. Exact pending local #525/#528 merge approvals have not been executed.
+Open source gates include native tournament consumers, paid/provider tournament ownership and compensation, authenticated quarter producer and durable CREATE owner. Web/API#529 and schema4 adoption#66 have bounded candidates; their runtime adoption remains unverified. Existing station/native/provider/device/store and release-custody gaps remain. New source evidence advances readiness without claiming full user-journey or production acceptance. Exact pending local #525/#528 merge approvals have not been executed.
 
 CUP#66 `5eb4fe04` now has reviewed LOCAL source for schema4 instance adoption and sale/reconciliation serialization; CI41248667293 SUCCESS, including full typecheck/build/artifact gates and the actual Mongo reconciliation/race fixture. #65 `5812113c` fullCI41247998877 is SUCCESS, including the new physical quarter target/reserve/replay case and full build. These close bounded source prerequisites only. Authoritative provider adoption, LK CREATE producer/owner, complete tournament consumer and the remaining platform/runtime gates keep R1 at NO-GO.
 

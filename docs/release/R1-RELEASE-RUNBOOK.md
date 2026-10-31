@@ -1,5 +1,13 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## Android tournament checkpoint — 2026-11-01
+
+Android#5304406a3b2 is a source candidate only. Before native release require fullCI, authorized integration with#526 unsigned build lane, an APK/AAB tied to finalsource and physical install/upgrade/offline/account-switch acceptance. Public tournament reads remain exact first-party/tenant and credential-free; empty text/plain is accepted only for the existing bodyless retry. Do not dispatch the release-only Android workflow or widen generic native transport to bypass a missing package gate.
+
+## Tournament consumer activation prerequisites — 2026-11-01
+
+LK2#529 `40d450c0` pairs only with compatible CUP#64. Require clean fullCI and physical PostgreSQL evidence, integration with0108 before0109, exact owner identity configuration and separately approved migration/runtime activation. `TOURNAMENT_LOCAL_COMMANDS_ENABLED` remains false. Public status exposes command availability; unavailable status must not create new browser attempts. Unsupported/ambiguous attempts retain their original key; HTTP404/409 is not proof of no dispatch. Native/paid/provider/WAITLIST paths must remain unavailable until their own acceptance.
+
 ## Additional source prerequisites — 2026-11-01
 
 CUP#64 `9d728414` has green CI41246247607 including six physical Mongo cases. Keep TOURNAMENT_LOCAL_OPERATIONS_ENABLED disabled until a matched LK2 consumer and runtime acceptance are approved. Admit only explicit LOCAL_ONLY nonmonetary targets; the 512-entry permanent journal reserves terminal LEAVE capacity. Adopted targets reject legacy roster/payment/admin replacement and restore even with the flag off. This conservative metadata freeze is an activation constraint, not a verified production behavior.
