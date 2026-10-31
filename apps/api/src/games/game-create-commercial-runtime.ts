@@ -403,6 +403,11 @@ function isValidReservationResponse(value: unknown, expected?: CommercialBinding
   if (value.policyVersion !== expected.policyRef.policyVersion) return false;
   if (value.policyDigest !== expected.policyRef.policyDigest) return false;
   if (expected.decisionId !== undefined && value.decisionId !== expected.decisionId) return false;
+  if (
+    expected.usageRef?.reservationUnits !== undefined &&
+    value.reservedUnits !== expected.usageRef.reservationUnits
+  )
+    return false;
   return true;
 }
 

@@ -691,31 +691,63 @@ describe('commercial JOIN policy/usage binding refs (B2)', () => {
     usageRef: { usageRef: 'usage:abc-1', reservationUnits: 1 },
   };
 
-  it('forwards a valid binding to the durable attempt', async () => {
-    type BeginInput = Parameters<CommercialJoinRepositoryPort['beginPaidJoin']>[0];
-    const captured: BeginInput[] = [];
-    const { repository: repo } = repository({
-      beginPaidJoin(input) {
-        captured.push(input);
-        return resolved<CommercialJoinBeginResult>({
-          outcome: 'reserved',
-          operationId,
-          reservationId,
-          expiresAt: new Date(Date.now() + 900_000).toISOString(),
-          revision: 9,
-        });
-      },
-    });
-
-    const result = await executeCommercialJoin(
-      { ...envelope, bindingRefs },
-      dependencies(repo, ownerPort([{ status: 'PENDING' }]).owner),
-    );
-
-    expect(result.kind).toBe('accepted');
-    expect(captured).toHaveLength(1);
-    expect(captured[0]?.bindingRefs).toEqual(bindingRefs);
+  it('refuses bound dispatch over the legacy owner before any durable write', async () => {
+    const { calls, repository: repo } = repository();
+    const owner = ownerPort([{ status: 'PENDING' }]);
+    for (const refs of [bindingRefs, { policyRef: bindingRefs.policyRef }]) {
+      const result = await executeCommercialJoin(
+        { ...envelope, bindingRefs: refs },
+        dependencies(repo, owner.owner),
+      );
+      expect(result).toMatchObject({ kind: 'failed', code: 'GAME_RECONCILIATION_REQUIRED' });
+    }
+    expect(calls).toEqual([]);
+    expect(owner.calls).toEqual([]);
   });
+
+  it.each(['IN_PROGRESS', 'COMPLETED'] as const)(
+    'keeps a bound %s attempt unresolved despite a legacy local or owner receipt',
+    async (state) => {
+      const deps = receiptDependencies();
+      const originalRead = deps.repository.getPaidJoinAttempt;
+      deps.repository.getPaidJoinAttempt = async (input) => {
+        const attempt = await originalRead(input);
+        return (
+          attempt && {
+            ...attempt,
+            bindingRefs,
+            state,
+            receipt: {
+              provider: 'VIVA' as const,
+              status: 'CONFIRMED' as const,
+              confirmedAt: ownerReceipt.verifiedAt,
+            },
+            result: {
+              commandId: operationId,
+              gameId: envelope.gameId,
+              revision: 10,
+              viewerRelation: 'PARTICIPANT' as const,
+              reservationId,
+              committedAt: ownerReceipt.verifiedAt,
+            },
+          }
+        );
+      };
+      for (const read of [readCommercialJoinOperation, reconcileCommercialJoinOperation]) {
+        const result = await read(reconcileInput, deps);
+        expect(result?.operation).toMatchObject({
+          status: 'UNKNOWN',
+          commercial: { attemptState: 'UNKNOWN', reason: 'GAME_RECONCILIATION_REQUIRED' },
+        });
+        expect(result?.operation.id).toBe(operationId);
+        expect(JSON.stringify(result)).not.toContain(bindingRefs.usageRef.usageRef);
+      }
+      expect(deps.confirmPayment).not.toHaveBeenCalled();
+      expect(deps.owner.read).not.toHaveBeenCalled();
+      expect(deps.owner.execute).not.toHaveBeenCalled();
+      expect(deps.calls).not.toContain('failPaidJoinAttempt');
+    },
+  );
 
   it('rejects a malformed binding before any durable write or owner call', async () => {
     const { calls, repository: repo } = repository();
@@ -780,26 +812,6 @@ describe('commercial JOIN request fingerprint v2 (B2)', () => {
     ).toThrow();
   });
 
-  it('forwards the v2 fingerprint and the binding to the durable attempt', async () => {
-    const captured: BeginInput[] = [];
-    const { repository: repo } = repository({
-      beginPaidJoin(input) {
-        captured.push(input);
-        return resolved(reserved);
-      },
-    });
-
-    const result = await executeCommercialJoin(
-      boundEnvelope,
-      dependencies(repo, ownerPort([{ status: 'PENDING' }]).owner),
-    );
-
-    expect(result.kind).toBe('accepted');
-    expect(captured).toHaveLength(1);
-    expect(captured[0]?.bindingRefs).toEqual(bindingRefs);
-    expect(captured[0]?.requestHash).toBe(commercialJoinRequestHashV2(boundEnvelope));
-  });
-
   it('keeps the legacy v1 fingerprint for an unbound operation', async () => {
     const captured: BeginInput[] = [];
     const { repository: repo } = repository({
@@ -818,35 +830,18 @@ describe('commercial JOIN request fingerprint v2 (B2)', () => {
     expect(captured[0]?.bindingRefs).toBeUndefined();
   });
 
-  it('resolves a same-key retry after a republication as a conflict, never a second attempt', async () => {
-    const stored = new Map<string, string>();
-    const hashes: string[] = [];
-    const { repository: repo } = repository({
-      beginPaidJoin(input) {
-        hashes.push(input.requestHash);
-        const previous = stored.get(input.operationId);
-        if (previous !== undefined && previous !== input.requestHash)
-          return resolved<CommercialJoinBeginResult>({ outcome: 'idempotency_conflict' });
-        stored.set(input.operationId, input.requestHash);
-        return resolved(reserved);
-      },
-    });
+  it('refuses both same-key bound retries without dispatching over the legacy wire', async () => {
+    const repo = repository();
     const owner = ownerPort([{ status: 'PENDING' }]);
-
-    const first = await executeCommercialJoin(boundEnvelope, dependencies(repo, owner.owner));
-    const second = await executeCommercialJoin(
-      {
-        ...boundEnvelope,
-        bindingRefs: { ...bindingRefs, policyRef: { policyVersion: 4, policyDigest: digestB } },
-      },
-      dependencies(repo, owner.owner),
-    );
-
-    expect(first.kind).toBe('accepted');
-    expect(second).toMatchObject({ kind: 'failed', code: 'GAME_COMMERCIAL_ATTEMPT_CONFLICT' });
-    expect(hashes).toHaveLength(2);
-    expect(hashes[0]).not.toBe(hashes[1]);
-    // The second, differently-bound attempt is refused before any owner dispatch.
-    expect(owner.calls).toEqual(['execute']);
+    for (const policyRef of [bindingRefs.policyRef, { policyVersion: 4, policyDigest: digestB }]) {
+      await expect(
+        executeCommercialJoin(
+          { ...boundEnvelope, bindingRefs: { ...bindingRefs, policyRef } },
+          dependencies(repo.repository, owner.owner),
+        ),
+      ).resolves.toMatchObject({ kind: 'failed', code: 'GAME_RECONCILIATION_REQUIRED' });
+    }
+    expect(repo.calls).toEqual([]);
+    expect(owner.calls).toEqual([]);
   });
 });

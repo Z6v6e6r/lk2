@@ -707,6 +707,20 @@ describe('booked-operation CREATE owner policy/usage binding (B2)', () => {
     expect(fixture.metrics).toEqual(['reserve_failure']);
   });
 
+  it.each([undefined, 2])(
+    'keeps a reservation with echoed units %s unresolved',
+    async (reservedUnits) => {
+      const fixture = createTransport(() =>
+        Promise.resolve(boundReservationResponse({ reservedUnits })),
+      );
+      await expect(
+        fixture.client.reserve({ ...reserveInput({ quote: pricedQuote() }), bindingRefs }),
+      ).resolves.toEqual({ status: 'UNKNOWN' });
+      expect(fixture.calls).toHaveLength(1);
+      expect(fixture.metrics).toEqual(['reserve_failure']);
+    },
+  );
+
   it('rejects malformed binding refs before any owner call', async () => {
     const fixture = createTransport(() => Promise.resolve(reservationResponse()));
     await expect(
