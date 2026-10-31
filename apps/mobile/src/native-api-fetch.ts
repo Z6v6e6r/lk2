@@ -1,3 +1,4 @@
+import { nativeTournamentRequest } from './native-tournament-request.js';
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError } from '@phub/api-sdk';
 import type { MobileRuntimeConfig } from './runtime-config.js';
@@ -176,7 +177,18 @@ export function createNativeApiFetch(
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
     const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}/`;
     // Check before URL normalization, which would hide traversal or encoded delimiters.
-    if (!value.startsWith(root) || /[%#\\]|\.\./.test(value.split('?')[0] ?? '')) throw rejected();
+    const tournament = nativeTournamentRequest(
+      value,
+      init?.method ?? 'GET',
+      init?.body,
+      Object.fromEntries(new Headers(init?.headers).entries()),
+      config,
+    );
+    if (
+      (!value.startsWith(root) && tournament !== 'PUBLIC') ||
+      /[%#\\]|\.\./.test(value.split('?')[0] ?? '')
+    )
+      throw rejected();
     const url = new URL(value);
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();

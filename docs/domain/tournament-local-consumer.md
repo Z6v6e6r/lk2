@@ -62,7 +62,7 @@ starts, even if revocation is delayed or fails. Late session refresh cannot reop
 tournament gate. Authentication started during logout cannot reopen it after revocation;
 only a genuinely new accepted authentication outside logout can. Denied browser storage
 renders an unavailable state without HTTP or a command lacking durable custody. SDK mutations have one request and no
-automatic network/401 refresh retry. Native gateway explicitly refuses this capability.
+automatic network/401 refresh retry. The Android native bridge exposes the bounded surface below; iOS remains closed.
 
 Availability limitation: unsupported or pre-dispatch failures keep browser custody;
 HTTP404/409 alone never clears it. Such attempts can block another JOIN until supported
@@ -99,3 +99,36 @@ non-superuser/no-bypass role (the existing CI fixture pattern) to verify cross-t
 SELECT hiding and INSERT denial, then drops only that role and its grants. This new
 physical coverage is source-only until its CI execution is observed. Full CI, provider/runtime, actual user membership,
 physical-device/store and production acceptance remain separate evidence levels.
+
+## Android concrete consumer (stacked after #529)
+
+Android exposes a dated tournament directory and the existing detail/registration panel.
+It does not enable the mixed Event Catalog, TRAINING, iOS or a generic public fetch.
+JS and Java independently allow only the fixed configured PadlHub origin/tenant and:
+public tournament list/detail GET with exact calendar-valid dateFrom/dateTo (1–15 days,
+exclusive end), plus the existing authenticated participants/status/command/original-retry
+routes. Public discovery has no bearer/cookie/idempotency key. Dates use the existing
+Moscow-day helper; the backend retains the original authoritative feed date, never a date
+inferred from displayed startsAt. Only public UUIDs reach the client.
+
+JOIN/LEAVE use exact body fields, and LEAVE keeps originalJoinOperationId. Native commands
+require the stored authenticated session and caller's stable key. The bridge/engine do not
+automatically retry a mutation or refresh/replay it after401. Manual original retry keeps
+the original operation/key. Android's HTTP implementation otherwise adds a form content
+type to an empty POST; the concrete retry policy sets text/plain. The API accepts only
+undefined body or exact empty string with text/plain (optional charset=UTF-8), never
+nonempty/whitespace text, JSON or form data. No sender/engine or owner wire is changed.
+
+The Android directory reaches the existing custody controller: availability must succeed
+before a new command, unavailable storage/locks deny dispatch, ambiguity retains custody,
+relaunch reads without creating a command, and manual retry uses the same original operation.
+Tournament principal invalidates at the start of the outer native logout, before async
+booking/push cleanup. Existing page/account/lock/late-ACK fences remain in effect.
+
+Rollback removes native exposure while retaining backend journals and browser custody;
+never erase unresolved requests. Runtime flag/owner deployment/identity acceptance remain
+the #529 gates. This branch does not integrate pending #524/#526 TRAINING/unsigned-build
+work. Their shared App/auth/native-policy changes require the designated integration owner.
+The actual base Android workflow is dispatch/tag-only: no automatic unsigned build is
+claimed here. Host-JVM policy/engine and synthetic JS/UI results are LOCAL, not an APK,
+device, provider, store or production result. Full applicable CI remains required.
