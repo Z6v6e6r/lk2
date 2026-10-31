@@ -1,3 +1,5 @@
+import { registerTournamentLocalRoutes } from './tournaments/tournament-local-routes.js';
+import type { TournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';
 import { registerTrainingRegistrationRoutes } from './bookings/training-registration-routes.js';
 import type { TrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
 import type { ManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
@@ -409,6 +411,7 @@ export interface BuildAppOptions {
   >;
   readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
   readonly trainingRegistration?: TrainingRegistrationRuntime;
+  readonly tournamentLocal?: TournamentLocalRuntime;
   readonly gameManagedSelfLeave?: ManagedSelfLeaveRuntime;
   readonly gameCommercialJoin?: GameCommercialJoinOptions;
   /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
@@ -1217,6 +1220,10 @@ export async function buildApp(options: BuildAppOptions) {
     publicTenantHandlers: [resolvePublicTenant],
   });
   const bookingRecommendationAuthService = options.authService;
+  registerTournamentLocalRoutes(app as unknown as FastifyInstance, {
+    ...(options.tournamentLocal ? { runtime: options.tournamentLocal } : {}),
+    handlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
   registerTrainingRegistrationRoutes(app as unknown as FastifyInstance, {
     ...(options.trainingRegistration ? { runtime: options.trainingRegistration } : {}),
     handlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],

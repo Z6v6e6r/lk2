@@ -1,3 +1,4 @@
+import { TournamentRegistrationPanel } from './TournamentRegistrationPanel.js';
 import { MoreIcon } from './MoreIcon.js';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -72,7 +73,9 @@ function TournamentView({
   roster,
   rosterLoading,
   rosterError,
+  registration,
 }: {
+  readonly registration?: React.ReactNode;
   readonly tournament: PublicTournamentSummary;
   readonly roster: TournamentParticipantRoster | null;
   readonly rosterLoading: boolean;
@@ -247,11 +250,17 @@ function TournamentView({
         )}
       </section>
 
-      <footer className="tournament-detail__action">
-        <button type="button" disabled={tournament.status === 'FULL'}>
-          {tournament.status === 'FULL' ? 'Мест нет' : 'Записаться на турнир'}
-        </button>
-        <small>Запись будет подключена отдельным безопасным действием</small>
+      <footer
+        className={`tournament-detail__action${registration ? ' tournament-detail__action--registration' : ''}`}
+      >
+        {registration ?? (
+          <>
+            <button type="button" disabled={tournament.status === 'FULL'}>
+              {tournament.status === 'FULL' ? 'Мест нет' : 'Записаться на турнир'}
+            </button>
+            <small>Запись будет подключена отдельным безопасным действием</small>
+          </>
+        )}
       </footer>
     </main>
   );
@@ -260,9 +269,11 @@ function TournamentView({
 export function TournamentDetailPage({
   gateway,
   tournamentId,
+  principal,
 }: {
   readonly gateway: AuthGateway;
   readonly tournamentId: string | null;
+  readonly principal?: { tenantId: string; userId: string };
 }): React.JSX.Element {
   const [tournament, setTournament] = useState<PublicTournamentSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -317,6 +328,16 @@ export function TournamentDetailPage({
         roster={roster}
         rosterLoading={Boolean(gateway.getTournamentParticipants) && !roster && !rosterError}
         rosterError={rosterError}
+        registration={
+          principal && gateway.commandTournament ? (
+            <TournamentRegistrationPanel
+              key={`${principal.tenantId}:${principal.userId}:${tournament.id}`}
+              gateway={gateway}
+              principal={principal}
+              tournamentId={tournament.id}
+            />
+          ) : undefined
+        }
       />
     );
   }

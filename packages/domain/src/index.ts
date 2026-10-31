@@ -978,3 +978,5 @@ export async function assertManagedSelfLeaveAuthority(a: ManagedSelfLeaveAuthori
   )
     return selfLeaveInvalid();
 }
+
+export * from './tournament-local.js';

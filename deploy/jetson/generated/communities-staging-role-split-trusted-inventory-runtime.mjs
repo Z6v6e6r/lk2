@@ -5447,6 +5447,14 @@ var init_level_assessment = __esm({
   }
 });
 
+// ../../packages/domain/src/tournament-local.ts
+var init_tournament_local = __esm({
+  "../../packages/domain/src/tournament-local.ts"() {
+    "use strict";
+    init_esm_shims();
+  }
+});
+
 // ../../packages/domain/src/index.ts
 var PROFILE_PHOTO_DELIVERY_PATH_PATTERN, COMMUNITY_LOGO_DELIVERY_PATH_PATTERN;
 var init_src = __esm({
@@ -5455,6 +5463,7 @@ var init_src = __esm({
     init_esm_shims();
     init_participation_eligibility();
     init_level_assessment();
+    init_tournament_local();
     PROFILE_PHOTO_DELIVERY_PATH_PATTERN = /^\/public\/api\/v1\/media\/profile-photos\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     COMMUNITY_LOGO_DELIVERY_PATH_PATTERN = /^\/public\/api\/v1\/media\/community-logos\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   }
@@ -30024,6 +30033,11 @@ init_connection();
 // ../../packages/database/src/subscription-runtime-actor-context-repository.ts
 init_esm_shims();
 init_connection();
+
+// ../../packages/database/src/tournament-local-repository.ts
+init_esm_shims();
+init_connection();
+init_src();
 
 // src/communities-staging-role-split-trusted-inventory-gate.ts
 init_esm_shims();
