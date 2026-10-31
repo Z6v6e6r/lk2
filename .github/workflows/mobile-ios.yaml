@@ -1,7 +1,33 @@
-name: iOS TestFlight build
+name: iOS native verification
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Unsigned native verification; signed release remains unavailable
+        type: choice
+        options: [unsigned-verification, signed-release]
+        default: unsigned-verification
+  pull_request:
+    paths:
+      - '.github/workflows/mobile-ios.yaml'
+      - 'scripts/ios-native-build.test.ts'
+      - 'apps/mobile/ios/**'
+      - 'apps/mobile/src/**'
+      - 'apps/mobile/index.html'
+      - 'apps/mobile/package.json'
+      - 'apps/mobile/vite.config.ts'
+      - 'apps/mobile/capacitor.config.ts'
+      - 'apps/web/**'
+      - 'packages/api-sdk/**'
+      - 'packages/api-contracts/**'
+      - 'packages/auth/**'
+      - 'packages/viva-client-adapter/**'
+      - 'packages/ui/**'
+      - 'contracts/openapi/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
   push:
     tags: ['mobile-v*']
 
@@ -9,17 +35,51 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  unsigned-native:
+    name: iOS unsigned simulator build
     runs-on: macos-latest
-    environment: mobile-ios
+    timeout-minutes: 25
+    env:
+      # Inert build: no API tenant, registration or real-account interaction.
+      VITE_PHUB_API_BASE_URL: ''
+      VITE_PHUB_TENANT_KEY: ''
+      PADLHUB_IOS_PUSH_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: test -d apps/mobile/ios || { echo 'Generate and review the native iOS project first.'; exit 1; }
       - run: npm ci
-      - run: npm run build -w @phub/mobile && npm run cap:sync -w @phub/mobile
-      - name: Native signing and TestFlight upload
-        run: echo "Connect the approved App Store Connect signing workflow before the first release."
+      - name: Verify capability and release boundaries
+        run: npx vitest run scripts/ios-native-build.test.ts --maxWorkers=2
+      - name: Verify synthetic native session and installation lifecycle
+        run: swift test --package-path apps/mobile/ios/PadlHubSession
+      - name: Build the native App without signing
+        run: npm run ios:build:simulator -w @phub/mobile
+      - name: Record the unsigned verification boundary
+        run: |
+          test -d apps/mobile/ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app
+          bundle_id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' apps/mobile/ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app/Info.plist)
+          test "$bundle_id" = ru.padlhub.app
+          {
+            echo '### Unsigned native verification'
+            echo 'Swift package tests and an iOS Simulator App build completed.'
+            echo 'CODE_SIGNING_ALLOWED=NO; runtime push disabled; no API target.'
+            echo 'No signed archive, IPA export, APNs device delivery or TestFlight upload was performed.'
+            echo 'Signed release remains blocked pending separately reviewed signing and store inputs.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  signed-release-gate:
+    name: Signed release unavailable
+    needs: unsigned-native
+    if: ${{ github.event_name == 'push' || inputs.operation == 'signed-release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse an unimplemented signed release
+        run: |
+          echo '::error::IOS_SIGNED_RELEASE_NOT_IMPLEMENTED: unsigned verification cannot satisfy signing, archive/export, APNs device or store acceptance.'
+          exit 1
