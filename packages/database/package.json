@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "scripts": {
-    "build": "tsup src/index.ts src/contact-reader.ts src/local-password-login-repository.ts src/support-ticket-repository.ts src/local-password-reset-repository.ts src/notification-scenario-repository.ts --format esm --dts --sourcemap --clean"
+    "build": "tsup src/index.ts src/contact-reader.ts src/local-password-login-repository.ts src/support-ticket-repository.ts src/local-password-reset-repository.ts src/notification-scenario-repository.ts src/managed-self-leave-repository.ts --format esm --dts --sourcemap --clean"
   },
   "dependencies": {
     "@phub/communities": "0.1.0",
@@ -38,6 +38,10 @@
     "./password-reset": {
       "types": "./src/local-password-reset-repository.ts",
       "import": "./dist/local-password-reset-repository.js"
+    },
+    "./managed-self-leave": {
+      "types": "./src/managed-self-leave-repository.ts",
+      "import": "./dist/managed-self-leave-repository.js"
     },
     "./notification-scenarios": {
       "types": "./src/notification-scenario-repository.ts",

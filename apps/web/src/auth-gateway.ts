@@ -606,7 +606,8 @@ export interface AuthGateway {
   /** Readback of the same commercial operation by its original idempotency key. */
   readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
   readonly reconcilePaidJoinOperation?: PadlHubApiClient['reconcilePaidJoinOperation'];
-  readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
+  readonly leaveGame: PadlHubApiClient['leaveGame'];
+  readonly getManagedLeaveOperation?: PadlHubApiClient['getManagedLeaveOperation'];
   readonly joinGameWaitlist: (gameId: string, invitationId?: string) => Promise<GameCommandResult>;
   readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
   readonly submitGameResult: (
@@ -2336,8 +2337,11 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getPaidJoinOperation(gameId, idempotencyKey);
     },
 
-    leaveGame(gameId) {
-      return client.leaveGame(gameId);
+    leaveGame(gameId, options) {
+      return client.leaveGame(gameId, options);
+    },
+    getManagedLeaveOperation(gameId, key) {
+      return client.getManagedLeaveOperation(gameId, key);
     },
 
     joinGameWaitlist(gameId, invitationId) {

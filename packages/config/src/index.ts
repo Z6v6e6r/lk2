@@ -223,6 +223,7 @@ const environmentSchema = z.object({
   // otherwise the runtime factory returns undefined and the route stays fail-closed.
   // Removal/review condition: replace when a dedicated booked-operation owner adapter lands, and
   // review this flag no later than the next delivery batch.
+  GAME_MANAGED_SELF_LEAVE_ENABLED: booleanFromEnvironment,
   GAME_COMMERCIAL_JOIN_ENABLED: booleanFromEnvironment,
   GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: z.string().url().optional(),
   GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(5_000).default(3_000),

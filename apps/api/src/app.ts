@@ -1,3 +1,4 @@
+import type { ManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { attachUpcomingRosters } from './bookings/upcoming-rosters.js';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -405,6 +406,7 @@ export interface BuildAppOptions {
     'issue'
   >;
   readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
+  readonly gameManagedSelfLeave?: ManagedSelfLeaveRuntime;
   readonly gameCommercialJoin?: GameCommercialJoinOptions;
   /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
   readonly gameCommercialCreate?: GameCommercialCreateOptions;
@@ -1103,6 +1105,7 @@ export async function buildApp(options: BuildAppOptions) {
       ? { managementRepository: options.gameCommandRepository }
       : {}),
     ...(options.gameCommercialJoin ? { commercialJoin: options.gameCommercialJoin } : {}),
+    ...(options.gameManagedSelfLeave ? { managedSelfLeave: options.gameManagedSelfLeave } : {}),
     ...(options.gameCommercialCreate ? { commercialCreate: options.gameCommercialCreate } : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
