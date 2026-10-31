@@ -1,5 +1,13 @@
 # LK2 R1 — E2E и acceptance matrix
 
+## Tournament/quarter evidence delta — 2026-11-01
+
+CUP#64 `9d728414`: CI41246247607 SUCCESS. Six actual Mongo subcases executed: two-connection last-preimage winner with atomic roster/audit/receipt; lost response and stale retry; legacy writer losing to adoption; legacy writer winning before adoption; LEAVE/rejoin with immutable original generation; adopted restore refusal. LOCAL24 focused cases and11 compatibility scripts additionally cover actor/tenant/phone changes, forbidden target modes, capacity, bounded journal and legacy guards. Full typecheck/build/artifact checks passed. No LK2/native/provider journey is implied.
+
+CUP#65 `5812113c`: nine LOCAL suite commands and source/physical-import typechecks passed. Synthetic real-service flow covers descriptor approval, whole/4 once, original actor/op/draft binding, v1 target downgrade refusal, exact old validator rejection, actual quote/reserve and replay. CI41247998877 SUCCESS (full build and physical quarter target/reserve/replay case); the added physical Mongo case checks publication4/target2 persistence, immutable conflicts, lost ACK and reserve replay. Synthetic instance seeding does not exercise normal schema4 adoption; projector/checkpoint/sale-binding adoption tests remain a separate source task. Initial physical runs41247080304/41247501428 failed on Mongo driver `_id` mutation: first the seeded fixture, then canonical target replay input. Test-only cloning and repository insert isolation corrected these; a real-repository driver-mutation regression was LOCAL RED before / GREEN after for schemas1/2. Legacy intake/runtime-contract tests and physical-import noEmit passed; latest physical quarter case passed on5812113 in CI41247998877; entitlement suite reports zero skips and zero provider writes.
+
+CUP#66 `5eb4fe04`: LOCAL12 affected suite commands plus full-source/owned-test noEmit passed. New synthetic checks cover preserved old pins, cutoff/history/descriptor failures, stale checkpoint/fence, exact unchanged-input replay and no-write refusal after later sale/row revision. CI41248667293 SUCCESS: job124677361291 executed actual Mongo transaction rollback, lost ACK with unchanged rows, no-write refusal after a later sale and independent-client sale/reconciliation races in both orders. Existing projector postcommit readback, full typecheck/build and artifact gates passed. No provider or runtime evidence is implied.
+
 ## Station evidence delta — 2026-11-01
 
 | Scope                          | Actual evidence                                                                                                                               | Not yet accepted                                                               |

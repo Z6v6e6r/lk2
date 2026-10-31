@@ -1,5 +1,13 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Tournament and quarter rollback constraints — 2026-11-01
+
+For CUP#64 retain canonical localParticipationOperations and localParticipationTenantKey, including terminal receipts, actor identity and generation. Disable admission without removing permanent legacy-writer/restore guards. An old unguarded writer is not a safe rollback for adopted documents. Historical receipt readback must remain reachable after phone changes; it does not authorize transferring identity or deleting a later rejoin.
+
+For CUP#65 retain immutable publication4 and target2 facts. Older validators must reject them; never remove descriptor/proof, redate purchases or downgrade stored schema to make an old binary accept them. Existing publication3 instances keep their original immutable pins. Future checkpoint reconciliation must preserve these bytes and use atomic fence/checkpoint CAS. Current LOCAL/CI evidence does not constitute a runtime rollback rehearsal.
+
+CUP#66 `5eb4fe04` advances only new-instance adoption/checkpoint in an atomic transaction; old instances remain unchanged. Retain the shared sale/reconciliation fence and do not roll back to an uncoordinated sale writer while schema4 adoption is permitted. Lost-ACK replay is accepted only while the original rows/fence/history remain exact; later sale or activation drift must refuse without writes. Inspect the original checkpoint, then separately approve any new snapshot/apply; never reinterpret refusal as a failed original commit.
+
 ## Station recovery addendum — 2026-11-01
 
 The station lifetime contract is now implemented in unmerged source packets LK#275/#276, CUP#63, LK2#527/#528; runtime recovery remains unverified. Rollback disables the coordinated producer/consumer flag and retains Mongo admissions, generation claims, community epoch/barrier and PostgreSQL0108 nullable markers. Existing protected roster writes remain fenced when the flag is off. Never delete those records or replace an original admission with the current membership epoch.

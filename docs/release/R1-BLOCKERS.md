@@ -1,5 +1,15 @@
 # LK2 R1 — приоритетные блокеры
 
+## B03/B05 evidence update — 2026-11-01
+
+- B05: CUP#64 `9d728414` source/CI is verified only for default-off LOCAL_ONLY nonmonetary tournaments. CI41246247607 passed six actual Mongo cases plus build. LK2 consumer, provider-backed/paid/subscription participation, WAITLIST, compensation and runtime acceptance remain open. Permanent adoption freezes legacy roster/admin replacement; rollout must preserve those guards.
+- B03: CUP#65 `5812113c` supplies reviewed publication4/target2 quarter provenance, LOCAL tests pass and CI41247998877 SUCCESS (full build and physical quarter target/reserve/replay case). Normal instance adoption is still a SOURCE blocker: projector/readiness reject4, and the initial importer cannot advance an existing checkpoint after publication. Required reconciliation must validate all existing immutable instances, insert only supported new identities and atomically advance the current fence/checkpoint. Legacy promotion stays closed. The authenticated LK producer and durable CREATE writer are still missing.
+- Neither packet proves PROVIDER, STAGING, PRODUCTION or physical-device acceptance. Existing exact local merge requests for #525/#528 remain pending; no alternate integration bypass is authorized.
+
+CUP#66 `5eb4fe04` is the reviewed SOURCE candidate for the instance-adoption blocker; CI41248667293 SUCCESS, including full typecheck/build/artifact gates and the actual Mongo reconciliation/race fixture. It does not supply the authoritative provider snapshot, authenticated LK producer or durable CREATE owner. Coherent upgraded sale writers and drained old transactions remain activation prerequisites. Projector replay is conditional: later sale/state/history changes cause a no-write refusal, not proof that the original apply failed.
+
+Further SOURCE audit: LK has no approved clientRefHash handoff; CUP computes it from verified identity and intentionally omits it from runtime-context. Current intake UUID-only configured tenant and CUP actor tenantKey are different namespaces. The next coordinated CREATE packet must derive actor/tenant/hash inside a versioned variant of the existing CUP intake, preserve context privacy, and connect it to an actual LK CREATE owner. Existing CREATE prospective target has null base price, old policy gate requires60/90/120, and timeout/409 room-time lookup cannot attribute creation. Pin the original quarter tuple and persist the ID from the original successful provider response; ambiguous creation remains UNKNOWN without a second POST or adoption of a found exercise.
+
 ## Station packet delta — 2026-11-01
 
 **B07 PARTIAL:** LK#275741543d2, LK#27662e32f7b and CUP#631abc9150 have green CI, including physical membership-lifetime cases. LK2#5273143ffbe fullCI41244545169 SUCCESS:7529passed/126skipped, managedJOIN PG10/10, required27physical+8guards zeroSKIP; #52826c5ceaa has54 LOCAL cases and independent reviews but parent bundle conflict blocks CI. Local synchronization needs exact approval; it is not main merge authority. Old statements that the entire station lifetime contract is unimplemented are superseded by this source-only delta.

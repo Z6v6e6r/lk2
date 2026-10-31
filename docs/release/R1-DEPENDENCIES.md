@@ -1,5 +1,16 @@
 # LK2 R1 — зависимости и критический путь
 
+## New bounded P0 paths — 2026-11-01
+
+1. CUP#61 preparation → #62 canonical gender → **#64 LOCAL_ONLY owner (CI41246247607 SUCCESS)** → LK2 authenticated tournament command/read/recovery consumer → native journey and tournament membership acceptance. Provider-backed and monetary paths require separate attributable owner/compensation contracts; do not downgrade them into LOCAL_ONLY.
+2. LK#273 nonbinding quarter observation + **CUP#65 publication4/target2 proof (LOCAL and CI41247998877 accepted)** → strict schema4 projector/readiness and bounded FULL_RECONCILIATION → authenticated LK target producer → original-CREATE durable owner/reserve/receipt → LK2 CREATE consumer. Preserve every old instance's purchase-time policy. A new publication clears the reconciliation fence; replaying INITIAL_FULL is not a checkpoint refresh. Existing sale-binding accepts trusted payment readback and is not itself a provider purchase writer.
+
+The quarter descriptor is an approved mapping, not a live provider observation. The full authoritative instance snapshot still requires endpoint/pagination/normalization/payment/identity evidence. Implementing schema4 support does not authorize importing a real snapshot, buying a subscription or changing a flag.
+
+Updated quarter chain: #65 `5812113c` fullCI41247998877 SUCCESS → #66 `5eb4fe04` bounded instance reconciliation (LOCAL/review accepted, CI41248667293 SUCCESS, including full typecheck/build/artifact gates and the actual Mongo reconciliation/race fixture) → authoritative snapshot and authenticated LK producer → durable original-CREATE owner/recovery/receipt → LK2 CREATE. Sale/import concurrency is serialized by the existing projection fence; mixed old writers are not supported and must be drained before activation.
+
+Further SOURCE audit: LK has no approved clientRefHash handoff; CUP computes it from verified identity and intentionally omits it from runtime-context. Current intake UUID-only configured tenant and CUP actor tenantKey are different namespaces. The next coordinated CREATE packet must derive actor/tenant/hash inside a versioned variant of the existing CUP intake, preserve context privacy, and connect it to an actual LK CREATE owner. Existing CREATE prospective target has null base price, old policy gate requires60/90/120, and timeout/409 room-time lookup cannot attribute creation. Pin the original quarter tuple and persist the ID from the original successful provider response; ambiguous creation remains UNKNOWN without a second POST or adoption of a found exercise.
+
 ## Station critical path — 2026-11-01
 
 `LK#275 + CUP#63 → LK#276 → LK2#527/#528 physical CI → reviewed0108 migration/signing/coordinated writer package → separately approved runtime/device acceptance`.

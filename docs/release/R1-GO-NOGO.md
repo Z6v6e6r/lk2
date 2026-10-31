@@ -1,5 +1,13 @@
 # LK2 R1 — GO / NO-GO
 
+## Latest P0 decision — 2026-11-01
+
+**NO-GO remains.** CUP#64 `9d728414` passed full CI41246247607 including six real Mongo concurrency/recovery cases for LOCAL_ONLY tournament JOIN/LEAVE/read. CUP#65 `5812113c` completed reviewed LOCAL quarter-provenance checks; CI41247998877 SUCCESS (full build and physical quarter target/reserve/replay case). Both are Draft PRs, not merged or activated.
+
+Open source gates include LK2 tournament consumer, paid/provider tournament ownership and compensation, schema4 instance adoption, authenticated quarter producer and durable CREATE owner. Existing station/native/provider/device/store and release-custody gaps remain. New source evidence advances readiness without claiming full user-journey or production acceptance. Exact pending local #525/#528 merge approvals have not been executed.
+
+CUP#66 `5eb4fe04` now has reviewed LOCAL source for schema4 instance adoption and sale/reconciliation serialization; CI41248667293 SUCCESS, including full typecheck/build/artifact gates and the actual Mongo reconciliation/race fixture. #65 `5812113c` fullCI41247998877 is SUCCESS, including the new physical quarter target/reserve/replay case and full build. These close bounded source prerequisites only. Authoritative provider adoption, LK CREATE producer/owner, complete tournament consumer and the remaining platform/runtime gates keep R1 at NO-GO.
+
 ## Решение после station packets — 2026-11-01
 
 **NO-GO.** Дополнительно приняты source/CI пакеты LK#275741543d2, LK#27662e32f7b и CUP#631abc9150. Они подтверждают owner lifetime/roster fences и физический TRAINING replay/LEFT case. LK2#5273143ffbe принят на fullCI41244545169 SUCCESS:7529passed/126skipped, managedJOIN PG10/10, required27physical+8guards zeroSKIP; #52826c5ceaa имеет54 LOCAL cases/review/scanner PASS, но CI блокирует конфликт с родительским bundle. Для точного локального merge запрошено разрешение; действие не выполнено.

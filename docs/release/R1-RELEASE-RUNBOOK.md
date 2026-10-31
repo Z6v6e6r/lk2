@@ -1,5 +1,13 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## Additional source prerequisites — 2026-11-01
+
+CUP#64 `9d728414` has green CI41246247607 including six physical Mongo cases. Keep TOURNAMENT_LOCAL_OPERATIONS_ENABLED disabled until a matched LK2 consumer and runtime acceptance are approved. Admit only explicit LOCAL_ONLY nonmonetary targets; the 512-entry permanent journal reserves terminal LEAVE capacity. Adopted targets reject legacy roster/payment/admin replacement and restore even with the flag off. This conservative metadata freeze is an activation constraint, not a verified production behavior.
+
+CUP#65 `5812113c` is a separate quarter-proof prerequisite, CI41247998877 SUCCESS (full build and physical quarter target/reserve/replay case). Before any quarter activation require strict schema4 instance adoption, a current full reconciliation checkpoint, authenticated LK producer, durable CREATE owner and original receipt recovery. Provider observations and instance snapshots must be attributable; fixtures and publication approval do not prove provider execution. No production configuration, migration, payment, signing or publication is authorized by these source packets.
+
+CUP#66 `5eb4fe04` supplies reviewed source for strict schema4 FULL_RECONCILIATION; CI41248667293 SUCCESS, including full typecheck/build/artifact gates and the actual Mongo reconciliation/race fixture. Before any real apply require exact target/input/plan attestation, complete attributable provider snapshot, coherent upgraded writers and draining old in-flight sale transactions. A schema4 guard cannot fence an old transaction already in progress. No actual import or sale was executed.
+
 ## Station preparation addendum — 2026-11-01
 
 Source packet consists of LK#275/#276, CUP#63, LK2#527/#528. Require their exact-head CI and coordinated integration before selecting release artifacts. #528 currently has an unresolved parent bundle conflict and no PR CI; local merge approval is pending. No main merge, feature activation or delivery authorization is supplied by these Draft PRs.
