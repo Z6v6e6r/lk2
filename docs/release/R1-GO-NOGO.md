@@ -1,5 +1,11 @@
 # LK2 R1 — GO / NO-GO
 
+## Актуальное решение после location/owner/native пакетов
+
+**NO-GO сохраняется.** #517 дал6/6 physical location-binding cases, но CREATE price/service authority и original-create ownership receipt отсутствуют. #270 готов как отдельный owner source; physical Mongo и graph cases прошли в owner suite 28/28, но LK2 consumer ещё не принят. #518 первый native run исполнил 0/5journeys; compile/unit success не заменяет runtime. TRAINING имеет независимый source path, но LK2 registration/LEAVE и provider capacity acceptance ещё открыты.
+
+Новые heads: LK2#517 `63486325`, #518 `a3a8d371`, LK#270 `7abe118b`. Все Draft, без merge/deploy. Main refs повторно подтверждены неизменными: LK2`14ebdca6`, LK`608ebe20`, CUP`83b1c17b`. Разрешённый #508 flag cycle завершён ранее и не повторялся. #511 merge/cycle, station choices и CREATE tariff specification ожидают отдельных ответов. Продолжение безопасной реализации не расширяет эти полномочия.
+
 Дата: 2026-10-31. **NO-GO: полный production release iOS + Android не готов.** Это результат актуального source/CI аудита, а не проверка состояния уже работающего production.
 
 ## Что подтверждено
@@ -58,7 +64,7 @@ Owner v2 и LK2 consumer теперь оформлены в #267/#515; теку�
 
 ## Новый source progress без изменения verdict
 
-LK owner #267 `72688c66` и CI kernel correction #268 `cc1811a2` прошли CI. LK2 JOIN #515 `b55bd4d2` подготовлен с LOCAL checks и specialist CLEAR, CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 LOCAL186/static/review passed, CI `41216151985` success (7267 passed /126 skipped, managed JOIN PostgreSQL3/3). Managed SELF compensation LK #269 `8d46b9b5` имеет LOCAL/review PASS и CI `41215625582` / `41215625485` success. Это закрывает ограниченные source gaps B02/B04, но не complete commercial participation acceptance.
+LK owner #267 `72688c66` и CI kernel correction #268 `cc1811a2` прошли CI. LK2 JOIN #515 `b55bd4d2` подготовлен с LOCAL checks и specialist CLEAR, CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 LOCAL 186/static/review passed, CI `41216151985` success (7267 passed /126 skipped, managed JOIN PostgreSQL3/3). Managed SELF compensation LK #269 `8d46b9b5` имеет LOCAL/review PASS и CI `41215625582` / `41215625485` success. Это закрывает ограниченные source gaps B02/B04, но не complete commercial participation acceptance.
 
 **NO-GO сохраняется**: canonical CREATE mapping/owner, monetary refund/organizer cancel, signup consumers, четыре социальных контекста, signed/device/provider acceptance и production custody ещё не завершены. Кроме ранее разрешённого #508, merge не выполнялся. #511 merge/flag approval и station choices ожидаются; source-only продолжение их не подменяет.
 

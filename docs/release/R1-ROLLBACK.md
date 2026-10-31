@@ -1,5 +1,12 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Новые additive и original-generation ограничения
+
+- #517: остановка location sync не удаляет таблицу 0105 или lineage evidence; TTL 5 минут закрывает новое readiness. Старый binary игнорирует additive table. Нельзя превратить expired/contradictory binding в provider CREATE authority.
+- #270: сохранять original SELF journal, immutable terminal receipt и запрет background/unbound recovery для managed rows. После rejoin старый receipt воспроизводит только старый результат. Mixed-history pending нельзя лечить выбором старой legacy записи или сервисным токеном. Runtime rollback не даёт права повторять visit-return/refund.
+- Планируемый LK2 consumer 0106: при выключении новых admissions сохранять journal/terminal reads; не удалять durable dispatch fence и не сбрасывать UNKNOWN в fresh attempt. Crash до owner claim может требовать отдельного recovery решения; новый ключ не устраняет неопределённость.
+- #518 меняет CI test execution, не установленные приложения. Cleanup имеет право только на созданный task UUID с повторной проверкой владения; отсутствие xcresult не означает успешного выполнения или удаления.
+
 Статус: **PARTIAL source procedures / UNKNOWN свежая rehearsal готовность**. На первом этапе rollback, restore, flags и runtime не менялись. Позднее отдельно одобрен только repository delivery-flag cycle для source-only merge #508; production flags, rollback/restore, worker, возвраты и stores не затрагивались. Этот документ — требования к подготовке, не разрешение операций.
 
 Каноническая основа: [application rollback](../runbooks/rollback.md), [Timeweb runtime](../runbooks/timeweb-lk2-beta.md), [publication custody](../runbooks/timeweb-amd64-image-publication.md). Выбранные target, previous digests, backup receipt и совместимый mobile/backend floor должны быть заполнены release owner до GO.

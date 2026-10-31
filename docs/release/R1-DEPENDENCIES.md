@@ -1,5 +1,15 @@
 # LK2 R1 — зависимости и критический путь
 
+## Критический путь после нового source audit
+
+1. Уже green JOIN chain #267/#515/CUP#60 сохраняет отдельную runtime/provider acceptance зависимость.
+2. SELF: LK#269 compensation → LK#270 exact admission/read + physical Mongo → LK2#515-based consumer с additive 0106, original-operation journal и Web UNKNOWN/retry → controlled provider acceptance. 0105 зарезервирована #517; migration writers согласованы, deployment order0105→0106. Ни один target не мигрирован.
+3. CREATE: #517 location producer/resolver → owner product specification (server service/dictionary binding, base price semantics) → real prospective target producer + narrow CUP CREATE preflight → durable direct-create ACK/owner receipt → LK2 consumer. Lost ACK без доказанной ownership остаётся UNKNOWN; room/time search не разрешает adoption.
+4. TRAINING можно вести независимо от CREATE: exact owner schedule/detail resolver → explicit legacy nonmonetary admission/read/receipt → LK2 detail/retry UI. CUP-managed/monetary/TRAINING LEAVE — отдельные contract outcomes; первый slice не маскирует их как completed.
+5. #516 → #518 native synthetic execution → physical device/provider acceptance. Новый CI должен действительно исполнить 5 XCTest; первый run исполнил 0. Signed/store/production transitions сохраняют отдельные gates.
+
+#511 approval, station cardinality/membership и CREATE tariff specification остаются pending. Они не мешают независимым source задачам и не заменяются таймаутом ожидания.
+
 Основа: [READINESS](R1-READINESS.md), [BLOCKERS](R1-BLOCKERS.md). Это последовательность закрытия фактических пробелов, без обещания даты release. Оценки времени невозможны до bounded task sizing и выделения provider/device test environment.
 
 ## Критический путь
@@ -163,12 +173,12 @@ public court → station и provider room → studio, tenant/organizer/draft rev
 
 1. CUP #60 `730e3f4c` поверх #59 — canonical preflight/reserve expectations/readback.
 2. LK #267 `72688c66` поверх #264 — v2 owner, strict selector и immutable recovery. CI green; совместимая capability проверяется до dispatch. CI kernel fix #268 включён, production Mongo не меняется.
-3. LK2 #515 `b55bd4d2` поверх #511 — v2 consumer; CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 LOCAL186/static/review passed, CI `41216151985` success (7267 passed /126 skipped, managed JOIN PostgreSQL3/3). Не входит дополнительным head в уже замороженный #511.
+3. LK2 #515 `b55bd4d2` поверх #511 — v2 consumer; CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 LOCAL 186/static/review passed, CI `41216151985` success (7267 passed /126 skipped, managed JOIN PostgreSQL3/3). Не входит дополнительным head в уже замороженный #511.
 4. LK #269 `8d46b9b5` поверх #267 — managed SELF compensation; LOCAL/review passed, CI `41215625582` / `41215625485` success. Затем отдельный exact LK2 cancellation consumer и physical/provider acceptance, не денежный refund по предположению.
 5. CREATE mapping producer/resolver → CREATE owner/admission → LK2 CREATE consumer → training/tournament consumers. Подготовленный JOIN нельзя переименовать в CREATE: новый exercise должен появиться из canonical provider result/readback.
 
 Параллельный iOS packet добавляет OTHER profile → новый DIRECT поверх #513; source/review готовятся отдельно, completion и device acceptance пока не заявлены. Station product choices остаются pending. Ни одна зависимость не даёт merge/live authority.
 
-CREATE producer audit уточнил: старый roster sync разрешён только local/staging. Новый узкий default-off цикл в существующем worker должен читать отдельное backend-only Mongo lineage evidence, проверять exact Viva room/studio через @phub/viva-adapter с собственной credential REF authority, и атомарно публиковать binding с CAS/audit/outbox. Весь historical alias/source cohort и reverse collisions проверяются без first-alias selection. TTL5мин, refresh60с, ambiguity/overflow/timeout закрывают новый CREATE. Source packet начат отдельно; migration/live credential/activation не выполнялись.
+CREATE producer audit уточнил: старый roster sync разрешён только local/staging. Новый узкий default-off цикл в существующем worker должен читать отдельное backend-only Mongo lineage evidence, проверять exact Viva room/studio через @phub/viva-adapter с собственной credential REF authority, и атомарно публиковать binding с CAS/audit/outbox. Весь historical alias/source cohort и reverse collisions проверяются без first-alias selection. TTL 5 минут, refresh60с, ambiguity/overflow/timeout закрывают новый CREATE. Source packet начат отдельно; migration/live credential/activation не выполнялись.
 
 Перед LK2 SELF LEAVE consumer требуется owner admission для original generation: существующий SELF endpoint выводит текущую generation и не является safe replay transport для LK2. Проверить также наличие LK1 roster для LK2-only JOIN; простой proxy на текущий endpoint не принимается.

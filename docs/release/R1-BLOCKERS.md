@@ -1,5 +1,12 @@
 # LK2 R1 — приоритетные блокеры
 
+## Уточнённые P0 зависимости нового checkpoint
+
+- **B03 BLOCKED:** #517 подготовил location evidence, но CREATE требует server-owned master-service/sub-services + dictionary revision и согласованной базы цены. Текущий prospective target имеет null base price, CUP quote требует authoritative evidence. Нельзя подставить ноль или client service choice. Вопрос владельцу pending. Provider slot match не даёт creation/organizer authority; lost create ACK без durable original success остаётся UNKNOWN.
+- **B04 PARTIAL:** LK #270 добавил original-generation admission/read и terminal replay after rejoin; physical Mongo3/3 прошли в CI 41221116994; два graph fixture требовали full Git history, исправленный head 7abe118b прошёл Mongo workflow 41221550586 (28/28 без skips), enforcement ещё выполняется. LK2 consumer с0106 journal/API/SDK/Web начат, пока не готов. Mixed managed/legacy ordinary recovery намеренно pending; нельзя выбирать старую unbound запись. Monetary refund/organizer CANCEL/late-NONE остаются отдельными gaps.
+- **B05 MISSING consumer:** training registration не зависит от prospective CREATE. Минимальный первый контур — existing exercise + explicit supported legacy owned subscription без доплаты. Trusted training resolver, exact active-booking receipt, stable-key UI/recovery ещё нужны. WAITLIST не равен CONFIRMED; generic first non-inactive row недостаточен. Training LEAVE требует server-owned cancellation→verification→release, а не фиктивной game generation.
+- **B07/B10 PARTIAL:** #518 ещё не выполнил ни одного из 5 native journeys: первый CI упал на bootstatus timeout до XCTest. Исправленный bounded boot ожидает нового CI. Debug/Release compile и Swift unit tests не закрывают native acceptance.
+
 Baseline и CI: [R1-READINESS](R1-READINESS.md), 2026-10-31. P0 означает блокер обязательного release scope, а не утверждение о severity уязвимости. Владельцы A–G — роли из программы; персональные DRI ещё не назначены. Ниже текущие остатки после ограниченной реализации; закрытие одного source/CI шага не означает закрытие полного release blocker.
 
 | ID  | Приоритет / тип                                         | Факт и влияние                                                                                                                                                                                                                                                                            | Владелец / зависимости                            | Проверяемый критерий закрытия                                                                                                                                                                                                         |
@@ -68,7 +75,7 @@ physical-device acceptance не закрыты. Для station implementation о
 
 ## Остаток после JOIN v2 и SELF LEAVE source packets
 
-B02: LK #267 `72688c66` имеет green CI; LK2 #515 `b55bd4d2` реализован, но CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 прошло LOCAL186/static/review, CI `41216151985` success (7267 passed /126 skipped, managed JOIN PostgreSQL3/3). Explicit authoritative LEGACY, immutable original tuple, receipt/usage checks и recovery-only contract больше не являются отсутствующим source. Physical PostgreSQL JOIN tests, paired runtime/provider/map freshness и выбор совместимых release heads остаются exit gates.
+B02: LK #267 `72688c66` имеет green CI; LK2 #515 `b55bd4d2` реализован, но CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 прошло LOCAL 186/static/review, CI `41216151985` success (7267 passed /126 skipped, managed JOIN PostgreSQL3/3). Explicit authoritative LEGACY, immutable original tuple, receipt/usage checks и recovery-only contract больше не являются отсутствующим source. Physical PostgreSQL JOIN tests, paired runtime/provider/map freshness и выбор совместимых release heads остаются exit gates.
 
 B04: LK #269 `8d46b9b5` добавляет только managed SELF subscription compensation, LOCAL/review passed, CI `41215625582` / `41215625485` success. Денежные refund, organizer CANCEL, LK2 paid consumer и provider acceptance остаются открытыми. Старые managed rows без durable tenant provenance и tokenless background retry намеренно pending; автоматический backfill или impersonation не добавлены.
 
