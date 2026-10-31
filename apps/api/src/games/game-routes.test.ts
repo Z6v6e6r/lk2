@@ -771,24 +771,20 @@ describe('paid JOIN reconciliation HTTP boundary', () => {
         },
       ],
     });
-    const stationMembership = vi
-      .fn()
-      .mockResolvedValue({
-        version: 1,
-        outcome: 'NO_ENROLLMENT',
-        reason: 'STATION_BINDING_UNAVAILABLE',
-      });
-    const beginPaidJoin = vi
-      .fn()
-      .mockImplementation((input: { operationId: string }) =>
-        Promise.resolve({
-          outcome: 'reserved',
-          operationId: input.operationId,
-          reservationId: commandId,
-          expiresAt: new Date(Date.now() + 600000).toISOString(),
-          revision: 9,
-        }),
-      );
+    const stationMembership = vi.fn().mockResolvedValue({
+      version: 1,
+      outcome: 'NO_ENROLLMENT',
+      reason: 'STATION_BINDING_UNAVAILABLE',
+    });
+    const beginPaidJoin = vi.fn().mockImplementation((input: { operationId: string }) =>
+      Promise.resolve({
+        outcome: 'reserved',
+        operationId: input.operationId,
+        reservationId: commandId,
+        expiresAt: new Date(Date.now() + 600000).toISOString(),
+        revision: 9,
+      }),
+    );
     const execute = vi.fn().mockResolvedValue({ status: 'PENDING' });
     const app = await buildApp({
       config,
