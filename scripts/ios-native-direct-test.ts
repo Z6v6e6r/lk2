@@ -26,6 +26,13 @@ export type SimulatorCommand = (
   inherit?: boolean,
 ) => string;
 
+export function assertNativeTestSymbols(symbols: string, expected: boolean): void {
+  for (const symbol of ['installDirectIntegrationTransport', 'PadlHubB07UnsupportedPushPlugin']) {
+    if (symbols.includes(symbol) !== expected)
+      throw new Error('IOS_NATIVE_TEST_HOOK_COMPILATION_BOUNDARY');
+  }
+}
+
 export function verifyNativeTestHook(bundle: string, expected: boolean): void {
   const binaries = [`${bundle}/App`, `${bundle}/App.debug.dylib`].filter(existsSync);
   if (binaries.length === 0) throw new Error('IOS_NATIVE_TEST_BINARY_MISSING');
@@ -38,8 +45,7 @@ export function verifyNativeTestHook(bundle: string, expected: boolean): void {
       }),
     )
     .join('\n');
-  if (symbols.includes('installDirectIntegrationTransport') !== expected)
-    throw new Error('IOS_NATIVE_TEST_HOOK_COMPILATION_BOUNDARY');
+  assertNativeTestSymbols(symbols, expected);
 }
 
 function versionNumber(value: string): number {

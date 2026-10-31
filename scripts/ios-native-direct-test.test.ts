@@ -1,6 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { runNativeDirectTests, selectNativeTestTarget } from './ios-native-direct-test.js';
+import {
+  assertNativeTestSymbols,
+  runNativeDirectTests,
+  selectNativeTestTarget,
+} from './ios-native-direct-test.js';
 
 const runtime = {
   identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5',
@@ -66,6 +70,23 @@ function fixture(
 }
 
 describe('owned synthetic native simulator execution', () => {
+  it('rejects either synthetic native capability in ordinary application binaries', () => {
+    expect(() => assertNativeTestSymbols('ordinary application symbols', false)).not.toThrow();
+    for (const symbol of ['installDirectIntegrationTransport', 'PadlHubB07UnsupportedPushPlugin']) {
+      expect(() => assertNativeTestSymbols(symbol, false)).toThrow(
+        'IOS_NATIVE_TEST_HOOK_COMPILATION_BOUNDARY',
+      );
+    }
+  });
+  it('requires both isolated capabilities in the explicit native test host', () => {
+    const symbols = 'installDirectIntegrationTransport PadlHubB07UnsupportedPushPlugin';
+    expect(() => assertNativeTestSymbols(symbols, true)).not.toThrow();
+    for (const partial of ['', ...symbols.split(' ')]) {
+      expect(() => assertNativeTestSymbols(partial, true)).toThrow(
+        'IOS_NATIVE_TEST_HOOK_COMPILATION_BOUNDARY',
+      );
+    }
+  });
   it('refuses CLI execution outside the explicit CI context before any device operation', () => {
     const result = spawnSync(
       process.execPath,

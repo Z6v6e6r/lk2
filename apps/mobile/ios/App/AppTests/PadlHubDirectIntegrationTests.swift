@@ -202,6 +202,22 @@ final class PadlHubDirectIntegrationTests: XCTestCase {
   func testBrowserEgressAndUnknownNativeCommandStayDenied() async throws {
     let fixture = try DirectIntegrationFixture(mode: .success)
     let web = try await start(fixture)
+    let unsupportedPush = try await web.callAsyncJavaScript("""
+      const push = window.Capacitor.Plugins.PadlHubIOSPush;
+      const status = await push.status();
+      const suspended = await push.suspend();
+      const opened = await push.takeOpened();
+      const denied = [];
+      for (const method of ['registration', 'activate', 'finishRevoke']) {
+        try { await push[method]({requestPermission: true}); denied.push(false); }
+        catch (e) { denied.push(e.code === 'NATIVE_PUSH_UNAVAILABLE'); }
+      }
+      return status.configured === false && status.active === false && status.state === 'unsupported'
+        && status.pendingRevoke === false && suspended.pendingRevoke === false
+        && suspended.revokeCurrentAccount === false && status.installationId === suspended.installationId
+        && Object.keys(opened).length === 0 && denied.every(Boolean);
+      """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+    XCTAssertEqual(unsupportedPush, true, "Synthetic DIRECT tests never register or revoke a real notification installation")
     let result = try await web.callAsyncJavaScript("""
       const output = [];
       for (const scheme of ['http', 'https']) {

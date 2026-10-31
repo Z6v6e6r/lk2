@@ -70,7 +70,8 @@ describe('native DIRECT acceptance custody', () => {
 
   it('exposes no synthetic command through the native JavaScript method table', () => {
     const plugin = read('apps/mobile/ios/App/App/PadlHubSessionPlugin.swift');
-    const registry = plugin.match(/public let pluginMethods:[\s\S]*?\n {2}\]/)?.[0];
+    const sessionPlugin = plugin.slice(plugin.indexOf('@objc(PadlHubSessionPlugin)'));
+    const registry = sessionPlugin.match(/public let pluginMethods:[\s\S]*?\n {2}\]/)?.[0];
     expect(registry).toBeDefined();
     expect(registry?.match(/name: "([^"]+)"/g)).toEqual([
       'name: "configuration"',
@@ -88,6 +89,25 @@ describe('native DIRECT acceptance custody', () => {
     }
     const fixture = read('apps/mobile/ios/App/AppTests/DirectIntegrationFixture.swift');
     expect(fixture).not.toMatch(/URLSession\(|KeychainCredentialStore\(/);
+  });
+
+  it('keeps the unsupported push adapter wholly inside the explicit test host', () => {
+    const plugin = read('apps/mobile/ios/App/App/PadlHubSessionPlugin.swift');
+    const guarded = plugin.slice(plugin.indexOf(guard), plugin.indexOf('#endif'));
+    expect(guarded).toContain('final class PadlHubB07UnsupportedPushPlugin:');
+    expect(guarded).toContain('let jsName = "PadlHubIOSPush"');
+    expect(guarded).toContain(
+      '"status", "registration", "activate", "suspend", "finishRevoke", "takeOpened"',
+    );
+    expect(guarded).toContain('result["state"] = "unsupported"');
+    expect(guarded).toContain('"pendingRevoke": false, "revokeCurrentAccount": false');
+    expect(guarded).toContain('"NATIVE_PUSH_UNAVAILABLE"');
+    expect(guarded).not.toMatch(
+      /IOSPushJournal|KeychainCredentialStore|UNUserNotificationCenter|UIApplication|URLSession/,
+    );
+    expect(plugin).toContain(
+      `${guard}\n    bridge?.registerPluginInstance(PadlHubB07UnsupportedPushPlugin())\n    #else\n    bridge?.registerPluginInstance(PadlHubIOSPushPlugin())\n    #endif`,
+    );
   });
 
   it('retains synthetic public identities and no private-account payload in the native fixture', () => {

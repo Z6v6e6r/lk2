@@ -3,6 +3,37 @@ import Foundation
 import PadlHubSession
 #if DEBUG && targetEnvironment(simulator) && PADLHUB_B07_TEST_HOST
 import WebKit
+
+#if DEBUG && targetEnvironment(simulator) && PADLHUB_B07_TEST_HOST
+// This suite has no notification installation. Do not touch Keychain/APNs just to log out.
+@objc(PadlHubB07UnsupportedPushPlugin)
+final class PadlHubB07UnsupportedPushPlugin: CAPPlugin, CAPBridgedPlugin {
+  let identifier = "PadlHubB07UnsupportedPushPlugin"
+  let jsName = "PadlHubIOSPush"
+  let pluginMethods: [CAPPluginMethod] = [
+    "status", "registration", "activate", "suspend", "finishRevoke", "takeOpened",
+  ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
+  private var inactive: [String: Any] {
+    ["installationId": "44444444-4444-4444-8444-444444444444",
+      "pendingRevoke": false, "revokeCurrentAccount": false]
+  }
+  @objc func status(_ call: CAPPluginCall) {
+    var result = inactive
+    result["configured"] = false
+    result["active"] = false
+    result["state"] = "unsupported"
+    call.resolve(result)
+  }
+  @objc func suspend(_ call: CAPPluginCall) { call.resolve(inactive) }
+  @objc func takeOpened(_ call: CAPPluginCall) { call.resolve([:]) }
+  @objc func registration(_ call: CAPPluginCall) { unavailable(call) }
+  @objc func activate(_ call: CAPPluginCall) { unavailable(call) }
+  @objc func finishRevoke(_ call: CAPPluginCall) { unavailable(call) }
+  private func unavailable(_ call: CAPPluginCall) {
+    call.reject("Notifications unavailable in synthetic DIRECT fixture", "NATIVE_PUSH_UNAVAILABLE")
+  }
+}
+#endif
 #endif
 
 @objc(PadlHubSessionPlugin)
@@ -150,7 +181,11 @@ final class PadlHubBridgeViewController: CAPBridgeViewController {
 
   override func capacitorDidLoad() {
     bridge?.registerPluginInstance(PadlHubSessionPlugin())
+    #if DEBUG && targetEnvironment(simulator) && PADLHUB_B07_TEST_HOST
+    bridge?.registerPluginInstance(PadlHubB07UnsupportedPushPlugin())
+    #else
     bridge?.registerPluginInstance(PadlHubIOSPushPlugin())
+    #endif
     bridge?.registerPluginInstance(PadlHubViewportPlugin())
     // Contain the viewport itself so scrolling and position:fixed cannot cover system UI.
     guard let webView else { return }

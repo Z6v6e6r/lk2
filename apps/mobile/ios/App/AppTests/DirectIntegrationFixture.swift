@@ -151,7 +151,9 @@ final class DirectIntegrationFixture {
       else { return try reject() }
       return try response(data["auth"]!, cookie: true)
     }
-    guard request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-short-lived-access",
+    let publicGames = method == "GET" && path == "/public/api/v1/local-padel/games"
+    let authorization = request.value(forHTTPHeaderField: "Authorization")
+    guard (publicGames ? authorization == nil : authorization == "Bearer synthetic-short-lived-access"),
       request.value(forHTTPHeaderField: "Cookie") == nil
     else { return try reject() }
     if method == "GET" {
@@ -166,7 +168,13 @@ final class DirectIntegrationFixture {
       if let key = routes.first(where: { Self.root + $0.key == path })?.value {
         return try response(data[key]!)
       }
-      if path == "/public/api/v1/local-padel/games" { return try response(data["publicGames"]!) }
+      if publicGames {
+        guard query.count == 2, Set(query.map(\.name)) == ["limit", "availability"],
+          query.first(where: { $0.name == "limit" })?.value == "20",
+          query.first(where: { $0.name == "availability" })?.value == "INCLUDE_FULL"
+        else { return try reject() }
+        return try response(data["publicGames"]!)
+      }
       if path == Self.root + "/profiles/" + peerID {
         guard query.isEmpty else { return try reject() }
         var profile = data["otherProfile"] as! [String: Any]
