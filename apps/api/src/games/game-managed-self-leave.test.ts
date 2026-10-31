@@ -24,6 +24,9 @@ function setup(state: ManagedSelfLeaveAttempt['state'] = 'PREPARED') {
     updatedAt: '2026-10-31T15:00:00.000Z',
   };
   const repository = {
+    isNoPayment: vi.fn(() => Promise.resolve(false)),
+    readCommand: vi.fn(() => Promise.resolve(null)),
+    reconcileUndispatched: vi.fn(() => Promise.resolve(null)),
     readByKey: vi.fn(() => Promise.resolve().then(() => a)),
     read: vi.fn(() => Promise.resolve().then(() => a)),
     begin: vi.fn(() => Promise.resolve().then(() => a)),
@@ -198,4 +201,58 @@ describe('managed SELF leave runtime orchestration', () => {
     ])
       expect(body).not.toContain(secret);
   });
+});
+
+it('NO_PAYMENT reaches ordinary writer without Viva mapping even with managed gate enabled', async () => {
+  const x = setup();
+  x.repository.readByKey.mockResolvedValue(null as never);
+  x.repository.isNoPayment.mockResolvedValue(true);
+  expect(await x.runtime.execute(x.input)).toBeNull();
+  expect(x.boundary.actorContextRepository.resolve).not.toHaveBeenCalled();
+  expect(x.repository.begin).not.toHaveBeenCalled();
+  expect(x.client.admit).not.toHaveBeenCalled();
+});
+it('reconciliation of an original PREPARED attempt never claims or first-dispatches it', async () => {
+  const x = setup();
+  expect((await x.runtime.reconcile(x.input)).operation.status).toBe('UNKNOWN');
+  expect(x.repository.begin).not.toHaveBeenCalled();
+  expect(x.repository.claim).not.toHaveBeenCalled();
+  expect(x.client.admit).not.toHaveBeenCalled();
+});
+it('missing canonical attempt after reconciliation cannot fall through to a new begin', async () => {
+  const x = setup();
+  x.repository.readByKey.mockResolvedValue(null as never);
+  await expect(x.runtime.reconcile(x.input)).rejects.toThrow('GAME_NOT_LEAVABLE');
+  expect(x.repository.begin).not.toHaveBeenCalled();
+  expect(x.client.admit).not.toHaveBeenCalled();
+});
+it('reconciliation of an original DISPATCH_STARTED attempt only signs recoveryOnly', async () => {
+  const x = setup('DISPATCH_STARTED');
+  await x.runtime.reconcile(x.input);
+  expect(x.repository.begin).not.toHaveBeenCalled();
+  expect(x.boundary.delegationIssuer.issueManagedSelfLeaveAdmission).toHaveBeenCalledWith(
+    expect.objectContaining({ recoveryOnly: true }),
+  );
+});
+it('durable refusal and ordinary success read by key need no provider mapping or new mutation', async () => {
+  for (const kind of ['NOT_DISPATCHED', 'APPLIED'] as const) {
+    const x = setup();
+    x.repository.readByKey.mockResolvedValue(null as never);
+    x.repository.readCommand.mockResolvedValue({
+      kind,
+      commandId: f.identity.operationId,
+      gameId: x.input.gameId,
+      revision: 2,
+      createdAt: x.a.createdAt,
+      completedAt: x.a.updatedAt,
+      idempotencyKeySha256: 'sha256:' + 'a'.repeat(64),
+    } as never);
+    const result = await x.runtime.readByKey(x.input);
+    expect(result?.operation.status).toBe(kind === 'APPLIED' ? 'SUCCEEDED' : 'FAILED');
+    expect(Boolean(result?.operation.noDispatch)).toBe(kind === 'NOT_DISPATCHED');
+    await x.runtime.execute(x.input);
+    expect(x.repository.begin).not.toHaveBeenCalled();
+    expect(x.boundary.actorContextRepository.resolve).not.toHaveBeenCalled();
+    expect(x.client.admit).not.toHaveBeenCalled();
+  }
 });

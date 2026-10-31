@@ -35,6 +35,9 @@ function setup() {
   } as const;
   const gateway = {
     leaveGame: vi.fn<AuthGateway['leaveGame']>().mockResolvedValue(result),
+    reconcileManagedLeaveOperation: vi
+      .fn<NonNullable<AuthGateway['reconcileManagedLeaveOperation']>>()
+      .mockResolvedValue(result),
     getManagedLeaveOperation: vi
       .fn<NonNullable<AuthGateway['getManagedLeaveOperation']>>()
       .mockResolvedValue(result),
@@ -52,9 +55,11 @@ describe('SELF leave browser custody', () => {
     await x.make().read(game);
     await x.make().submit(game);
     expect(x.make().load(game)?.idempotencyKey).toBe(original.idempotencyKey);
-    expect(x.gateway.leaveGame.mock.calls[1]?.[1]).toEqual({
-      idempotencyKey: original.idempotencyKey,
-    });
+    expect(x.gateway.leaveGame).toHaveBeenCalledTimes(1);
+    expect(x.gateway.reconcileManagedLeaveOperation).toHaveBeenCalledWith(
+      game,
+      original.idempotencyKey,
+    );
     expect(x.gateway.getManagedLeaveOperation).toHaveBeenCalledWith(game, original.idempotencyKey);
   });
   it('404 or malformed/foreign success never releases custody', async () => {
@@ -140,4 +145,83 @@ it('a response arriving after account replacement cannot clear or rewrite stored
   release({ ...x.result, operation: { ...x.result.operation, status: 'SUCCEEDED' } } as never);
   await expect(pending).rejects.toThrow('SELF_LEAVE_SCOPE_CHANGED');
   expect(old.load(game)).toEqual(saved);
+});
+
+async function refusal(x: ReturnType<typeof setup>, key: string) {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  return {
+    ...x.result,
+    operation: {
+      ...x.result.operation,
+      status: 'FAILED' as const,
+      nextAction: { type: 'NONE' as const },
+      error: { code: 'GAME_NOT_LEAVABLE' as const, message: 'synthetic' },
+      noDispatch: {
+        schemaVersion: 1 as const,
+        outcome: 'NOT_DISPATCHED' as const,
+        idempotencyKeySha256:
+          'sha256:' +
+          Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join(''),
+      },
+    },
+  };
+}
+it('exact durable no-dispatch proof closes only its key; next command requires a new explicit choice', async () => {
+  const x = setup();
+  x.gateway.leaveGame.mockRejectedValueOnce(new Error('unsupported'));
+  await expect(x.make().submit(game)).rejects.toThrow();
+  const original = x.make().load(game)!;
+  x.gateway.reconcileManagedLeaveOperation.mockResolvedValueOnce(
+    await refusal(x, original.idempotencyKey),
+  );
+  await x.make().submit(game);
+  expect(x.make().load(game)).toBeNull();
+  expect(x.gateway.leaveGame).toHaveBeenCalledTimes(1);
+  await x.make().submit(game);
+  expect(x.gateway.leaveGame).toHaveBeenCalledTimes(2);
+  expect(x.make().load(game)?.idempotencyKey).not.toBe(original.idempotencyKey);
+});
+it.each(['404', '409', 'FAILED', 'wrong-key', 'extra-proof'])(
+  'retains custody for %s without exact durable proof',
+  async (condition) => {
+    const x = setup();
+    await x.make().submit(game);
+    const original = x.make().load(game)!;
+    if (condition === '404' || condition === '409')
+      x.gateway.reconcileManagedLeaveOperation.mockRejectedValueOnce(new Error(condition));
+    else {
+      const result = await refusal(
+        x,
+        condition === 'wrong-key' ? 'foreign-key' : original.idempotencyKey,
+      );
+      if (condition === 'FAILED') delete (result.operation as { noDispatch?: unknown }).noDispatch;
+      if (condition === 'extra-proof') Object.assign(result.operation.noDispatch, { extra: true });
+      x.gateway.reconcileManagedLeaveOperation.mockResolvedValueOnce(result);
+    }
+    await x
+      .make()
+      .submit(game)
+      .catch(() => undefined);
+    expect(x.make().load(game)?.idempotencyKey).toBe(original.idempotencyKey);
+    expect(x.gateway.leaveGame).toHaveBeenCalledTimes(1);
+  },
+);
+it('late refusal cannot clear a replaced custody key', async () => {
+  const x = setup();
+  await x.make().submit(game);
+  const original = x.make().load(game)!;
+  let release!: (v: Awaited<ReturnType<typeof refusal>>) => void;
+  x.gateway.reconcileManagedLeaveOperation.mockReturnValueOnce(
+    new Promise((resolve) => {
+      release = resolve;
+    }),
+  );
+  const pending = x.make().submit(game);
+  await vi.waitFor(() => expect(x.gateway.reconcileManagedLeaveOperation).toHaveBeenCalled());
+  const key = [...x.data.keys()][0]!;
+  const replacement = { ...original, idempotencyKey: crypto.randomUUID() };
+  x.data.set(key, JSON.stringify(replacement));
+  release(await refusal(x, original.idempotencyKey));
+  await expect(pending).rejects.toThrow('SELF_LEAVE_CUSTODY_CHANGED');
+  expect(x.make().load(game)).toEqual(replacement);
 });

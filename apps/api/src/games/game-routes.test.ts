@@ -1254,6 +1254,7 @@ describe('managed SELF leave route projection', () => {
     };
     const managed = {
       execute: vi.fn(() => Promise.resolve().then(() => body)),
+      reconcile: vi.fn(() => Promise.resolve().then(() => body)),
       read: vi.fn(() => Promise.resolve().then(() => body)),
       readByKey: vi.fn(() => Promise.resolve().then(() => body)),
     };
@@ -1307,6 +1308,40 @@ describe('managed SELF leave route projection', () => {
       gameId,
       idempotencyKey: headers['idempotency-key'],
     });
+    const reconcile = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+      headers,
+    });
+    expect(reconcile.statusCode).toBe(202);
+    expect(managed.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ gameId, idempotencyKey: headers['idempotency-key'] }),
+    );
+    expect(roster.leave).not.toHaveBeenCalled();
+    for (const extra of [
+      { payload: { recoveryOnly: true } },
+      { url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile?retry=true` },
+    ]) {
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+            headers,
+            ...extra,
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+    expect(managed.reconcile).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+        })
+      ).statusCode,
+    ).toBe(401);
     managed.readByKey.mockRejectedValueOnce(new ManagedSelfLeaveError('IDEMPOTENCY_CONFLICT'));
     const wrongGame = await app.inject({
       url: `/user/api/v1/local-padel/games/${invitationId}/leave-operation`,

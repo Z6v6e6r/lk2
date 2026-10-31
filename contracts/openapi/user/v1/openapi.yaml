@@ -3987,6 +3987,8 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join
   /{tenantKey}/games/{gameId}/join-operation:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join-operation
+  /{tenantKey}/games/{gameId}/leave-operation/reconcile:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1leave-operation~1reconcile
   /{tenantKey}/games/{gameId}/leave-operation:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1leave-operation
   /{tenantKey}/games/{gameId}/participants/me:
