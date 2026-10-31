@@ -93,6 +93,8 @@ describe('required physical game CI boundary', () => {
       [13, 6],
       [10, 1],
       [4, 1],
+      [4, 0],
+      [4, 0],
     ]);
   });
   it.each([
@@ -113,6 +115,9 @@ describe('required physical game CI boundary', () => {
     ['PGHOST', 'remote'],
     ['DOCKER_HOST', 'tcp://remote'],
     ['GAME_LIFECYCLE_HTTP_TEST_DATABASE_URL', env.DATABASE_URL],
+    ['NOTIFICATION_RESILIENCE_TEST_DATABASE_URL', env.DATABASE_URL],
+    ['NOTIFICATION_RESILIENCE_TEST_RABBITMQ_URL', env.RABBITMQ_URL],
+    ['NOTIFICATION_RESILIENCE_TEST_EVENT', '{}'],
   ])('denies unsafe context %s=%s before commands or database construction', async (key, value) => {
     const execute = vi.fn();
     await expect(main({ ...env, [key]: value }, execute)).rejects.toThrow();
@@ -149,6 +154,15 @@ describe('required physical game CI boundary', () => {
       marker: `lk2_game_1_1_${nonce}`,
     };
     expect(() => requireDatabaseOwnership(expected, expected)).not.toThrow();
+    const notification = { ...expected, name: fixtureName(nonce, 'notification_pg') };
+    expect(() => requireDatabaseOwnership(notification, notification)).not.toThrow();
+    expect(() => requireDatabaseOwnership(notification, expected)).toThrow('OWNERSHIP_LOST');
+    for (const id of ['rabbit', 'notification_rabbit', 'unknown']) {
+      const wrongResource = { ...expected, name: `lk2_${nonce}_${id}_verify` };
+      expect(() => requireDatabaseOwnership(wrongResource, wrongResource)).toThrow(
+        'OWNERSHIP_LOST',
+      );
+    }
     for (const actual of [
       undefined,
       { ...expected, oid: 124 },
@@ -161,6 +175,27 @@ describe('required physical game CI boundary', () => {
     const name = fixtureName(nonce, 'rabbit');
     const rows = [{ name, description: expected.marker }];
     expect(() => requireVhostOwnership(rows, name, expected.marker, true)).not.toThrow();
+    const notificationHost = fixtureName(nonce, 'notification_rabbit');
+    expect(() =>
+      requireVhostOwnership(
+        [{ name: notificationHost, description: expected.marker }],
+        notificationHost,
+        expected.marker,
+        true,
+      ),
+    ).not.toThrow();
+    expect(() => requireVhostOwnership(rows, notificationHost, expected.marker, true)).toThrow();
+    for (const id of ['lifecycle', 'comms', 'notification_pg', 'unknown']) {
+      const wrongResource = `lk2_${nonce}_${id}_verify`;
+      expect(() =>
+        requireVhostOwnership(
+          [{ name: wrongResource, description: expected.marker }],
+          wrongResource,
+          expected.marker,
+          true,
+        ),
+      ).toThrow();
+    }
     for (const actual of [[], [...rows, ...rows], [{ name, description: 'other' }]]) {
       expect(() => requireVhostOwnership(actual, name, expected.marker, true)).toThrow();
     }
@@ -306,6 +341,8 @@ function fixture(
     | 'cleanup'
     | 'timeout'
     | 'bad-connections'
+    | 'notification-pg-exit'
+    | 'notification-rabbit-skip'
     | 'busy',
 ) {
   const rows = new Map<
@@ -341,7 +378,9 @@ function fixture(
   const execute: Command = async (args, childEnv) => {
     if (args.includes('inspect')) return ok(service());
     if (args.includes('scripts/migrate.ts')) {
-      expect(childEnv.DATABASE_URL).toMatch(/\/lk2_[a-f0-9]{32}_(lifecycle|comms)_verify$/);
+      expect(childEnv.DATABASE_URL).toMatch(
+        /\/lk2_[a-f0-9]{32}_(lifecycle|comms|notification_pg)_verify$/,
+      );
       expect(childEnv.CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK).toBe(
         'CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1',
       );
@@ -357,9 +396,16 @@ function fixture(
       artifacts.add(dirname(reportPath));
       expect(childEnv[suite.env]).toContain('_verify');
       await mkdir(dirname(reportPath), { recursive: true });
-      if (failure !== 'missing-report')
-        await writeFile(reportPath, JSON.stringify(reportFor(suite)));
+      const report = reportFor(suite);
+      if (failure === 'notification-rabbit-skip' && suite.id === 'notification_rabbit') {
+        report.numPendingTests = 1;
+        report.numPassedTests -= 1;
+        report.testResults[0]!.assertionResults[0]!.status = 'pending';
+      }
+      if (failure !== 'missing-report') await writeFile(reportPath, JSON.stringify(report));
       events.push(`test-${suite.id}-closed`);
+      if (failure === 'notification-pg-exit' && suite.id === 'notification_pg')
+        return { ...ok(), code: 1 };
       return failure === 'test-exit' ? { ...ok(), code: 1 } : ok();
     }
     if (args.includes('list_vhosts'))
@@ -383,7 +429,7 @@ function fixture(
 }
 
 describe('required game CI fixture custody and orchestration', () => {
-  it('runs three suites sequentially and deletes only acknowledged idle owned fixtures', async () => {
+  it('runs five suites sequentially and deletes only acknowledged idle owned fixtures', async () => {
     const f = fixture();
     await main(env, f.execute);
     expect(f.rows.size).toBe(0);
@@ -392,10 +438,20 @@ describe('required game CI fixture custody and orchestration', () => {
       'test-lifecycle-closed',
       'test-comms-closed',
       'test-rabbit-closed',
+      'test-notification_pg-closed',
+      'test-notification_rabbit-closed',
     ]);
     expect(f.events.indexOf('DROP')).toBeGreaterThan(f.events.indexOf('test-lifecycle-closed'));
     expect(f.events.indexOf('delete-vhost')).toBeGreaterThan(
       f.events.indexOf('test-rabbit-closed'),
+    );
+    expect(f.events.filter((event) => event === 'DROP')).toHaveLength(3);
+    expect(f.events.filter((event) => event === 'delete-vhost')).toHaveLength(2);
+    expect(f.events.lastIndexOf('DROP')).toBeGreaterThan(
+      f.events.indexOf('test-notification_pg-closed'),
+    );
+    expect(f.events.lastIndexOf('delete-vhost')).toBeGreaterThan(
+      f.events.indexOf('test-notification_rabbit-closed'),
     );
     expect(database.end).toHaveBeenCalledOnce();
   });
@@ -410,6 +466,8 @@ describe('required game CI fixture custody and orchestration', () => {
     'cleanup',
     'timeout',
     'bad-connections',
+    'notification-pg-exit',
+    'notification-rabbit-skip',
   ] as const)(
     'fails closed for %s and retains only fixtures lacking cleanup authority',
     async (failure) => {
