@@ -1,10 +1,8 @@
 # LK2 R1 — GO / NO-GO
 
-## Актуальное решение после location/owner/native пакетов
+## Актуальное решение после подтверждённого CI
 
-**NO-GO сохраняется.** #517 дал6/6 physical location-binding cases, но CREATE price/service authority и original-create ownership receipt отсутствуют. #270 готов как отдельный owner source; physical Mongo и graph cases прошли в owner suite 28/28, но LK2 consumer ещё не принят. #518 первый native run исполнил 0/5journeys; compile/unit success не заменяет runtime. TRAINING имеет независимый source path, но LK2 registration/LEAVE и provider capacity acceptance ещё открыты.
-
-Новые heads: LK2#517 `63486325`, #518 `a3a8d371`, LK#270 `7abe118b`. Все Draft, без merge/deploy. Main refs повторно подтверждены неизменными: LK2`14ebdca6`, LK`608ebe20`, CUP`83b1c17b`. Разрешённый #508 flag cycle завершён ранее и не повторялся. #511 merge/cycle, station choices и CREATE tariff specification ожидают отдельных ответов. Продолжение безопасной реализации не расширяет эти полномочия.
+**NO-GO сохраняется.** #517 exact source/physical CI и оба#270 workflow green. #518 full source green, но два native run дали0/5;53a8 correction ожидает actual execution. Consumer0106 и training owner ещё проходят локальные gates/review. Денежный game refund contract отсутствует; для tournament требуется source-owner binding при наличии реальных CUP level/CAS foundations. CREATE tariff question, station choices и #511 exact merge/flag cycle остаются pending. Main refs неизменны; #508 cycle завершён ранее. Новых merge/deploy/provider/store действий не было.
 
 Дата: 2026-10-31. **NO-GO: полный production release iOS + Android не готов.** Это результат актуального source/CI аудита, а не проверка состояния уже работающего production.
 

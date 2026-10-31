@@ -1,11 +1,8 @@
 # LK2 R1 — rollback и recovery readiness
 
-## Новые additive и original-generation ограничения
+## Дополнительные original-operation ограничения
 
-- #517: остановка location sync не удаляет таблицу 0105 или lineage evidence; TTL 5 минут закрывает новое readiness. Старый binary игнорирует additive table. Нельзя превратить expired/contradictory binding в provider CREATE authority.
-- #270: сохранять original SELF journal, immutable terminal receipt и запрет background/unbound recovery для managed rows. После rejoin старый receipt воспроизводит только старый результат. Mixed-history pending нельзя лечить выбором старой legacy записи или сервисным токеном. Runtime rollback не даёт права повторять visit-return/refund.
-- Планируемый LK2 consumer 0106: при выключении новых admissions сохранять journal/terminal reads; не удалять durable dispatch fence и не сбрасывать UNKNOWN в fresh attempt. Crash до owner claim может требовать отдельного recovery решения; новый ключ не устраняет неопределённость.
-- #518 меняет CI test execution, не установленные приложения. Cleanup имеет право только на созданный task UUID с повторной проверкой владения; отсутствие xcresult не означает успешного выполнения или удаления.
+Consumer0106 сохраняет исходный ключ и journal при UNKNOWN; unsupported typed refusal может сохранить custody и блокировать новый JOIN до подтверждения результата. Удаление browser custody по404/409 или повторная запись с новым ключом не являются recovery. При terminal original-key replay после rejoin нельзя менять новое участие. Для денежных отмен не повторять cancellation/refund после ambiguous write, пока provider contract не доказал idempotency; cancelled history не означает settlement. При tournament recovery сохранять source owner и original booking generation, не переключаться с CUP на LK или наоборот.
 
 Статус: **PARTIAL source procedures / UNKNOWN свежая rehearsal готовность**. На первом этапе rollback, restore, flags и runtime не менялись. Позднее отдельно одобрен только repository delivery-flag cycle для source-only merge #508; production flags, rollback/restore, worker, возвраты и stores не затрагивались. Этот документ — требования к подготовке, не разрешение операций.
 

@@ -1,11 +1,11 @@
 # LK2 R1 — приоритетные блокеры
 
-## Уточнённые P0 зависимости нового checkpoint
+## Уточнённые P0 зависимости текущего checkpoint
 
-- **B03 BLOCKED:** #517 подготовил location evidence, но CREATE требует server-owned master-service/sub-services + dictionary revision и согласованной базы цены. Текущий prospective target имеет null base price, CUP quote требует authoritative evidence. Нельзя подставить ноль или client service choice. Вопрос владельцу pending. Provider slot match не даёт creation/organizer authority; lost create ACK без durable original success остаётся UNKNOWN.
-- **B04 PARTIAL:** LK #270 добавил original-generation admission/read и terminal replay after rejoin; physical Mongo3/3 прошли в CI 41221116994; два graph fixture требовали full Git history, исправленный head 7abe118b прошёл Mongo workflow 41221550586 (28/28 без skips), enforcement ещё выполняется. LK2 consumer с0106 journal/API/SDK/Web начат, пока не готов. Mixed managed/legacy ordinary recovery намеренно pending; нельзя выбирать старую unbound запись. Monetary refund/organizer CANCEL/late-NONE остаются отдельными gaps.
-- **B05 MISSING consumer:** training registration не зависит от prospective CREATE. Минимальный первый контур — existing exercise + explicit supported legacy owned subscription без доплаты. Trusted training resolver, exact active-booking receipt, stable-key UI/recovery ещё нужны. WAITLIST не равен CONFIRMED; generic first non-inactive row недостаточен. Training LEAVE требует server-owned cancellation→verification→release, а не фиктивной game generation.
-- **B07/B10 PARTIAL:** #518 ещё не выполнил ни одного из 5 native journeys: первый CI упал на bootstatus timeout до XCTest. Исправленный bounded boot ожидает нового CI. Debug/Release compile и Swift unit tests не закрывают native acceptance.
+- **B03 BLOCKED:** #517 source/physical CI green; service/dictionary binding и база CREATE price требуют решения. Lost create ACK без original ownership остаётся UNKNOWN.
+- **B04 PARTIAL:** LK#270 exact owner source/physical Mongo green; LK2 consumer0106 проходит final local gates. Monetary cancellation BLOCKED отдельно: нет authoritative game refund/credit receipt contract. Cancelled booking/REQUESTED/annual subscription proof не доказывают game CURRENCY/DEPOSIT settlement. Solo-organizer после доказанного single-payer refund и bulk CANCEL — разные объёмы.
+- **B05 MISSING consumer:** training legacy nonmonetary owner в реализации. Tournament имеет LK/Viva и CUP custom owner candidates; CUP accessLevels и durable payment/capacity seams существуют. Следующая задача — source identity/owner selection + auth/generation/WAITLIST audit, затем narrow consumer. CREATE clarification не блокирует эти исследования.
+- **B07/B10 PARTIAL:** #518 два native CI исполнили0/5; последняя correction53a8b8c9 ожидает actual XCTest. Full source CI7298pass и compiled hook absence не заменяют native runtime.
 
 Baseline и CI: [R1-READINESS](R1-READINESS.md), 2026-10-31. P0 означает блокер обязательного release scope, а не утверждение о severity уязвимости. Владельцы A–G — роли из программы; персональные DRI ещё не назначены. Ниже текущие остатки после ограниченной реализации; закрытие одного source/CI шага не означает закрытие полного release blocker.
 

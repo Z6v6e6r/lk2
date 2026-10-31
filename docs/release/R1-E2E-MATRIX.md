@@ -1,19 +1,12 @@
 # LK2 R1 — E2E и acceptance matrix
 
-## Новые результаты и незакрытые journey assertions
+## Актуальное evidence уточнение
 
-| Контур                         | Доказательство                                                                                                             | Не покрыто                                                                                                                             |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| CREATE location binding        | #517 previous-head CI41219731409:6/6 physical PG; CAS/replay, RLS, rollback, active-room uniqueness, FK/expiry, revocation | CREATE booking/price/ownership/provider; исправленный closed-package fixture ждёт exact-head CI                                        |
-| Original managed SELF owner    | #270 LOCAL 25; critical 1342/48; leave54; clean release10; review/scans PASS                                               | Исправленный head 7abe118b: CI 41221550586 owner 28/28, включая 3 physical Mongo и2 graph; LK2 consumer/real returned visit не приняты |
-| Native DIRECT synthetic        | #518 compilation/static/18 runner-boundary tests PASS; normal Debug/Release hook absent                                    | First native CI41219880229:0/5 journeys, boot timeout, без xcresult. Исправленный runner ещё не acceptance                             |
-| Existing training registration | SOURCE audit подтверждает canonical LK writer и actual-exercise tariff read                                                | LK2 trusted detail/registration/recovery, exact active booking vsWAITLIST, real provider last-seat concurrency                         |
+Exact-head #517 CI41221114711:7141passed/126skipped, location physical6/6 и отдельныйPG4/4. LK#270 Mongo41221550586:28/28 без skips, включая3physical; enforcement41221550594SUCCESS. #518 parent full CI7298passed/126skipped +PG4/4, но оба native runs0/5: boot/inventory timeouts, второго cleanup receipt нет. Новый53a8 native41223262254 pending. SELF consumer account-switch доHTTP и SDK retry boundary исправлены с негативными тестами и review; полный source/physical/UI результат ожидается. Training CAS interleaving пока synthetic, не physical/provider last seat. Tournament accessLevels/CAS source найден в CUP; соответствующий runtime здесь не выполнялся. Финансовый Q08 требует attributable game refund/credit, не cancelled booking или REQUESTED.
 
-Для SELF добавить в обязательную приёмку: старый confirmed receipt после rejoin не меняет новое участие; mixed-history ordinary/background recovery не снимает managed binding; UNKNOWN в Web не показывает success, refresh/manual retry сохраняют исходный ключ. Для CREATE добавить отсутствие price evidence и lost exercise ACK без adoption. Эти строки не разрешают provider или shared-state тесты.
+Обязательные assertions SELF: старый terminal receipt после rejoin не меняет новое участие; mixed-history background recovery не снимает managed binding; UNKNOWN не показывает success, reload/manual retry сохраняют исходный ключ, logout/account-switch доHTTP не отправляет чужое намерение. Для CREATE: отсутствующая price authority и lost original-create ACK не разрешают dispatch/adoption.
 
-Baseline: [READINESS](R1-READINESS.md), 2026-10-31. **Это acceptance matrix, а не утверждение о полном E2E pass.** Первый этап был read-only; последующие LOCAL/CI случаи перечислены отдельно. G добавил physical Mongo tests в существующую изолированную CI fixture. Provider writes, production data и device acceptance не выполнялись.
-
-Уровень ниже относится к имеющемуся доказательству. `test source` означает только прочитанную реализацию теста. `BLOCKED` означает, что полный путь сейчас нельзя принять. Ни одна строка не заявляет свежий STAGING/PROVIDER/PRODUCTION или physical-device pass.
+Baseline: [READINESS](R1-READINESS.md). Это acceptance matrix, не общий E2E pass. `test source` означает прочитанную реализацию теста; LOCAL, CI, STAGING, PROVIDER и PRODUCTION не взаимозаменяемы. Provider writes, production data и physical-device acceptance в этом checkpoint не выполнялись.
 
 ## Обязательные journeys и отрицательные случаи
 

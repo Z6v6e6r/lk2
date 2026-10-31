@@ -2,15 +2,13 @@
 
 ## Критический путь после нового source audit
 
-1. Уже green JOIN chain #267/#515/CUP#60 сохраняет отдельную runtime/provider acceptance зависимость.
-2. SELF: LK#269 compensation → LK#270 exact admission/read + physical Mongo → LK2#515-based consumer с additive 0106, original-operation journal и Web UNKNOWN/retry → controlled provider acceptance. 0105 зарезервирована #517; migration writers согласованы, deployment order0105→0106. Ни один target не мигрирован.
-3. CREATE: #517 location producer/resolver → owner product specification (server service/dictionary binding, base price semantics) → real prospective target producer + narrow CUP CREATE preflight → durable direct-create ACK/owner receipt → LK2 consumer. Lost ACK без доказанной ownership остаётся UNKNOWN; room/time search не разрешает adoption.
-4. TRAINING можно вести независимо от CREATE: exact owner schedule/detail resolver → explicit legacy nonmonetary admission/read/receipt → LK2 detail/retry UI. CUP-managed/monetary/TRAINING LEAVE — отдельные contract outcomes; первый slice не маскирует их как completed.
-5. #516 → #518 native synthetic execution → physical device/provider acceptance. Новый CI должен действительно исполнить 5 XCTest; первый run исполнил 0. Signed/store/production transitions сохраняют отдельные gates.
-
-#511 approval, station cardinality/membership и CREATE tariff specification остаются pending. Они не мешают независимым source задачам и не заменяются таймаутом ожидания.
-
-Основа: [READINESS](R1-READINESS.md), [BLOCKERS](R1-BLOCKERS.md). Это последовательность закрытия фактических пробелов, без обещания даты release. Оценки времени невозможны до bounded task sizing и выделения provider/device test environment.
+1. Green JOIN chain #267/#515/CUP#60 сохраняет отдельную runtime/provider acceptance зависимость.
+2. SELF: LK#269 compensation → LK#270 admission/read + physical Mongo green → LK2 consumer0106 final LOCAL/CI/UI → controlled provider acceptance. Порядок migrations0105→0106, без исполнения на target. Старый ключ возвращает original result после rejoin; новый ключ без original membership selector после LEFT безопасно отклоняется. UNKNOWN/unsupported custody нельзя очищать по404 или любому409.
+3. CREATE: #517 green location evidence → owner specification service/dictionary/base-price → real target + narrow CUP preflight → durable original-create ACK/receipt → LK2 consumer. Lost ACK не разрешает room/time adoption.
+4. TRAINING: existing target → reviewed exact legacy nonmonetary owner → LK2 consumer/recovery → provider capacity acceptance. CUP-managed/paid/LEAVE отдельны.
+5. TOURNAMENT: определить authoritative custom CUP или LK/Viva owner → проверить существующий accessLevels/booking/payment/capacity contract → signed original-operation receipt → LK2 registration и membership producer для tournament chat. Не переписывать foundation и не создавать independent dual-write.
+6. Monetary SELF: provider-owned game CURRENCY/DEPOSIT readback/idempotency contract → original-payment/quote-bound owner → LK2 pending/settled consumer → approved financial acceptance. Только затем solo-organizer CANCEL; bulk refunds требуют отдельного product scope. Отсутствие provider contract блокирует этот lane, не FREE/SERVICE.
+7. #516 → #518 actual5native XCTest → physical device/provider acceptance. Два предыдущих native runs0/5;53a8 correction CI pending. Signed/store/production остаются отдельно разрешаемыми переходами.
 
 ## Критический путь
 

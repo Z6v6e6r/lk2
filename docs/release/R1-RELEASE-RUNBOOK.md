@@ -1,12 +1,8 @@
 # LK2 R1 — release preparation и controlled handoff
 
-## Новые source prerequisites без runtime authority
+## Дополнительные prerequisites текущего checkpoint
 
-#517 location sync остаётся default-off; activation требует approved 0105, private credential-reference custody, подтверждённый provider tenant/read scope и runtime evidence. Ни один credential не создан. Этот producer не разрешает CREATE и не заменяет service/price specification.
-
-LK#270 должен поставляться атомарным reviewed graph, включая original SELF stages, response/privacy guards и оба background recovery filters. Не устанавливать частичный packet и не считать обычный legacy SELF endpoint safe transport для LK2. Следующий consumer 0106 требует exact owner contract, оригинальных JOIN receipts и CI concurrency/recovery evidence; source ordering не разрешает реальную миграцию.
-
-#518 использует только disposable CI-owned simulator, synthetic transport и unsigned builds. Увеличенный boot budget остаётся ограниченным; timeout не считается выполненным XCTest. До mobile acceptance требуется фактический result bundle с 5 journeys, затем отдельная physical-device/provider проверка.
+Перед tournament consumer зафиксировать actual owner по custom-to-Viva mapping; отдельно проверить CUP accessLevels/claim/readback или LK/Viva binding. Не поставлять два независимых writer для одного участия. Monetary SELF не активировать без versioned game refund/credit contract и approved financial acceptance: historical annual-subscription proof и synthetic options недостаточны. #518 full source green не закрывает native journey gate; два failed simulator runs не дали xcresult, второе удаление не подтверждено. Latest53a8 runner может повторить только timed-out owned inventory read, не create/boot/test/delete.
 
 **Текущее решение NO-GO. Этот документ не разрешает dispatch, публикацию, deploy, provider writes или store upload.** Он связывает R1 критерии с существующими executable runbooks; не создаёт новый deploy process. Baseline/блокеры: [READINESS](R1-READINESS.md), [BLOCKERS](R1-BLOCKERS.md).
 
