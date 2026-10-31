@@ -60,7 +60,13 @@ final class PadlHubDirectIntegrationTests: XCTestCase {
     let plugin = try XCTUnwrap(controller.bridge?.plugin(withName: "PadlHubSession") as? PadlHubSessionPlugin)
     XCTAssertEqual(Set(plugin.pluginMethods.map(\.name)), ["configuration", "request"])
     // Clear the previous document's timers before replacing its synthetic transport.
-    web.loadHTMLString("<html><body>B07 fixture reset</body></html>", baseURL: nil)
+    // A nil base URL becomes about:blank, which Capacitor correctly rejects as external.
+    let localURL = try XCTUnwrap(controller.bridge?.config.localURL)
+    guard localURL.absoluteString == "capacitor://localhost" else {
+      XCTFail("Fixture reset requires the exact bundled application origin")
+      throw NSError(domain: "B07NativeAcceptance", code: 3)
+    }
+    web.loadHTMLString("<html><body>B07 fixture reset</body></html>", baseURL: localURL)
     try await wait(web, "document.body?.textContent === 'B07 fixture reset'")
     let configuration = try fixture.configuration()
     plugin.installDirectIntegrationTransport(try fixture.transport(), configuration: configuration)

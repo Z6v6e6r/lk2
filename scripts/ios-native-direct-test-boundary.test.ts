@@ -39,6 +39,16 @@ describe('native DIRECT acceptance custody', () => {
     expect(test).toMatch(
       /guard controller\.directIntegrationEgressReady else \{\s+XCTFail\([^\n]+\)\s+throw NSError/,
     );
+    expect(test).toMatch(
+      /guard localURL\.absoluteString == "capacitor:\/\/localhost" else \{\s+XCTFail\([^\n]+\)\s+throw NSError/,
+    );
+    const originGuard = test.indexOf('guard localURL.absoluteString');
+    const reset = test.indexOf('web.loadHTMLString(');
+    expect(originGuard).toBeGreaterThanOrEqual(0);
+    expect(reset).toBeGreaterThan(originGuard);
+    expect(test).toContain('baseURL: localURL)');
+    expect(test).not.toContain('baseURL: nil');
+    expect(test).not.toContain('navigationDelegate =');
   });
 
   it('keeps fixture files in AppTests and out of application source/resources', () => {
