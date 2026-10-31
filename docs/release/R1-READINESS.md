@@ -2,7 +2,25 @@
 
 Дата: 2026-10-31. Решение: **NO-GO для заявленного полного iOS + Android release**.
 
-Это первый deliverable программы: аудит актуального исходного кода, открытых PR и существующих CI-результатов. Реализация, запуск новых E2E, публикация образов, миграции, отправка уведомлений, операции Viva и store activation не выполнялись. R1 — название программы, а не класс риска: коммерческие, identity и participation изменения относятся к CRITICAL.
+Первый deliverable программы — аудит актуального исходного кода, открытых PR и существующих CI-результатов. На этапе аудита реализация и новые E2E не выполнялись. После разрешения реализации начаты два bounded пакета ниже. Публикация образов, production-миграции, отправка уведомлений, операции Viva и store activation не выполнялись. R1 — название программы, а не класс риска: коммерческие, identity и participation изменения относятся к CRITICAL.
+
+## Реализация после аудита — 2026-10-31
+
+| Пакет               | Изменение и commit                                                                                                                                                                                                    | Доказательство                                                                                                                                                                                                                                                                                     | Остаток                                                                                               |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| B02 local safety    | [Draft #503](https://github.com/Z6v6e6r/lk2/pull/503), `d8af48b2` (основной fix `d51e5c9c`): strict persisted refs, отказ bound JOIN до dispatch, запрет v1 confirmation/replay для bound snapshot, CREATE units echo | LOCAL: 207 коммерческих тестов; финальный повтор с bundle/Git verifier 269 passed. Независимый payment/security/reliability review approved. Secret scan passed.                                                                                                                                   | PARTIAL: нет согласованного owner v2; v1 не превращён в binding wire. Нет provider/device acceptance. |
+| F1 / B12 dependency | [Draft #508](https://github.com/Z6v6e6r/lk2/pull/508), `18061aa8`: только systeminformation 5.31.16 → 5.33.16 в lockfile                                                                                              | LOCAL: clean install, import, 9 observability tests; audit high gate exit 0 (0 high/critical, 16 moderate). [CI dependency-security success](https://github.com/Z6v6e6r/lk2/actions/runs/41188184138/job/124499477726), source-quality success в том же run. Independent security review approved. | Не merged; high gate на main/#503 остаётся зависимостью интеграции. Moderate findings не закрыты.     |
+
+Для B02 полный LOCAL `npm run check` выполнил static/build/runtime-import stages, но первоначальный
+source-test run дал 116 failed / 6835 passed / 340 skipped (705 files) в Node 26 sandbox.
+Разобраны все 13 failed suites: Node native webstorage, запрет loopback/Docker, macOS TMPDIR alias,
+и одна реальная новая module-shim regression в hash закреплённого bundle. Последняя исправлена без
+изменения generated deploy artifact. Все failed suites повторно прошли на изолированном Node
+22.23.4 с каноническим TMPDIR и разрешёнными disposable fixtures; это составное LOCAL evidence,
+а не утверждение об одном чистом полном прогоне. Exact-head CI проверяется отдельно. Skipped DB/
+broker cases остаются пропусками, не runtime acceptance.
+
+NO-GO полного R1 сохраняется. Исходный baseline ниже не включает новые task-head commits.
 
 ## Зафиксированный baseline
 

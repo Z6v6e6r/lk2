@@ -68,3 +68,16 @@ flowchart TD
 - Apple/Google account owner, approved signing identities, privacy/deletion/store obligations.
 
 Эти неизвестные не препятствуют завершению аудита и безопасной реализации локальных bounded tasks; они блокируют зависимые provider/production/store переходы.
+
+## Выполненные первые пакеты и следующий переход
+
+- B02 local guards: #503 `d8af48b2`; F1 high dependency fix: #508 `18061aa8`.
+  Ветки независимы, merge не выполнен. При интеграции сначала принять dependency fix и затем
+  проверить combined source с #503; результаты раздельных веток не доказывают combined gate.
+- Следующий коммерческий packet — exact owner contract LK1/ph-admin: binding decision/usageRef,
+  admission/delegation/receipt schemas, stable retry identity, reserve/confirm/release/compensate.
+  Существующие advisory quote v1 и 17-field receipt не являются этим контрактом.
+- После owner implementation подключить dormant LK2 consumer и пройти physical DB/provider
+  sandbox acceptance; затем CREATE, paid LEAVE/CANCEL и training/tournament consumers.
+- Signing, social, push и required E2E infrastructure сохраняют параллельные dependency lanes;
+  закрытие локальных guards не разрешает отключать production guards.

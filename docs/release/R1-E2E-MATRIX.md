@@ -45,3 +45,15 @@ Baseline: [READINESS](R1-READINESS.md), 2026-10-31. **Эта матрица — 
 `case ID; repo SHA(s); run/attempt; build hash/version; environment + synthetic fixture ID; UTC time; command; passed/failed/skipped; assertions; receipt/correlation IDs; artifact URL/hash; provider write count; remaining gap`.
 
 Секреты, телефоны, payment URLs, access/refresh tokens и реальные player records в Git/CI artifacts не помещать. Удалять PII из runtime receipts перед sharing; идентификаторы тестовых операций хранить в разрешённом evidence store.
+
+## Новое LOCAL regression evidence — B02
+
+PR #503 `d8af48b2`: 207 tests в пяти focused suites, в том числе strict snapshot corruption,
+bound JOIN до dispatch, bound read/reconciliation, fresh/replayed v1 confirmation rejection,
+legacy replay и CREATE reservedUnits mismatch. Финальный набор с deterministic runtime-bundle
+rebuild и canonical Git verifier: 7 files / 269 passed. Это unit/contract/fake repository evidence
+для части Q02/Q03/Q04/Q06/Q07, не E2E на физических DB/provider/device.
+
+На source-wide LOCAL прогоне 340 tests skipped без внешних test-service env. Их статус не повышен.
+В частности concurrency/capacity, payment/refund и offline native acceptance требуют отдельных
+реальных disposable service/device прогонов согласно исходной матрице.
