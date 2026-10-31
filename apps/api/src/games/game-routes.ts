@@ -32,6 +32,7 @@ import {
   executeCommercialJoin,
   readCommercialJoinOperation,
   reconcileCommercialJoinOperation,
+  type CommercialJoinDependencies,
   type CommercialJoinFailureCode,
   type CommercialJoinOwnerPort,
   type CommercialJoinRepositoryPort,
@@ -563,6 +564,7 @@ function rejected(
 }
 
 export interface GameCommercialJoinOptions {
+  readonly stationMembership?: CommercialJoinDependencies['stationMembership'];
   readonly repository: CommercialJoinRepositoryPort;
   readonly conditionsOwner: GameJoinConditionsOwner;
   readonly owner: CommercialJoinOwnerPort;
@@ -895,6 +897,9 @@ export function registerGameRoutes(
               repository: options.commercialJoin.repository,
               conditionsOwner: options.commercialJoin.conditionsOwner,
               owner: options.commercialJoin.owner,
+              ...(options.commercialJoin.stationMembership
+                ? { stationMembership: options.commercialJoin.stationMembership }
+                : {}),
             },
           );
           if (result.kind === 'failed') {

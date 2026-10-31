@@ -1,3 +1,5 @@
+import managedJoinFixture from '../../../../packages/subscription-runtime-adapter/src/fixtures/managed-join-v2.json';
+import { parseManagedJoinEntitlement } from '@phub/domain';
 import { ManagedSelfLeaveError } from '@phub/database/managed-self-leave';
 import { loadConfig } from '@phub/config';
 import type {
@@ -12,7 +14,11 @@ import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createJoinConditionsFixture } from './game-join-conditions.test-fixture.js';
+import {
+  fixtureActor,
+  fixtureId,
+  createJoinConditionsFixture,
+} from './game-join-conditions.test-fixture.js';
 import {
   commercialCreateDraftGameId,
   commercialCreateOperationId,
@@ -742,6 +748,123 @@ describe('Games roster User API', () => {
 });
 
 describe('paid JOIN reconciliation HTTP boundary', () => {
+  it('carries station adoption through the authenticated HTTP JOIN composition without exposing the private marker', async () => {
+    const fixture = createJoinConditionsFixture(0);
+    fixture.setQuotes({
+      quotes: [
+        {
+          subscriptionId: fixtureId(6),
+          selectionKey: JSON.stringify([
+            'EXISTING_GAME',
+            'pay_synthetic_existing_game',
+            '2099-09-21T07:00:00+03:00',
+            90,
+          ]),
+          status: 'AVAILABLE',
+          basePriceMinor: 300000,
+          amountMinor: 0,
+          freeMinutes: 90,
+          paidMinutes: 0,
+          reasonCode: null,
+          evaluatedAt: Date.now(),
+          expiresAt: Date.now() + 30000,
+        },
+      ],
+    });
+    const stationMembership = vi.fn().mockResolvedValue({
+      version: 1,
+      outcome: 'NO_ENROLLMENT',
+      reason: 'STATION_BINDING_UNAVAILABLE',
+    });
+    const beginPaidJoin = vi.fn().mockImplementation((input: { operationId: string }) =>
+      Promise.resolve({
+        outcome: 'reserved',
+        operationId: input.operationId,
+        reservationId: commandId,
+        expiresAt: new Date(Date.now() + 600000).toISOString(),
+        revision: 9,
+      }),
+    );
+    const execute = vi.fn().mockResolvedValue({ status: 'PENDING' });
+    const app = await buildApp({
+      config,
+      logger: createLogger('station-http-test', 'silent'),
+      pool: fakePool(),
+      gameRosterRepository: repository(),
+      gameCommercialJoin: {
+        repository: {
+          beginPaidJoin,
+          getPaidJoinAttempt: vi.fn().mockResolvedValue(null),
+          failPaidJoinAttempt: vi.fn(),
+        },
+        conditionsOwner: {
+          ...fixture.owner,
+          resolveSelection: async (actor, signal) => {
+            const selection = await fixture.owner.resolveSelection(
+              {
+                ...fixtureActor,
+                tenantKey: 'local-padel',
+                expectedRevision: 8,
+                correlationId: 'fixture-correlation',
+              },
+              signal,
+            );
+            return selection ? { ...selection, ...actor } : null;
+          },
+        },
+        owner: {
+          prepareManaged: (input) =>
+            Promise.resolve({
+              outcome: 'prepared',
+              binding: {
+                ...managedJoinFixture.confirmed.receipt,
+                startsAt: '2099-09-21T04:00:00.000Z',
+                durationMinutes: 90,
+                capacity: 4,
+                admissible: true,
+              },
+              managedJoin: {
+                contractVersion: 2,
+                requestFingerprint: input.requestFingerprint,
+                entitlement: parseManagedJoinEntitlement(
+                  managedJoinFixture.preflight.response.entitlement,
+                ),
+              },
+            }),
+          execute,
+          read: vi.fn().mockResolvedValue(null),
+        },
+        stationMembership,
+      },
+    });
+    apps.push(app);
+    const result = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/games/${gameId}/join`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'station-http-original-join',
+      },
+      payload: {
+        subscriptionInstanceId: fixtureActor.subscriptionInstanceId,
+        expectedRevision: 8,
+        priceConsent: { amountMinor: 0, currency: 'RUB' },
+      },
+    });
+    expect(result.statusCode).toBe(202);
+    expect(stationMembership).toHaveBeenCalledOnce();
+    expect(stationMembership.mock.calls[0]?.[0]).toMatchObject({
+      command: { tenantId, userId, gameId, sessionId: '55555555-5555-4555-8555-555555555555' },
+    });
+    expect(beginPaidJoin.mock.calls[0]?.[0]).toHaveProperty(
+      'stationMembership.reason',
+      'STATION_BINDING_UNAVAILABLE',
+    );
+    expect(result.body).not.toContain('stationMembership');
+    expect(result.body).not.toContain('providerMappingId');
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it('scopes recovery to the authenticated actor and never invokes an owner for a foreign attempt', async () => {
     const getPaidJoinAttempt = vi.fn().mockResolvedValue(null);
     const read = vi.fn();
