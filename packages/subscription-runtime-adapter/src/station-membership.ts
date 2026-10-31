@@ -99,7 +99,7 @@ export function parseStationRequest(
       !digest(x.requestSha256) ||
       !id(x.stationId) ||
       !keys(x.activity, ['kind', 'id']) ||
-      !['GAME', 'TRAINING'].includes(String(x.activity.kind)) ||
+      (x.activity.kind !== 'GAME' && x.activity.kind !== 'TRAINING') ||
       !stationUuid(x.activity.id)
     )
       throw new StationMembershipError();
@@ -114,7 +114,8 @@ export function parseStationRequest(
     !stationUuid(x.admissionId) ||
     !digest(x.admissionBindingSha256) ||
     !keys(x.confirmation, ['kind', 'generationId', 'activityId']) ||
-    !['GAME_PARTICIPATION', 'TRAINING_REGISTRATION'].includes(String(x.confirmation.kind)) ||
+    (x.confirmation.kind !== 'GAME_PARTICIPATION' &&
+      x.confirmation.kind !== 'TRAINING_REGISTRATION') ||
     !stationUuid(x.confirmation.generationId) ||
     !stationUuid(x.confirmation.activityId)
   )

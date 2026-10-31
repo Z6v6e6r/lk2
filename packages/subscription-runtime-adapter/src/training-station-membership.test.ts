@@ -6,7 +6,11 @@ import {
   trainingStationActor,
   trainingStationRequest,
 } from './training-station-membership.js';
-import { parseStationMarker, stationAdmissionId } from './station-membership.js';
+import {
+  parseStationMarker,
+  parseStationRequest,
+  stationAdmissionId,
+} from './station-membership.js';
 import { trainingHash } from '@phub/domain/training-registration';
 async function fixture() {
   const authority = await trainingAuthorityFixture(),
@@ -91,4 +95,33 @@ it('JSONB key-order roundtrip normalizes pinned authority before order-sensitive
     await trainingHash(JSON.stringify(authority)),
   );
   expect(JSON.stringify(raw.authority)).not.toBe(JSON.stringify(authority));
+});
+
+it('wire enum arrays are rejected instead of coerced to strings', async () => {
+  const { marker } = await fixture();
+  expect(() =>
+    parseStationRequest(
+      { ...marker.request, activity: { ...marker.request.activity, kind: ['TRAINING'] } },
+      'admission',
+    ),
+  ).toThrow();
+  expect(() =>
+    parseStationRequest(
+      {
+        contractVersion: 1,
+        operationId: marker.request.operationId,
+        admissionId: marker.response.admission.admissionId,
+        admissionBindingSha256: marker.response.admission.bindingSha256,
+        confirmation: {
+          kind: ['TRAINING_REGISTRATION'],
+          generationId: marker.request.operationId,
+          activityId: marker.request.activity.id,
+        },
+      },
+      'confirmation',
+    ),
+  ).toThrow();
+  await expect(
+    parseTrainingStationMarker({ version: 1, outcome: 'NO_ENROLLMENT', reason: ['DISABLED'] }),
+  ).rejects.toThrow();
 });

@@ -65,7 +65,7 @@ export async function parseTrainingStationMarker(raw: unknown): Promise<Training
     case 'NO_ENROLLMENT':
       if (
         !keys('version', 'outcome', 'reason') ||
-        !['DISABLED', 'OWNER_UNAVAILABLE'].includes(String(x.reason))
+        (x.reason !== 'DISABLED' && x.reason !== 'OWNER_UNAVAILABLE')
       )
         throw new StationMembershipError();
       break;
