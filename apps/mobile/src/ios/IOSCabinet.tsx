@@ -4,6 +4,9 @@ import {
   initialAndroidPushState,
   type AndroidPushPlugin,
 } from '../android-push.js';
+import { TournamentDirectoryPage } from '../../../web/src/TournamentDirectoryPage.js';
+import { TournamentDetailPage } from '../../../web/src/TournamentDetailPage.js';
+import { createIOSTournamentGateway } from './tournament-gateway.js';
 import { IOSNotifications } from './IOSNotifications.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -429,6 +432,7 @@ export function IOSCabinet({
   readonly auth: AuthenticatedSession;
 }): React.JSX.Element {
   const route = useCabinetRoute();
+  const tournamentGateway = useMemo(() => createIOSTournamentGateway(session), [session]);
   const data = useMemo(() => createCabinetData(session, auth.user.id), [session, auth.user.id]);
   const [push, setPush] = useState(initialAndroidPushState);
   const [logoutError, setLogoutError] = useState<string>();
@@ -463,6 +467,7 @@ export function IOSCabinet({
       path,
     );
   const logout = () => {
+    session.closeTournament();
     setLogoutError(undefined);
     void controller
       .beforeLogout()
@@ -486,7 +491,18 @@ export function IOSCabinet({
         onDisable={() => void controller.disable().catch(() => undefined)}
       />
     );
-  else if (path === '/bookings') content = <Bookings data={data} />;
+  else if (path === '/tournaments') {
+    const id = new URLSearchParams(route.split('?')[1] ?? '').get('event');
+    content = id ? (
+      <TournamentDetailPage
+        gateway={tournamentGateway}
+        tournamentId={id}
+        principal={{ tenantId: auth.context.tenantId, userId: auth.context.userId }}
+      />
+    ) : (
+      <TournamentDirectoryPage gateway={tournamentGateway} />
+    );
+  } else if (path === '/bookings') content = <Bookings data={data} />;
   else if (path === '/games') content = <Games data={data} />;
   else if (path === '/history')
     content = (
@@ -530,6 +546,9 @@ export function IOSCabinet({
     );
   return (
     <div className="ios-cabinet">
+      <nav className="ios-tournament-navigation" aria-label="Турниры">
+        <a href="/tournaments">Турниры</a>
+      </nav>
       {logoutError ? <p role="alert">{logoutError}</p> : null}
       <div key={path}>{content}</div>
     </div>
