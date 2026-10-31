@@ -132,3 +132,43 @@ work. Their shared App/auth/native-policy changes require the designated integra
 The actual base Android workflow is dispatch/tag-only: no automatic unsigned build is
 claimed here. Host-JVM policy/engine and synthetic JS/UI results are LOCAL, not an APK,
 device, provider, store or production result. Full applicable CI remains required.
+
+## iOS concrete consumer (stacked after #530)
+
+The iOS cabinet reuses the dated directory, detail and original-operation custody panel.
+It retains its existing IOSSession/SDK, Keychain/FIFO transport and custom-scheme navigation;
+no browser gateway, second SDK, generic URL transport or unrelated DIRECT/TRAINING feature
+is introduced. A concrete typed `tournament` operation has six resources: list, summary,
+participants, status, command and retry. JS validates the same bounded tournament contract
+as Android; Swift independently constructs fixed configured origin/tenant paths, validates
+calendar dates/UUIDs/body/header/key and denies mixed operation payloads. Only list/summary
+are credential-free. Status alone accepts the optional original key/operation selector;
+JOIN/LEAVE and bodyless retry require an idempotency key. No cookie crosses this bridge.
+
+Existing SDK mutation methods send once and disable401 refresh replay. The existing
+native FIFO denies calls without a credential or with pending logout; queued operations
+cannot bypass that journal. Tournament principal closes synchronously at the OUTER logout
+click, before push cleanup. IOSSession lifecycle generation rejects late results and drains
+in-flight calls. Within the same IOSSession, restore cannot reopen a logout fence; only accepted new authentication
+that did not cross another logout fence can. Public reads never confer admission authority.
+
+The existing tenant/user custody persists the original body/key/generation across remount
+and session restoration. No automatic booking retry or404 reset is added. iOS15 declaration
+does not establish WKWebView capability/device acceptance: absent Web Locks, usable storage
+or crypto.randomUUID must cause zero command POST. No unsafe fallback or minimum-OS change
+is supplied. Sticky ambiguous/unsupported custody restrictions from #529 still apply.
+
+Rollback removes native exposure while retaining backend journals and custody. Native
+schema changes are additive typed resources; old binaries reject the new operation. Existing
+public API/backends/owner flags are unchanged and runtime activation is separately gated.
+LOCAL tests use synthetic native senders only. Existing automatic iOS CI must run Swift
+package tests and unsigned simulator compilation; source/host tests are not device, Keychain
+runtime, signed archive, provider or store acceptance. Pending iOS DIRECT/chat heads are
+not imported by this packet and shared Session/Plugin/IOSCabinet integration belongs to the
+explicit integration owner.
+
+The outer tournament fence is process-local until the existing native logout request is
+invoked after push cleanup. Process death during that earlier cleanup retains the existing
+auth restoration behavior; this packet does not rewrite push/auth sequencing. Once native
+logout is invoked, the existing Keychain pending-revocation journal protects restart. Neither
+case automatically retries a tournament mutation; original custody remains for explicit recovery.

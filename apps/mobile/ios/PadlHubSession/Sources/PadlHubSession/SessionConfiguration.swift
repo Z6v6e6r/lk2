@@ -34,7 +34,7 @@ public struct SessionConfiguration: Sendable {
 }
 
 public enum SessionOperation: String, Sendable {
-  case challenge, verify, refresh, logout, context, read, notification
+  case challenge, verify, refresh, logout, context, read, notification, tournament
 }
 
 public struct SessionRequest: Sendable {
@@ -44,10 +44,11 @@ public struct SessionRequest: Sendable {
   public let body: String?
   public let read: CabinetRead?
   public let notification: NotificationCommand?
+  public let tournament: TournamentRequest?
 
   public init(
     operation: SessionOperation, challengeID: String? = nil,
-    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil
+    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil, tournament: TournamentRequest? = nil
   ) {
     self.operation = operation
     self.challengeID = challengeID
@@ -55,12 +56,19 @@ public struct SessionRequest: Sendable {
     self.body = body
     self.read = read
     self.notification = notification
+    self.tournament = tournament
   }
 
   func urlRequest(configuration: SessionConfiguration) throws -> URLRequest {
+    if operation == .tournament {
+      guard let tournament, challengeID == nil, read == nil, notification == nil else { throw SessionFailure.request }
+      return try tournament.urlRequest(configuration: configuration, headers: headers, body: body)
+    }
+    guard tournament == nil else { throw SessionFailure.request }
     var path = configuration.authPath
     let method: String
     switch operation {
+    case .tournament: throw SessionFailure.request
     case .challenge:
       path += "/challenges"
       method = "POST"

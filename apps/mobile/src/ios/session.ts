@@ -1,6 +1,7 @@
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type { AuthenticatedSession, UserContext } from '@phub/api-sdk';
+import { tournamentRequest } from './tournament-routes.js';
 import { cabinetReadRequest } from './cabinet-routes.js';
 
 export interface IOSConfiguration {
@@ -12,8 +13,16 @@ export interface IOSConfiguration {
 
 interface NativeRequest {
   readonly operation:
-    'challenge' | 'verify' | 'refresh' | 'logout' | 'context' | 'read' | 'notification';
+    | 'challenge'
+    | 'verify'
+    | 'refresh'
+    | 'logout'
+    | 'context'
+    | 'read'
+    | 'notification'
+    | 'tournament';
   readonly challengeId?: string;
+  readonly operationId?: string;
   readonly resource?: string;
   readonly resourceId?: string;
   readonly query?: Record<string, string>;
@@ -38,16 +47,25 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
-    const read = (init?.method ?? 'GET') === 'GET' ? cabinetReadRequest(value, config) : null;
+    const tournament = tournamentRequest(
+      value,
+      init?.method ?? 'GET',
+      init?.body,
+      Object.fromEntries(new Headers(init?.headers).entries()),
+      config,
+    );
+    const read =
+      !tournament && (init?.method ?? 'GET') === 'GET' ? cabinetReadRequest(value, config) : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
-    if (!read && (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)))
+    if (!tournament && !read && (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)))
       throw rejectedRequest();
     const path = value.slice(root.length);
     const method = init?.method ?? 'GET';
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (read) operation = 'read';
+    if (tournament) operation = 'tournament';
+    else if (read) operation = 'read';
     else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
     else if (path === '/auth/session/refresh' && method === 'POST') operation = 'refresh';
     else if (path === '/auth/session' && method === 'DELETE') operation = 'logout';
@@ -80,6 +98,7 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
       const result = await plugin.request({
         operation,
         ...(read ?? {}),
+        ...(tournament ?? {}),
         ...(notification ?? {}),
         ...(challengeId ? { challengeId } : {}),
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
@@ -126,6 +145,8 @@ export class IOSSession {
   private busy = false;
   private restoration: Promise<void> | undefined;
   private generation = 0;
+  private tournamentClosed = false;
+  private tournamentEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
 
   public constructor(
@@ -187,16 +208,40 @@ export class IOSSession {
   public verify(challengeId: string, code: string): Promise<void> {
     return this.exclusive(async () => {
       if (this.state.status !== 'signed-out' || !/^\d{4}$/.test(code)) throw rejectedRequest();
+      const tournamentEpoch = this.tournamentEpoch;
       await Promise.allSettled([...this.reads]);
       const session = await this.api.verifyAuthChallenge(challengeId, {
         code,
         acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
       });
+      if (tournamentEpoch === this.tournamentEpoch) this.tournamentClosed = false;
       this.update({ status: 'signed-in', session });
     });
   }
 
+  public closeTournament(): void {
+    this.tournamentClosed = true;
+    this.tournamentEpoch++;
+  }
+
+  public tournamentPrincipal(): string | null {
+    if (this.tournamentClosed || this.state.status !== 'signed-in') return null;
+    const { context } = this.state.session;
+    return `${context.tenantId}:${context.userId}:${this.generation}`;
+  }
+
+  public tournamentCall<T>(load: (api: PadlHubApiClient) => Promise<T>): Promise<T> {
+    const principal = this.tournamentPrincipal();
+    if (!principal) return Promise.reject(rejectedRequest());
+    return this.read(load).then((value) => {
+      if (this.tournamentPrincipal() !== principal)
+        throw new DOMException('Session changed', 'AbortError');
+      return value;
+    });
+  }
+
   public logout(): Promise<void> {
+    this.closeTournament();
     return this.exclusive(async () => {
       this.api.clearAccessToken();
       this.update({ status: 'checking' });
