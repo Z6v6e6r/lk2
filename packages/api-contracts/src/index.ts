@@ -40,3 +40,9 @@ export interface TrainingRegistrationResult {
   readonly registration: { readonly status: 'UNKNOWN' | 'CONFIRMED'; readonly asOf: string | null };
   readonly retryAfterSeconds: number | null;
 }
+
+export type {
+  TournamentLocalResult,
+  TournamentLocalInput,
+  TournamentLocalStatus,
+} from '@phub/domain';

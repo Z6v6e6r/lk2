@@ -1,3 +1,8 @@
+import type {
+  TournamentLocalInput,
+  TournamentLocalResult,
+  TournamentLocalStatus,
+} from '@phub/api-contracts';
 import type { TrainingRegistrationResult } from '@phub/api-contracts';
 export type { TrainingRegistrationResult } from '@phub/api-contracts';
 import type { components, PublicApiComponents, UserApiV2Components } from '@phub/api-contracts';
@@ -1375,6 +1380,40 @@ export class PadlHubApiClient {
       this.publicApiRoot,
       `/tournaments/${encodeURIComponent(summaryId)}?${query.toString()}`,
       { auth: 'none' },
+    );
+  }
+
+  public commandTournament(
+    tournamentId: string,
+    input: TournamentLocalInput,
+    idempotencyKey: string,
+  ): Promise<TournamentLocalResult> {
+    return this.request<TournamentLocalResult>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/registrations`,
+      { method: 'POST', body: JSON.stringify(input), idempotencyKey, retryOnUnauthorized: false },
+    );
+  }
+  public retryTournament(
+    tournamentId: string,
+    operationId: string,
+    idempotencyKey: string,
+  ): Promise<TournamentLocalResult> {
+    return this.request<TournamentLocalResult>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/registration-operations/${encodeURIComponent(operationId)}/retry`,
+      { method: 'POST', idempotencyKey, retryOnUnauthorized: false },
+    );
+  }
+  public getTournamentRegistration(
+    tournamentId: string,
+    selector: { operationId?: string; idempotencyKey?: string } = {},
+  ): Promise<TournamentLocalStatus> {
+    return this.request<TournamentLocalStatus>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/registration-operation${selector.operationId ? '?operationId=' + encodeURIComponent(selector.operationId) : ''}`,
+      {
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        ...(selector.idempotencyKey ? { idempotencyKey: selector.idempotencyKey } : {}),
+      },
     );
   }
 

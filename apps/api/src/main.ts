@@ -1,3 +1,6 @@
+import { createTournamentLocalRepository } from '@phub/database';
+import { TournamentLocalOwnerClient } from '@phub/legacy-games-adapter';
+import { createTournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';
 import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
 import { createTrainingRegistrationRepository } from '@phub/database/training-registration';
 import { TrainingRegistrationOwnerClient } from '@phub/subscription-runtime-adapter';
@@ -603,6 +606,23 @@ const communityMediaRuntime = communityMediaObjectStore
   ? createCommunityMediaRuntime({ config, pool, objectStore: communityMediaObjectStore })
   : undefined;
 // Independent concrete TRAINING gate: never activates or widens WARN quote/game paths.
+const tournamentLocal = createTournamentLocalRuntime({
+  enabled: config.TOURNAMENT_LOCAL_COMMANDS_ENABLED,
+  repository: createTournamentLocalRepository(pool),
+  ...(config.TOURNAMENT_LOCAL_COMMANDS_ENABLED
+    ? {
+        client: new TournamentLocalOwnerClient({
+          identityUrl: config.LEGACY_GAME_IDENTITY_VERIFY_URL!,
+          integrationToken: config.LEGACY_GAME_IDENTITY_VERIFY_TOKEN!,
+          timeoutMs: config.LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS,
+          onMetric: (metric) => logger.info({ metric }, 'CUP local tournament owner operation'),
+        }),
+        token: async (actor: Parameters<typeof authService.issueVivaAccessToken>[0]) =>
+          (await authService.issueVivaAccessToken(actor)).accessToken,
+        date: (id: string) => tournamentSummarySource!.resolveRegistrationDate(id),
+      }
+    : {}),
+});
 const trainingRegistration = (() => {
   const repository = createTrainingRegistrationRepository(pool, {
     stationMembershipEnabled:
@@ -757,6 +777,7 @@ const app = await buildApp({
   ...(subscriptionPolicyRegistryClient ? { subscriptionPolicyRegistryClient } : {}),
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
   trainingRegistration,
+  tournamentLocal,
   gameManagedSelfLeave,
   ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
   ...(gameCommercialCreate ? { gameCommercialCreate } : {}),

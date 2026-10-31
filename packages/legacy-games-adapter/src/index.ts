@@ -1538,6 +1538,7 @@ function publicTournamentSummary(value: unknown): PublicTournamentSummary | unde
  * not become a thousand upstream roster requests.
  */
 export class LegacyTournamentSummaryAdapter {
+  private readonly registrationDates = new Map<string, Set<string>>();
   private readonly cache = new Map<string, TournamentCacheEntry>();
   private readonly pending = new Map<string, Promise<readonly PublicTournamentSummary[]>>();
   private readonly avatarSources = new Map<
@@ -1602,6 +1603,13 @@ export class LegacyTournamentSummaryAdapter {
       const items = body
         .flatMap((item) => {
           const summary = publicTournamentSummary(item);
+          if (summary) {
+            if (this.registrationDates.size >= 10000 && !this.registrationDates.has(summary.id))
+              this.registrationDates.clear();
+            const dates = this.registrationDates.get(summary.id) ?? new Set<string>();
+            dates.add(date);
+            this.registrationDates.set(summary.id, dates);
+          }
           const avatarSourceUrl =
             typeof item === 'object' && item !== null && !Array.isArray(item)
               ? httpsUrl((item as Record<string, unknown>).trainerAvatarUrl)
@@ -1659,6 +1667,20 @@ export class LegacyTournamentSummaryAdapter {
       this.emit({ outcome: 'failure', durationMs: Date.now() - startedAt });
       throw error;
     }
+  }
+
+  /** Original feed query date, never derived from normalized UTC startsAt. CUP revalidates it. */
+  public async resolveRegistrationDate(id: string): Promise<string> {
+    const dates = this.registrationDates.get(id);
+    if (!dates || dates.size !== 1) throw new Error('TOURNAMENT_DATE_ASSOCIATION_UNAVAILABLE');
+    const date = [...dates][0]!;
+    const fresh = await this.fetchDate(date);
+    if (
+      fresh.filter((item) => item.id === id).length !== 1 ||
+      this.registrationDates.get(id)?.size !== 1
+    )
+      throw new Error('TOURNAMENT_DATE_ASSOCIATION_UNAVAILABLE');
+    return date;
   }
 
   public readDate(date: string): Promise<readonly PublicTournamentSummary[]> {
@@ -2173,3 +2195,5 @@ export const testing = {
   normalizedPhoneKey,
   phoneCandidateForms,
 };
+
+export { TournamentLocalOwnerClient } from './tournament-local-owner.js';

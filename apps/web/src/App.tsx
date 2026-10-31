@@ -2950,7 +2950,14 @@ export function App({
         typeof window === 'undefined'
           ? null
           : new URLSearchParams(window.location.search).get('event');
-      return <TournamentDetailPage gateway={gateway} tournamentId={tournamentId} />;
+      return (
+        <TournamentDetailPage
+          key={`${context.tenant.id}:${context.user.id}`}
+          gateway={gateway}
+          tournamentId={tournamentId}
+          principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+        />
+      );
     }
     if (protectedRoute.kind === 'subscriptions') {
       return (

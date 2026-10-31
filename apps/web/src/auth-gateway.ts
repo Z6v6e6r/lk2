@@ -608,6 +608,10 @@ export interface AuthGateway {
   readonly reconcilePaidJoinOperation?: PadlHubApiClient['reconcilePaidJoinOperation'];
   readonly leaveGame: PadlHubApiClient['leaveGame'];
   readonly reconcileManagedLeaveOperation?: PadlHubApiClient['reconcileManagedLeaveOperation'];
+  readonly tournamentPrincipal?: () => string | null;
+  readonly commandTournament?: PadlHubApiClient['commandTournament'];
+  readonly retryTournament?: PadlHubApiClient['retryTournament'];
+  readonly getTournamentRegistration?: PadlHubApiClient['getTournamentRegistration'];
   readonly registerTraining?: PadlHubApiClient['registerTraining'];
   readonly getTrainingRegistration?: PadlHubApiClient['getTrainingRegistration'];
   readonly getManagedLeaveOperation?: PadlHubApiClient['getManagedLeaveOperation'];
@@ -994,6 +998,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   const subjectLinkStartKeys = new Map<string, string>();
   const subjectLinkVerifyKeys = new Map<string, string>();
   let principalGeneration = 0;
+  let tournamentLogoutStarted = false;
+  let tournamentLogoutPending = 0;
+  let tournamentSessionEpoch = 0;
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
   let bookingPreferencesPromise: Promise<BookingPreferences> | undefined;
@@ -1912,6 +1919,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async verifyCode(input) {
+      const tournamentAuthenticationEpoch = tournamentSessionEpoch;
+      const tournamentAuthenticationOutsideLogout = tournamentLogoutPending === 0;
       if (!input.acceptance.publicOfferAccepted || !input.acceptance.personalDataPolicyAccepted) {
         throw new Error('Required legal acceptance is missing');
       }
@@ -1922,7 +1931,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           personalDataPolicyAccepted: true,
         },
       });
-      return normalizeSession(session);
+      const normalized = normalizeSession(session);
+      if (
+        tournamentAuthenticationOutsideLogout &&
+        tournamentAuthenticationEpoch === tournamentSessionEpoch &&
+        tournamentLogoutPending === 0
+      )
+        tournamentLogoutStarted = false;
+      return normalized;
     },
 
     async startIdentitySubjectLink(phoneE164) {
@@ -2345,6 +2361,23 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
     reconcileManagedLeaveOperation(gameId, key) {
       return client.reconcileManagedLeaveOperation(gameId, key);
+    },
+    tournamentPrincipal() {
+      return !nativeClient && !tournamentLogoutStarted && currentUserId && currentTenantId
+        ? `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`
+        : null;
+    },
+    commandTournament(id, input, key) {
+      if (nativeClient) return nativeUnavailable();
+      return client.commandTournament(id, input, key);
+    },
+    retryTournament(id, operation, key) {
+      if (nativeClient) return nativeUnavailable();
+      return client.retryTournament(id, operation, key);
+    },
+    getTournamentRegistration(id, selector) {
+      if (nativeClient) return nativeUnavailable();
+      return client.getTournamentRegistration(id, selector);
     },
     registerTraining(trainingId, input, key) {
       return client.registerTraining(trainingId, input, key);
@@ -2835,14 +2868,21 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async logout() {
-      if (nativeClient) {
-        // Invalidate account reads before waiting for native revocation/recovery.
-        principalGeneration += 1;
-        currentUserId = undefined;
-        currentTenantId = undefined;
-        client.clearAccessToken();
-        if (options.nativeSessionTransport) await client.revokeSession();
-      } else await client.revokeSession();
+      tournamentLogoutStarted = true;
+      tournamentSessionEpoch += 1;
+      tournamentLogoutPending += 1;
+      try {
+        if (nativeClient) {
+          // Invalidate account reads before waiting for native revocation/recovery.
+          principalGeneration += 1;
+          currentUserId = undefined;
+          currentTenantId = undefined;
+          client.clearAccessToken();
+          if (options.nativeSessionTransport) await client.revokeSession();
+        } else await client.revokeSession();
+      } finally {
+        tournamentLogoutPending -= 1;
+      }
       vivaAccessToken = undefined;
       vivaProfilePhotoGrant = undefined;
       vivaProfilePhotoCommandIdempotencyKey = undefined;

@@ -264,6 +264,7 @@ const environmentSchema = z.object({
   GAME_CREATE_LOCATION_BINDING_ADMIN_CREDENTIAL_FILE: z.string().min(1).optional(),
   LEGACY_GAMES_ROSTER_SYNC_ENABLED: booleanFromEnvironment,
   LEGACY_GAME_COMMAND_BRIDGE_ENABLED: booleanFromEnvironment,
+  TOURNAMENT_LOCAL_COMMANDS_ENABLED: booleanFromEnvironment,
   LEGACY_GAME_COMMAND_BRIDGE_TOKEN: z.string().min(32).optional(),
   LEGACY_GAME_IDENTITY_VERIFY_URL: z.string().url().optional(),
   LEGACY_GAME_IDENTITY_VERIFY_TOKEN: z.string().min(32).optional(),
@@ -940,6 +941,16 @@ export function loadConfig(
       );
     }
   }
+  if (
+    parsed.data.TOURNAMENT_LOCAL_COMMANDS_ENABLED &&
+    (!parsed.data.LEGACY_GAME_IDENTITY_VERIFY_URL ||
+      !parsed.data.LEGACY_GAME_IDENTITY_VERIFY_TOKEN ||
+      !parsed.data.GAMES_READ_ENABLED ||
+      !parsed.data.VIVA_OAUTH_ENABLED)
+  )
+    throw new Error(
+      'TOURNAMENT_LOCAL_COMMANDS_ENABLED requires discovery and trusted actor identity',
+    );
   if (
     parsed.data.GAMES_RESULTS_WRITE_MODE === 'local_primary' &&
     !parsed.data.GAMES_COMMANDS_ENABLED
