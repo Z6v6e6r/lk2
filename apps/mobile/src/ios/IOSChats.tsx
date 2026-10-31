@@ -72,9 +72,7 @@ export function IOSChats({
           </button>
         </div>
       ) : null}
-      <p className="ios-cabinet-note">
-        Личные чаты и чаты игр. Новые диалоги и вложения пока недоступны.
-      </p>
+      <p className="ios-cabinet-note">Личные чаты и чаты игр. Вложения пока недоступны.</p>
       <div className={styles.threadBody}>
         {conversationId ? (
           <ChatThread

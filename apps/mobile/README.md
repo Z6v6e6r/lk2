@@ -221,7 +221,25 @@ reconnect, and HTTP sequence recovery/polling remains active. Logout/account cha
 results, stop sockets/polling and clear the shared unread badge. Read cursors advance only for a
 visible thread after history loads. Unread totals cover the existing bounded conversation list.
 
-This increment does not create new personal/game conversations, change membership, send or fetch
+Personal chat creation starts from an existing game participant's `/profile/{publicUuid}` link.
+The existing authenticated `/profiles/{uuid}` projection must match that exact player, have
+`OTHER` audience and contain no private account section. The native allowlist permits only this
+GET without query parameters. Shared profile UI preserves server chat privacy/capabilities;
+friend/contact writes and player search are not added. Other-player avatars use the initials
+placeholder, without fetching protected media.
+
+The server-projected `/chats/new?recipientUserId={uuid}&open=1` action rechecks the profile,
+current `profile.read`/`chat.direct.create` grants and exact target before the named native
+`createDirect` command: POST `/conversations/direct`, only `{otherUserId}`, current JWT and a
+stable idempotency key. Swift independently constructs/validates the route, method and body.
+One command is active at a time. After an ambiguous response, a user retry checks HTTP conversation
+history before retrying the same key; a bounded list miss is not proof of absence. The backend
+canonical pair and command ledger prevent duplicate threads. There is no automatic network retry
+or offline queue. Route exit clears presentation, and logout/account changes discard commands
+and late responses. Successful creation opens the existing text thread; server privacy, blocks,
+reachability and stored grants remain authoritative on every command/replay.
+
+This increment does not create game conversations, change membership, send or fetch
 attachments, or enable community/tournament writes. Existing media is explicitly unavailable on
 iOS; it never falls back to a protected browser fetch. Server messaging gates remain authoritative.
 Signing, provider/device acceptance and full B07 closure remain separate requirements.

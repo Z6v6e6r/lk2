@@ -63,6 +63,10 @@ export function cabinetReadRequest(
       /^\/(locations|games)\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i.exec(
         path,
       );
+    const profile =
+      /^\/profiles\/([a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/.exec(
+        path,
+      );
     const messages =
       /^\/conversations\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/messages$/i.exec(
         path,
@@ -72,6 +76,10 @@ export function cabinetReadRequest(
       resource = 'conversationMessages';
       resourceId = messages[1];
       allowed = ['afterSequence', 'limit'];
+    } else if (profile) {
+      resource = 'playerProfile';
+      resourceId = profile[1];
+      allowed = [];
     } else if (detail) {
       resource = detail[1] === 'locations' ? 'location' : 'game';
       resourceId = detail[2];

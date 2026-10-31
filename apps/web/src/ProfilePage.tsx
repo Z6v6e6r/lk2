@@ -2481,15 +2481,17 @@ export function ProfilePage({
 
           {access.audience === 'OTHER' ? (
             <>
-              <FriendshipAction
-                busy={friendsBusy}
-                reachable={view.reachable}
-                {...(friendship !== undefined ? { friendship } : {})}
-                {...(friendsError !== undefined ? { error: friendsError } : {})}
-                {...(onAddFriend ? { onAdd: onAddFriend } : {})}
-                {...(onRemoveFriend ? { onRemove: onRemoveFriend } : {})}
-                {...(onAcceptFriendRequest ? { onAccept: onAcceptFriendRequest } : {})}
-              />
+              {friendsAvailable ? (
+                <FriendshipAction
+                  busy={friendsBusy}
+                  reachable={view.reachable}
+                  {...(friendship !== undefined ? { friendship } : {})}
+                  {...(friendsError !== undefined ? { error: friendsError } : {})}
+                  {...(onAddFriend ? { onAdd: onAddFriend } : {})}
+                  {...(onRemoveFriend ? { onRemove: onRemoveFriend } : {})}
+                  {...(onAcceptFriendRequest ? { onAccept: onAcceptFriendRequest } : {})}
+                />
+              ) : null}
               <section className="profile-access-section" aria-labelledby="profile-actions-title">
                 <div className="profile-section-heading">
                   <span>Возможности</span>

@@ -8,13 +8,35 @@ function reject(): never {
   throw new ApiClientError('Native request rejected', 400, 'NATIVE_REQUEST_REJECTED', 'native');
 }
 
-/** Existing text conversations only; native code independently validates this exact command. */
+/** Text conversation commands; native code independently validates this exact command. */
 export function messagingRequest(path: string, method: string, init?: RequestInit) {
   const headers = new Headers(init?.headers);
   if (!/^Bearer \S+$/.test(headers.get('authorization') ?? '')) reject();
   if (path === '/messaging/realtime-ticket' && method === 'POST') {
     if (init?.body != null || headers.has('idempotency-key')) reject();
     return { resource: 'realtimeTicket' };
+  }
+  if (path === '/conversations/direct' && method === 'POST') {
+    if (!keyPattern.test(headers.get('idempotency-key') ?? '') || typeof init?.body !== 'string')
+      reject();
+    let body: unknown;
+    try {
+      body = JSON.parse(init.body);
+    } catch {
+      reject();
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) reject();
+    const value = body as Record<string, unknown>;
+    if (
+      Object.keys(value).length !== 1 ||
+      typeof value.otherUserId !== 'string' ||
+      value.otherUserId.length !== 36 ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+        value.otherUserId,
+      )
+    )
+      reject();
+    return { resource: 'createDirect' };
   }
   const match = new RegExp(
     `^/conversations/(${uuid})/(messages|read-cursor|notification-policy)$`,

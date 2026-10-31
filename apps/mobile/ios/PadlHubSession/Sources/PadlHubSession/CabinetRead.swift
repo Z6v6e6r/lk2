@@ -3,7 +3,7 @@ import Foundation
 /// Reviewed first-party reads only. The WebView cannot choose a URL, tenant or HTTP method.
 public enum CabinetResource: String, Sendable {
   case home, homeBase, profile, preferences, privacy, bookings, history, recommendations
-  case locations, location, game, publicGames, communities
+  case locations, location, game, publicGames, communities, playerProfile
   case pushConfig, notifications, notificationPreferences
   case conversations, conversationMessages
 
@@ -40,6 +40,9 @@ public struct CabinetRead: Sendable {
     case .home: suffix = "/home"
     case .homeBase: suffix = "/home/base"
     case .profile: suffix = "/profile"
+    case .playerProfile:
+      guard let id, UUID(uuidString: id) != nil else { throw SessionFailure.request }
+      suffix = "/profiles/\(id)"
     case .preferences: suffix = "/profile/booking-preferences"
     case .privacy: suffix = "/profile/privacy"
     case .bookings: suffix = "/bookings/upcoming"
@@ -60,7 +63,7 @@ public struct CabinetRead: Sendable {
       suffix = "/communities/mine"
       allowed = ["limit", "cursor"]
     }
-    guard (resource == .location || resource == .game || resource == .conversationMessages) || id == nil,
+    guard (resource == .location || resource == .game || resource == .conversationMessages || resource == .playerProfile) || id == nil,
       Set(query.keys).isSubset(of: allowed)
     else { throw SessionFailure.request }
     for (key, value) in query {
