@@ -8,7 +8,7 @@
 - #508 merged в LK2 main `14ebdca6`; main CI `41201792854` success. Combined #503 `39feed0c` CI `41202183068` success: **7165 passed / 126 skipped**, PostgreSQL 4 passed. High dependency blocker B12 закрыт; 16 moderate остаются отдельно.
 - Auth/profile, canonical subscription lifecycle foundations, game/JOIN recovery, messaging/realtime и APNs/FCM/scenario foundations присутствуют в исходниках.
 - Исторический Web delivery получил RANGE_INELIGIBLE. После разрешённого source-only merge #508 exact downstream `41202697617` / `standard-web` SKIPPED, steps=[]; delivery не выполнялась.
-- #58/#59 подтвердили конкретные physical Mongo lifecycle/rollback/lost-response/post-TTL readback cases. #510 имеет unsigned native и full CI success; LK #264 exact-head CI success; #509 physical CI пока running. Это не полный E2E, signed/store или runtime pass.
+- #58/#59 подтвердили конкретные physical Mongo lifecycle/rollback/lost-response/post-TTL readback cases. #510 имеет unsigned native и full CI success; LK #264 exact-head CI success; #509 physical CI 6/6 passed в combined #511; #60 preflight/reserve guards прошли physical CI. Это не полный E2E, signed/store или runtime pass.
 
 ## Решение по gate
 
@@ -19,8 +19,8 @@
 | Production games / entitlements            | BLOCKED                               | Explicit production guards; B01/B02                                                                                            |
 | CREATE / JOIN / paid LEAVE / CANCEL        | BLOCKED                               | Advisory CREATE, paid cancellation отсутствует, native/owner acceptance неполна; B03/B04/B06                                   |
 | Training / tournament signup               | MISSING                               | Каталог/summary без завершённого command consumer; B05                                                                         |
-| Четыре chat contexts + station communities | BLOCKED                               | Community read-only, tournament mapping не доказан, iOS social отсутствует; B07                                                |
-| Push / campaigns                           | PARTIAL / runtime BLOCKED             | Ordinary iOS APNs source реализован в #509; corrected physical CI running, device/provider acceptance отсутствует; B08         |
+| Четыре chat contexts + station communities | BLOCKED                               | Community read-only, tournament mapping не доказан, iOS existing DIRECT/GAME text #513 LOCAL/CI verified; B07                  |
+| Push / campaigns                           | PARTIAL / runtime BLOCKED             | Ordinary iOS APNs source реализован в #509; шесть physical CI cases passed в #511, device/provider acceptance отсутствует; B08 |
 | Required E2E                               | PARTIAL evidence / full scope BLOCKED | #58/#59 конкретные physical Mongo cases passed; остальные required paths, PG/broker/native/provider acceptance не закрыты; B10 |
 | Current dependency gate                    | VERIFIED high fix                     | #508 merged/main CI success; #503 combined CI success. B12 high закрыт, moderate triage и финальный source gate сохраняются    |
 | Signed artifacts / stores                  | BLOCKED; unsigned CI VERIFIED         | #510 unsigned native builds и full CI success; signing/material/physical-device/store readiness не приняты; B09                |
@@ -37,9 +37,21 @@
 
 ## Следующий практический шаг
 
-Принять новый exact-head CI LK #264 success и дождаться corrected #509 physical CI; сохранить порядок CUP #57 → #58 → #59 → LK #264. Physical canonical ledger и post-TTL readback cases уже passed; следующий коммерческий residual — owner v2 B02 и authoritative CREATE B03, затем paid cancellation B04 и signup B05. Local pre-write abort и provider acceptance остаются отдельными gap. Native journeys B06, social B07, signed/device/store acceptance развивать ограниченными задачами. Не проводить широкую переработку архитектуры и не активировать production flags для обхода blockers.
+Завершить совместимые LK owner v2 и LK2 JOIN consumer поверх CUP #60; сохранить prerequisite chain CUP #57 → #58 → #59 и LK #264. #511 уже имеет combined green CI, но merge требует отдельного exact-head разрешения и подавления automatic delivery. Physical canonical ledger и post-TTL readback cases уже passed; следующий коммерческий residual — owner v2 B02 и authoritative CREATE B03, затем paid cancellation B04 и signup B05. Local pre-write abort и provider acceptance остаются отдельными gap. Native journeys B06, social B07, signed/device/store acceptance развивать ограниченными задачами. Не проводить широкую переработку архитектуры и не активировать production flags для обхода blockers.
 
 ## Выполненные и невыполненные действия
 
-На первом этапе подготовлены семь audit documents без application changes. После разрешения реализации созданы task-branch commits и Draft PR: LK2 #503/#508/#509/#510, ph-admin #57/#58/#59 и LK #264; application tests/builds выполнены с результатами в READINESS. Это SOURCE/LOCAL/CI evidence, без runtime acceptance. По отдельному owner approval merged только LK2 #508 (`14ebdca6`). Остальные PR не merged.
+На первом этапе подготовлены семь audit documents без application changes. После разрешения реализации созданы task-branch commits и Draft PR: LK2 #503/#508/#509/#510/#511/#512/#513, ph-admin #57/#58/#59/#60 и LK #264; application tests/builds выполнены с результатами в READINESS. Это SOURCE/LOCAL/CI evidence, без runtime acceptance. По отдельному owner approval merged только LK2 #508 (`14ebdca6`). Остальные PR не merged.
 Также отдельно разрешён временный cycle repository delivery flag: false в 12:34:48 UTC → exact main CI `41201792854` success / delivery `41202697617` SKIPPED, steps=[] → исходный true в 12:49:05 UTC, с подтверждённым readback. Это подавление автодоставки, не production activation. Деплой, workflow dispatch/rerun, publication, secret creation, live/shared database/provider writes, реальные push-уведомления, store upload/publication не выполнялись. Commit/branch/PR custody документационного пакета фиксируется в handoff/PR; это не acceptance продукта.
+
+## Дополнение текущего checkpoint
+
+#511 `ed3854c3` имеет три success CI runs, включая combined full checks и unsigned iOS;
+#512 `96723a30` — green CI/debug APK; CUP #60 `730e3f4c` — green canonical physical preflight/
+reserve/replay evidence. #513 `7b2213a0` — LOCAL full/native/UI и CI `41210366790`/`41210366803` success.
+Owner v2 и LK2 consumer продолжаются в отдельных worktrees; их completion не заявлен.
+
+Вердикт остаётся **NO-GO**. Source-only merge #511 ожидает отдельного ответа; station cardinality
+и membership — отдельных продуктовых решений. Остальные bounded implementation tasks идут
+независимо. Последний подтверждённый LK main `608ebe20`; LK2 main `14ebdca6`, CUP main `83b1c17b`.
+Список выполненных операций выше не расширяет старую authority #508 на другие PR или live targets.

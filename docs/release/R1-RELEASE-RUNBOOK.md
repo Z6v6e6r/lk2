@@ -91,3 +91,17 @@ semantics; не включать producer/strict mode автоматически
 B02 owner v2, B03 CREATE, B04 paid cancellation, B05 signup или B06 native guards. #509/#510
 нужны для push/build lanes, но не заменяют physical-device acceptance. B12 high исправлен на main;
 финальный выбранный source всё равно требует собственного зелёного dependency/full gate.
+
+## Приёмка последующих кандидатов
+
+#511 `ed3854c3` имеет green combined CI, но не разрешение merge. Новый cycle delivery flag
+нельзя выводить из уже завершённого approval #508: необходимы exact head и отдельная authority.
+Перед каждым разрешённым source-only cycle повторить quiescence/current main/flag checks;
+после merge дождаться exact main CI и corresponding delivery SKIPPED без executed steps,
+затем проверить отсутствие новых relevant runs и только тогда восстановить исходный flag.
+
+CUP #60 добавляет read-only preflight и optional expectations поверх #59. До использования
+managed JOIN v2 принять совместимые owner/consumer heads и selector drift/replay tests;
+не подменять explicit LEGACY отсутствующим instance. #512 debug APK и #513 unsigned iOS
+проверяют build/consumer slices, но не открывают signed/store/device gates. Эти PR не входят
+в source integration #511 и не активируются вследствие её merge автоматически.

@@ -93,7 +93,7 @@ Dependency order: **ph-admin #57 → #58 → #59 → LK #264**. Merge не вк�
 До runtime acceptance проверить Node-RED crypto injection, согласованные closed flags и оставшиеся
 local pre-write abort paths. Не снимать production guards; полного B02/B04 acceptance ещё нет.
 
-Параллельные lanes: #509 ordinary iOS APNs source реализован, exact-head physical CI running;
+Параллельные lanes: #509 ordinary iOS APNs source реализован, physical CI 6/6 passed в combined #511;
 #510 unsigned native CI и full CI success, signing/device/store acceptance отдельно. После этих
 пакетов B08/B09 остаются PARTIAL, B06/B07 и полный B10 не закрыты.
 
@@ -125,3 +125,36 @@ DIRECT/GAME, canonical community/tournament-to-conversation binding не най�
 требует Swift/TS session validation и controller/UI. #330 не добавляет community sending; #453/#466
 затрагивают Android policy для GAME JOIN, поэтому будущий read-access PR должен объявить порядок
 интеграции. Нельзя обойти membership checks клиентским вызовом generic send.
+
+## Текущие отдельные исходные пакеты
+
+1. Source integration #511 (`ed3854c3`) объединяет ровно #503/#509/#510/#507 и test-only
+   Linux process-state regression fix. Combined CI и unsigned iOS success. Merge и отдельный
+   temporary delivery suppression cycle ещё не одобрены; source freeze не меняется новыми задачами.
+2. CUP #60 (`730e3f4c`) поверх #59: read-only canonical preflight + exact reserve expectations;
+   physical CI success. Следом LK managed JOIN v2 owner поверх #264 и отдельный LK2 consumer
+   поверх #511. Общие operation ID и v1 wire сохраняются; managed/legacy определяется одним
+   server selector, не отсутствием instance. До consumer activation нужен verified compatible owner.
+3. Android community history #512 (`96723a30`) — самостоятельный green candidate. iOS existing
+   DIRECT/GAME chats #513 (`7b2213a0`) — отдельный stacked candidate на #511; LOCAL passed,
+   CI `41210366790` и unsigned `41210366803` success. После разрешённого merge #511 retarget последующих PR на main без добавления
+   пятого head в исходную integration batch.
+4. Станционные сообщества ждут material cardinality/membership choices и canonical mapping owner.
+   Нельзя подменить их support-dialog rows или объединить LOCAL membership с LEGACY chat writes.
+5. После JOIN v2 идут canonical CREATE, paid cancellation/compensation, training/tournament
+   consumers и native journeys. Provider/device/signing/restore acceptance остаются обязательными,
+   а exact live/package authority запрашивается лишь для подготовленного конкретного перехода.
+
+## CREATE target prerequisite из текущего source
+
+Raw `booking.studioId`/`roomId` есть до sanitizer в LegacyGames Mongo adapter, но importer
+сохраняет raw/pseudonymous aliases с одинаковой ролью. Migration 0042 разрешает несколько
+`LK_LEGACY_SNAPSHOT/game_station,game_court` aliases на один internal UUID. Поэтому reverse
+выбор первого alias не может дать authority на provider CREATE. Текущий draft resolver не
+связывает court со station и не возвращает exact provider location.
+
+До CREATE admission нужен versioned canonical location producer и resolver с явной связью
+public court → station и provider room → studio, tenant/organizer/draft revision checks и
+отказом при missing/ambiguous/conflicting evidence. LK уже имеет authoritative room/studio GET
+проверку и durable precreate CAS, но это не заменяет LK2 mapping. Provider exercise ID должен
+появиться только из actual create/readback; синтетический ID недопустим. Пакет пока не реализован.

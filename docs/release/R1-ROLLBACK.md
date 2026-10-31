@@ -71,3 +71,17 @@ rehearsal rollback выбранного production target. Rollback не дол�
 → delivery `41202697617` standard-web SKIPPED, steps=[] → исходный true восстановлен/readback
 12:49:05 UTC. Delivery, publication и host rollback не выполнялись; новое выполнение этого цикла
 не разрешено исторической записью.
+
+## Совместимость новых подготовленных пакетов
+
+- CUP #60: expectations optional для прежних callers, прежний absent fingerprint сохраняется.
+  После начала bound operations нельзя откатывать на receiver, игнорирующий expectations:
+  остановить новые managed admissions и сохранить readback/replay до завершения операций.
+  Старый ответ без строгой binding формы downstream обязан отвергать, а не принимать как legacy.
+- #512 Android community history меняет только native GET allowlist; откат consumer не меняет
+  membership или backend data. Debug APK не является rollback artifact установленной production версии.
+- #513 iOS existing chats можно revert как отдельный consumer commit поверх #511, восстановив
+  unavailable route/default-deny. Уже принятые сервером сообщения/read cursors остаются canonical.
+  Pending send только в памяти mounted thread: нет обещания восстановления draft после process death.
+- #511 test-only process termination fix не меняет production scripts. Ни один из этих source
+  rollback планов не означает разрешение выполнить runtime rollback или изменение shared data.
