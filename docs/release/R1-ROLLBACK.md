@@ -1,5 +1,11 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Дополнительные original-operation ограничения
+
+Принятый source/CI consumer#519 (0106) сохраняет исходный ключ и journal при UNKNOWN; unsupported typed refusal может сохранить custody и блокировать новый JOIN до подтверждения результата. Удаление browser custody по404/409 или повторная запись с новым ключом не являются recovery. При terminal original-key replay после rejoin нельзя менять новое участие. Для денежных отмен не повторять cancellation/refund после ambiguous write, пока provider contract не доказал idempotency; cancelled history не означает settlement. При tournament recovery сохранять source owner и original booking generation, не переключаться с CUP на LK или наоборот.
+
+TRAINING consumer0107 пока в разработке: после dispatch fence нельзя reprepare, подменять capsule или начинать новый booking. Fresh owner read не должен превращать immutable historical receipt в текущее участие после cancel/WAITLIST/rejoin. Только durable terminal pre-dispatch proof с CAS и отсутствием dispatch разрешает новый выбор/ключ; timeout,404/409 и отсутствие локальной строки сами по себе не доказательство. Rollback удерживает original attempts и не передаёт их старому writer.
+
 Статус: **PARTIAL source procedures / UNKNOWN свежая rehearsal готовность**. На первом этапе rollback, restore, flags и runtime не менялись. Позднее отдельно одобрен только repository delivery-flag cycle для source-only merge #508; production flags, rollback/restore, worker, возвраты и stores не затрагивались. Этот документ — требования к подготовке, не разрешение операций.
 
 Каноническая основа: [application rollback](../runbooks/rollback.md), [Timeweb runtime](../runbooks/timeweb-lk2-beta.md), [publication custody](../runbooks/timeweb-amd64-image-publication.md). Выбранные target, previous digests, backup receipt и совместимый mobile/backend floor должны быть заполнены release owner до GO.
@@ -71,3 +77,25 @@ rehearsal rollback выбранного production target. Rollback не дол�
 → delivery `41202697617` standard-web SKIPPED, steps=[] → исходный true восстановлен/readback
 12:49:05 UTC. Delivery, publication и host rollback не выполнялись; новое выполнение этого цикла
 не разрешено исторической записью.
+
+## Совместимость новых подготовленных пакетов
+
+- CUP #60: expectations optional для прежних callers, прежний absent fingerprint сохраняется.
+  После начала bound operations нельзя откатывать на receiver, игнорирующий expectations:
+  остановить новые managed admissions и сохранить readback/replay до завершения операций.
+  Старый ответ без строгой binding формы downstream обязан отвергать, а не принимать как legacy.
+- #512 Android community history меняет только native GET allowlist; откат consumer не меняет
+  membership или backend data. Debug APK не является rollback artifact установленной production версии.
+- #513 iOS existing chats можно revert как отдельный consumer commit поверх #511, восстановив
+  unavailable route/default-deny. Уже принятые сервером сообщения/read cursors остаются canonical.
+  Pending send только в памяти mounted thread: нет обещания восстановления draft после process death.
+- #511 test-only process termination fix не меняет production scripts. Ни один из этих source
+  rollback планов не означает разрешение выполнить runtime rollback или изменение shared data.
+
+## Recovery floor для новых bound operations
+
+- #267/#515: после появления v2 bound operation сохранять compatible receipt/readback/recovery-only обработчики до её terminal outcome. Остановка новых admissions допустима только отдельным runtime решением; v1 или отсутствие instance не могут стать fallback. Original request tuple, fingerprint и canonical usage identity не переписывать.
+- #269: после CUP compensation, но потерянного local ACK восстановление выполняется exact readback и CAS исходной operation/generation. Не повторять visit return или денежный refund ради локального состояния. Original proof timestamp не продлевается; post-TTL uncompensated operation остаётся pending.
+- Старые managed leave rows без stored tenant требуют отдельного доказанного recovery/backfill решения; source rollback не добавляет им authority. Не удалять additive proof/receipt поля при откате consumer. Все описанные runtime действия требуют отдельного exact-target разрешения.
+
+#516 можно откатить отдельным consumer revert до создания новых DIRECT, сохранив #513 existing chat reader. Уже созданные server conversations остаются canonical; удалять их для rollback нельзя. Незавершённый create key хранится в памяти authenticated cabinet; после process death новый запрос полагается также на server unique pair, а не обещанное восстановление памяти.

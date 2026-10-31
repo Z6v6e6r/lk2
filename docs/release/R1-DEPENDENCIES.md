@@ -1,6 +1,14 @@
 # LK2 R1 — зависимости и критический путь
 
-Основа: [READINESS](R1-READINESS.md), [BLOCKERS](R1-BLOCKERS.md). Это последовательность закрытия фактических пробелов, без обещания даты release. Оценки времени невозможны до bounded task sizing и выделения provider/device test environment.
+## Критический путь после нового source audit
+
+1. Green JOIN chain #267/#515/CUP#60 сохраняет отдельную runtime/provider acceptance зависимость.
+2. SELF: LK#269 compensation → LK#270 admission/read + physical Mongo green → LK2#519 consumer0106 source/physical CI/Web UI green → bounded unsupported-key recovery + native consumer → controlled provider acceptance. Порядок migrations0105→0106, без исполнения на target. Старый ключ возвращает original result после rejoin; новый ключ без original membership selector после LEFT безопасно отклоняется. UNKNOWN/unsupported custody нельзя очищать по404 или любому409.
+3. CREATE: #517 green location evidence → owner specification service/dictionary/base-price → real target + narrow CUP preflight → durable original-create ACK/receipt → LK2 consumer. Lost ACK не разрешает room/time adoption.
+4. TRAINING: existing target → LK#271 legacy nonmonetary owner exact CI green → LK2 consumer0107/recovery → native consumer → provider capacity acceptance. CUP-managed/paid/LEAVE отдельны.
+5. TOURNAMENT: fresh non-swallowing custom/source/exercise lookup (catalog missing-link не proof при storage outage) → определить authoritative CUP или LK/Viva owner → проверить существующий accessLevels/booking/payment/capacity contract → signed original-operation receipt → LK2 registration и membership producer для tournament chat. Не переписывать foundation и не создавать independent dual-write.
+6. Monetary SELF: provider-owned game CURRENCY/DEPOSIT readback/idempotency contract → original-payment/quote-bound owner → LK2 pending/settled consumer → approved financial acceptance. Только затем solo-organizer CANCEL; bulk refunds требуют отдельного product scope. Отсутствие provider contract блокирует этот lane, не FREE/SERVICE.
+7. #516 → #518 actual5native XCTest → physical device/provider acceptance. Последний a644 native run исполнил5, все5failed на reset; narrow test-origin correction pending. Signed/store/production остаются отдельно разрешаемыми переходами.
 
 ## Критический путь
 
@@ -9,9 +17,9 @@ flowchart TD
   A[Аудит main и residual PR delta] --> B[Actor / target / policy / usage contract]
   B --> C[Canonical CREATE owner + JOIN parity]
   B --> D[Paid cancellation / refund compensation]
-  C --> E[Training / tournament signup consumers]
-  D --> E
+  B --> E[Existing training / tournament owners and consumers]
   C --> M[Native command and payment handoff]
+  D --> M
   E --> M
   A --> S[Social membership / reconnect / iOS consumer]
   A --> P[APNs / FCM / campaigns acceptance]
@@ -27,7 +35,7 @@ flowchart TD
   H --> R[Controlled rollout / store transitions]
 ```
 
-Главная последовательность: **B02 → B03/B04 → B05/B06 → B10 → B01/B11 → owner decision**. Signing/B09 и social/push B07/B08 идут параллельно и должны завершиться до device acceptance; B12 high finding уже устранён на main; свежий dependency gate остаётся требованием финального source. Это граф зависимостей, не разрешение выполнить live шаги.
+Коммерческий путь: **B02 → B03/B04 → B06 → B10 → B01/B11 → owner decision**. Existing-target B05 training/tournament развивается от своего actor/owner contract параллельно CREATE и monetary refund; их завершение не является prerequisite для nonmonetary registration. Signing/B09 и social/push B07/B08 идут параллельно и должны завершиться до device acceptance; B12 high finding уже устранён на main; свежий dependency gate остаётся требованием финального source. Это граф зависимостей, не разрешение выполнить live шаги.
 
 ## Bounded task packets после аудита
 
@@ -87,13 +95,13 @@ flowchart TD
 3. ph-admin #59 (`70d3820c`) — actor/tenant/operation/instance-scoped primary-majority readback, семь полей, без owner proof или business write. Новый physical TTL case CI `41204278865` success: lost response после provider-rejection commit → read-only recovery beyond TTL; provider writes=0, skipped=0. Все четыре workflow green.
 4. LK #264 (`de95b8cc`) — opt-in signer, durable original rejection, fresh-TTL retry и post-TTL readback только уже завершённого CUP release. LOCAL 213 passed / 1 skip; CI `41204447158` success. Неприменённый release после TTL остаётся pending; timestamp не обновляется.
 5. Принять exact compatible heads, затем отдельно разрешённые runtime configuration / sandbox acceptance. Общий secret/config предусмотрен; создание, установка и активация сейчас не разрешены.
-6. Owner v2 policy/instance/target/usage binding и authoritative CREATE consumer остаются следующим коммерческим критическим путём; затем paid cancellation/signup/native journeys. Этот compensation slice их не заменяет.
+6. Runtime acceptance owner v2 #267/#515 и authoritative CREATE consumer остаются коммерческим критическим путём; затем paid cancellation/signup/native journeys. Этот compensation slice их не заменяет.
 
 Dependency order: **ph-admin #57 → #58 → #59 → LK #264**. Merge не включает strict mode.
 До runtime acceptance проверить Node-RED crypto injection, согласованные closed flags и оставшиеся
 local pre-write abort paths. Не снимать production guards; полного B02/B04 acceptance ещё нет.
 
-Параллельные lanes: #509 ordinary iOS APNs source реализован, exact-head physical CI running;
+Параллельные lanes: #509 ordinary iOS APNs source реализован, physical CI 6/6 passed в combined #511;
 #510 unsigned native CI и full CI success, signing/device/store acceptance отдельно. После этих
 пакетов B08/B09 остаются PARTIAL, B06/B07 и полный B10 не закрыты.
 
@@ -125,3 +133,50 @@ DIRECT/GAME, canonical community/tournament-to-conversation binding не най�
 требует Swift/TS session validation и controller/UI. #330 не добавляет community sending; #453/#466
 затрагивают Android policy для GAME JOIN, поэтому будущий read-access PR должен объявить порядок
 интеграции. Нельзя обойти membership checks клиентским вызовом generic send.
+
+## Текущие отдельные исходные пакеты
+
+1. Source integration #511 (`ed3854c3`) объединяет ровно #503/#509/#510/#507 и test-only
+   Linux process-state regression fix. Combined CI и unsigned iOS success. Merge и отдельный
+   temporary delivery suppression cycle ещё не одобрены; source freeze не меняется новыми задачами.
+2. CUP #60 (`730e3f4c`) поверх #59: read-only canonical preflight + exact reserve expectations;
+   physical CI success. Следом LK managed JOIN v2 owner поверх #264 и отдельный LK2 consumer
+   поверх #511. Общие operation ID и v1 wire сохраняются; managed/legacy определяется одним
+   server selector, не отсутствием instance. До consumer activation нужен verified compatible owner.
+3. Android community history #512 (`96723a30`) — самостоятельный green candidate. iOS existing
+   DIRECT/GAME chats #513 (`7b2213a0`) — отдельный stacked candidate на #511; LOCAL passed,
+   CI `41210366790` и unsigned `41210366803` success. После разрешённого merge #511 retarget последующих PR на main без добавления
+   пятого head в исходную integration batch.
+4. Станционные сообщества ждут material cardinality/membership choices и canonical mapping owner.
+   Нельзя подменить их support-dialog rows или объединить LOCAL membership с LEGACY chat writes.
+5. После JOIN v2 идут canonical CREATE, paid cancellation/compensation, training/tournament
+   consumers и native journeys. Provider/device/signing/restore acceptance остаются обязательными,
+   а exact live/package authority запрашивается лишь для подготовленного конкретного перехода.
+
+## CREATE target prerequisite из текущего source
+
+Raw `booking.studioId`/`roomId` есть до sanitizer в LegacyGames Mongo adapter, но importer
+сохраняет raw/pseudonymous aliases с одинаковой ролью. Migration 0042 разрешает несколько
+`LK_LEGACY_SNAPSHOT/game_station,game_court` aliases на один internal UUID. Поэтому reverse
+выбор первого alias не может дать authority на provider CREATE. Текущий draft resolver не
+связывает court со station и не возвращает exact provider location.
+
+До CREATE admission нужен versioned canonical location producer и resolver с явной связью
+public court → station и provider room → studio, tenant/organizer/draft revision checks и
+отказом при missing/ambiguous/conflicting evidence. LK уже имеет authoritative room/studio GET
+проверку и durable precreate CAS, но это не заменяет LK2 mapping. Provider exercise ID должен
+появиться только из actual create/readback; синтетический ID недопустим. Пакет пока не реализован.
+
+## Текущая цепочка новых коммерческих кандидатов
+
+1. CUP #60 `730e3f4c` поверх #59 — canonical preflight/reserve expectations/readback.
+2. LK #267 `72688c66` поверх #264 — v2 owner, strict selector и immutable recovery. CI green; совместимая capability проверяется до dispatch. CI kernel fix #268 включён, production Mongo не меняется.
+3. LK2 #515 `b55bd4d2` поверх #511 — v2 consumer; CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 LOCAL 186/static/review passed, CI `41216151985` success (7267 passed /126 skipped, managed JOIN PostgreSQL3/3). Не входит дополнительным head в уже замороженный #511.
+4. LK #269 `8d46b9b5` поверх #267 — managed SELF compensation; LOCAL/review passed, CI `41215625582` / `41215625485` success. Затем отдельный exact LK2 cancellation consumer и physical/provider acceptance, не денежный refund по предположению.
+5. CREATE mapping producer/resolver → CREATE owner/admission → LK2 CREATE consumer → training/tournament consumers. Подготовленный JOIN нельзя переименовать в CREATE: новый exercise должен появиться из canonical provider result/readback.
+
+Параллельный iOS packet добавляет OTHER profile → новый DIRECT поверх #513; source/review готовятся отдельно, completion и device acceptance пока не заявлены. Station product choices остаются pending. Ни одна зависимость не даёт merge/live authority.
+
+CREATE producer audit уточнил: старый roster sync разрешён только local/staging. Новый узкий default-off цикл в существующем worker должен читать отдельное backend-only Mongo lineage evidence, проверять exact Viva room/studio через @phub/viva-adapter с собственной credential REF authority, и атомарно публиковать binding с CAS/audit/outbox. Весь historical alias/source cohort и reverse collisions проверяются без first-alias selection. TTL 5 минут, refresh60с, ambiguity/overflow/timeout закрывают новый CREATE. Source packet начат отдельно; migration/live credential/activation не выполнялись.
+
+Перед LK2 SELF LEAVE consumer требуется owner admission для original generation: существующий SELF endpoint выводит текущую generation и не является safe replay transport для LK2. Проверить также наличие LK1 roster для LK2-only JOIN; простой proxy на текущий endpoint не принимается.

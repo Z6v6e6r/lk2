@@ -1,5 +1,9 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## Дополнительные prerequisites текущего checkpoint
+
+Перед tournament consumer зафиксировать actual owner по custom-to-Viva mapping; отдельно проверить CUP accessLevels/claim/readback или LK/Viva binding. Не поставлять два независимых writer для одного участия. Monetary SELF не активировать без versioned game refund/credit contract и approved financial acceptance: historical annual-subscription proof и synthetic options недостаточны. #518 full source green не закрывает native journey gate: latest a644 run дал0passed/5failed на fixture reset; xcresult сохранён и owned cleanup завершён. Приёмка требует успешного actual native run следующего source; compiled/fixture evidence не является device acceptance. LK#271 owner и LK2#519 SELF source/physical CI green; принять compatible heads и native/provider consumers до activation, не активировать standalone owner по зелёному CI.
+
 **Текущее решение NO-GO. Этот документ не разрешает dispatch, публикацию, deploy, provider writes или store upload.** Он связывает R1 критерии с существующими executable runbooks; не создаёт новый deploy process. Baseline/блокеры: [READINESS](R1-READINESS.md), [BLOCKERS](R1-BLOCKERS.md).
 
 ## 1. Закрыть source и product gates
@@ -91,3 +95,27 @@ semantics; не включать producer/strict mode автоматически
 B02 owner v2, B03 CREATE, B04 paid cancellation, B05 signup или B06 native guards. #509/#510
 нужны для push/build lanes, но не заменяют physical-device acceptance. B12 high исправлен на main;
 финальный выбранный source всё равно требует собственного зелёного dependency/full gate.
+
+## Приёмка последующих кандидатов
+
+#511 `ed3854c3` имеет green combined CI, но не разрешение merge. Новый cycle delivery flag
+нельзя выводить из уже завершённого approval #508: необходимы exact head и отдельная authority.
+Перед каждым разрешённым source-only cycle повторить quiescence/current main/flag checks;
+после merge дождаться exact main CI и corresponding delivery SKIPPED без executed steps,
+затем проверить отсутствие новых relevant runs и только тогда восстановить исходный flag.
+
+CUP #60 добавляет read-only preflight и optional expectations поверх #59. До использования
+managed JOIN v2 принять совместимые owner/consumer heads и selector drift/replay tests;
+не подменять explicit LEGACY отсутствующим instance. #512 debug APK и #513 unsigned iOS
+проверяют build/consumer slices, но не открывают signed/store/device gates. Эти PR не входят
+в source integration #511 и не активируются вследствие её merge автоматически.
+
+## Установка совместимого owner v2 / SELF compensation
+
+До отдельного runtime approval сверить CUP #60, LK #267 и LK2 #515 exact heads и законченный CI. Выполнить отдельную paired runtime приёмку selector/preflight/admission/receipt/recovery без конфигурационного downgrade. Проверить actual Node-RED crypto injection, closed opt-in flags, actor-scoped calls и provider mapping provenance; ключи и live config в этой программе не создавались.
+
+Для #269 устанавливать только полный совместимый graph: bridge, owner authority read, lease reclaim и capability3 вместе. Самостоятельное включение probe запрещено контрактом: успешная capability без actual handler дала бы ложную совместимость. Fresh actor retry обязателен; background token не сохраняется. До rollout подтвердить exact canonical compensation и lost-response recovery на разрешённом target. Старые tenantless rows остаются pending; автоматической миграции нет.
+
+#268 меняет только CI fixture runner для Mongo8. Его green monthly run не доказывает исправность production kernel/Mongo и не является разрешением менять production runtime.
+
+#516 зависит от #513 и существующих server profile/direct-create permissions. Перед native acceptance проверить participant UUID route, OTHER projection, privacy denial, same-key retry и account-switch на реальном устройстве. Unsigned build и browser mock не являются подписанным IPA или device acceptance.
