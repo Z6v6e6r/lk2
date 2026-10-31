@@ -57,3 +57,17 @@ rebuild и canonical Git verifier: 7 files / 269 passed. Это unit/contract/fa
 На source-wide LOCAL прогоне 340 tests skipped без внешних test-service env. Их статус не повышен.
 В частности concurrency/capacity, payment/refund и offline native acceptance требуют отдельных
 реальных disposable service/device прогонов согласно исходной матрице.
+
+## Owner release LOCAL regression evidence — Q03/Q08
+
+ph-admin #57 (`d5000a4d`) добавляет отдельный release proof и проверки отсутствующей/подменённой/
+просроченной подписи, несовпадения actor/tenant/operation/reason/booking, незавершённой
+компенсации, точного unsigned legacy replay и conflicting replay. Два конкурентных вызова
+через repository double возвращают один mutation и один replay; synthetic lost response после
+сохранения восстанавливается свежей подписью без второго ledger/outbox/counter изменения.
+
+Verifier/lifecycle suites passed LOCAL; исходный unsigned-release regression сначала упал на
+main. Configured subscription closure, runtime-contracts, adapter, auth, TypeScript/build passed.
+Оба exact-head CI workflow success (runs 41190093733 / 41190093707); новые regressions выполнены
+в `test:subscriptions`. Это in-memory service/contract evidence, не physical Mongo transaction/concurrency,
+не реальный network failure, не provider cancellation/refund и не native E2E. Q08/B04 не закрыт.

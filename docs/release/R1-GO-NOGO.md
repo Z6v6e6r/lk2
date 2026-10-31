@@ -36,8 +36,8 @@
 
 ## Следующий практический шаг
 
-Начать bounded задачи B02 (policy/usage binding), B03 (CREATE owner contract), F dependency triage и G required physical acceptance harness с согласованным ownership. Mobile signing, community/tournament chat и iOS parity развивать отдельными ограниченными задачами. Не проводить широкую переработку архитектуры и не активировать production flags для обхода blockers.
+Продолжить owner contract и signer integration после локальных safety fixes #503/#508 и ph-admin #57; B03 (CREATE owner contract) и G required physical acceptance harness сохраняют зависимости и согласованный ownership. Mobile signing, community/tournament chat и iOS parity развивать отдельными ограниченными задачами. Не проводить широкую переработку архитектуры и не активировать production flags для обхода blockers.
 
 ## Выполненные и невыполненные действия
 
-Подготовлены семь audit documents. Source/config/lockfiles/runtime не менялись. Новые application tests/builds не запускались; прочитаны существующие CI jobs и logs. Деплой, workflow dispatch/rerun, publication, secret creation, database/provider writes, real push, store upload/publication не выполнялись. Commit/branch/PR custody документационного пакета фиксируется в handoff/PR; это не acceptance продукта.
+На первом этапе подготовлены семь audit documents без application changes. После разрешения реализации созданы task-branch commits и Draft PR: LK2 #503/#508 и ph-admin #57; application tests/builds выполнены с результатами в READINESS. Это SOURCE/LOCAL/CI evidence, без runtime acceptance. Merge не выполнялся. Деплой, workflow dispatch/rerun, publication, secret creation, live/shared database/provider writes, реальные push-уведомления, store upload/publication не выполнялись. Commit/branch/PR custody документационного пакета фиксируется в handoff/PR; это не acceptance продукта.

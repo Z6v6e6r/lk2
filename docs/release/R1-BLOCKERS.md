@@ -34,3 +34,12 @@ Baseline и CI: [R1-READINESS](R1-READINESS.md), 2026-10-31. P0 означает
 4. Production secret/config custody и актуальная writer ownership не исследованы на hosts; не использовать исторические values и не создавать новые секреты для снятия UNKNOWN.
 
 Не расширять R1 на generic framework, Event Catalog V2 или масштабирование communities. Сохранять LK1 API, канонического writer и существующие safeguards.
+
+## Owner compensation prerequisite — 2026-10-31
+
+ph-admin #57 (`d5000a4d`) устраняет подтверждённый source-дефект: strict release обходил owner proof,
+а terminal replay не связывал причину и booking. LOCAL negative/retry/recovery checks прошли.
+Оба exact-head CI workflow success (runs 41190093733 / 41190093707). B02/B04 остаются PARTIAL/BLOCKED по исходным exit criteria. Новая обязательная
+зависимость до strict activation: LK owner подписывает только подтверждённую отмену либо
+определённый отказ без созданного booking; таймаут не считается отказом. Подпись
+сама по себе не доказывает provider outcome — требуется sandbox readback acceptance.

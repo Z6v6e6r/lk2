@@ -2,7 +2,7 @@
 
 Дата: 2026-10-31. Решение: **NO-GO для заявленного полного iOS + Android release**.
 
-Первый deliverable программы — аудит актуального исходного кода, открытых PR и существующих CI-результатов. На этапе аудита реализация и новые E2E не выполнялись. После разрешения реализации начаты два bounded пакета ниже. Публикация образов, production-миграции, отправка уведомлений, операции Viva и store activation не выполнялись. R1 — название программы, а не класс риска: коммерческие, identity и participation изменения относятся к CRITICAL.
+Первый deliverable программы — аудит актуального исходного кода, открытых PR и существующих CI-результатов. На этапе аудита реализация и новые E2E не выполнялись. После разрешения пользователя выполнены ограниченные пакеты ниже. Публикация образов, production-миграции, отправка уведомлений, операции Viva и store activation не выполнялись. R1 — название программы, а не класс риска: коммерческие, identity и participation изменения относятся к CRITICAL.
 
 ## Реализация после аудита — 2026-10-31
 
@@ -10,6 +10,20 @@
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | B02 local safety    | [Draft #503](https://github.com/Z6v6e6r/lk2/pull/503), `d8af48b2` (основной fix `d51e5c9c`): strict persisted refs, отказ bound JOIN до dispatch, запрет v1 confirmation/replay для bound snapshot, CREATE units echo | LOCAL: 207 коммерческих тестов; финальный повтор с bundle/Git verifier 269 passed. Независимый payment/security/reliability review approved. Secret scan passed. [CI quality-full success](https://github.com/Z6v6e6r/lk2/actions/runs/41188455531): 7165 passed / 126 skipped; отдельно PostgreSQL suite 4 passed. Source-quality и Docker builds зелёные; workflow/pr-gate красные из-за dependency-security.            | PARTIAL: нет согласованного owner v2; v1 не превращён в binding wire. Нет provider/device acceptance. |
 | F1 / B12 dependency | [Draft #508](https://github.com/Z6v6e6r/lk2/pull/508), `18061aa8`: только systeminformation 5.31.16 → 5.33.16 в lockfile                                                                                              | LOCAL: clean install, import, 9 observability tests; audit high gate exit 0 (0 high/critical, 16 moderate). [CI dependency-security success](https://github.com/Z6v6e6r/lk2/actions/runs/41188184138/job/124499477726), весь workflow success: source-quality, quality-full и пять Docker builds. CI tests: 7087 passed / 126 skipped; отдельно PostgreSQL migration suite 4 passed. Independent security review approved. | Не merged; high gate на main/#503 остаётся зависимостью интеграции. Moderate findings не закрыты.     |
+
+Дополнительный owner compensation packet: [ph-admin Draft #57](https://github.com/Z6v6e6r/ph-admin/pull/57),
+`d5000a4d207bd078a776902c918b9d35a13a7f77` от main `83b1c17b`. Воспроизведён дефект:
+strict-режим принимал release без owner proof. Теперь отдельная подпись `release-v1` связывает
+operation/reason/booking/time; confirmation v1 не подходит для release. Terminal replay проверяет
+сохранённую причину, booking и завершённую компенсацию. Strict-off exact legacy replay сохранён.
+LOCAL: verifier/lifecycle, полная configured subscription suite, runtime-contracts,
+trusted-shadow-adapter, auth-rbac, обе конфигурации TypeScript и build passed. Final recovery
+regressions passed; независимое security/payment/reliability review approved; gitleaks passed.
+CI: [subscriptions-binding-promotion](https://github.com/Z6v6e6r/ph-admin/actions/runs/41190093733)
+и [CUP immutable runtime](https://github.com/Z6v6e6r/ph-admin/actions/runs/41190093707) завершились success
+на exact head `d5000a4d`: subscription regressions, TypeScript/build и deterministic artifact attestation passed. Это часть B02/B04, не закрытие блокеров: LK signer, authoritative provider
+readback, физическая concurrent Mongo приёмка и полный LK2 paid LEAVE/CANCEL отсутствуют в этом пакете.
+Strict-mode activation и изменения секретов не выполнялись.
 
 Для B02 полный LOCAL `npm run check` выполнил static/build/runtime-import stages, но первоначальный
 source-test run дал 116 failed / 6835 passed / 340 skipped (705 files) в Node 26 sandbox.
