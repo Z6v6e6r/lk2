@@ -1,5 +1,6 @@
+import { runGameCreateLocationBindingSync } from './game-create-location-binding-sync.js';
 import Redis from 'ioredis';
-import { VivaIdentityProvider } from '@phub/viva-adapter';
+import { VivaIdentityProvider, VivaCreateLocationSource } from '@phub/viva-adapter';
 import { VivaNotificationSource } from '@phub/viva-adapter/notification-lifecycle';
 import { ApnsDeliveryAdapter, ApnsTokenProvider } from './apns-adapter.js';
 import { YandexSmtpAdapter } from './yandex-smtp-adapter.js';
@@ -1587,6 +1588,20 @@ void runCommunityLogoCompatibilityCycle();
 void runPlatformSyncCycle();
 void runHomeBaseCycle();
 void runPromotionSyncCycle();
+const createLocationProvider = config.GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED
+  ? new VivaCreateLocationSource()
+  : undefined;
+async function runCreateLocationBindings(): Promise<void> {
+  if (shuttingDown || !config.GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED) return;
+  const result = await runGameCreateLocationBindingSync({
+    pool,
+    config,
+    ...(createLocationProvider ? { dependencies: { provider: createLocationProvider } } : {}),
+  });
+  logger.info({ result }, 'CREATE location binding cycle');
+  if (!shuttingDown) setTimeout(() => void runCreateLocationBindings(), 60_000).unref();
+}
+void runCreateLocationBindings();
 void runLegacyGamesRosterSync();
 void runLegacyGameReminderSource();
 void runWebPushCycle();

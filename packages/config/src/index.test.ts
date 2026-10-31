@@ -23,6 +23,35 @@ const validEnvironment = {
 } as const;
 
 describe('loadConfig', () => {
+  it('keeps CREATE binding off and requires dedicated references only for its worker', () => {
+    expect(loadWorkerConfig(validEnvironment).GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED).toBe(
+      false,
+    );
+    const enabled = { ...validEnvironment, GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED: 'true' };
+    expect(() => loadWorkerConfig(enabled)).toThrow('CREATE location binding worker requires');
+    // API parsing does not require a worker credential mount.
+    expect(loadConfig(enabled).GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED).toBe(true);
+    expect(
+      loadWorkerConfig({
+        ...enabled,
+        GAME_CREATE_LOCATION_BINDING_TENANT_ID: '00000000-0000-4000-8000-000000000001',
+        GAME_CREATE_LOCATION_BINDING_ADMIN_CREDENTIAL_FILE: '/synthetic/create-location.json',
+        LEGACY_GAMES_MONGODB_URI: 'mongodb://synthetic.invalid/fixture',
+      }),
+    ).toMatchObject({
+      GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED: true,
+      LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
+    });
+    expect(() =>
+      loadWorkerConfig({
+        ...enabled,
+        GAME_CREATE_LOCATION_BINDING_TENANT_ID: '00000000-0000-4000-8000-000000000001',
+        GAME_CREATE_LOCATION_BINDING_ADMIN_CREDENTIAL_FILE: 'relative.json',
+        LEGACY_GAMES_MONGODB_URI: 'mongodb://synthetic.invalid/fixture',
+      }),
+    ).toThrow('CREATE location binding worker requires');
+  });
+
   it('enables test courts only in staging with Games commands, and defaults to disabled', () => {
     expect(loadConfig(validEnvironment).GAMES_TEST_COURTS_ENABLED).toBe(false);
     const enabled = {
