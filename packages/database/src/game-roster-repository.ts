@@ -14,6 +14,8 @@ import {
 } from '@phub/games';
 import {
   evaluateLevelEligibility,
+  parseCommercialBindingRefs,
+  type CommercialBindingRefs,
   type LevelEligibilityReasonCode,
   type LevelEligibilityPolicy,
   type LevelEligibilityContext,
@@ -214,6 +216,13 @@ export interface PaidJoinProviderBinding {
   readonly idempotencyKeySha256: string;
 }
 
+/**
+ * Policy/usage binding evidence for one paid JOIN attempt (B2). Values are opaque to the database
+ * layer: both the API and this repository validate them strictly, and LK2 never derives
+ * entitlement, counters or booking state from them.
+ */
+export type PaidJoinBindingRefs = CommercialBindingRefs;
+
 export interface BeginPaidJoinInput {
   readonly tenantId: string;
   readonly actorUserId: string;
@@ -229,6 +238,8 @@ export interface BeginPaidJoinInput {
   readonly invitationId?: string;
   readonly reservationTtlSeconds: number;
   readonly providerBinding?: PaidJoinProviderBinding;
+  /** Optional B2 binding loaded from a binding quote; absent means legacy/unbound behavior. */
+  readonly bindingRefs?: PaidJoinBindingRefs;
 }
 
 export interface PaidJoinAttemptResult {
@@ -267,6 +278,7 @@ export type BeginPaidJoinResult =
 
 export interface PaidJoinAttemptView {
   readonly providerBinding?: PaidJoinProviderBinding;
+  readonly bindingRefs?: PaidJoinBindingRefs;
   readonly commandId: string;
   readonly gameId: string;
   readonly state: PaidJoinAttemptState;
@@ -366,6 +378,7 @@ interface ConfirmableReservationRow extends ReservationRow {
   readonly paid_snapshot?: {
     operation_id: string;
     provider_binding: PaidJoinProviderBinding | null;
+    binding_snapshot?: unknown;
   };
 }
 
@@ -450,6 +463,7 @@ interface PaidJoinReservationRow extends QueryResultRow {
   readonly payment_state: PaidJoinReservationPaymentState;
   readonly expires_at: Date | string;
   readonly provider_binding?: PaidJoinProviderBinding;
+  readonly binding_snapshot?: unknown;
 }
 
 interface PaidJoinReservationLockRow extends QueryResultRow {
@@ -1341,6 +1355,23 @@ async function completePaidJoinAttempt(
   }
 }
 
+/** Missing keys are legacy; present-invalid binding evidence must never downgrade to legacy. */
+function paidJoinBindingRefsFromSnapshot(snapshot: unknown): PaidJoinBindingRefs | undefined {
+  if (snapshot === undefined) return undefined;
+  if (typeof snapshot !== 'object' || snapshot === null || Array.isArray(snapshot))
+    throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+  const row = snapshot as Record<string, unknown>;
+  const keys = ['policyRef', 'usageRef', 'decisionId'].filter((key) =>
+    Object.prototype.hasOwnProperty.call(row, key),
+  );
+  if (keys.length === 0) return undefined;
+  try {
+    return parseCommercialBindingRefs(Object.fromEntries(keys.map((key) => [key, row[key]])));
+  } catch {
+    throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+  }
+}
+
 async function loadPaidJoinAttempt(
   client: PoolClient,
   input: GameRosterOperationInput,
@@ -1366,7 +1397,8 @@ async function loadPaidJoinAttempt(
   const reservationRow = await queryOne<PaidJoinReservationRow>(
     client,
     `select reservation.id, reservation.state, reservation.payment_state,
-            reservation.expires_at, snapshot.snapshot->'providerBinding' as provider_binding
+            reservation.expires_at, snapshot.snapshot->'providerBinding' as provider_binding,
+            snapshot.snapshot as binding_snapshot
        from eligibility.payment_snapshots snapshot
        join games.seat_reservations reservation
          on reservation.tenant_id = snapshot.tenant_id
@@ -1399,7 +1431,9 @@ async function loadPaidJoinAttempt(
       };
     }
   }
+  const bindingRefs = paidJoinBindingRefsFromSnapshot(reservationRow?.binding_snapshot);
   return {
+    ...(bindingRefs ? { bindingRefs } : {}),
     ...(reservationRow?.provider_binding
       ? { providerBinding: reservationRow.provider_binding }
       : {}),
@@ -1682,6 +1716,8 @@ export function createGameRosterRepository(
     },
 
     async beginPaidJoin(input) {
+      const bindingRefs =
+        input.bindingRefs === undefined ? undefined : parseCommercialBindingRefs(input.bindingRefs);
       assertPaidJoinInput(input);
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const replay = replayPaidJoin(await lockIdempotency(client, input), input.requestHash);
@@ -1821,6 +1857,13 @@ export function createGameRosterRepository(
               paymentMode: game.payment_mode,
               subscriptionInstanceId: input.subscriptionInstanceId,
               ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
+              ...(bindingRefs
+                ? {
+                    policyRef: bindingRefs.policyRef,
+                    ...(bindingRefs.usageRef ? { usageRef: bindingRefs.usageRef } : {}),
+                    ...(bindingRefs.decisionId ? { decisionId: bindingRefs.decisionId } : {}),
+                  }
+                : {}),
               price: input.price,
               ...(input.invitationId ? { invitationId: input.invitationId } : {}),
               correlationId: input.correlationId,
@@ -1984,6 +2027,33 @@ export function createGameRosterRepository(
           commandType,
           input.requestHash,
         );
+        if (replay?.outcome === 'applied') {
+          // A stored v1 success is not proof of a subsequently discovered bound attempt.
+          // Recheck the original actor/reservation snapshot without repeating any mutation.
+          const snapshot = await queryOne<{ binding_snapshot: unknown }>(
+            client,
+            `select snapshot.snapshot as binding_snapshot
+               from games.seat_reservations reservation
+               join eligibility.payment_snapshots snapshot
+                 on snapshot.tenant_id = reservation.tenant_id
+                and snapshot.decision_id = reservation.eligibility_decision_id
+                and snapshot.player_id = reservation.user_id
+                and snapshot.activity_type = 'GAME'
+                and snapshot.activity_id = reservation.game_id
+              where reservation.tenant_id = $1 and reservation.game_id = $2
+                and reservation.id = $3 and reservation.user_id = $4
+              order by snapshot.created_at desc limit 1`,
+            [input.tenantId, input.gameId, input.reservationId, input.actorUserId],
+          );
+          if (!snapshot) throw new Error('GAME_PAYMENT_SNAPSHOT_MISSING');
+          if (paidJoinBindingRefsFromSnapshot(snapshot.binding_snapshot) !== undefined) {
+            return {
+              outcome: 'rejected' as const,
+              code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
+              replayed: true,
+            };
+          }
+        }
         if (replay) return replay;
         const commandId = randomUUID();
         const game = await lockGame(client, input);
@@ -2005,7 +2075,8 @@ export function createGameRosterRepository(
                        and snapshot.activity_id = games.seat_reservations.game_id
                   ) as payment_snapshot_exists,
                   (select jsonb_build_object('operation_id', snapshot.operation_id,
-                            'provider_binding', snapshot.snapshot->'providerBinding')
+                            'provider_binding', snapshot.snapshot->'providerBinding',
+                            'binding_snapshot', snapshot.snapshot)
                      from eligibility.payment_snapshots snapshot
                     where snapshot.tenant_id=games.seat_reservations.tenant_id
                       and snapshot.decision_id=games.seat_reservations.eligibility_decision_id
@@ -2042,6 +2113,17 @@ export function createGameRosterRepository(
 
         let clientPhoneE164 = input.evidence.clientPhoneE164;
         const paidSnapshot = reservation.paid_snapshot;
+        // Legacy confirmation evidence has no policy/usage proof. Do not let a callback bypass
+        // the orchestrator guard and settle a bound reservation as an ordinary v1 operation.
+        // Malformed stored binding throws and rolls back; a valid bound attempt stays unresolved.
+        if (paidJoinBindingRefsFromSnapshot(paidSnapshot?.binding_snapshot) !== undefined) {
+          return {
+            outcome: 'rejected' as const,
+            code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
+            currentRevision,
+            replayed: false,
+          };
+        }
         if (paidSnapshot?.provider_binding || input.paidJoinBinding) {
           const original = paidSnapshot?.provider_binding;
           const supplied = input.paidJoinBinding;

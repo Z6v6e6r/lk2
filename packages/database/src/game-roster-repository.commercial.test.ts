@@ -1043,7 +1043,12 @@ describe('immutable paid JOIN confirmation binding', () => {
   };
   function database(
     snapshotBinding: unknown = binding,
-    options: { phone?: string; state?: string; completion?: number } = {},
+    options: {
+      phone?: string;
+      state?: string;
+      completion?: number;
+      bindingSnapshot?: unknown;
+    } = {},
   ) {
     return poolWithHandler((text) => {
       if (text.includes('payment_snapshot_exists'))
@@ -1057,7 +1062,11 @@ describe('immutable paid JOIN confirmation binding', () => {
               expires_at: reservationExpiresAt,
               eligibility_decision_id: eligibilityDecisionId,
               payment_snapshot_exists: true,
-              paid_snapshot: { operation_id: operationId, provider_binding: snapshotBinding },
+              paid_snapshot: {
+                operation_id: operationId,
+                provider_binding: snapshotBinding,
+                binding_snapshot: options.bindingSnapshot,
+              },
             },
           ],
         };
@@ -1082,6 +1091,45 @@ describe('immutable paid JOIN confirmation binding', () => {
       return baseHandler(text, { paymentMode: 'SUBSCRIPTION' });
     });
   }
+  it.each([
+    ['legacy', {}, 'applied'],
+    [
+      'bound',
+      { policyRef: { policyVersion: 3, policyDigest: `sha256:${'a'.repeat(64)}` } },
+      'rejected',
+    ],
+    ['corrupt', { policyRef: null }, 'invalid'],
+    ['missing', undefined, 'missing'],
+  ] as const)(
+    'rechecks %s snapshot before replaying a successful confirmation',
+    async (_, snapshot, expected) => {
+      const confirmation = input();
+      const { pool, query } = poolWithHandler((text) => {
+        if (text.includes('select snapshot.snapshot as binding_snapshot'))
+          return { rows: snapshot === undefined ? [] : [{ binding_snapshot: snapshot }] };
+        return baseHandler(text, {
+          replayRow: commandRow({
+            command_type: 'game.payment.confirm.v1',
+            request_hash: confirmation.requestHash,
+            state: 'COMPLETED',
+            result_payload: appliedAttemptPayload(),
+          }),
+        });
+      });
+      const result = createGameRosterRepository(pool as never).confirmPayment(confirmation);
+      if (expected === 'invalid')
+        await expect(result).rejects.toThrow('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+      else if (expected === 'missing')
+        await expect(result).rejects.toThrow('GAME_PAYMENT_SNAPSHOT_MISSING');
+      else await expect(result).resolves.toMatchObject({ outcome: expected, replayed: true });
+      expect(writtenStatements(query)).toEqual([]);
+      const read = query.mock.calls.find(([text]) =>
+        text.includes('select snapshot.snapshot as binding_snapshot'),
+      );
+      expect(read?.[1]).toEqual([tenantId, gameId, reservationId, playerId]);
+    },
+  );
+
   it('derives phone inside the transaction and atomically completes the original paid attempt', async () => {
     const { pool, query } = database();
     await expect(
@@ -1144,6 +1192,31 @@ describe('immutable paid JOIN confirmation binding', () => {
       createGameRosterRepository(repaired.pool as never).confirmPayment(input()),
     ).resolves.toMatchObject({ outcome: 'applied' });
   });
+  it('refuses legacy confirmation of a bound reservation without changing the original attempt', async () => {
+    const { pool, query } = database(binding, {
+      bindingSnapshot: {
+        policyRef: { policyVersion: 3, policyDigest: `sha256:${'a'.repeat(64)}` },
+      },
+    });
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment(input()),
+    ).resolves.toMatchObject({ outcome: 'rejected', code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' });
+    expect(
+      query.mock.calls.some(([text]) =>
+        /^\s*(?:insert\s+into|update\s+|delete\s+from)/i.test(text),
+      ),
+    ).toBe(false);
+  });
+  it('rolls back legacy confirmation when stored binding is malformed', async () => {
+    const { pool, query } = database(binding, { bindingSnapshot: { policyRef: null } });
+    await expect(createGameRosterRepository(pool as never).confirmPayment(input())).rejects.toThrow(
+      'GAME_PAID_JOIN_BINDING_REFS_INVALID',
+    );
+    expect(query.mock.calls.some(([text]) => text === 'rollback')).toBe(true);
+    expect(
+      query.mock.calls.some(([text]) => /(?:insert into|update games|delete from)/i.test(text)),
+    ).toBe(false);
+  });
   it('rolls back if completion of the original command is lost', async () => {
     const { pool, query } = database(binding, { completion: 0 });
     await expect(createGameRosterRepository(pool as never).confirmPayment(input())).rejects.toThrow(
@@ -1151,5 +1224,141 @@ describe('immutable paid JOIN confirmation binding', () => {
     );
     expect(query.mock.calls.some(([text]) => text === 'rollback')).toBe(true);
     expect(query.mock.calls.some(([text]) => text === 'commit')).toBe(false);
+  });
+});
+
+describe('paid join policy/usage binding refs (B2)', () => {
+  const bindingRefs = {
+    policyRef: { policyVersion: 3, policyDigest: `sha256:${'a'.repeat(64)}` },
+    decisionId: '11111111-1111-4111-8111-111111111111',
+    usageRef: { usageRef: 'usage:abc-1', reservationUnits: 1 },
+  };
+  const attemptInput = { tenantId, actorUserId: playerId, operationId };
+
+  it('persists binding refs inside the existing payment snapshot jsonb', async () => {
+    const { pool, query } = poolWithHandler((text) => baseHandler(text));
+
+    await expect(
+      createGameRosterRepository(pool as never).beginPaidJoin({
+        ...paidJoinInput(),
+        bindingRefs,
+      }),
+    ).resolves.toMatchObject({ outcome: 'reserved' });
+
+    const snapshotInsert = query.mock.calls.find(([text]) =>
+      text.includes('insert into eligibility.payment_snapshots'),
+    );
+    const snapshot = JSON.parse(String(snapshotInsert?.[1]?.[5])) as Record<string, unknown>;
+    expect(snapshot).toMatchObject({
+      policyRef: bindingRefs.policyRef,
+      usageRef: bindingRefs.usageRef,
+      decisionId: bindingRefs.decisionId,
+    });
+  });
+
+  it('reads binding refs back from the payment snapshot', async () => {
+    const { pool } = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency')) return { rows: [commandRow()] };
+      if (text.includes('from eligibility.payment_snapshots snapshot')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+              binding_snapshot: bindingRefs,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      return { rows: [] };
+    });
+
+    const view = await createGameRosterRepository(pool as never).getPaidJoinAttempt(attemptInput);
+    expect(view?.bindingRefs).toEqual(bindingRefs);
+  });
+
+  it('keeps a legacy attempt readable without binding refs', async () => {
+    const { pool } = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency')) return { rows: [commandRow()] };
+      if (text.includes('from eligibility.payment_snapshots snapshot')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const view = await createGameRosterRepository(pool as never).getPaidJoinAttempt(attemptInput);
+    expect(view).not.toBeNull();
+    expect(view).not.toHaveProperty('bindingRefs');
+  });
+  const invalidSnapshots: readonly [string, unknown][] = [
+    ['null snapshot', null],
+    ['array snapshot', []],
+    ['null policy', { policyRef: null }],
+    ['orphan usage', { usageRef: bindingRefs.usageRef }],
+    ['orphan decision', { decisionId: bindingRefs.decisionId }],
+    ['bad digest', { policyRef: { policyVersion: 3, policyDigest: 'invalid' } }],
+    ['extra policy key', { policyRef: { ...bindingRefs.policyRef, ignored: true } }],
+    ['bad version', { policyRef: { ...bindingRefs.policyRef, policyVersion: 0 } }],
+    ['null usage', { ...bindingRefs, usageRef: null }],
+    ['empty usage', { ...bindingRefs, usageRef: { usageRef: '' } }],
+    [
+      'invalid usage units',
+      { ...bindingRefs, usageRef: { ...bindingRefs.usageRef, reservationUnits: 0 } },
+    ],
+    ['extra usage key', { ...bindingRefs, usageRef: { ...bindingRefs.usageRef, ignored: true } }],
+    ['null decision', { ...bindingRefs, decisionId: null }],
+    ['bad decision', { ...bindingRefs, decisionId: 'not-a-uuid' }],
+  ];
+  it.each(invalidSnapshots)(
+    'does not downgrade %s to an unbound attempt',
+    async (_name, snapshot) => {
+      const { pool, query } = poolWithHandler((text) => {
+        if (text.includes('from games.command_idempotency')) return { rows: [commandRow()] };
+        if (text.includes('from eligibility.payment_snapshots snapshot'))
+          return {
+            rows: [
+              {
+                id: reservationId,
+                state: 'ACTIVE',
+                payment_state: 'PROCESSING',
+                expires_at: reservationExpiresAt,
+                binding_snapshot: snapshot,
+              },
+            ],
+          };
+        return { rows: [] };
+      });
+      await expect(
+        createGameRosterRepository(pool as never).getPaidJoinAttempt(attemptInput),
+      ).rejects.toThrow('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+      expect(
+        query.mock.calls.some(([text]) =>
+          /^\s*(?:insert\s+into|update\s+|delete\s+from)/i.test(text),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it('rejects invalid binding on the write boundary before acquiring a connection', async () => {
+    const { pool, connect } = poolWithHandler((text) => baseHandler(text));
+    await expect(
+      createGameRosterRepository(pool as never).beginPaidJoin({
+        ...paidJoinInput(),
+        bindingRefs: { policyRef: { policyVersion: 3, policyDigest: 'invalid' } },
+      }),
+    ).rejects.toMatchObject({ code: 'COMMERCIAL_POLICY_REF_INVALID' });
+    expect(connect).not.toHaveBeenCalled();
   });
 });

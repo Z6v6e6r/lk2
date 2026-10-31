@@ -36,6 +36,30 @@ const hasTrustedGnuTimeout = (() => {
   }
 })();
 
+async function processHasTerminated(pid: number): Promise<boolean> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid fixture process ID');
+  const isAbsent = () => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
+      throw error;
+    }
+  };
+  if (isAbsent()) return true;
+  if (process.platform !== 'linux') return false;
+  try {
+    const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+    // A killed process can remain visible until its parent reaps it. Z means it can no
+    // longer execute; kill(pid, 0) alone cannot distinguish that from a live process.
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] === 'Z';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return isAbsent();
+    throw error;
+  }
+}
+
 interface Result {
   readonly code: number;
   readonly stdout: string;
@@ -488,6 +512,7 @@ describe('runnable role-split restore-marker clone ceremony', () => {
   it.runIf(hasTrustedGnuTimeout)(
     'kills a hanging child and grandchild with the trusted GNU timeout process group',
     async () => {
+      expect(await processHasTerminated(process.pid)).toBe(false);
       const parentPid = join(root, 'timeout-parent.pid');
       const childPid = join(root, 'timeout-child.pid');
       const hanger = join(root, 'timeout-hanger.sh');
@@ -519,10 +544,10 @@ describe('runnable role-split restore-marker clone ceremony', () => {
       expect(result.code !== 0 || result.signal !== null).toBe(true);
       for (const pidPath of [parentPid, childPid]) {
         const pid = Number((await readFile(pidPath, 'utf8')).trim());
-        expect(() => process.kill(pid, 0)).toThrow();
+        await expect.poll(() => processHasTerminated(pid), { timeout: 2_000 }).toBe(true);
       }
     },
-    5_000,
+    10_000,
   );
 
   it('always stops CREATE for an independently pinned OID receipt before restore', async () => {
