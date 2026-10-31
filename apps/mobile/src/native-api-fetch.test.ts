@@ -20,6 +20,29 @@ function plugin() {
 }
 
 describe('Android native bridge adapter', () => {
+  it('forwards community history and its opaque cursor to the native policy without a body', async () => {
+    const native = plugin();
+    const cursor = 'eyJ2IjoxLCJiZWZvcmVUcyI6IjIwMjYtMTAtMzFUMDA6MDA6MDBaIn0';
+    const path = `/user/api/v1/local-padel/community-views/11111111-1111-4111-8111-111111111111/chat?limit=50&cursor=${cursor}`;
+    await createNativeApiFetch(config, native)(config.apiBaseUrl + path, {
+      headers: { Authorization: 'Bearer synthetic-access' },
+    });
+    expect(native.request).toHaveBeenCalledExactlyOnceWith({
+      path,
+      method: 'GET',
+      headers: { authorization: 'Bearer synthetic-access' },
+    });
+  });
+
+  it.each([
+    'https://lk2.padlhub.su/user/api/v1/other/community-views/11111111-1111-4111-8111-111111111111/chat',
+    `${root}/community-views/11111111-1111-4111-8111-111111111111/chat#fragment`,
+  ])('rejects ambiguous community reads before the native bridge: %s', async (url) => {
+    const native = plugin();
+    await expect(createNativeApiFetch(config, native)(url)).rejects.toThrow();
+    expect(native.request).not.toHaveBeenCalled();
+  });
+
   it('does not upload an attachment cancelled while Blob conversion was pending', async () => {
     const native = plugin();
     const controller = new AbortController();
