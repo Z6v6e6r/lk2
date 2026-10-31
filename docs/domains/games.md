@@ -713,8 +713,57 @@ uses it; account replacement/unmount fences queued locks, pre-dispatch execution
 remain unchanged. LOCAL fixtures and CI disposable PostgreSQL exercise these boundaries; neither
 proves real provider cancellation/return, operational mapping freshness or production activation.
 
-Availability limitation: a definitive unsupported/default-off rejection can leave browser custody
-without a managed owner attempt. Web displays the typed refusal and retains the original key;
-404 or an HTTP error alone never erases it. This can block a later JOIN until supported
-reconciliation. A durable terminal no-dispatch receipt is a separate bounded correction; this
-packet does not claim release acceptance for that case or select the latest former participation.
+### SELF refusal recovery without a new cancellation
+
+POST `/games/:gameId/leave-operation/reconcile` takes the original Idempotency-Key, no body or
+query parameters. It never creates a managed attempt, selects a new membership for cancellation,
+or calls the ordinary LEAVE writer. A separate route is required: older APIs ignore DELETE bodies;
+an optional recovery marker on that route would permit an old process to dispatch a new leave.
+An old API returns404 for the new route and Web retains custody. Existing direct/old-client DELETE
+semantics remain unchanged; the restrictive retry guarantee applies to the updated Web/SDK path.
+Native route support remains a separate companion dependency.
+
+The existing command journal stores exact `GAME_SELF_LEAVE_NOT_DISPATCHED_V1` evidence in
+FAILED.result_payload; no new migration is required. The same tenant/actor/key advisory lock and
+game row lock serialize this proof against both managed begin and ordinary LEAVE. If recovery wins
+before the first DELETE arrives, its FAILED command prevents that late request from dispatching.
+If admission wins, recovery observes the original managed link/attempt and cannot manufacture a
+refusal. PREPARED remains pending for its original caller; DISPATCH_STARTED may only use existing
+owner read/recovery-only admission, never a new cancellation. Other unresolved attempts for the
+actor/game also prevent certification. No provider/business call occurs for an absent command.
+
+A historical generic FAILED is not proof. The only narrowly certifiable old case is exact
+`game.leave.v1` / FAILED / GAME_PAYMENT_REQUIRED / NULL result / valid completed timestamp, with
+exact tenant, actor, principal, game, key and request hash and no managed attempt or link in either
+direction. All20 relevant source commits through59c1f0ee have only two distinct ordinary LEAVE
+bodies: `71d1d86371f29d2537d124bb6984dc6d1e2ceff6e711857689dc5930e36582da` contains this refusal
+before any participation write and no provider call; predecessor
+`567d58e5ae970b770f742ea4b009c45ab3392bd77d95b0d617b9395860611d60` has no such refusal. The guard
+was introduced at2c67620c. This certification preserves the original command ID, key/hash, code and
+timestamps; it is not a generic legacy-state conversion. Unknown/corrupt scope, other refusal codes,
+missing schema or ambiguous state remain unresolved. Direct edits/imports outside these canonical
+writers do not gain authority from a matching error string.
+
+Proof, audit and `audit.game_self_leave_not_dispatched.v1` outbox row commit atomically. The event
+contains only command/user public IDs and uses the audit namespace: no roster, attendance or
+notification fact is asserted. Current consumers use explicit bindings; in particular `game.#`
+projection does not receive this control event. Proof replay emits no additional events and never
+rebinds a later participation. Rollback retains the existing FAILED row: old writers replay its
+original refusal, old clients conservatively keep their key, and no migration rollback is needed.
+
+Read-by-key also recovers a canonical ordinary NO_PAYMENT success after lost response. A local
+NO_PAYMENT lookup precedes external actor resolution; the ordinary writer rechecks mode under its
+own lock. No Viva mapping is required to leave an ordinary local game. GET remains nonmutating.
+
+Public NOT_DISPATCHED evidence contains only schemaVersion1, the fixed outcome and original key
+SHA256, attached to a FAILED/LEAVE_GAME operation. It describes only this command, never current
+attendance. Web persists custody before first HTTP, routes every existing-key retry to restrictive
+reconciliation, and removes only matching custody after strict proof or original success. Generic
+FAILED/404/409, offline, missing endpoint and malformed/foreign proof never clear it. A late response
+cannot update a replaced account or key. Clearing a proven refusal refreshes the game and offers a
+new explicit choice; it never automatically joins, leaves, chooses a replacement key or refreshes
+and retries a mutation on401. A confirmed historical operation is not current membership evidence.
+
+LOCAL tests and CI-only disposable PostgreSQL cover these transitions and rollback. No local DB
+provisioning, provider calls or activation are part of this correction; provider/native/runtime
+acceptance remains separate.

@@ -50,7 +50,24 @@ export interface ManagedSelfLeaveAttempt {
   receipt: ManagedSelfLeaveReceipt | null;
   result: Extract<GameRosterCommandResult, { outcome: 'applied' }> | null;
 }
+/** Local command evidence only; never asserts current membership or a provider cancellation. */
+export interface SelfLeaveCommandEvidence {
+  kind: 'NOT_DISPATCHED' | 'APPLIED';
+  commandId: string;
+  gameId: string;
+  revision: number;
+  createdAt: string;
+  completedAt: string;
+  idempotencyKeySha256: string;
+}
+type CommandLookup = Pick<
+  ManagedSelfLeaveInput,
+  'tenantId' | 'actorUserId' | 'gameId' | 'idempotencyKey'
+>;
 export interface ManagedSelfLeaveRepository {
+  isNoPayment(input: Pick<ManagedSelfLeaveInput, 'tenantId' | 'gameId'>): Promise<boolean>;
+  readCommand(input: CommandLookup): Promise<SelfLeaveCommandEvidence | null>;
+  reconcileUndispatched(input: ManagedSelfLeaveInput): Promise<SelfLeaveCommandEvidence | null>;
   begin(input: ManagedSelfLeaveInput): Promise<ManagedSelfLeaveAttempt | null>;
   read(input: {
     tenantId: string;
@@ -210,6 +227,12 @@ async function rowById(
   );
 }
 interface Command {
+  tenant_id: string;
+  principal_key: string;
+  idempotency_key: string;
+  error_code: string | null;
+  created_at: Date | string;
+  completed_at: Date | string | null;
   id: string;
   command_type: string;
   aggregate_id: string;
@@ -269,8 +292,255 @@ async function addCommand(
     ],
   );
 }
+const refusalKind = 'GAME_SELF_LEAVE_NOT_DISPATCHED_V1';
+function commandScope(command: Command, input: CommandLookup & { requestHash?: string }): void {
+  if (
+    command.tenant_id !== input.tenantId ||
+    command.actor_user_id !== input.actorUserId ||
+    command.principal_key !== 'user:' + input.actorUserId ||
+    command.idempotency_key !== input.idempotencyKey ||
+    command.aggregate_id !== input.gameId ||
+    command.command_type !== 'game.leave.v1' ||
+    (input.requestHash !== undefined && command.request_hash !== input.requestHash)
+  )
+    throw new ManagedSelfLeaveError('IDEMPOTENCY_CONFLICT');
+}
+async function commandEvidence(
+  command: Command,
+  input: CommandLookup,
+): Promise<SelfLeaveCommandEvidence | null> {
+  commandScope(command, input);
+  const raw = command.result_payload;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const keyHash = await digest(input.idempotencyKey);
+  const createdAt = new Date(command.created_at).toISOString();
+  if (!command.completed_at) return invalid();
+  const completedAt = new Date(command.completed_at).toISOString();
+  if (completedAt < createdAt) return invalid();
+  if (command.state === 'FAILED' && r.kind === refusalKind) {
+    if (
+      Object.keys(r).sort().join(',') !==
+        [
+          'kind',
+          'basis',
+          'tenantId',
+          'actorUserId',
+          'gameId',
+          'commandId',
+          'requestHash',
+          'idempotencyKeySha256',
+          'revision',
+          'dispatchStarted',
+        ]
+          .sort()
+          .join(',') ||
+      r.tenantId !== input.tenantId ||
+      r.actorUserId !== input.actorUserId ||
+      r.gameId !== input.gameId ||
+      r.commandId !== command.id ||
+      r.requestHash !== command.request_hash ||
+      r.idempotencyKeySha256 !== keyHash ||
+      r.dispatchStarted !== false ||
+      !(
+        (r.basis === 'ABSENT_COMMAND' && command.error_code === 'GAME_NOT_LEAVABLE') ||
+        (r.basis === 'ORDINARY_PAYMENT_REQUIRED' && command.error_code === 'GAME_PAYMENT_REQUIRED')
+      ) ||
+      !Number.isSafeInteger(r.revision) ||
+      Number(r.revision) < 1
+    )
+      return invalid();
+    return {
+      kind: 'NOT_DISPATCHED',
+      commandId: command.id,
+      gameId: input.gameId,
+      revision: Number(r.revision),
+      createdAt,
+      completedAt,
+      idempotencyKeySha256: keyHash,
+    };
+  }
+  if (command.state === 'COMPLETED') {
+    if (
+      command.error_code !== null ||
+      r.outcome !== 'applied' ||
+      r.commandId !== command.id ||
+      r.gameId !== input.gameId ||
+      r.viewerRelation !== 'NONE' ||
+      !Number.isSafeInteger(r.revision) ||
+      Number(r.revision) < 1 ||
+      typeof r.participationId !== 'string' ||
+      !/^[0-9a-f-]{36}$/i.test(r.participationId) ||
+      typeof r.committedAt !== 'string' ||
+      !Number.isFinite(Date.parse(r.committedAt))
+    )
+      return invalid();
+    return {
+      kind: 'APPLIED',
+      commandId: command.id,
+      gameId: input.gameId,
+      revision: Number(r.revision),
+      createdAt,
+      completedAt,
+      idempotencyKeySha256: keyHash,
+    };
+  }
+  return null;
+}
+async function commandByKey(client: PoolClient, input: CommandLookup, lock: 'share' | 'update') {
+  return queryOne<Command>(
+    client,
+    `select * from games.command_idempotency where tenant_id=$1 and principal_key=$2 and idempotency_key=$3 for ${lock}`,
+    [input.tenantId, 'user:' + input.actorUserId, input.idempotencyKey],
+  );
+}
+async function hasManagedLink(
+  client: PoolClient,
+  input: CommandLookup,
+  command: Command,
+): Promise<boolean> {
+  // Check both directions: a corrupt missing link must never turn a dispatched attempt into refusal.
+  return Boolean(
+    await queryOne(
+      client,
+      `select id from games.managed_self_leave_attempts where tenant_id=$1 and id=$2
+    union all select attempt_id as id from games.managed_self_leave_command_links where tenant_id=$1 and command_id=$2 limit 1`,
+      [input.tenantId, command.id],
+    ),
+  );
+}
 export function createManagedSelfLeaveRepository(pool: Pool): ManagedSelfLeaveRepository {
   return {
+    isNoPayment(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) =>
+        Boolean(
+          await queryOne(
+            client,
+            "select id from games.games where tenant_id=$1 and id=$2 and payment_mode='NO_PAYMENT'",
+            [input.tenantId, input.gameId],
+          ),
+        ),
+      );
+    },
+    readCommand(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        if (!(await present(client))) return null;
+        const command = await commandByKey(client, input, 'share');
+        if (!command) return null;
+        commandScope(command, input);
+        if (await hasManagedLink(client, input, command)) return null;
+        return commandEvidence(command, input);
+      });
+    },
+    reconcileUndispatched(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        if (!(await present(client))) throw new ManagedSelfLeaveError('GAME_PAYMENT_REQUIRED');
+        if (
+          !/^[a-f0-9]{64}$/.test(input.requestHash) ||
+          input.idempotencyKey.length < 16 ||
+          input.idempotencyKey.length > 128
+        )
+          return invalid();
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
+          `game-command:${input.tenantId}:user:${input.actorUserId}:${input.idempotencyKey}`,
+        ]);
+        const command = await commandByKey(client, input, 'update');
+        if (command) {
+          commandScope(command, input);
+          if (await hasManagedLink(client, input, command)) return null;
+          const evidence = await commandEvidence(command, input);
+          if (evidence) return evidence;
+          // Only this historical refusal has a source-proven pre-write ordinary owner (see games.md).
+          // No generic FAILED inference, and no coercion of malformed/unknown persisted results.
+          if (
+            command.state !== 'FAILED' ||
+            command.error_code !== 'GAME_PAYMENT_REQUIRED' ||
+            command.result_payload !== null ||
+            !command.completed_at ||
+            !Number.isFinite(new Date(command.created_at).getTime()) ||
+            !Number.isFinite(new Date(command.completed_at).getTime()) ||
+            new Date(command.completed_at) < new Date(command.created_at)
+          )
+            throw new ManagedSelfLeaveError('GAME_NOT_LEAVABLE');
+        }
+        const game = await queryOne<{ revision: number | string }>(
+          client,
+          'select revision from games.games where tenant_id=$1 and id=$2 for update',
+          [input.tenantId, input.gameId],
+        );
+        if (!game) throw new ManagedSelfLeaveError('GAME_NOT_FOUND');
+        // A different original key may already own unresolved cancellation of this actor's membership.
+        if (
+          await queryOne(
+            client,
+            `select id from games.managed_self_leave_attempts where tenant_id=$1 and user_id=$2 and game_id=$3 and state <> 'COMPLETED' limit 1`,
+            [input.tenantId, input.actorUserId, input.gameId],
+          )
+        )
+          throw new ManagedSelfLeaveError('IDEMPOTENCY_CONFLICT');
+        const { randomUUID } = await import('node:crypto');
+        const id = command?.id ?? randomUUID();
+        const proof = {
+          kind: refusalKind,
+          basis: command ? 'ORDINARY_PAYMENT_REQUIRED' : 'ABSENT_COMMAND',
+          tenantId: input.tenantId,
+          actorUserId: input.actorUserId,
+          gameId: input.gameId,
+          commandId: id,
+          requestHash: input.requestHash,
+          idempotencyKeySha256: await digest(input.idempotencyKey),
+          revision: Number(game.revision),
+          dispatchStarted: false,
+        };
+        const stored = command
+          ? await queryOne<Command>(
+              client,
+              `update games.command_idempotency set result_payload=$4::jsonb
+              where tenant_id=$1 and id=$2 and request_hash=$3 and state='FAILED' and error_code='GAME_PAYMENT_REQUIRED'
+              and result_payload is null and completed_at is not null returning *`,
+              [input.tenantId, id, input.requestHash, JSON.stringify(proof)],
+            )
+          : await queryOne<Command>(
+              client,
+              `insert into games.command_idempotency
+          (tenant_id,id,actor_user_id,principal_key,idempotency_key,command_type,request_hash,aggregate_id,state,error_code,result_payload,completed_at)
+          values($1,$2,$3,$4,$5,'game.leave.v1',$6,$7,'FAILED','GAME_NOT_LEAVABLE',$8::jsonb,clock_timestamp()) returning *`,
+              [
+                input.tenantId,
+                id,
+                input.actorUserId,
+                'user:' + input.actorUserId,
+                input.idempotencyKey,
+                input.requestHash,
+                input.gameId,
+                JSON.stringify(proof),
+              ],
+            );
+        await client.query(
+          `insert into audit.audit_log(tenant_id,actor_id,action,resource_type,resource_id,result,reason,correlation_id,new_value)
+          values($1,$2,'GAME_SELF_LEAVE_NOT_DISPATCHED','GAME',$3,'REJECTED','NO_ORIGINAL_DISPATCH',$4,$5::jsonb)`,
+          [
+            input.tenantId,
+            input.actorUserId,
+            input.gameId,
+            input.correlationId,
+            JSON.stringify({ commandId: id, revision: proof.revision }),
+          ],
+        );
+        await client.query(
+          `insert into audit.outbox_events(id,tenant_id,event_type,aggregate_id,correlation_id,payload,occurred_at)
+          values($1,$2,'audit.game_self_leave_not_dispatched.v1',$3,$4,$5::jsonb,clock_timestamp())`,
+          [
+            randomUUID(),
+            input.tenantId,
+            input.gameId,
+            input.correlationId,
+            JSON.stringify({ commandId: id, userId: input.actorUserId }),
+          ],
+        );
+        return stored ? commandEvidence(stored, input) : invalid();
+      });
+    },
     read(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         if (!(await present(client))) return null;

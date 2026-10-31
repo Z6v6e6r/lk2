@@ -13,7 +13,10 @@ export class GameSelfLeaveAttempts {
     private readonly scope: { tenantId: string; userId: string },
     private readonly storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>,
     private readonly locks: GameJoinAttemptLockManager,
-    private readonly gateway: Pick<AuthGateway, 'leaveGame' | 'getManagedLeaveOperation'>,
+    private readonly gateway: Pick<
+      AuthGateway,
+      'leaveGame' | 'getManagedLeaveOperation' | 'reconcileManagedLeaveOperation'
+    >,
     private readonly isCurrent: () => boolean = () => true,
   ) {}
   private assertCurrent(): void {
@@ -54,11 +57,35 @@ export class GameSelfLeaveAttempts {
       (attempt.operationId !== undefined && attempt.operationId !== result.operation.id)
     )
       throw new Error('SELF_LEAVE_RESPONSE_INVALID');
+    const proof = result.operation.noDispatch;
+    let notDispatched = false;
+    if (proof !== undefined) {
+      const hash = await crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode(attempt.idempotencyKey),
+      );
+      const expected =
+        'sha256:' +
+        Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('');
+      if (
+        !proof ||
+        Object.keys(proof).sort().join(',') !== 'idempotencyKeySha256,outcome,schemaVersion' ||
+        proof.schemaVersion !== 1 ||
+        proof.outcome !== 'NOT_DISPATCHED' ||
+        proof.idempotencyKeySha256 !== expected ||
+        result.operation.status !== 'FAILED' ||
+        result.operation.error?.code !== 'GAME_NOT_LEAVABLE' ||
+        result.operation.nextAction.type !== 'NONE'
+      )
+        throw new Error('SELF_LEAVE_RESPONSE_INVALID');
+      notDispatched = true;
+    }
     await this.locks.request(this.key(attempt.gameId), { mode: 'exclusive' }, () => {
       this.assertCurrent();
       const current = this.load(attempt.gameId);
-      if (!current || current.idempotencyKey !== attempt.idempotencyKey) return;
-      if (result.operation.status === 'SUCCEEDED')
+      if (!current || current.idempotencyKey !== attempt.idempotencyKey)
+        throw new Error('SELF_LEAVE_CUSTODY_CHANGED');
+      if (result.operation.status === 'SUCCEEDED' || notDispatched)
         this.storage.removeItem(this.key(attempt.gameId));
       else
         this.storage.setItem(
@@ -69,16 +96,24 @@ export class GameSelfLeaveAttempts {
   }
   async submit(gameId: string): Promise<GameCommandResult> {
     this.assertCurrent();
-    const attempt = await this.locks.request(this.key(gameId), { mode: 'exclusive' }, () => {
-      this.assertCurrent();
-      const current = this.load(gameId);
-      if (current) return current;
-      const fresh: SelfLeaveAttempt = { version: 1, gameId, idempotencyKey: crypto.randomUUID() };
-      this.storage.setItem(this.key(gameId), JSON.stringify(fresh));
-      return fresh;
-    });
+    const { attempt, fresh } = await this.locks.request(
+      this.key(gameId),
+      { mode: 'exclusive' },
+      () => {
+        this.assertCurrent();
+        const current = this.load(gameId);
+        if (current) return { attempt: current, fresh: false };
+        const fresh: SelfLeaveAttempt = { version: 1, gameId, idempotencyKey: crypto.randomUUID() };
+        this.storage.setItem(this.key(gameId), JSON.stringify(fresh));
+        return { attempt: fresh, fresh: true };
+      },
+    );
     this.assertCurrent();
-    const result = await this.gateway.leaveGame(gameId, { idempotencyKey: attempt.idempotencyKey });
+    if (!fresh && !this.gateway.reconcileManagedLeaveOperation)
+      throw new Error('SELF_LEAVE_RECONCILIATION_UNAVAILABLE');
+    const result = fresh
+      ? await this.gateway.leaveGame(gameId, { idempotencyKey: attempt.idempotencyKey })
+      : await this.gateway.reconcileManagedLeaveOperation!(gameId, attempt.idempotencyKey);
     await this.accept(attempt, result);
     return result;
   }

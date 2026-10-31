@@ -1675,6 +1675,21 @@ export class PadlHubApiClient {
     });
   }
 
+  /** Restrictive recovery: this route cannot start a new SELF LEAVE, including on an older API. */
+  public reconcileManagedLeaveOperation(
+    gameId: string,
+    idempotencyKey: string,
+  ): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(
+      `/games/${encodeURIComponent(gameId)}/leave-operation/reconcile`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        retryOnUnauthorized: false,
+      },
+    );
+  }
+
   public joinGameWaitlist(gameId: string, invitationId?: string): Promise<GameCommandResult> {
     return this.gameCommand(gameId, '/waitlist', 'POST', { invitationId });
   }

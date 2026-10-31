@@ -607,6 +607,7 @@ export interface AuthGateway {
   readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
   readonly reconcilePaidJoinOperation?: PadlHubApiClient['reconcilePaidJoinOperation'];
   readonly leaveGame: PadlHubApiClient['leaveGame'];
+  readonly reconcileManagedLeaveOperation?: PadlHubApiClient['reconcileManagedLeaveOperation'];
   readonly getManagedLeaveOperation?: PadlHubApiClient['getManagedLeaveOperation'];
   readonly joinGameWaitlist: (gameId: string, invitationId?: string) => Promise<GameCommandResult>;
   readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
@@ -2339,6 +2340,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     leaveGame(gameId, options) {
       return client.leaveGame(gameId, options);
+    },
+    reconcileManagedLeaveOperation(gameId, key) {
+      return client.reconcileManagedLeaveOperation(gameId, key);
     },
     getManagedLeaveOperation(gameId, key) {
       return client.getManagedLeaveOperation(gameId, key);

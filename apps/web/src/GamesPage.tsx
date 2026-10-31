@@ -474,7 +474,11 @@ function GamesPageContent({
         setPendingLeaveGameId(gameId);
         const result = await leaveAttempts.read(gameId);
         if (!active) return;
-        if (result?.operation.status === 'SUCCEEDED') {
+        if (result?.operation.noDispatch?.outcome === 'NOT_DISPATCHED') {
+          setPendingLeaveGameId(null);
+          setNotice('Исходный выход не отправлялся. Можно выбрать новое действие.');
+          setReloadToken((n) => n + 1);
+        } else if (result?.operation.status === 'SUCCEEDED') {
           setPendingLeaveGameId(null);
           setNotice('Выход из игры подтверждён.');
           setReloadToken((n) => n + 1);
@@ -498,7 +502,12 @@ function GamesPageContent({
         ? leaveAttempts.submit(pendingLeaveGameId)
         : leaveAttempts.read(pendingLeaveGameId));
       if (!joinPageActive.current) return;
-      if (result?.operation.status === 'SUCCEEDED') {
+      if (result?.operation.noDispatch?.outcome === 'NOT_DISPATCHED') {
+        setPendingLeaveGameId(null);
+        setError(null);
+        setNotice('Исходный выход не отправлялся. Можно выбрать новое действие.');
+        setReloadToken((n) => n + 1);
+      } else if (result?.operation.status === 'SUCCEEDED') {
         setPendingLeaveGameId(null);
         setNotice('Выход из игры подтверждён.');
         setReloadToken((n) => n + 1);
@@ -1878,6 +1887,16 @@ function GamesPageContent({
         await new Promise((resolve) => setTimeout(resolve, 250));
         result = await gateway.getGameOperation(result.operation.id);
         if (!joinPageActive.current) return;
+      }
+      if (
+        action === 'LEAVE' &&
+        leaveAttempts &&
+        result.operation.noDispatch?.outcome === 'NOT_DISPATCHED'
+      ) {
+        setPendingLeaveGameId(null);
+        setNotice('Исходный выход не отправлялся. Можно выбрать новое действие.');
+        setReloadToken((n) => n + 1);
+        return;
       }
       if (result.operation.status === 'FAILED') {
         throw Object.assign(new Error(result.operation.error?.message ?? 'Game command failed'), {

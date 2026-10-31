@@ -2712,3 +2712,28 @@ it('does not refresh or retry a stable-key SELF DELETE on 401 after session repl
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(requestUrl(fetcher.mock.calls[0]![0])).toContain('/participants/me');
 });
+
+it.each([401, 404, 409, 503])(
+  'SELF restrictive recovery never retries HTTP %s or falls back to DELETE',
+  async (status) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: { code: 'AUTH_REQUIRED', message: 'synthetic', correlationId: 'synthetic' } },
+          status,
+        ),
+      );
+    const client = createClient(fetcher, { initialAccessToken: authenticatedSession.accessToken });
+    await expect(
+      client.reconcileManagedLeaveOperation('public-game', 'synthetic-original-self-key'),
+    ).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(requestUrl(fetcher.mock.calls[0]![0])).toContain('/leave-operation/reconcile');
+    expect(fetcher.mock.calls[0]![1]?.method).toBe('POST');
+    expect(fetcher.mock.calls[0]![1]?.body).toBeUndefined();
+    expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get('Idempotency-Key')).toBe(
+      'synthetic-original-self-key',
+    );
+  },
+);

@@ -471,4 +471,176 @@ suite('managed SELF LEAVE on existing disposable CI PostgreSQL (no provider call
     expect(tables.rows).toHaveLength(2);
     expect(tables.rows.every((r) => r.relrowsecurity && r.relforcerowsecurity)).toBe(true);
   });
+  function pausedPool(pool: Pool, match: string) {
+    let reached!: () => void, release!: () => void;
+    const reachedPromise = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let paused = false;
+    return {
+      reached: reachedPromise,
+      release,
+      pool: {
+        connect: async () => {
+          const client = await pool.connect();
+          return {
+            query: async (sql: string, values?: unknown[]) => {
+              const result = await client.query(sql, values);
+              if (!paused && sql.includes(match)) {
+                paused = true;
+                reached();
+                await gate;
+              }
+              return result;
+            },
+            release: () => client.release(),
+          };
+        },
+      } as unknown as Pool,
+    };
+  }
+  it('reconciliation winning the common lock fences a late first admission and ordinary fallback', async () => {
+    const f = await joined(),
+      before = await facts(f.game.gameId);
+    const paused = pausedPool(first, 'select revision from games.games');
+    const reconcile = createManagedSelfLeaveRepository(paused.pool).reconcileUndispatched(f.input);
+    await paused.reached;
+    const late = leave2.begin(f.input);
+    paused.release();
+    const [proof, attempt] = await Promise.all([reconcile, late]);
+    expect(proof?.kind).toBe('NOT_DISPATCHED');
+    expect(attempt).toBeNull();
+    expect(await repo2.leave(f.input)).toMatchObject({
+      outcome: 'rejected',
+      code: 'GAME_NOT_LEAVABLE',
+      replayed: true,
+    });
+    expect(await facts(f.game.gameId)).toEqual(before);
+    expect(await leave2.reconcileUndispatched(f.input)).toEqual(proof);
+  });
+  it('first admission winning the lock retains its original attempt and never yields refusal proof', async () => {
+    const f = await joined();
+    const paused = pausedPool(first, 'pg_advisory_xact_lock');
+    const begin = createManagedSelfLeaveRepository(paused.pool).begin(f.input);
+    await paused.reached;
+    const recovery = leave2.reconcileUndispatched(f.input);
+    paused.release();
+    const [attempt, proof] = await Promise.all([begin, recovery]);
+    expect(attempt?.state).toBe('PREPARED');
+    expect(proof).toBeNull();
+    const identity = {
+      tenantId,
+      actorUserId: player1,
+      operationId: attempt!.authority.operationId,
+    };
+    await leave1.claim(identity);
+    expect(await leave2.reconcileUndispatched(f.input)).toBeNull();
+    expect(await leave2.readCommand(f.input)).toBeNull();
+    expect(await leave2.read(identity)).toMatchObject({ state: 'DISPATCH_STARTED' });
+  });
+  it('upgrades only the original ordinary pre-write payment refusal and retains proof after membership change', async () => {
+    const f = await joined();
+    expect(await repo1.leave(f.input)).toMatchObject({
+      outcome: 'rejected',
+      code: 'GAME_PAYMENT_REQUIRED',
+    });
+    const read = () =>
+      withTenantTransaction(
+        first,
+        tenantId,
+        async (client) =>
+          (
+            await client.query<{
+              id: string;
+              created_at: Date;
+              completed_at: Date;
+              error_code: string;
+            }>(
+              'select id,created_at,completed_at,error_code from games.command_idempotency where tenant_id=$1 and idempotency_key=$2',
+              [tenantId, f.input.idempotencyKey],
+            )
+          ).rows[0],
+      );
+    const original = await read();
+    const proof = await leave2.reconcileUndispatched(f.input);
+    expect(proof?.kind).toBe('NOT_DISPATCHED');
+    expect(await read()).toEqual(original);
+    const before = await facts(f.game.gameId);
+    await withTenantTransaction(first, tenantId, async (client) => {
+      await client.query(
+        "update games.participations set state='LEFT',left_at=now() where tenant_id=$1 and game_id=$2 and user_id=$3 and state='ACTIVE'",
+        [tenantId, f.game.gameId, player1],
+      );
+      await client.query(
+        "insert into games.participations(tenant_id,game_id,user_id,role) values($1,$2,$3,'PLAYER')",
+        [tenantId, f.game.gameId, player1],
+      );
+      await client.query(
+        'update games.games set revision=revision+1 where tenant_id=$1 and id=$2',
+        [tenantId, f.game.gameId],
+      );
+    });
+    expect(await leave2.reconcileUndispatched(f.input)).toEqual(proof);
+    expect(await repo1.leave(f.input)).toMatchObject({
+      outcome: 'rejected',
+      code: 'GAME_PAYMENT_REQUIRED',
+      replayed: true,
+    });
+    expect((await facts(f.game.gameId)).left_players).toBe(before.left_players + 1);
+    await expect(
+      leave1.reconcileUndispatched({ ...f.input, requestHash: hash('changed') }),
+    ).rejects.toThrow('IDEMPOTENCY_CONFLICT');
+  });
+  it('ordinary NO_PAYMENT lost response is recovered by its original command without managed authority', async () => {
+    const game = await fixtureGame();
+    await withTenantTransaction(first, tenantId, async (client) => {
+      await client.query(
+        "update games.games set payment_mode='NO_PAYMENT' where tenant_id=$1 and id=$2",
+        [tenantId, game.gameId],
+      );
+      await client.query(
+        "insert into games.participations(tenant_id,game_id,user_id,role) values($1,$2,$3,'PLAYER')",
+        [tenantId, game.gameId, player1],
+      );
+    });
+    const input = {
+      tenantId,
+      actorUserId: player1,
+      gameId: game.gameId,
+      idempotencyKey: 'ordinary-leave:' + randomUUID(),
+      requestHash: hash('ordinary'),
+      correlationId: 'ordinary-recovery',
+    };
+    const applied = await repo1.leave(input);
+    expect(applied.outcome).toBe('applied');
+    expect(await leave2.readCommand(input)).toMatchObject({ kind: 'APPLIED', gameId: game.gameId });
+    const before = await facts(game.gameId);
+    expect(await leave2.reconcileUndispatched(input)).toMatchObject({ kind: 'APPLIED' });
+    expect(await facts(game.gameId)).toEqual(before);
+  });
+  it('audit/outbox failure rolls back refusal and leaves no false terminal proof', async () => {
+    for (const needle of ['insert into audit.audit_log', 'insert into audit.outbox_events']) {
+      const f = await joined();
+      const failing = {
+        connect: async () => {
+          const client = await first.connect();
+          return {
+            query: (sql: string, values?: unknown[]) => {
+              if (sql.includes(needle)) throw new Error('SYNTHETIC_REFUSAL_ATOMIC_FAILURE');
+              return client.query(sql, values);
+            },
+            release: () => client.release(),
+          };
+        },
+      } as unknown as Pool;
+      await expect(
+        createManagedSelfLeaveRepository(failing).reconcileUndispatched(f.input),
+      ).rejects.toThrow('SYNTHETIC_REFUSAL_ATOMIC_FAILURE');
+      expect(await leave1.readCommand(f.input)).toBeNull();
+      expect((await leave2.begin(f.input))?.state).toBe('PREPARED');
+    }
+  });
 });
