@@ -2,9 +2,15 @@
 
 ## Текущие prerequisites
 
+#525eb993ff6 — конкретный source integration candidate четырёх heads#517/#521/#520/#522, с успешными integratedCI41236559609/41236564284 и native41236564207, без merge authority. Перед возможным source-only merge нужны exact-head checks, свежий main и отдельно разрешённое подавление automatic delivery. #523/#524 и cross-repo owners не входят в эту партию; её source merge не разрешает их runtime activation.
+
+#522ada66c50 required physical CI принят: lifecycle/communications/Rabbit27+8guard cases, zero skips, owned fixtures cleanup подтверждён вCI41233392220. При будущей интеграции этот обязательный step и его fail-closed report/ownership проверки должны сохраниться. Это не разрешение на shared database/broker или provider тесты.
+
+LK#2733678c039 preparation source/CI green, но unsigned observation не является CUP producer authority. До CREATE acceptance нужны versioned actor/draft-bound trusted target, actual applied1/4 check, original-create receipt и сохранение v1/LK1 replay. Station membership требует original pre-dispatch admission epoch и confirmed generation; поздний replay после voluntary leave не должен возвращать пользователя.
+
 #511 source-only integration разрешена отдельно от delivery; её flag cycle завершён: mainCI41230249442 SUCCESS, delivery41231241175 SKIPPED/steps=[], исходныйtrue восстановлен18:50:31 UTC. Остальные merge требуют отдельных exact-head approvals.
 
-Training LK#271→LK2#520 и FREE/SERVICE SELF LK#270→LK2#519 имеют source/CI evidence. Native/provider paths и SELF terminal-refusal recovery ещё нужны. CUP#61 даёт только nonbinding dated owner observation; admission обязан проверить raw rules, actual owner, original generation и capacity/WAITLIST. MALE/FEMALE проверяют exact actor profileM/F, MIXED без gender restriction; missing rule не unrestricted.
+Training LK#271→LK2#520 и FREE/SERVICE SELF LK#270→LK2#519 имеют source/CI evidence. SELF terminal-refusal recovery#521e1d781 CI41234847565/native41234847625 green, physicalPG9/9; native/provider paths ещё нужны. CUP#61 даёт только nonbinding dated owner observation; admission обязан проверить raw rules, actual owner, original generation и capacity/WAITLIST. MALE/FEMALE проверяют exact actor profileM/F, MIXED без gender restriction; missing rule не unrestricted.
 
 Денежные LK1 cancellation commands существуют. До LK2 monetary activation требуются attributable game settlement/credit, ambiguous-write recovery и отдельная financial acceptance. #518 имеет actual synthetic simulator5/5 и full CI green; physical devices, real OTP/Keychain/APNs/provider и stores этим не приняты. Quarter-court CREATE и station community decisions зафиксированы в READINESS, их server write contracts ещё не завершены.
 
@@ -123,3 +129,5 @@ managed JOIN v2 принять совместимые owner/consumer heads и se
 #268 меняет только CI fixture runner для Mongo8. Его green monthly run не доказывает исправность production kernel/Mongo и не является разрешением менять production runtime.
 
 #516 зависит от #513 и существующих server profile/direct-create permissions. Перед native acceptance проверить participant UUID route, OTHER projection, privacy denial, same-key retry и account-switch на реальном устройстве. Unsigned build и browser mock не являются подписанным IPA или device acceptance.
+
+Android native CI#526 создаёт только unsigned verification APK: JDK21/SDK36, actual JVM report gate, appId/unsigned check и SHA256. Он не разрешает signing/store; APK не устанавливался на устройство и не считается релизом.

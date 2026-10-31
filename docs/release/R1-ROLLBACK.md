@@ -2,6 +2,12 @@
 
 ## Дополнительные original-operation ограничения
 
+#525 объединяет source миграций0105/0106/0107 без изменения их bytes или frozen closed108 пакета. Это не применение миграций: существующий closed deploy mode по-прежнему отвергает неподтверждённый расширенный ledger. Application rollback сохраняет новые attempts/receipts; фактический forward migration/backup/old binary compatibility требуют отдельного принятого runtime package.
+
+#521 добавляет restrictive POST reconcile, который сохраняет terminal NOT_DISPATCHED в существующем journal и атомарно блокирует запоздалую первую DELETE. При rollback эти записи и custody сохраняются; старый API404 не разрешает новый ключ. Currente1d781 CI41234847565/native41234847625 SUCCESS;9physicalSELF cases passed. Нет миграции или автоматического financial replay.
+
+Предлагаемый station lifetime contract сохраняет immutable original admission и membership epoch. Leave/remove/ban/restoration не должны оживлять прежние admissions; пропавший ACK восстанавливается чтением исходной записи, не новым admission с текущим epoch. Ошибка доставки community fact не откатывает booking/деньги. Контракт ещё не реализован, production recovery не заявлен.
+
 Принятый source/CI consumer#519 (0106) сохраняет исходный ключ и journal при UNKNOWN; unsupported typed refusal может сохранить custody и блокировать новый JOIN до подтверждения результата. Удаление browser custody по404/409 или повторная запись с новым ключом не являются recovery. При terminal original-key replay после rejoin нельзя менять новое участие. Для денежных отмен не повторять cancellation/refund после ambiguous write, пока provider contract не доказал idempotency; cancelled history не означает settlement. При tournament recovery сохранять source owner и original booking generation, не переключаться с CUP на LK или наоборот.
 
 TRAINING consumer0107 в #520 прошёл source/CI, включая6physicalPG: после dispatch fence нельзя reprepare, подменять capsule или начинать новый booking. Fresh owner read не должен превращать immutable historical receipt в текущее участие после cancel/WAITLIST/rejoin. Только durable terminal pre-dispatch proof с CAS и отсутствием dispatch разрешает новый выбор/ключ; timeout,404/409 и отсутствие локальной строки сами по себе не доказательство. Rollback удерживает original attempts и не передаёт их старому writer.
