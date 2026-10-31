@@ -16,6 +16,12 @@ import {
 } from '@phub/database/training-registration';
 import {
   TrainingPreparationRefused,
+  trainingStationActor,
+  trainingStationRequest,
+  parseStationAdmissionResponse,
+  type TrainingStationMarker,
+  type StationMembershipClient,
+  type StationMembershipSigner,
   type TrainingRegistrationOwnerClient,
   type TrainingOwnerOutcome,
 } from '@phub/subscription-runtime-adapter';
@@ -79,6 +85,12 @@ export function createTrainingRegistrationRuntime(options: {
   >;
   client?: Pick<TrainingRegistrationOwnerClient, 'prepare' | 'admit' | 'read'>;
   token?: (actor: TrainingActor) => Promise<{ token: string; expiresAt: string }>;
+  stationMembership?:
+    | {
+        client: Pick<StationMembershipClient, 'admit'>;
+        signer: Pick<StationMembershipSigner, 'issue'>;
+      }
+    | undefined;
   metric?: (status: 'confirmed' | 'unknown' | 'expired' | 'unavailable') => void;
 }): TrainingRegistrationRuntime {
   const { repository } = options;
@@ -100,15 +112,18 @@ export function createTrainingRegistrationRuntime(options: {
     const context = await repository.context({ ...actor, subscriptionId });
     if (!context)
       throw new TrainingRegistrationError('TRAINING_REGISTRATION_IDENTITY_UNAVAILABLE', 403);
-    if (a?.authority) {
-      const p = a.authority.request.preparation,
+    const storedAuthority =
+      a?.authority ??
+      (a?.stationMembership?.outcome === 'INTENT' ? a.stationMembership.authority : null);
+    if (storedAuthority) {
+      const p = storedAuthority.request.preparation,
         signer = options.issuer.trainingSigningIdentity();
       if (
         p.actor.providerClientId !== context.providerClientId ||
         p.actor.providerMappingId !== context.providerMappingId ||
         p.subscription.providerClientSubscriptionId !== context.providerClientSubscriptionId ||
-        a.authority.issuer !== signer.issuer ||
-        a.authority.audience !== signer.audience
+        storedAuthority.issuer !== signer.issuer ||
+        storedAuthority.audience !== signer.audience
       )
         throw new TrainingRegistrationError();
     }
@@ -193,6 +208,7 @@ export function createTrainingRegistrationRuntime(options: {
             dateHint: input.dateHint,
           },
           actor.correlationId,
+          !!options.stationMembership,
         );
       let ctx: Awaited<ReturnType<typeof identity>>;
       try {
@@ -204,6 +220,23 @@ export function createTrainingRegistrationRuntime(options: {
         const claim = await repository.claimPreparation(s);
         if (!claim?.token) return view(claim?.attempt ?? a);
         a = claim.attempt;
+        // The lease winner may have pinned an intent after the earlier read/identity check.
+        // Recheck the claimed immutable identity before any station-owner write.
+        if (a.stationMembership?.outcome === 'INTENT') {
+          const pinned = a.stationMembership.authority,
+            p = pinned.request.preparation,
+            signer = options.issuer.trainingSigningIdentity();
+          if (
+            p.actor.tenantId !== actor.tenantId ||
+            p.actor.userId !== actor.userId ||
+            p.actor.providerClientId !== ctx.providerClientId ||
+            p.actor.providerMappingId !== ctx.providerMappingId ||
+            p.subscription.providerClientSubscriptionId !== ctx.providerClientSubscriptionId ||
+            pinned.issuer !== signer.issuer ||
+            pinned.audience !== signer.audience
+          )
+            return view(a);
+        }
         const request: TrainingRequest = {
           contractVersion: 1,
           action: 'BOOK_GROUP_TRAINING',
@@ -212,43 +245,95 @@ export function createTrainingRegistrationRuntime(options: {
           paymentIntent: 'USE_SUBSCRIPTION',
         };
         try {
-          const operationId = a.id,
-            actorDelegation = await options.issuer.issueTrainingRegistration({
-              ...actor,
-              ...ctx,
-              mode: 'prepare',
+          const prepareAuthority = async () => {
+            const operationId = claim.attempt.id,
+              actorDelegation = await options.issuer!.issueTrainingRegistration({
+                ...actor,
+                ...ctx,
+                mode: 'prepare',
+                operationId,
+                keySha256: s.keySha256,
+                request,
+              });
+            const p = await options.client!.prepare(request, {
               operationId,
-              keySha256: s.keySha256,
-              request,
+              actorDelegation,
+              actorToken: ctx.actorToken,
+              correlationId: actor.correlationId,
             });
-          const p = await options.client.prepare(request, {
-            operationId,
-            actorDelegation,
-            actorToken: ctx.actorToken,
-            correlationId: actor.correlationId,
-          });
-          if (
-            p.operationId !== operationId ||
-            p.actor.tenantId !== actor.tenantId ||
-            p.actor.userId !== actor.userId ||
-            p.actor.providerClientId !== ctx.providerClientId ||
-            p.actor.providerMappingId !== ctx.providerMappingId ||
-            p.subscription.providerClientSubscriptionId !== ctx.providerClientSubscriptionId ||
-            Date.parse(p.observedAt) > Date.now()
-          )
-            throw new TrainingRegistrationError('TRAINING_REGISTRATION_EVIDENCE_INVALID');
-          const admission = await parseTrainingAdmission({ ...request, preparation: p }),
-            base = {
-              request: admission,
-              keySha256: s.keySha256,
-              requestSha256: await trainingRequestHash(admission),
-              ...options.issuer.trainingSigningIdentity(),
-            };
+            if (
+              p.operationId !== operationId ||
+              p.actor.tenantId !== actor.tenantId ||
+              p.actor.userId !== actor.userId ||
+              p.actor.providerClientId !== ctx.providerClientId ||
+              p.actor.providerMappingId !== ctx.providerMappingId ||
+              p.subscription.providerClientSubscriptionId !== ctx.providerClientSubscriptionId ||
+              Date.parse(p.observedAt) > Date.now()
+            )
+              throw new TrainingRegistrationError('TRAINING_REGISTRATION_EVIDENCE_INVALID');
+            const admission = await parseTrainingAdmission({ ...request, preparation: p }),
+              base = {
+                request: admission,
+                keySha256: s.keySha256,
+                requestSha256: await trainingRequestHash(admission),
+                ...options.issuer!.trainingSigningIdentity(),
+              };
+            return parseTrainingAuthority({ ...base, bindingSha256: await trainingBinding(base) });
+          };
+          const authority =
+            a.stationMembership?.outcome === 'INTENT'
+              ? a.stationMembership.authority
+              : await prepareAuthority();
+          let marker: TrainingStationMarker | undefined;
+          if (a.stationMembership) {
+            marker = { version: 1, outcome: 'NO_ENROLLMENT', reason: 'DISABLED' };
+            if (
+              options.stationMembership &&
+              Date.parse(authority.request.preparation.expiresAt) > Date.now()
+            ) {
+              if (a.stationMembership.outcome === 'PENDING_ADMISSION') {
+                const pinned = await repository.pinStationPreparation(s, claim.token, authority);
+                if (!pinned) return view((await repository.read(s)) ?? a);
+                a = pinned;
+              }
+              if (a.stationMembership?.outcome !== 'INTENT') return view(a);
+              try {
+                const stationActor = trainingStationActor(authority),
+                  request = trainingStationRequest(authority);
+                const delegation = options.stationMembership.signer.issue({
+                  mode: 'admission',
+                  actor: stationActor,
+                  request,
+                  sessionId: actor.sessionId,
+                  correlationId: actor.correlationId,
+                });
+                const response = parseStationAdmissionResponse(
+                  await options.stationMembership.client.admit(request, stationActor, {
+                    delegation,
+                    correlationId: actor.correlationId,
+                  }),
+                  stationActor,
+                  request,
+                );
+                marker = {
+                  version: 1,
+                  outcome: 'OWNER_ADMISSION',
+                  actor: stationActor,
+                  request,
+                  response,
+                  authoritySha256: await trainingHash(JSON.stringify(authority)),
+                };
+              } catch {
+                marker = { version: 1, outcome: 'NO_ENROLLMENT', reason: 'OWNER_UNAVAILABLE' };
+              }
+            }
+          }
           const settled = await repository.settlePreparation(
             s,
             claim.token,
-            await parseTrainingAuthority({ ...base, bindingSha256: await trainingBinding(base) }),
+            authority,
             actor.correlationId,
+            marker,
           );
           if (!settled) return view((await repository.read(s)) ?? a);
           a = settled;

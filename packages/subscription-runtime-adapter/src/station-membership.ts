@@ -73,7 +73,7 @@ export interface StationAdmissionRequest {
   contractVersion: 1;
   operationId: string;
   requestSha256: string;
-  activity: { kind: 'GAME'; id: string };
+  activity: { kind: 'GAME' | 'TRAINING'; id: string };
   stationId: string;
 }
 export interface StationConfirmationRequest {
@@ -81,7 +81,11 @@ export interface StationConfirmationRequest {
   operationId: string;
   admissionId: string;
   admissionBindingSha256: string;
-  confirmation: { kind: 'GAME_PARTICIPATION'; generationId: string; activityId: string };
+  confirmation: {
+    kind: 'GAME_PARTICIPATION' | 'TRAINING_REGISTRATION';
+    generationId: string;
+    activityId: string;
+  };
 }
 export function parseStationRequest(
   x: unknown,
@@ -95,7 +99,7 @@ export function parseStationRequest(
       !digest(x.requestSha256) ||
       !id(x.stationId) ||
       !keys(x.activity, ['kind', 'id']) ||
-      x.activity.kind !== 'GAME' ||
+      !['GAME', 'TRAINING'].includes(String(x.activity.kind)) ||
       !stationUuid(x.activity.id)
     )
       throw new StationMembershipError();
@@ -110,7 +114,7 @@ export function parseStationRequest(
     !stationUuid(x.admissionId) ||
     !digest(x.admissionBindingSha256) ||
     !keys(x.confirmation, ['kind', 'generationId', 'activityId']) ||
-    x.confirmation.kind !== 'GAME_PARTICIPATION' ||
+    !['GAME_PARTICIPATION', 'TRAINING_REGISTRATION'].includes(String(x.confirmation.kind)) ||
     !stationUuid(x.confirmation.generationId) ||
     !stationUuid(x.confirmation.activityId)
   )
@@ -261,7 +265,10 @@ export function parseStationMarker(x: unknown): StationMarker {
     const actor = parseStationActor(x.actor),
       request = parseStationRequest(x.request, 'admission') as StationAdmissionRequest;
     parseStationAdmissionResponse(x.response, actor, request);
-    if (parseStationLocationEvidence(x.location).providerStationId !== request.stationId)
+    if (
+      request.activity.kind !== 'GAME' ||
+      parseStationLocationEvidence(x.location).providerStationId !== request.stationId
+    )
       throw new StationMembershipError();
   }
   return structuredClone(x) as unknown as StationMarker;

@@ -149,11 +149,51 @@ describe('station delivery from persisted confirmation', () => {
         'x-dead-letter-exchange': 'phub.dead-letter',
       },
     });
-    expect(f.channel.bindQueue).toHaveBeenCalledOnce();
+    expect(f.channel.bindQueue).toHaveBeenCalledTimes(2);
     expect(f.channel.bindQueue).toHaveBeenCalledWith(
       STATION_MEMBERSHIP_QUEUE,
       'phub.events',
       event.type,
     );
   });
+});
+
+it('training event uses only original receipt-backed fact; wrong status and kind are rejected', async () => {
+  const f = fixture(),
+    trainingEvent = {
+      ...event,
+      type: 'training.registration.confirmed.v1',
+      payload: { operationId: id(7), trainingId: id(3), userId: id(4), status: 'CONFIRMED' },
+    };
+  const fact = {
+    ...f.fact,
+    request: {
+      ...f.fact.request,
+      confirmation: {
+        kind: 'TRAINING_REGISTRATION' as const,
+        generationId: id(15),
+        activityId: id(3),
+      },
+    },
+  };
+  const trainingRepository = { loadTrainingConfirmedFact: vi.fn(() => Promise.resolve(fact)) };
+  await handleStationMembershipMessage(
+    { ...f.options, trainingRepository },
+    message(trainingEvent),
+  );
+  expect(trainingRepository.loadTrainingConfirmedFact).toHaveBeenCalledWith({
+    tenantId: id(2),
+    eventId: id(1),
+    trainingId: id(3),
+    userId: id(4),
+    operationId: id(7),
+  });
+  expect(f.repository.loadConfirmedFact).not.toHaveBeenCalled();
+  expect(f.client.confirm).toHaveBeenCalledWith(fact.request, expect.anything());
+  await handleStationMembershipMessage(
+    { ...f.options, trainingRepository },
+    message({ ...trainingEvent, payload: { ...trainingEvent.payload, status: 'PENDING' } }),
+  );
+  expect(trainingRepository.loadTrainingConfirmedFact).toHaveBeenCalledOnce();
+  expect(f.channel.nack).toHaveBeenCalledOnce();
 });

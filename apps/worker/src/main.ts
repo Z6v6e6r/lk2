@@ -1,3 +1,4 @@
+import { createTrainingStationFactRepository } from '../../../packages/database/src/training-registration-repository.js';
 import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
 import { createStationMembershipRepository } from '../../../packages/database/src/station-membership-repository.js';
 import { registerStationMembershipConsumer } from './station-membership-consumer.js';
@@ -495,6 +496,7 @@ if (stationMembershipTransport) {
     channel: consumerChannel,
     logger,
     repository: createStationMembershipRepository(pool),
+    trainingRepository: createTrainingStationFactRepository(pool),
     ...stationMembershipTransport,
   });
 }

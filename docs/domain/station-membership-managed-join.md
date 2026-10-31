@@ -65,3 +65,44 @@ new-operation timing, negative markers, old-command replay, original fact delive
 Physical suites run only on existing owned CI PostgreSQL/Mongo fixtures. Local skips are not physical
 proof; CI is not device/provider/production acceptance. TRAINING, legacy LK1 adoption, real signer
 provision and cross-repository runtime acceptance remain separate release dependencies.
+
+## Training registration consumer
+
+The private v1 wire accepts TRAINING / TRAINING_REGISTRATION as an exact pair.
+The source is the verified owner preparation capsule's providerStudioId. Generation
+is the validated original training receiptId, independent of the outbox event ID.
+
+Migration 0108 only adds nullable private station_membership to the 0107 journal.
+Old NULL rows remain unadopted. A newly inserted operation may capture PENDING_ADMISSION
+when the existing station lifetime flag is enabled. Before any station admission POST,
+the preparation lease pins the complete canonical original authority as INTENT.
+Recovery reuses it and rechecks original actor/provider mapping and signing identity;
+it never refreshes studio, expiry or operation identity. Terminal owner response or
+NO_ENROLLMENT and that same authority commit with the prepared outbox event atomically.
+Timeout is terminal OWNER_UNAVAILABLE; disabling the flag yields DISABLED. Expired
+capsules follow the original non-dispatched expiry path. A late ACK cannot upgrade a
+terminal negative. Training booking can complete when station enrollment is unavailable.
+
+The worker consumes only training.registration.confirmed.v1 and rereads its exact
+persisted event, CONFIRMED journal, hashes, receipt and terminal admission. It sends
+TRAINING_REGISTRATION with receiptId to the owner. Membership epochs protect LEFT,
+removed and banned members; cancellation retains membership. No training-leave or
+same-training rebooking contract is invented: 0107's actor/target fence remains.
+
+Activation requires an authorized 0108 migration, compatible LK TRAINING owner,
+existing signing readiness, coherent flag ownership, outbox retention and DLQ recovery
+evidence. API startup runs no migration. Flag-off SQL does not name the new column on
+0107; expanded rows can still be read. Rollback disables producer/consumer and retains
+the column, markers, admissions and claims. Never backfill NULL rows or delete ledgers.
+Old code may complete while the marker remains INTENT; the new worker never enrolls
+that incomplete station fact. No automatic backfill or operator replay is authorized.
+
+LOCAL checks use synthetic data; physical PostgreSQL and MongoDB cases use existing
+CI disposable services. Flag-off compatibility includes SQL-column exclusion with a
+0107-shaped response over CI PostgreSQL, not a separately provisioned old database.
+Provider, staging, production and device acceptance remain outstanding. Flag default
+remains off; this source packet does not activate the feature.
+
+The additive CHECK may scan existing journal rows under ALTER lock. Lock/statement
+timeouts bound failure; production lock-duration acceptance requires separate rehearsal
+and migration approval. Rollback retains the column rather than dropping data.
