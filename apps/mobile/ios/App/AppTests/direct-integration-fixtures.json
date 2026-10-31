@@ -1,0 +1,465 @@
+{
+  "provenance": "Synthetic #516 cabinet/direct/chat fixtures; no provider or user export",
+  "viewerId": "00000000-0000-4000-8000-000000000001",
+  "peerId": "33333333-3333-4333-8333-333333333333",
+  "directId": "11111111-1111-4111-8111-111111111111",
+  "auth": {
+    "accessToken": "synthetic-short-lived-access",
+    "tokenType": "Bearer",
+    "expiresAt": "2099-01-01T00:00:00Z",
+    "user": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "displayName": "Анна Петрова"
+    },
+    "context": {
+      "userId": "00000000-0000-4000-8000-000000000001",
+      "tenantId": "00000000-0000-4000-8000-000000000002",
+      "displayName": "Анна Петрова",
+      "roles": [
+        "client"
+      ],
+      "permissions": [
+        "profile.read",
+        "chat.direct.create"
+      ]
+    }
+  },
+  "homeBase": {
+    "snapshot": {
+      "version": "home-base-v1-test",
+      "generatedAt": "2099-10-15T09:00:00.000Z",
+      "source": "LOCAL_PROJECTION",
+      "completeness": "PARTIAL"
+    },
+    "viewerUserId": "00000000-0000-4000-8000-000000000001",
+    "quickActions": [
+      {
+        "id": "play",
+        "title": "Найти игру",
+        "subtitle": "Открытые игры рядом",
+        "route": "/games",
+        "tone": "violet"
+      }
+    ],
+    "communities": {
+      "status": "READY",
+      "revision": "1",
+      "observedAt": "2099-10-15T09:00:00.000Z",
+      "staleAt": "2099-10-15T09:05:00.000Z",
+      "value": [
+        {
+          "id": "42c05c91-da23-4dc5-bf97-3d136a2d12bd",
+          "title": "Padel Friends",
+          "logoUrl": null,
+          "isVerified": true,
+          "unreadChatCount": 2,
+          "route": "/communities/42c05c91-da23-4dc5-bf97-3d136a2d12bd"
+        },
+        {
+          "id": "2abf4d16-35d5-445b-91ff-75676469ad12",
+          "title": "Тест",
+          "logoUrl": null,
+          "isVerified": false,
+          "unreadChatCount": 0,
+          "route": "/communities/2abf4d16-35d5-445b-91ff-75676469ad12"
+        }
+      ]
+    },
+    "promotions": {
+      "status": "READY",
+      "revision": "1",
+      "observedAt": "2099-10-15T09:00:00.000Z",
+      "staleAt": "2099-10-15T09:05:00.000Z",
+      "value": {
+        "hero": {
+          "rotationEnabled": false,
+          "intervalSeconds": 6,
+          "items": []
+        },
+        "standard": {
+          "rotationEnabled": false,
+          "intervalSeconds": 6,
+          "items": []
+        }
+      }
+    },
+    "locations": [
+      {
+        "id": "a8df730b-6a67-41a5-8772-48bca84f73bc",
+        "title": "Селигерская",
+        "courtCount": 5,
+        "imageUrl": null,
+        "route": "/locations/a8df730b-6a67-41a5-8772-48bca84f73bc"
+      }
+    ],
+    "additionalLinks": [
+      {
+        "id": "promotions",
+        "title": "Все акции",
+        "route": "/promotions"
+      },
+      {
+        "id": "gift_certificates",
+        "title": "Подарочные сертификаты",
+        "route": "/gift-certificates"
+      },
+      {
+        "id": "offers",
+        "title": "Предложения",
+        "route": "/offers"
+      }
+    ],
+    "capabilities": {
+      "canCreateGame": true,
+      "canManageTournaments": false,
+      "canViewCommunities": true
+    }
+  },
+  "home": {
+    "snapshot": {
+      "version": "home-v1-test",
+      "generatedAt": "2099-10-15T09:00:00.000Z",
+      "staleAt": "2099-10-15T09:01:00.000Z",
+      "source": "LOCAL_MOCK"
+    },
+    "profile": {
+      "userId": "00000000-0000-4000-8000-000000000001",
+      "displayName": "Анна Петрова",
+      "firstName": "Анна",
+      "avatarUrl": null,
+      "phoneLast4": "0001",
+      "balanceMinor": 54000,
+      "currency": "RUB",
+      "level": {
+        "label": "C+",
+        "value": 3.8,
+        "assessmentRequired": false
+      }
+    },
+    "counters": {
+      "unreadChats": 2,
+      "upcomingEvents": 1,
+      "activeSubscriptions": 1
+    },
+    "quickActions": [
+      {
+        "id": "play",
+        "title": "Найти игру",
+        "subtitle": "Открытые игры рядом",
+        "route": "/games",
+        "tone": "violet"
+      }
+    ],
+    "upcoming": [
+      {
+        "id": "751fe6a8-b0b1-4b2b-873d-a2d785c4e191",
+        "kind": "game",
+        "title": "Американо · уровень C",
+        "startsAt": "2099-10-16T18:00:00.000Z",
+        "venue": "ПадлхАБ · корт 2",
+        "status": "confirmed",
+        "route": "/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191"
+      }
+    ],
+    "subscriptions": [
+      {
+        "id": "24793a5a-0931-4a76-8600-267015be0ac9",
+        "title": "Лето · Падел · Спорт",
+        "status": "active",
+        "remainingUnits": 8,
+        "validUntil": "2099-12-15T00:00:00.000Z",
+        "route": "/subscriptions/24793a5a-0931-4a76-8600-267015be0ac9"
+      }
+    ],
+    "communities": [
+      {
+        "id": "42c05c91-da23-4dc5-bf97-3d136a2d12bd",
+        "title": "Padel Friends",
+        "logoUrl": null,
+        "isVerified": true,
+        "unreadChatCount": 2,
+        "route": "/communities/42c05c91-da23-4dc5-bf97-3d136a2d12bd"
+      },
+      {
+        "id": "2abf4d16-35d5-445b-91ff-75676469ad12",
+        "title": "Тест",
+        "logoUrl": null,
+        "isVerified": false,
+        "unreadChatCount": 0,
+        "route": "/communities/2abf4d16-35d5-445b-91ff-75676469ad12"
+      }
+    ],
+    "promotion": null,
+    "promotions": {
+      "rotationEnabled": false,
+      "intervalSeconds": 6,
+      "items": []
+    },
+    "locations": [
+      {
+        "id": "a8df730b-6a67-41a5-8772-48bca84f73bc",
+        "title": "Селигерская",
+        "courtCount": 5,
+        "imageUrl": null,
+        "route": "/locations/a8df730b-6a67-41a5-8772-48bca84f73bc"
+      }
+    ],
+    "additionalLinks": [
+      {
+        "id": "promotions",
+        "title": "Все акции",
+        "route": "/promotions"
+      },
+      {
+        "id": "gift_certificates",
+        "title": "Подарочные сертификаты",
+        "route": "/gift-certificates"
+      },
+      {
+        "id": "offers",
+        "title": "Предложения",
+        "route": "/offers"
+      }
+    ],
+    "capabilities": {
+      "canCreateGame": true,
+      "canManageTournaments": false,
+      "canViewCommunities": true
+    }
+  },
+  "profile": {
+    "userId": "00000000-0000-4000-8000-000000000001",
+    "displayName": "Анна Петрова",
+    "firstName": "Анна",
+    "avatarUrl": null,
+    "phoneLast4": "0001",
+    "balanceMinor": 54000,
+    "currency": "RUB",
+    "level": {
+      "label": "C+",
+      "value": 3.8,
+      "assessmentRequired": false
+    }
+  },
+  "preferences": {
+    "favoriteStationIds": [],
+    "preferredTimeWindows": [
+      {
+        "weekday": "ANY",
+        "startsAt": "09:00",
+        "endsAt": "22:00"
+      }
+    ],
+    "useHistory": true,
+    "recommendFriends": true,
+    "recommendationDisplay": "CARDS",
+    "version": 0,
+    "updatedAt": null
+  },
+  "recommendations": {
+    "version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generatedAt": "2099-10-18T09:00:00.000Z",
+    "staleAt": "2099-10-18T09:05:00.000Z",
+    "personalization": "BASIC",
+    "items": [],
+    "nextCursor": null
+  },
+  "privacy": {
+    "contactPolicy": "AUTHORIZED",
+    "chatPolicy": "AUTHORIZED",
+    "version": 1,
+    "updatedAt": "2099-10-17T12:00:00.000Z"
+  },
+  "bookings": {
+    "state": "READY",
+    "version": "home-v1-test",
+    "generatedAt": "2099-10-15T09:00:00.000Z",
+    "staleAt": "2099-10-15T09:01:00.000Z",
+    "items": [
+      {
+        "id": "751fe6a8-b0b1-4b2b-873d-a2d785c4e191",
+        "kind": "game",
+        "title": "Американо · уровень C",
+        "startsAt": "2099-10-16T18:00:00.000Z",
+        "venue": "ПадлхАБ · корт 2",
+        "status": "confirmed",
+        "route": "/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191"
+      }
+    ]
+  },
+  "location": {
+    "id": "a8df730b-6a67-41a5-8772-48bca84f73bc",
+    "slug": "seligerskaya",
+    "title": "Хаб Селигерская",
+    "shortTitle": "Селигерская",
+    "city": "Москва",
+    "courtCount": 5,
+    "address": "Тестовая улица, 1",
+    "coordinates": null,
+    "timezone": "Europe/Moscow",
+    "metro": {
+      "name": "Селигерская",
+      "distanceMeters": 400
+    },
+    "phoneE164": null,
+    "gallery": [],
+    "amenities": [
+      {
+        "key": "parking",
+        "icon": "PARKING",
+        "title": "Бесплатная парковка",
+        "description": null,
+        "sortOrder": 0
+      }
+    ],
+    "workingHours": [
+      {
+        "weekday": "MON",
+        "closed": false,
+        "intervals": [
+          {
+            "opensAt": "07:00",
+            "closesAt": "23:00"
+          }
+        ]
+      }
+    ],
+    "openNow": true,
+    "workingHoursSummary": "Сегодня, 07:00—23:00",
+    "navigationUrl": null,
+    "route": "/locations/a8df730b-6a67-41a5-8772-48bca84f73bc"
+  },
+  "communities": {
+    "items": [
+      {
+        "id": "42c05c91-da23-4dc5-bf97-3d136a2d12bd",
+        "title": "Padel Friends",
+        "logoUrl": null,
+        "isVerified": true,
+        "unreadChatCount": 2,
+        "route": "/communities/42c05c91-da23-4dc5-bf97-3d136a2d12bd"
+      },
+      {
+        "id": "2abf4d16-35d5-445b-91ff-75676469ad12",
+        "title": "Тест",
+        "logoUrl": null,
+        "isVerified": false,
+        "unreadChatCount": 0,
+        "route": "/communities/2abf4d16-35d5-445b-91ff-75676469ad12"
+      }
+    ]
+  },
+  "history": {
+    "items": [],
+    "nextCursor": null
+  },
+  "publicGames": {
+    "items": [
+      {
+        "id": "751fe6a8-b0b1-4b2b-873d-a2d785c4e191",
+        "revision": 7,
+        "surface": "DISCOVER",
+        "displayState": "ONE_SPOT_LEFT",
+        "title": "Рейтинговая игра вечером",
+        "kind": "RATING",
+        "visibility": "PUBLIC",
+        "startsAt": "2099-10-20T15:00:00.000Z",
+        "endsAt": "2099-10-20T16:00:00.000Z",
+        "timezone": "Europe/Moscow",
+        "station": {
+          "id": "a8df730b-6a67-41a5-8772-48bca84f73bc",
+          "name": "Селигерская"
+        },
+        "court": {
+          "id": "bd35543d-c565-443a-bd3d-eea68eb2fbe6",
+          "name": "Корт №3"
+        },
+        "levelRange": {
+          "from": "C",
+          "to": "C+"
+        },
+        "rosterState": "LAST_SPOT",
+        "capacity": {
+          "total": 4,
+          "occupied": 3,
+          "reserved": 0,
+          "open": 1,
+          "waitlistCount": 0
+        },
+        "participants": [
+          {
+            "userId": "33333333-3333-4333-8333-333333333333",
+            "displayName": "Борис Тестовый",
+            "role": "PLAYER",
+            "avatarUrl": null,
+            "level": "C"
+          }
+        ],
+        "priceSummary": null,
+        "viewerRelation": "ANONYMOUS",
+        "viewerPaymentState": "NOT_REQUIRED",
+        "badges": [
+          "RATING"
+        ],
+        "allowedActions": [
+          "OPEN_DETAILS",
+          "JOIN"
+        ],
+        "deepLink": "/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191"
+      }
+    ],
+    "nextCursor": null
+  },
+  "otherProfile": {
+    "profile": {
+      "userId": "33333333-3333-4333-8333-333333333333",
+      "displayName": "Борис Тестовый",
+      "avatarUrl": "/user/api/v1/local-padel/protected-photo"
+    },
+    "reachable": true,
+    "access": {
+      "audience": "OTHER",
+      "tier": "INTERACTION",
+      "visibleSections": [
+        "BASIC"
+      ],
+      "contact": {
+        "status": "HIDDEN"
+      },
+      "chat": {
+        "status": "AVAILABLE",
+        "route": "/chats/new?recipientUserId=33333333-3333-4333-8333-333333333333&open=1"
+      }
+    }
+  },
+  "conversation": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "kind": "DIRECT",
+    "participant": {
+      "userId": "33333333-3333-4333-8333-333333333333",
+      "displayName": "Борис Тестовый"
+    },
+    "unreadCount": 0,
+    "updatedAt": "2026-10-31T09:00:00Z",
+    "notificationPolicy": {
+      "level": "ALL",
+      "muted": false
+    }
+  },
+  "messages": {
+    "messages": [
+      {
+        "id": "11111111-1111-4111-8111-111111111111-message",
+        "conversationId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 1,
+        "sender": {
+          "userId": "33333333-3333-4333-8333-333333333333",
+          "displayName": "Борис Тестовый"
+        },
+        "body": "До встречи на корте!",
+        "messageType": "TEXT",
+        "createdAt": "2026-10-31T09:00:00Z"
+      }
+    ]
+  }
+}
