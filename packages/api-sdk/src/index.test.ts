@@ -2660,3 +2660,80 @@ describe('PadlHubApiClient notification boundary', () => {
     });
   });
 });
+
+describe('managed SELF leave stable-key recovery', () => {
+  it('never automatically retries a stable-key DELETE after response loss; read-by-key keeps original custody', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    let first = true;
+    const fetcher: typeof fetch = (url, init) =>
+      Promise.resolve().then(() => {
+        requests.push({ url: requestUrl(url), ...(init ? { init } : {}) });
+        if (first) {
+          first = false;
+          throw new TypeError('lost response');
+        }
+        return jsonResponse({ commandId: 'synthetic-operation', operation: { status: 'UNKNOWN' } });
+      });
+    const client = createClient(fetcher);
+    const key = 'synthetic-self-leave-original';
+    await expect(client.leaveGame('public-game', { idempotencyKey: key })).rejects.toThrow(
+      'lost response',
+    );
+    expect(requests).toHaveLength(1);
+    await client.getManagedLeaveOperation('public-game', key);
+    expect(requests.map((r) => r.url)).toEqual([
+      'https://api.padlhub.test/user/api/v1/local-padel/games/public-game/participants/me',
+      'https://api.padlhub.test/user/api/v1/local-padel/games/public-game/leave-operation',
+    ]);
+    for (const request of requests)
+      expect(new Headers(request.init?.headers).get('Idempotency-Key')).toBe(key);
+    expect(requests[0]?.init?.body).toBeUndefined();
+    expect(requests[1]?.init?.method ?? 'GET').toBe('GET');
+  });
+});
+
+it('does not refresh or retry a stable-key SELF DELETE on 401 after session replacement', async () => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+    jsonResponse(
+      {
+        error: {
+          code: 'AUTH_REQUIRED',
+          message: 'synthetic expired',
+          correlationId: 'synthetic',
+        },
+      },
+      401,
+    ),
+  );
+  const client = createClient(fetcher, { initialAccessToken: authenticatedSession.accessToken });
+  await expect(
+    client.leaveGame('public-game', { idempotencyKey: 'synthetic-original-self-key' }),
+  ).rejects.toThrow();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(requestUrl(fetcher.mock.calls[0]![0])).toContain('/participants/me');
+});
+
+it.each([401, 404, 409, 503])(
+  'SELF restrictive recovery never retries HTTP %s or falls back to DELETE',
+  async (status) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: { code: 'AUTH_REQUIRED', message: 'synthetic', correlationId: 'synthetic' } },
+          status,
+        ),
+      );
+    const client = createClient(fetcher, { initialAccessToken: authenticatedSession.accessToken });
+    await expect(
+      client.reconcileManagedLeaveOperation('public-game', 'synthetic-original-self-key'),
+    ).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(requestUrl(fetcher.mock.calls[0]![0])).toContain('/leave-operation/reconcile');
+    expect(fetcher.mock.calls[0]![1]?.method).toBe('POST');
+    expect(fetcher.mock.calls[0]![1]?.body).toBeUndefined();
+    expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get('Idempotency-Key')).toBe(
+      'synthetic-original-self-key',
+    );
+  },
+);

@@ -257,6 +257,7 @@ describe('closed migration custody validators', () => {
       '0103_game_start_notification_scenarios.sql',
       '0104_identity_external_subject_link_commands.sql',
       '0105_game_create_location_bindings.sql',
+      '0106_game_managed_self_leave_attempts.sql',
     ]); // gitleaks:allow - public migration filenames, not credentials
     expect(() => validateApiWorkerLedger(currentPackage, currentPackage)).toThrow(
       'API_WORKER_LEDGER',

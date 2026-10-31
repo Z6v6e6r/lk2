@@ -718,3 +718,7 @@ export class ManagedSubscriptionRuntimeQuoteClient {
     }
   }
 }
+
+export * from './managed-join.js';
+
+export * from './managed-self-leave.js';
