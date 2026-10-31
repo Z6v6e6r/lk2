@@ -143,7 +143,7 @@ export function createStationMembershipRepository(pool: Pool) {
            join eligibility.payment_snapshots s on s.tenant_id=p.tenant_id and s.decision_id=p.eligibility_decision_id
              and s.player_id=p.user_id and s.activity_type='GAME' and s.activity_id=p.game_id
            where o.tenant_id=$1 and o.id=$2 and o.aggregate_id=$3 and o.event_type='game.participation.confirmed.v1'
-             and o.payload->>'participationId'=$5 and o.payload->>'userId'=$4`,
+             and o.payload->>'participationId'=$5::text and o.payload->>'userId'=$4::text`,
           [input.tenantId, input.eventId, input.gameId, input.userId, input.participationId],
         );
         if (rows.rows.length !== 1) return null;
