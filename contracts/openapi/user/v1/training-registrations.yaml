@@ -1,0 +1,118 @@
+paths:
+  /{tenantKey}/trainings/{trainingId}/registrations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TrainingId'
+      - $ref: '#/components/parameters/TrainingKey'
+    post:
+      tags: [bookings]
+      operationId: registerTraining
+      summary: Register using the explicit legacy subscription owner
+      description: |
+        Exact public target and subscription only. A durable original request precedes owner dispatch.
+        The same key resumes only that request; no automatic network or authentication retry.
+        Managed, monetary, trial and matched-rule paths are unsupported. Historical operation success
+        is separate from current attendance. Only EXPIRED_NOT_DISPATCHED or exact REJECTED_NOT_DISPATCHED permits a new key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [dateHint, subscriptionId]
+              properties:
+                dateHint: { type: string, format: date }
+                subscriptionId: { type: string, format: uuid }
+      responses:
+        '200': { $ref: '#/components/responses/TrainingResult' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '409':
+          description: Original request or target attempt conflicts.
+          content:
+            application/json:
+              schema: { $ref: ../../common/components.yaml#/components/schemas/ApiError }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/trainings/{trainingId}/registration-operation:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TrainingId'
+      - $ref: '#/components/parameters/TrainingKey'
+    get:
+      tags: [bookings]
+      operationId: getTrainingRegistration
+      summary: Read the original operation and fresh owner observation
+      description: No admission, expiry, lease, booking or local completion write. Unknown current attendance never becomes confirmed from the stored historical receipt.
+      responses:
+        '200': { $ref: '#/components/responses/TrainingResult' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '409':
+          description: Original request or target attempt conflicts.
+          content:
+            application/json:
+              schema: { $ref: ../../common/components.yaml#/components/schemas/ApiError }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+components:
+  parameters:
+    TrainingId:
+      name: trainingId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    TrainingKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        {
+          type: string,
+          minLength: 16,
+          maxLength: 128,
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$',
+        }
+  responses:
+    TrainingResult:
+      description: Original immutable operation and separate current registration observation; provider references remain private.
+      headers:
+        Cache-Control: { schema: { type: string, const: no-store } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TrainingRegistrationResult' }
+  schemas:
+    TrainingRegistrationResult:
+      type: object
+      additionalProperties: false
+      required: [trainingId, subscriptionId, dateHint, operation, registration, retryAfterSeconds]
+      properties:
+        trainingId: { type: string, format: uuid }
+        subscriptionId: { type: string, format: uuid }
+        dateHint: { type: string, format: date }
+        operation:
+          type: object
+          additionalProperties: false
+          required: [id, status]
+          properties:
+            id: { type: string, format: uuid }
+            status:
+              {
+                type: string,
+                enum:
+                  [PENDING, UNKNOWN, CONFIRMED, EXPIRED_NOT_DISPATCHED, REJECTED_NOT_DISPATCHED],
+              }
+        registration:
+          type: object
+          additionalProperties: false
+          required: [status, asOf]
+          properties:
+            status: { type: string, enum: [UNKNOWN, CONFIRMED] }
+            asOf: { type: [string, 'null'], format: date-time }
+        retryAfterSeconds: { type: [integer, 'null'], minimum: 1 }

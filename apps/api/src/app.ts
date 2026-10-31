@@ -1,3 +1,5 @@
+import { registerTrainingRegistrationRoutes } from './bookings/training-registration-routes.js';
+import type { TrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
 import type { ManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { attachUpcomingRosters } from './bookings/upcoming-rosters.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -406,6 +408,7 @@ export interface BuildAppOptions {
     'issue'
   >;
   readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
+  readonly trainingRegistration?: TrainingRegistrationRuntime;
   readonly gameManagedSelfLeave?: ManagedSelfLeaveRuntime;
   readonly gameCommercialJoin?: GameCommercialJoinOptions;
   /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
@@ -1214,6 +1217,10 @@ export async function buildApp(options: BuildAppOptions) {
     publicTenantHandlers: [resolvePublicTenant],
   });
   const bookingRecommendationAuthService = options.authService;
+  registerTrainingRegistrationRoutes(app as unknown as FastifyInstance, {
+    ...(options.trainingRegistration ? { runtime: options.trainingRegistration } : {}),
+    handlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
   registerBookingRecommendationRoutes(app as unknown as FastifyInstance, {
     ...(options.gameReadRepository?.listRecommendationCardProjections
       ? {

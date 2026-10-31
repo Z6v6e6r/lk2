@@ -1,3 +1,14 @@
+import {
+  parseTrainingRequest,
+  parseTrainingAdmission,
+  trainingHash,
+  trainingRequestHash,
+  trainingOperationId,
+  trainingPrivateId,
+  trainingUuid,
+  type TrainingRequest,
+  type TrainingAdmission,
+} from '@phub/domain/training-registration';
 import { createHash, createPrivateKey, randomUUID } from 'node:crypto';
 
 import { importPKCS8, SignJWT } from 'jose';
@@ -106,6 +117,127 @@ export class SubscriptionRuntimeActorDelegationIssuer {
         'SUBSCRIPTION_RUNTIME_DELEGATION_CONFIGURATION_INVALID',
       );
     }
+  }
+
+  trainingSigningIdentity(): { issuer: string; audience: string } {
+    return { issuer: this.options.issuer, audience: this.options.audience };
+  }
+  async issueTrainingRegistration(input: {
+    mode: 'prepare' | 'admit' | 'read';
+    tenantId: string;
+    userId: string;
+    sessionId: string;
+    providerClientId: string;
+    providerMappingId: string;
+    providerClientSubscriptionId: string;
+    keySha256: string;
+    operationId: string;
+    request: TrainingRequest | TrainingAdmission;
+    correlationId: string;
+    actorToken: { token: string; expiresAt: string };
+    recoveryOnly?: true;
+  }): Promise<string> {
+    const { mode } = input;
+    if (
+      !['prepare', 'admit', 'read'].includes(mode) ||
+      ![
+        input.tenantId,
+        input.userId,
+        input.sessionId,
+        input.providerMappingId,
+        input.operationId,
+      ].every(trainingUuid) ||
+      ![input.providerClientId, input.providerClientSubscriptionId].every(trainingPrivateId) ||
+      !/^sha256:[a-f0-9]{64}$/.test(input.keySha256) ||
+      input.keySha256.length !== 71 ||
+      !correlationPattern.test(input.correlationId) ||
+      /[\r\n]/.test(input.correlationId) ||
+      !printableAsciiPattern.test(input.actorToken.token) ||
+      input.actorToken.token.length < 16 ||
+      input.actorToken.token.length > 4096 ||
+      !Number.isFinite(Date.parse(input.actorToken.expiresAt)) ||
+      new Date(input.actorToken.expiresAt).toISOString() !== input.actorToken.expiresAt ||
+      Date.parse(input.actorToken.expiresAt) <= Date.now() ||
+      (input.recoveryOnly !== undefined && (mode !== 'admit' || input.recoveryOnly !== true)) ||
+      (await trainingOperationId(input.tenantId, input.userId, input.keySha256)) !==
+        input.operationId
+    )
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    const request =
+      mode === 'prepare'
+        ? parseTrainingRequest(input.request)
+        : await parseTrainingAdmission(input.request);
+    if ('preparation' in request) {
+      const p = (request as TrainingAdmission).preparation;
+      if (
+        p.operationId !== input.operationId ||
+        p.actor.tenantId !== input.tenantId ||
+        p.actor.userId !== input.userId ||
+        p.actor.providerMappingId !== input.providerMappingId ||
+        p.actor.providerClientId !== input.providerClientId ||
+        p.subscription.providerClientSubscriptionId !== input.providerClientSubscriptionId
+      )
+        throw new SubscriptionRuntimeActorDelegationError(
+          'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+        );
+    }
+    const path =
+      mode === 'prepare'
+        ? '/lk/integrations/v1/training-registration-preparations'
+        : mode === 'admit'
+          ? '/lk/integrations/v1/training-registration-admissions'
+          : '/lk/integrations/v1/training-registrations/' + input.operationId;
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      contract_version: 1,
+      scope: 'subscription-runtime.training-registration.' + mode,
+      caller: 'lk2-api',
+      method: mode === 'read' ? 'GET' : 'POST',
+      path,
+      tenant_id: input.tenantId,
+      tenant_key: 'iSkq6G',
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: input.providerClientId,
+      provider_mapping_id: input.providerMappingId,
+      subscription_id: request.subscriptionId,
+      provider_client_subscription_id: input.providerClientSubscriptionId,
+      operation_id: input.operationId,
+      idempotency_key_sha256: input.keySha256,
+      target_id: request.target.id,
+      date_hint: request.target.dateHint,
+      actor_token_sha256: await trainingHash(input.actorToken.token),
+      actor_token_expires_at: input.actorToken.expiresAt,
+      correlation_id: input.correlationId,
+      request_sha256:
+        mode === 'read'
+          ? await trainingHash(
+              'training-registration-read:v1\0' +
+                JSON.stringify({ operationId: input.operationId }),
+            )
+          : await trainingRequestHash(request),
+      ...(input.recoveryOnly ? { recovery_only: true } : {}),
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(
+        Math.min(
+          now + this.options.ttlSeconds,
+          Math.floor(Date.parse(input.actorToken.expiresAt) / 1000),
+        ),
+      )
+      .setJti(randomUUID())
+      .sign(await importPKCS8(this.options.privateKeyPem, 'RS256'));
   }
 
   async issueManagedSelfLeaveAdmission(input: {

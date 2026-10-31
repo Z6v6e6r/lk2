@@ -26,3 +26,17 @@ export type InternalGameCommand = InternalGeneratedComponents['schemas']['GameIn
 export type InternalGameEvent = InternalGeneratedComponents['schemas']['GameDomainEvent'];
 
 export const CURRENT_CONTRACT_VERSION = '1.12.0-stable-media-delivery' as const;
+
+/** Public training command state is separate from fresh attendance observation. */
+export interface TrainingRegistrationResult {
+  readonly trainingId: string;
+  readonly subscriptionId: string;
+  readonly dateHint: string;
+  readonly operation: {
+    readonly id: string;
+    readonly status:
+      'PENDING' | 'UNKNOWN' | 'CONFIRMED' | 'EXPIRED_NOT_DISPATCHED' | 'REJECTED_NOT_DISPATCHED';
+  };
+  readonly registration: { readonly status: 'UNKNOWN' | 'CONFIRMED'; readonly asOf: string | null };
+  readonly retryAfterSeconds: number | null;
+}

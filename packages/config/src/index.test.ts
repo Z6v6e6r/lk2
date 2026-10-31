@@ -1820,3 +1820,49 @@ describe('loadConfig', () => {
     ).toMatchObject({ COMMUNITY_INVITES_ENABLED: true, COMMUNITY_INVITE_ACTIVE_KEY_ID: 'current' });
   });
 });
+
+describe('independent training registration composition', () => {
+  const training = {
+    ...validEnvironment,
+    APP_ENV: 'local',
+    VIVA_MODE: 'sandbox',
+    TRAINING_REGISTRATION_ENABLED: 'true',
+    VIVA_OAUTH_ENABLED: 'true',
+    VIVA_AUTH_TENANT_KEY: 'iSkq6G',
+    VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+    VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+    VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://padlhub.su',
+    SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({
+      'fixture-key': [
+        ['-----BEGIN', 'PRIVATE KEY-----'].join(' '),
+        'source-only-fixture',
+        ['-----END', 'PRIVATE KEY-----'].join(' '),
+      ].join('\n'),
+    }),
+    SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'fixture-key',
+    SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://api.padlhub.test',
+    SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'lk-booked-operation-owner',
+  };
+  it('defaults off, permits complete independent composition, never enables WARN/game commands', () => {
+    expect(loadConfig(validEnvironment).TRAINING_REGISTRATION_ENABLED).toBe(false);
+    expect(loadConfig(training)).toMatchObject({
+      TRAINING_REGISTRATION_ENABLED: true,
+      SUBSCRIPTION_RUNTIME_WARN_MODE: 'OFF',
+      GAMES_COMMANDS_ENABLED: false,
+    });
+  });
+  it('refuses missing signer/actor/malformed keys and untrusted origin', () => {
+    for (const delta of [
+      { SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: undefined },
+      { VIVA_OAUTH_ENABLED: 'false' },
+      { VIVA_AUTH_TENANT_KEY: 'foreign' },
+      { VIVA_MODE: 'mock' },
+      { SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: '[]' },
+      { SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'missing' },
+      { GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://padlhub.su/other' },
+      { GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'http://foreign.invalid' },
+    ])
+      expect(() => loadConfig({ ...training, ...delta })).toThrow();
+  });
+});

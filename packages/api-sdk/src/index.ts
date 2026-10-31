@@ -1,3 +1,5 @@
+import type { TrainingRegistrationResult } from '@phub/api-contracts';
+export type { TrainingRegistrationResult } from '@phub/api-contracts';
 import type { components, PublicApiComponents, UserApiV2Components } from '@phub/api-contracts';
 
 export type AuthChallengeRequest = components['schemas']['AuthChallengeRequest'];
@@ -1645,6 +1647,26 @@ export class PadlHubApiClient {
       retryOnUnauthorized: false,
       idempotencyKey,
     });
+  }
+
+  public registerTraining(
+    trainingId: string,
+    input: { dateHint: string; subscriptionId: string },
+    idempotencyKey: string,
+  ): Promise<TrainingRegistrationResult> {
+    return this.request<TrainingRegistrationResult>(
+      `/trainings/${encodeURIComponent(trainingId)}/registrations`,
+      { method: 'POST', body: JSON.stringify(input), idempotencyKey, retryOnUnauthorized: false },
+    );
+  }
+  public getTrainingRegistration(
+    trainingId: string,
+    idempotencyKey: string,
+  ): Promise<TrainingRegistrationResult> {
+    return this.request<TrainingRegistrationResult>(
+      `/trainings/${encodeURIComponent(trainingId)}/registration-operation`,
+      { cache: 'no-store', idempotencyKey, retryOnUnauthorized: false },
+    );
   }
 
   public leaveGame(
