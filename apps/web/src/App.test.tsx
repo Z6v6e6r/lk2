@@ -1310,6 +1310,51 @@ describe('PadlHub web authentication', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('opens read-only community history on Android when the runtime capability is enabled', async () => {
+    window.history.replaceState({}, '', '/chats');
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const listCommunityReadExperienceChat = vi.fn().mockResolvedValue({
+      items: [
+        {
+          body: 'История сообщества на Android',
+          sentAt: '2026-10-31T10:00:00Z',
+          author: { displayName: 'Анна' },
+          isViewer: false,
+        },
+      ],
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue({
+        ...session,
+        context: {
+          ...session.context,
+          runtimeCapabilities: { communityDirectory: true, communityReadChat: true },
+        },
+      }),
+      listMyCommunities: vi.fn().mockResolvedValue({
+        items: [
+          {
+            id: communityId,
+            title: 'Android community',
+            logoUrl: null,
+            isVerified: false,
+            unreadChatCount: 0,
+            route: `/communities/${communityId}`,
+          },
+        ],
+      }),
+      listCommunityReadExperienceChat,
+      listConversations: vi.fn().mockResolvedValue({ items: [] }),
+    });
+    render(<App clientPlatform="android" gateway={gateway} tenantKey="padlhub" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Android community/ }));
+    expect(await screen.findByText('История сообщества на Android')).toBeVisible();
+    expect(listCommunityReadExperienceChat).toHaveBeenCalledWith(communityId, undefined);
+    expect(screen.getByText('Чат сообщества доступен только для чтения.')).toBeVisible();
+    expect(screen.queryByLabelText('Сообщение')).not.toBeInTheDocument();
+  });
+
   it.each(['web', 'android'] as const)(
     'opens the standalone support route on %s',
     async (clientPlatform) => {

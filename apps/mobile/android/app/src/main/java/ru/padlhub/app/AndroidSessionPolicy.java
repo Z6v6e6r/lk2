@@ -79,7 +79,7 @@ final class AndroidSessionPolicy {
             || cleanPath.contains("%") || cleanPath.contains("..") || cleanPath.contains("//")) throw rejected();
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
         String relativePath = cleanPath.substring(userRoot.length());
-        if (!validQuery(relativePath, method, relativePath.startsWith("/games") ? uri.getRawQuery() : uri.getQuery())) throw rejected();
+        if (!validQuery(relativePath, method, (relativePath.startsWith("/games") || relativePath.startsWith("/community-views/")) ? uri.getRawQuery() : uri.getQuery())) throw rejected();
         String gameUuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
         boolean gameJoin = "POST".equals(method) && relativePath.matches("/games/" + gameUuid + "/join");
         // Canonical receipt reconciliation (merged main #455): GET-only recovery advanced the
@@ -152,6 +152,7 @@ final class AndroidSessionPolicy {
             "/notification-endpoints/android/config", "/games").contains(path)) return true;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
         if (path.matches("/games/" + uuid + "(?:/join-conditions|/join-operation)?")) return true;
+        if (path.matches("/community-views/" + uuid + "/chat")) return true;
         if (path.matches("/conversations/" + uuid + "/messages")
             || path.matches("/conversations/" + uuid + "/media/" + uuid)
             || path.matches("/conversations/" + uuid + "/media/" + uuid + "/content")
@@ -191,6 +192,19 @@ final class AndroidSessionPolicy {
     private boolean validQuery(String path, String method, String query) {
         if (!"GET".equals(method)) return query == null;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.matches("/community-views/" + uuid + "/chat")) {
+            if (query == null) return true;
+            Set<String> seen = new HashSet<>();
+            for (String part : query.split("&", -1)) {
+                String[] pair = part.split("=", 2);
+                if (pair.length != 2 || !seen.add(pair[0])) return false;
+                if (pair[0].equals("limit")) { if (!pair[1].matches("[1-9]|[1-4][0-9]|50")) return false; }
+                // The existing community projection emits opaque base64url cursors (16..512).
+                else if (pair[0].equals("cursor")) { if (!pair[1].matches("[A-Za-z0-9_-]{16,512}")) return false; }
+                else return false;
+            }
+            return true;
+        }
         if (path.equals("/games")) {
             if (query == null) return true;
             Set<String> seen = new HashSet<>();
