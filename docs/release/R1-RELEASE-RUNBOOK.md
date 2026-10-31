@@ -1,8 +1,12 @@
 # LK2 R1 — release preparation и controlled handoff
 
-## Дополнительные prerequisites текущего checkpoint
+## Текущие prerequisites
 
-Перед tournament consumer зафиксировать actual owner по custom-to-Viva mapping; отдельно проверить CUP accessLevels/claim/readback или LK/Viva binding. Не поставлять два независимых writer для одного участия. Monetary SELF не активировать без versioned game refund/credit contract и approved financial acceptance: historical annual-subscription proof и synthetic options недостаточны. #518 full source green не закрывает native journey gate: latest a644 run дал0passed/5failed на fixture reset; xcresult сохранён и owned cleanup завершён. Приёмка требует успешного actual native run следующего source; compiled/fixture evidence не является device acceptance. LK#271 owner и LK2#519 SELF source/physical CI green; принять compatible heads и native/provider consumers до activation, не активировать standalone owner по зелёному CI.
+#511 source-only integration разрешена отдельно от delivery; её flag cycle завершён: mainCI41230249442 SUCCESS, delivery41231241175 SKIPPED/steps=[], исходныйtrue восстановлен18:50:31 UTC. Остальные merge требуют отдельных exact-head approvals.
+
+Training LK#271→LK2#520 и FREE/SERVICE SELF LK#270→LK2#519 имеют source/CI evidence. Native/provider paths и SELF terminal-refusal recovery ещё нужны. CUP#61 даёт только nonbinding dated owner observation; admission обязан проверить raw rules, actual owner, original generation и capacity/WAITLIST. MALE/FEMALE проверяют exact actor profileM/F, MIXED без gender restriction; missing rule не unrestricted.
+
+Денежные LK1 cancellation commands существуют. До LK2 monetary activation требуются attributable game settlement/credit, ambiguous-write recovery и отдельная financial acceptance. #518 имеет actual synthetic simulator5/5 и full CI green; physical devices, real OTP/Keychain/APNs/provider и stores этим не приняты. Quarter-court CREATE и station community decisions зафиксированы в READINESS, их server write contracts ещё не завершены.
 
 **Текущее решение NO-GO. Этот документ не разрешает dispatch, публикацию, deploy, provider writes или store upload.** Он связывает R1 критерии с существующими executable runbooks; не создаёт новый deploy process. Baseline/блокеры: [READINESS](R1-READINESS.md), [BLOCKERS](R1-BLOCKERS.md).
 

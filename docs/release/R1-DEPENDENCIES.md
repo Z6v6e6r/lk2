@@ -1,14 +1,21 @@
 # LK2 R1 — зависимости и критический путь
 
-## Критический путь после нового source audit
+## Текущий dependency-aware critical path
 
-1. Green JOIN chain #267/#515/CUP#60 сохраняет отдельную runtime/provider acceptance зависимость.
-2. SELF: LK#269 compensation → LK#270 admission/read + physical Mongo green → LK2#519 consumer0106 source/physical CI/Web UI green → bounded unsupported-key recovery + native consumer → controlled provider acceptance. Порядок migrations0105→0106, без исполнения на target. Старый ключ возвращает original result после rejoin; новый ключ без original membership selector после LEFT безопасно отклоняется. UNKNOWN/unsupported custody нельзя очищать по404 или любому409.
-3. CREATE: #517 green location evidence → owner specification service/dictionary/base-price → real target + narrow CUP preflight → durable original-create ACK/receipt → LK2 consumer. Lost ACK не разрешает room/time adoption.
-4. TRAINING: existing target → LK#271 legacy nonmonetary owner exact CI green → LK2 consumer0107/recovery → native consumer → provider capacity acceptance. CUP-managed/paid/LEAVE отдельны.
-5. TOURNAMENT: fresh non-swallowing custom/source/exercise lookup (catalog missing-link не proof при storage outage) → определить authoritative CUP или LK/Viva owner → проверить существующий accessLevels/booking/payment/capacity contract → signed original-operation receipt → LK2 registration и membership producer для tournament chat. Не переписывать foundation и не создавать independent dual-write.
-6. Monetary SELF: provider-owned game CURRENCY/DEPOSIT readback/idempotency contract → original-payment/quote-bound owner → LK2 pending/settled consumer → approved financial acceptance. Только затем solo-organizer CANCEL; bulk refunds требуют отдельного product scope. Отсутствие provider contract блокирует этот lane, не FREE/SERVICE.
-7. #516 → #518 actual5native XCTest → physical device/provider acceptance. Последний a644 native run исполнил5, все5failed на reset; narrow test-origin correction pending. Signed/store/production остаются отдельно разрешаемыми переходами.
+1. Source-only merge/flag cycle #511 завершён: mainCI41230249442 success, delivery41231241175 SKIPPED/steps=[], true восстановлен18:50:31 UTC; остальные candidates интегрировать только после отдельного exact-head разрешения. Green CI и source merge не разрешают публикацию/deploy.
+2. CUP#60 → LK#267 → LK2#515: accepted source/physical CI managed JOIN; отдельная совместная PROVIDER/native acceptance остаётся.
+3. LK#269 → LK#270 → LK2#519: FREE/SERVICE SELF. Следующий ограниченный пакет — durable terminal non-dispatch proof и recovery endpoint, который не исполняет новый LEAVE при потере первой записи. Затем native/provider acceptance.
+4. #517 mapping0105 → authoritative service selector + quarter-court price → original-create owner/receipt → LK2 CREATE. Пользователь подтвердил только1/4корта по подписке; mapping и lost-ACK attribution нельзя вывести из этого решения.
+5. LK#271 → LK2#5200107: training Web/API source/CI green, включая6physicalPG. Далее native consumer, owner/provider capacity acceptance. CUP-managed/paid/trial/LEAVE отдельны; CREATE не prerequisite этой цепочки.
+6. CUP#61 fresh nonbinding owner preparation (physical Mongo green) → authoritative actor gender + MALE/FEMALE check, MIXED без gender restriction → exact owner admission/capacity/WAITLIST/original generation → LK2 tournament consumer → tournament chat membership. Нельзя выбрать LK writer по отсутствующей custom link или dual-write CUP/LK roster.
+7. LK1 monetary commands уже существуют. Их original-booking/generation/options/CAS/readback → attributable payment/refund/credit evidence → bounded LK2 pending/settled consumer → separately approved financial acceptance. Booking cancellation/REQUESTED не доказывают деньги. Затем solo-organizer cancellation; bulk scope не подразумевается.
+8. Одно official community per station + automatic membership после confirmed game/training registration: canonical station mapping/write owner → atomic/replay-safe membership producer → permission-safe chat/read/unread/native entry. Pending booking не считается вступлением; support chats не заменяют community.
+9. #516 → #518 synthetic iOS native5/5 уже CI verified; следующий уровень — physical device/real session/push. Отдельный QA packet включает27 существующих skipped game lifecycle/PG/Rabbit cases в required automatic CI, только isolated owned fixtures.
+10. Совместимая source integration → immutable package → approved staging/provider/device acceptance → signing/store/restore evidence → новое GO/NO-GO → отдельные owner approvals на каждый live transition.
+
+## Исторические схемы и прежние checkpoint
+
+Ниже сохранён исходный dependency audit. Актуальные product decisions, heads и завершённые source результаты — в списке выше и [READINESS](R1-READINESS.md); старые pending формулировки не являются текущими решениями.
 
 ## Критический путь
 
