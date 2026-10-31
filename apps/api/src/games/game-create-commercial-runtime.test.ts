@@ -646,3 +646,129 @@ describe('booked-operation CREATE owner transport', () => {
     expect(fixture.metrics).toEqual(['release']);
   });
 });
+
+describe('booked-operation CREATE owner policy/usage binding (B2)', () => {
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const otherDigest = `sha256:${'b'.repeat(64)}`;
+  const decisionId = '11111111-1111-4111-8111-111111111111';
+  const bindingRefs = {
+    policyRef: { policyVersion: 3, policyDigest: digest },
+    decisionId,
+    usageRef: { usageRef: USAGE_REF, reservationUnits: 1 },
+  };
+  function boundReservationResponse(overrides: Readonly<Record<string, unknown>> = {}): Response {
+    return Response.json({
+      reservationId: RESERVATION_ID,
+      expiresAt: new Date(NOW + 60_000).toISOString(),
+      policyVersion: 3,
+      policyDigest: digest,
+      decisionId,
+      reservedUnits: 1,
+      remainingUnits: 7,
+      priceSnapshot: { amountMinor: 70_000, currency: 'RUB' },
+      ...overrides,
+    });
+  }
+  function boundReceipt(overrides: Readonly<Record<string, unknown>> = {}) {
+    return {
+      receiptId: RECEIPT_ID,
+      confirmedAt: new Date(NOW + 120_000).toISOString(),
+      appliedRule: 'ENTITLEMENT_APPLIED',
+      usageRef: USAGE_REF,
+      bookingRef: BOOKING_REF,
+      policyVersion: 3,
+      policyDigest: digest,
+      decisionId,
+      ...overrides,
+    };
+  }
+
+  it('echoes the binding decision on the frozen reserve wire body', async () => {
+    const fixture = createTransport(() => Promise.resolve(boundReservationResponse()));
+    await expect(
+      fixture.client.reserve({ ...reserveInput({ quote: pricedQuote() }), bindingRefs }),
+    ).resolves.toEqual({ status: 'PENDING' });
+    expect(fixture.calls).toHaveLength(1);
+    expect(fixture.calls[0]?.body).toMatchObject({
+      policyRef: bindingRefs.policyRef,
+      decisionId,
+      usageRef: bindingRefs.usageRef,
+    });
+    expect(fixture.metrics).toEqual(['reserve_success']);
+  });
+
+  it('fails a reservation that does not echo the bound policy decision', async () => {
+    const fixture = createTransport(() =>
+      Promise.resolve(boundReservationResponse({ policyVersion: 4 })),
+    );
+    await expect(
+      fixture.client.reserve({ ...reserveInput({ quote: pricedQuote() }), bindingRefs }),
+    ).resolves.toEqual({ status: 'UNKNOWN' });
+    expect(fixture.metrics).toEqual(['reserve_failure']);
+  });
+
+  it.each([undefined, 2])(
+    'keeps a reservation with echoed units %s unresolved',
+    async (reservedUnits) => {
+      const fixture = createTransport(() =>
+        Promise.resolve(boundReservationResponse({ reservedUnits })),
+      );
+      await expect(
+        fixture.client.reserve({ ...reserveInput({ quote: pricedQuote() }), bindingRefs }),
+      ).resolves.toEqual({ status: 'UNKNOWN' });
+      expect(fixture.calls).toHaveLength(1);
+      expect(fixture.metrics).toEqual(['reserve_failure']);
+    },
+  );
+
+  it('rejects malformed binding refs before any owner call', async () => {
+    const fixture = createTransport(() => Promise.resolve(reservationResponse()));
+    await expect(
+      fixture.client.reserve({
+        ...reserveInput(),
+        bindingRefs: {
+          policyRef: { policyVersion: 0, policyDigest: digest },
+        },
+      }),
+    ).resolves.toEqual({ status: 'UNKNOWN' });
+    expect(fixture.fetchImplementation).not.toHaveBeenCalled();
+    expect(fixture.metrics).toEqual(['reserve_failure']);
+  });
+
+  it('confirms only a receipt that echoes the bound decision and usage ref', async () => {
+    const fixture = createTransport(() => Promise.resolve(Response.json(boundReceipt())));
+    const outcome = await confirmCommercialCreateReservation(fixture.options, {
+      request: { ...ownerRequest(), bindingRefs },
+      reservationId: RESERVATION_ID,
+    });
+    expect(outcome).toEqual({
+      status: 'CONFIRMED',
+      receipt: {
+        provider: 'VIVA',
+        status: 'CONFIRMED',
+        confirmedAt: boundReceipt().confirmedAt,
+      },
+    });
+    // Owner evidence (ids, rule, usage ref, digests) never leaves the transport.
+    const serialized = JSON.stringify(outcome);
+    expect(serialized).not.toContain(RECEIPT_ID);
+    expect(serialized).not.toContain(USAGE_REF);
+    expect(serialized).not.toContain(digest);
+  });
+
+  it.each([
+    ['a different policy digest', { policyDigest: otherDigest }],
+    ['a different policy version', { policyVersion: 4 }],
+    ['a different decision id', { decisionId: '22222222-2222-4222-8222-222222222222' }],
+    ['a different usage ref', { usageRef: 'other:usage-ref' }],
+  ])('treats a receipt with %s as UNKNOWN', async (_label, overrides) => {
+    const fixture = createTransport(() => Promise.resolve(Response.json(boundReceipt(overrides))));
+    await expect(
+      confirmCommercialCreateReservation(fixture.options, {
+        request: { ...ownerRequest(), bindingRefs },
+        reservationId: RESERVATION_ID,
+      }),
+    ).resolves.toEqual({ status: 'UNKNOWN' });
+    expect(fixture.metrics).toEqual(['confirm_unknown']);
+  });
+});

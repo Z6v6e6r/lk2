@@ -13,6 +13,20 @@ policy version/digest, usage context и opaque orchestration receipt.
   CREATE), после лендинга.
 - План среза LK2 и порядок шагов: `docs/plans/lk2-policy-usage-binding-slice-plan.md`.
 
+## Актуализация R1 — 2026-10-31
+
+Повторный source audit main LK1 `788fdb96b3efd60fb09e4187b4ca4b5b00e2daaa` и ph-admin
+`83b1c17bc4c5edaec65387b25b5695e48337c3cf` подтверждает: предложенный ниже v2 пока не реализован.
+Quote receiver возвращает non-binding v1; Node-RED admission и delegation допускают точный
+v1 claim set, receipt содержит 17 v1 полей. Существующий canonical usage ledger ph-admin
+не означает наличие совместимого transport contract для LK2.
+
+PR #503 закрывает локальные downgrade/confirmation обходы. Он не отправляет предложенные поля
+через v1 и не считает v1 receipt доказательством policy/usage binding. До включения нужны
+согласованные exact schemas, minting/expiry usageRef, стабильная retry identity, confirm/release/
+compensation semantics, совместимость старых операций и интеграционные негативные тесты.
+Реализация R1 разрешена пользователем; live/provider операции остаются за отдельной границей.
+
 ## 1. Почему это P0
 
 На срезе LK2 не связывает коммерческую операцию с версией политики:
