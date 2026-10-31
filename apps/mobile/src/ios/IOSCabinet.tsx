@@ -5,6 +5,13 @@ import {
   type AndroidPushPlugin,
 } from '../android-push.js';
 import { IOSNotifications } from './IOSNotifications.js';
+import { IOSChats } from './IOSChats.js';
+import { readIOSConversations } from './chat-data.js';
+import {
+  CHATS_UNREAD_REFRESH_INTERVAL_MS,
+  setChatsUnreadCount,
+  totalUnreadConversations,
+} from '../../../web/src/chats-unread.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthenticatedSession, PublicGameCardPage } from '@phub/api-sdk';
@@ -80,7 +87,7 @@ function useQuery<T>(load: () => Promise<T>): Query<T> {
 }
 
 function Navigation({ active }: { readonly active?: MainNavigationSection }): React.JSX.Element {
-  return <MainBottomNavigation readOnly {...(active ? { active } : {})} />;
+  return <MainBottomNavigation readOnly chatsAvailable {...(active ? { active } : {})} />;
 }
 
 function Page({
@@ -429,6 +436,30 @@ export function IOSCabinet({
   readonly auth: AuthenticatedSession;
 }): React.JSX.Element {
   const route = useCabinetRoute();
+  useEffect(() => {
+    let active = true;
+    setChatsUnreadCount(0);
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      void readIOSConversations(session).then(
+        (page) => {
+          if (active) setChatsUnreadCount(totalUnreadConversations(page));
+        },
+        () => {
+          if (active) setChatsUnreadCount(0);
+        },
+      );
+    };
+    refresh();
+    const timer = window.setInterval(refresh, CHATS_UNREAD_REFRESH_INTERVAL_MS);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+      setChatsUnreadCount(0);
+    };
+  }, [session, auth.user.id]);
   const data = useMemo(() => createCabinetData(session, auth.user.id), [session, auth.user.id]);
   const [push, setPush] = useState(initialAndroidPushState);
   const [logoutError, setLogoutError] = useState<string>();
@@ -474,7 +505,18 @@ export function IOSCabinet({
       );
   };
   let content: ReactNode;
+  const chat = /^\/chats\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i.exec(
+    path,
+  );
   if (path === '/') content = <Home data={data} auth={auth} onLogout={logout} />;
+  else if (path === '/chats' || chat)
+    content = (
+      <IOSChats
+        session={session}
+        userId={auth.user.id}
+        {...(chat ? { conversationId: chat[1]! } : {})}
+      />
+    );
   else if (path === '/profile' || path === `/profile/${auth.user.id}`)
     content = <Profile data={data} origin={session.configuration.apiBaseUrl} onLogout={logout} />;
   else if (path === '/notifications')
