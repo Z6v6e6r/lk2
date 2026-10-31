@@ -23,3 +23,5 @@ f9dadb20ccfd34d60167d823fb453bd8813015bb:apps/api/src/games/game-commercial-join
 # Current literals carry an inline allow; these entries cover only the original immutable commit.
 26d1b613af60db51cf89f740c527ac35e3bfdfbe:scripts/timeweb-notification-profile.test.ts:generic-api-key:34
 26d1b613af60db51cf89f740c527ac35e3bfdfbe:scripts/timeweb-notification-profile.js:generic-api-key:62
+# Public migration filenames in the immutable-catalog fixture; reviewed exact commit only.
+23e4af4c234e28c1fbbcadd4e0651db108439677:apps/migrator/src/closed-single-migration.test.ts:generic-api-key:20
