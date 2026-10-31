@@ -140,3 +140,17 @@ Post-TTL consumer принимает только exact CUP `FAILED / APPLIED / 
 
 Полная обязательная matrix не закрыта. Physical Mongo/PG означает фактически исполненные
 synthetic DB cases; это не paid booking, provider refund, APNs/FCM device receipt или store install.
+
+## Новые проверки owner/consumer
+
+| Slice                   | LOCAL                                                                                                                                                                          | CI / предел evidence                                                                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LK owner JOIN v2 #267   | Final closure 175 passed /18 conditional skips; strict selector, v1 downgrade, wrong tuple, lost response, recovery-only, mixed owner capability                               | `41213677959` success; monthly `41213678058` success проверяет community Mongo, не physical JOIN owner                                                                       |
+| LK2 JOIN v2 #515        | Composite static PASS + corrective 480 passed /6 skipped; оригинальные успешные unchanged cases reused                                                                         | `41214688574`: 7258 passed /126 skipped, same-key и receipt/recovery PG cases failed; last-seat passed; исправление b55bd4d2 LOCAL186/static/review passed, новый CI pending |
+| Managed SELF LEAVE #269 | Original proof/CAS, lost ACK, TTL, actor/tenant/instance/generation negatives, stale reclaim и tenantless LK1 compatibility; correction126 passed; clean release fixtures10/10 | CI `41215625582` / `41215625485` success; physical Mongo/provider compensation ещё не исполнялась                                                                            |
+
+Локальные fixtures никогда не использовали production account/provider. Нельзя считать новый leave bridge проверкой денежных refunds или organizer CANCEL.
+
+Paired actual implementation contract check: LOCAL 22/22 PASS на LK2 `ba26dd7c` и LK `72688c66`. Использованы реальные issuer/client/verifier/receipt функции с ephemeral RSA; storage/provider ответы синтетические, owner executor не исполнялся. Это не DB atomicity, deployed HTTP wiring или provider E2E. Script SHA256 `15240c0cd314480fcd41eb904c9df45452ea86e77b8566f59dd43e240f497b06`.
+
+#516 `3e9c566a`: LOCAL composite 682 files passed /31 skipped; failed-only rerun32files711tests passed /4 skipped, без выдачи за один чистый полный прогон. Swift37 passed /1 skipped, unsigned simulator build PASS. Browser mock participant→profile→DIRECT, locked privacy, keyboard, lost response→HTTP reconcile (create count1), logout/unread0; protected avatar requests0. CI pending, device/provider acceptance отсутствует.

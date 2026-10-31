@@ -61,7 +61,19 @@ B03–B06 по-прежнему зависят от этого контракт�
 
 B07 больше не означает полное отсутствие iOS source: #513 реализует существующие DIRECT/GAME
 text chats, LOCAL/CI passed (7265 passed /126 skipped; PG 4 passed). Android community history #512 CI success, debug build
-passed. Полные четыре контекста, создание личного диалога, station mapping/membership и
+passed. Полные четыре контекста, device acceptance нового личного диалога #516, station mapping/membership и
 physical-device acceptance не закрыты. Для station implementation ожидаются ответы владельца
 о числе сообществ на станцию и добровольном/автоматическом membership; названия станций не
 используются как identity, membership не создаётся неявно.
+
+## Остаток после JOIN v2 и SELF LEAVE source packets
+
+B02: LK #267 `72688c66` имеет green CI; LK2 #515 `b55bd4d2` реализован, но CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 прошло LOCAL186/static/review, новый CI ожидается. Explicit authoritative LEGACY, immutable original tuple, receipt/usage checks и recovery-only contract больше не являются отсутствующим source. Physical PostgreSQL JOIN tests, paired runtime/provider/map freshness и выбор совместимых release heads остаются exit gates.
+
+B04: LK #269 `8d46b9b5` добавляет только managed SELF subscription compensation, LOCAL/review passed, CI `41215625582` / `41215625485` success. Денежные refund, organizer CANCEL, LK2 paid consumer и provider acceptance остаются открытыми. Старые managed rows без durable tenant provenance и tokenless background retry намеренно pending; автоматический backfill или impersonation не добавлены.
+
+B03 не снят: нет trusted producer canonical court/station/provider location relation. Raw alias или CUP EVIDENCE_ONLY preview недостаточны. B05/B06 нельзя завершать обходом этой authority.
+
+B07: #516 `3e9c566a` добавил source/LOCAL нового DIRECT из профиля участника; CI ожидается. Полные community/tournament contexts и station choices этим не закрыты.
+
+B04 consumer audit: #269 — internal compensation tail, не готовый LK2 leave transport. Canonical SELF ingress определяет текущую membership generation и не использует внешний SELF operationId; bookingId меняет режим на organizer target. Обычный retry после rejoin может затронуть другую generation. Кроме того, LK2-only JOIN не гарантирует LK1 roster row. До consumer нужен restrictive authenticated owner admission, связанный с original booking/usage/generation, и доказанный canonical ingress/recovery; напрямую вызывать internal release bridge нельзя.

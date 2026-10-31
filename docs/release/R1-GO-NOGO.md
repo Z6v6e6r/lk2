@@ -37,11 +37,11 @@
 
 ## Следующий практический шаг
 
-Завершить совместимые LK owner v2 и LK2 JOIN consumer поверх CUP #60; сохранить prerequisite chain CUP #57 → #58 → #59 и LK #264. #511 уже имеет combined green CI, но merge требует отдельного exact-head разрешения и подавления automatic delivery. Physical canonical ledger и post-TTL readback cases уже passed; следующий коммерческий residual — owner v2 B02 и authoritative CREATE B03, затем paid cancellation B04 и signup B05. Local pre-write abort и provider acceptance остаются отдельными gap. Native journeys B06, social B07, signed/device/store acceptance развивать ограниченными задачами. Не проводить широкую переработку архитектуры и не активировать production flags для обхода blockers.
+Получить green physical CI исправленного LK2 JOIN #515 и совместную runtime приёмку с LK #267/CUP #60; сохранить prerequisite chain CUP #57 → #58 → #59 и LK #264. #511 уже имеет combined green CI, но merge требует отдельного exact-head разрешения и подавления automatic delivery. Physical canonical ledger и post-TTL readback cases уже passed; следующий коммерческий residual — acceptance B02 и authoritative CREATE B03, затем paid cancellation B04 и signup B05. Local pre-write abort и provider acceptance остаются отдельными gap. Native journeys B06, social B07, signed/device/store acceptance развивать ограниченными задачами. Не проводить широкую переработку архитектуры и не активировать production flags для обхода blockers.
 
 ## Выполненные и невыполненные действия
 
-На первом этапе подготовлены семь audit documents без application changes. После разрешения реализации созданы task-branch commits и Draft PR: LK2 #503/#508/#509/#510/#511/#512/#513, ph-admin #57/#58/#59/#60 и LK #264; application tests/builds выполнены с результатами в READINESS. Это SOURCE/LOCAL/CI evidence, без runtime acceptance. По отдельному owner approval merged только LK2 #508 (`14ebdca6`). Остальные PR не merged.
+На первом этапе подготовлены семь audit documents без application changes. После разрешения реализации созданы task-branch commits и Draft PR: LK2 #503/#508/#509/#510/#511/#512/#513, ph-admin #57/#58/#59/#60 и LK #264/#267/#268/#269, а также LK2 #515; application tests/builds выполнены с результатами в READINESS. Это SOURCE/LOCAL/CI evidence, без runtime acceptance. По отдельному owner approval merged только LK2 #508 (`14ebdca6`). Остальные PR не merged.
 Также отдельно разрешён временный cycle repository delivery flag: false в 12:34:48 UTC → exact main CI `41201792854` success / delivery `41202697617` SKIPPED, steps=[] → исходный true в 12:49:05 UTC, с подтверждённым readback. Это подавление автодоставки, не production activation. Деплой, workflow dispatch/rerun, publication, secret creation, live/shared database/provider writes, реальные push-уведомления, store upload/publication не выполнялись. Commit/branch/PR custody документационного пакета фиксируется в handoff/PR; это не acceptance продукта.
 
 ## Дополнение текущего checkpoint
@@ -49,9 +49,17 @@
 #511 `ed3854c3` имеет три success CI runs, включая combined full checks и unsigned iOS;
 #512 `96723a30` — green CI/debug APK; CUP #60 `730e3f4c` — green canonical physical preflight/
 reserve/replay evidence. #513 `7b2213a0` — LOCAL full/native/UI и CI `41210366790`/`41210366803` success.
-Owner v2 и LK2 consumer продолжаются в отдельных worktrees; их completion не заявлен.
+Owner v2 и LK2 consumer теперь оформлены в #267/#515; текущие evidence и ограничения приведены ниже.
 
 Вердикт остаётся **NO-GO**. Source-only merge #511 ожидает отдельного ответа; station cardinality
 и membership — отдельных продуктовых решений. Остальные bounded implementation tasks идут
 независимо. Последний подтверждённый LK main `608ebe20`; LK2 main `14ebdca6`, CUP main `83b1c17b`.
 Список выполненных операций выше не расширяет старую authority #508 на другие PR или live targets.
+
+## Новый source progress без изменения verdict
+
+LK owner #267 `72688c66` и CI kernel correction #268 `cc1811a2` прошли CI. LK2 JOIN #515 `b55bd4d2` подготовлен с LOCAL checks и specialist CLEAR, CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 LOCAL186/static/review passed, новый CI pending. Managed SELF compensation LK #269 `8d46b9b5` имеет LOCAL/review PASS и CI `41215625582` / `41215625485` success. Это закрывает ограниченные source gaps B02/B04, но не complete commercial participation acceptance.
+
+**NO-GO сохраняется**: canonical CREATE mapping/owner, monetary refund/organizer cancel, signup consumers, четыре социальных контекста, signed/device/provider acceptance и production custody ещё не завершены. Кроме ранее разрешённого #508, merge не выполнялся. #511 merge/flag approval и station choices ожидаются; source-only продолжение их не подменяет.
+
+#516 `3e9c566a` теперь оформляет iOS participant/profile/new-DIRECT source, LOCAL/native/mock UI passed, CI pending. CREATE binding producer начат после отдельного аудита authority, а B04 LK2 consumer требует нового original-generation owner admission; простая пересылка в legacy SELF небезопасна. Эти задачи сохраняют NO-GO до соответствующих exit criteria.

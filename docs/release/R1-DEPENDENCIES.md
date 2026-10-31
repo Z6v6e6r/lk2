@@ -87,7 +87,7 @@ flowchart TD
 3. ph-admin #59 (`70d3820c`) — actor/tenant/operation/instance-scoped primary-majority readback, семь полей, без owner proof или business write. Новый physical TTL case CI `41204278865` success: lost response после provider-rejection commit → read-only recovery beyond TTL; provider writes=0, skipped=0. Все четыре workflow green.
 4. LK #264 (`de95b8cc`) — opt-in signer, durable original rejection, fresh-TTL retry и post-TTL readback только уже завершённого CUP release. LOCAL 213 passed / 1 skip; CI `41204447158` success. Неприменённый release после TTL остаётся pending; timestamp не обновляется.
 5. Принять exact compatible heads, затем отдельно разрешённые runtime configuration / sandbox acceptance. Общий secret/config предусмотрен; создание, установка и активация сейчас не разрешены.
-6. Owner v2 policy/instance/target/usage binding и authoritative CREATE consumer остаются следующим коммерческим критическим путём; затем paid cancellation/signup/native journeys. Этот compensation slice их не заменяет.
+6. Runtime acceptance owner v2 #267/#515 и authoritative CREATE consumer остаются коммерческим критическим путём; затем paid cancellation/signup/native journeys. Этот compensation slice их не заменяет.
 
 Dependency order: **ph-admin #57 → #58 → #59 → LK #264**. Merge не включает strict mode.
 До runtime acceptance проверить Node-RED crypto injection, согласованные closed flags и оставшиеся
@@ -158,3 +158,17 @@ public court → station и provider room → studio, tenant/organizer/draft rev
 отказом при missing/ambiguous/conflicting evidence. LK уже имеет authoritative room/studio GET
 проверку и durable precreate CAS, но это не заменяет LK2 mapping. Provider exercise ID должен
 появиться только из actual create/readback; синтетический ID недопустим. Пакет пока не реализован.
+
+## Текущая цепочка новых коммерческих кандидатов
+
+1. CUP #60 `730e3f4c` поверх #59 — canonical preflight/reserve expectations/readback.
+2. LK #267 `72688c66` поверх #264 — v2 owner, strict selector и immutable recovery. CI green; совместимая capability проверяется до dispatch. CI kernel fix #268 включён, production Mongo не меняется.
+3. LK2 #515 `b55bd4d2` поверх #511 — v2 consumer; CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 LOCAL186/static/review passed, новый CI pending. Не входит дополнительным head в уже замороженный #511.
+4. LK #269 `8d46b9b5` поверх #267 — managed SELF compensation; LOCAL/review passed, CI `41215625582` / `41215625485` success. Затем отдельный exact LK2 cancellation consumer и physical/provider acceptance, не денежный refund по предположению.
+5. CREATE mapping producer/resolver → CREATE owner/admission → LK2 CREATE consumer → training/tournament consumers. Подготовленный JOIN нельзя переименовать в CREATE: новый exercise должен появиться из canonical provider result/readback.
+
+Параллельный iOS packet добавляет OTHER profile → новый DIRECT поверх #513; source/review готовятся отдельно, completion и device acceptance пока не заявлены. Station product choices остаются pending. Ни одна зависимость не даёт merge/live authority.
+
+CREATE producer audit уточнил: старый roster sync разрешён только local/staging. Новый узкий default-off цикл в существующем worker должен читать отдельное backend-only Mongo lineage evidence, проверять exact Viva room/studio через @phub/viva-adapter с собственной credential REF authority, и атомарно публиковать binding с CAS/audit/outbox. Весь historical alias/source cohort и reverse collisions проверяются без first-alias selection. TTL5мин, refresh60с, ambiguity/overflow/timeout закрывают новый CREATE. Source packet начат отдельно; migration/live credential/activation не выполнялись.
+
+Перед LK2 SELF LEAVE consumer требуется owner admission для original generation: существующий SELF endpoint выводит текущую generation и не является safe replay transport для LK2. Проверить также наличие LK1 roster для LK2-only JOIN; простой proxy на текущий endpoint не принимается.

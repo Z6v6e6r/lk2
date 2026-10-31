@@ -105,3 +105,13 @@ managed JOIN v2 принять совместимые owner/consumer heads и se
 не подменять explicit LEGACY отсутствующим instance. #512 debug APK и #513 unsigned iOS
 проверяют build/consumer slices, но не открывают signed/store/device gates. Эти PR не входят
 в source integration #511 и не активируются вследствие её merge автоматически.
+
+## Установка совместимого owner v2 / SELF compensation
+
+До отдельного runtime approval сверить CUP #60, LK #267 и LK2 #515 exact heads и законченный CI. Выполнить отдельную paired runtime приёмку selector/preflight/admission/receipt/recovery без конфигурационного downgrade. Проверить actual Node-RED crypto injection, closed opt-in flags, actor-scoped calls и provider mapping provenance; ключи и live config в этой программе не создавались.
+
+Для #269 устанавливать только полный совместимый graph: bridge, owner authority read, lease reclaim и capability3 вместе. Самостоятельное включение probe запрещено контрактом: успешная capability без actual handler дала бы ложную совместимость. Fresh actor retry обязателен; background token не сохраняется. До rollout подтвердить exact canonical compensation и lost-response recovery на разрешённом target. Старые tenantless rows остаются pending; автоматической миграции нет.
+
+#268 меняет только CI fixture runner для Mongo8. Его green monthly run не доказывает исправность production kernel/Mongo и не является разрешением менять production runtime.
+
+#516 зависит от #513 и существующих server profile/direct-create permissions. Перед native acceptance проверить participant UUID route, OTHER projection, privacy denial, same-key retry и account-switch на реальном устройстве. Unsigned build и browser mock не являются подписанным IPA или device acceptance.
