@@ -1379,7 +1379,32 @@ function paidJoinBindingRefsFromSnapshot(snapshot: unknown): PaidJoinBindingRefs
   );
   if (keys.length === 0) return undefined;
   try {
-    return parseCommercialBindingRefs(Object.fromEntries(keys.map((key) => [key, row[key]])));
+    const refs = parseCommercialBindingRefs(Object.fromEntries(keys.map((key) => [key, row[key]])));
+    // The existing payment snapshot stores local level eligibility at decisionId/decision.
+    // It is not a CUP commercial decision: v2 carries only policy expectations until
+    // the owner supplies its canonical usage receipt. Validate the local pair before
+    // excluding it; a missing/mismatched pair must never hide a forged commercial ref.
+    if (
+      Object.prototype.hasOwnProperty.call(row, 'managedJoin') &&
+      (Object.prototype.hasOwnProperty.call(row, 'decisionId') ||
+        Object.prototype.hasOwnProperty.call(row, 'decision'))
+    ) {
+      const decision = row.decision;
+      if (
+        refs.decisionId === undefined ||
+        typeof decision !== 'object' ||
+        decision === null ||
+        Array.isArray(decision) ||
+        (decision as Record<string, unknown>).decisionId !== refs.decisionId ||
+        (decision as Record<string, unknown>).status !== 'ALLOWED'
+      )
+        throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+      return {
+        policyRef: refs.policyRef,
+        ...(refs.usageRef === undefined ? {} : { usageRef: refs.usageRef }),
+      };
+    }
+    return refs;
   } catch {
     throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
   }

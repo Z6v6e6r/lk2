@@ -25,6 +25,15 @@ const reservationExpiresAt = '2026-08-01T10:15:00.000Z';
 
 type QueryOutcome = { rows?: readonly unknown[]; rowCount?: number };
 
+/** JSONB preserves values, not JavaScript object insertion order. */
+function jsonbRoundTrip(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value), (_key, row: unknown) =>
+    row && typeof row === 'object' && !Array.isArray(row)
+      ? Object.fromEntries(Object.entries(row).sort(([a], [b]) => b.localeCompare(a)))
+      : row,
+  );
+}
+
 function poolWithHandler(handler: (text: string, values: readonly unknown[]) => QueryOutcome) {
   const query = vi.fn((text: string, values: readonly unknown[] = []) => {
     const result = handler(text, values);
@@ -1179,6 +1188,8 @@ describe('immutable paid JOIN confirmation binding', () => {
     };
     const snapshot = {
       operationId,
+      decisionId: eligibilityDecisionId,
+      decision: { decisionId: eligibilityDecisionId, status: 'ALLOWED' },
       providerBinding: binding,
       managedJoin,
       policyRef: receipt.entitlement.policyRef,
@@ -1603,6 +1614,37 @@ describe('managed JOIN durable preflight snapshot', () => {
     expect(snapshot.policyRef).toEqual(input.bindingRefs?.policyRef);
     expect(snapshot).not.toHaveProperty('usageRef');
     expect(snapshot.managedJoin).not.toHaveProperty('decisionId');
+    expect(snapshot.decisionId).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/);
+    expect(snapshot.decision).toEqual({ decisionId: snapshot.decisionId, status: 'ALLOWED' });
+    const persisted = jsonbRoundTrip(snapshot);
+    const reader = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency'))
+        return { rows: [commandRow({ request_hash: input.requestHash })] };
+      if (text.includes('from eligibility.payment_snapshots snapshot'))
+        return {
+          rows: [
+            {
+              id: reservationId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+              binding_snapshot: persisted,
+              provider_binding: jsonbRoundTrip(input.providerBinding),
+            },
+          ],
+        };
+      return { rows: [] };
+    });
+    const repository = createGameRosterRepository(reader.pool as never);
+    expect(
+      await repository.getPaidJoinAttempt({ tenantId, actorUserId: playerId, operationId }),
+    ).toMatchObject({
+      managedJoin: input.managedJoin,
+      requestHash: input.requestHash,
+      bindingRefs: input.bindingRefs,
+    });
+    expect(await repository.beginPaidJoin(input)).toMatchObject({ outcome: 'replayed' });
+    expect(writtenStatements(reader.query)).toEqual([]);
   });
   it.each(['paid', 'hash', 'policy', 'binding'] as const)(
     'rejects invalid %s managed input before a transaction',
@@ -1631,6 +1673,64 @@ describe('managed JOIN durable preflight snapshot', () => {
       expect(connect).not.toHaveBeenCalled();
     },
   );
+  it.each([
+    'missing-id',
+    'missing-decision',
+    'malformed-id',
+    'mismatched-id',
+    'status',
+    'managed-decision',
+    'usage',
+  ] as const)('rejects %s in a persisted managed snapshot', async (change) => {
+    const input = boundInput();
+    const snapshot: Record<string, unknown> = {
+      managedJoin: input.managedJoin,
+      ...input.bindingRefs,
+      decisionId: eligibilityDecisionId,
+      decision: { decisionId: eligibilityDecisionId, status: 'ALLOWED' },
+      providerBinding: input.providerBinding,
+      operationId,
+      price: input.price,
+    };
+    if (change === 'missing-id') delete snapshot.decisionId;
+    if (change === 'missing-decision') delete snapshot.decision;
+    if (change === 'malformed-id') {
+      snapshot.decisionId = 'not-a-uuid';
+      snapshot.decision = { decisionId: 'not-a-uuid', status: 'ALLOWED' };
+    }
+    if (change === 'mismatched-id') snapshot.decisionId = otherPlayerId;
+    if (change === 'status')
+      snapshot.decision = { decisionId: eligibilityDecisionId, status: 'DENIED' };
+    if (change === 'managed-decision')
+      snapshot.managedJoin = { ...input.managedJoin, decisionId: eligibilityDecisionId };
+    if (change === 'usage') snapshot.usageRef = { usageRef: 'invented:usage', reservationUnits: 1 };
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency'))
+        return { rows: [commandRow({ request_hash: input.requestHash })] };
+      if (text.includes('from eligibility.payment_snapshots snapshot'))
+        return {
+          rows: [
+            {
+              id: reservationId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+              binding_snapshot: jsonbRoundTrip(snapshot),
+              provider_binding: input.providerBinding,
+            },
+          ],
+        };
+      return { rows: [] };
+    });
+    await expect(
+      createGameRosterRepository(pool as never).getPaidJoinAttempt({
+        tenantId,
+        actorUserId: playerId,
+        operationId,
+      }),
+    ).rejects.toThrow();
+    expect(writtenStatements(query)).toEqual([]);
+  });
   it('reads exact pinned expectation and hash with no current policy or provider lookup', async () => {
     const input = boundInput();
     const snapshot = {
