@@ -23,3 +23,7 @@ f9dadb20ccfd34d60167d823fb453bd8813015bb:apps/api/src/games/game-commercial-join
 # Current literals carry an inline allow; these entries cover only the original immutable commit.
 26d1b613af60db51cf89f740c527ac35e3bfdfbe:scripts/timeweb-notification-profile.test.ts:generic-api-key:34
 26d1b613af60db51cf89f740c527ac35e3bfdfbe:scripts/timeweb-notification-profile.js:generic-api-key:62
+
+# Public migration filenames in the frozen closed-release test are not credentials.
+# Only this immutable commit/rule/line is excluded; all other findings remain enforced.
+2474214463d14c9374a0515448e582fc869afd05:apps/migrator/src/closed-single-migration.test.ts:generic-api-key:20
