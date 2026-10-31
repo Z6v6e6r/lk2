@@ -55,6 +55,38 @@ enabling chats.
     false-positive review. No authoritative mode exists.
 12. Expand tenant coverage gradually while watching the metrics below.
 
+### Ordinary iOS APNs delivery
+
+Ordinary booking, game, messaging and friendship rules can queue iOS deliveries when both
+`APNS_ENABLED` and the tenant's `ios_push_enabled` are enabled. The endpoint must belong to the
+recipient and its active provider account must exactly match `IOS/APNS`, app ID, environment and
+`APNS_CREDENTIAL_REF`. Existing registration and secret custody gates still apply; this source
+change does not enable a tenant, install credentials or authorize a provider send.
+
+The ordinary APNs loop runs independently of `NOTIFICATION_SCENARIOS_ENABLED`. It claims one row
+per tenant turn, excludes both scenario scheduling markers, and rechecks current recipient,
+endpoint ownership/status, provider settings, rule/template state, opt-out and quiet hours before
+committing the dispatch timestamp. Quiet hours suppress only the interruption, retaining the inbox.
+Existing mandatory rules retain their server-owned preference bypass. The APNs payload remains
+`ПадлхАБ / Новое уведомление` with `/notifications`; chat text and participant data are not sent.
+
+After a committed dispatch, a timeout or expired lease with no durable result becomes
+`DEAD / APNS_OUTCOME_UNKNOWN`, with attempt and outbox evidence. Do not automatically replay that
+row: APNs IDs do not provide an exactly-once guarantee. Definite retryable failures use bounded
+backoff and at most five attempts; an open circuit defers without consuming an attempt. A late
+invalid-token response may invalidate only the exact dispatched token/key/recipient/provider
+snapshot, preserving a token rotated or transferred while the request was in flight.
+
+For acceptance, verify source-event replay produces one intent and one delivery per endpoint,
+concurrent workers produce one transport call, queued opt-out/revocation prevents dispatch, and
+crash-after-dispatch recovery never sends again. `apns-delivery.pg.test.ts` exercises PostgreSQL
+fences and a non-owner RLS role only in the existing disposable Actions `quality-full` service;
+local runs without that fixture skip it. Its injected transport is not APNs/provider or device
+acceptance. Record sandbox APNs receipt, actual iOS display/tap and logout/token rotation separately
+before production enablement. Rollback is to the prior worker digest with APNs disabled through the
+approved operational path; retained `SENDING` rows with a dispatch marker require reconciliation,
+not a blanket reset to `PENDING`.
+
 ### Maintenance-only foundation migration gate
 
 Migrations `0069_booking_notification_projection_fence.sql` through
