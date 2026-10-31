@@ -31,18 +31,21 @@ const levelRangeLabels: Readonly<Record<TrainingLevelRangeFilter, string>> = {
   B_A: 'B–A',
 };
 
-const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
-const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
+const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', {
+  weekday: 'short',
+  timeZone: 'Europe/Moscow',
+});
+const dayFormatter = new Intl.DateTimeFormat('ru-RU', {
+  day: '2-digit',
+  timeZone: 'Europe/Moscow',
+});
 type EventCatalogMetadata = Pick<
   EventCatalogPage,
   'state' | 'totalMatched' | 'facets' | 'sourceStatus'
 >;
 
 function dateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return new Date(date.getTime() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function isExpiredCatalogCursor(error: Error | null): boolean {
@@ -184,9 +187,8 @@ export function TrainingsPage({
   const days = useMemo(
     () =>
       Array.from({ length: 7 }, (_, index) => {
-        const date = new Date();
-        date.setHours(0, 0, 0, 0);
-        date.setDate(date.getDate() + index);
+        const today = dateKey(new Date());
+        const date = new Date(Date.parse(`${today}T00:00:00+03:00`) + index * 86_400_000);
         return {
           key: dateKey(date),
           day: dayFormatter.format(date),

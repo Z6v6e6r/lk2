@@ -2172,12 +2172,17 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     listEventCatalog(query) {
-      if (nativeClient) return nativeUnavailable();
+      if (nativeClient)
+        return query.surface === 'TRAININGS'
+          ? client.listTrainingCatalogue(query)
+          : nativeUnavailable();
       return loadClientAssistedEventCatalog(query);
     },
 
     continueEventCatalog(cursor, limit) {
-      return client.continueEventCatalog(cursor, limit);
+      return nativeClient
+        ? client.continueTrainingCatalogue(cursor, limit)
+        : client.continueEventCatalog(cursor, limit);
     },
 
     getHomeBase() {

@@ -109,3 +109,57 @@ CI/mock credentials and unique task tenant; it is skipped locally and provisions
 It exercises independent connections, dispatch/expiry/prepare races, stale ACK, atomic
 outbox rollback, original-key replacement rules, constraints and RLS metadata. It does not
 claim provider capacity, live signing, device acceptance, deployment or production proof.
+
+## Android catalogue companion
+
+The Android TRAININGS entry uses `GET /user/api/v1/:tenantKey/trainings/catalog` for initial
+and cursor reads. The existing Web client-assisted catalogue stays unchanged. The displayed
+seven-day date window is Europe/Moscow on both clients. Registration remains the exact #271
+legacy-subscription contract above; neither discovery, a zero displayed price, category names,
+nor an observed free seat authorizes a reservation.
+
+The API composes the server catalogue only under the existing `GAMES_READ_ENABLED` gate and
+`sandbox`/`production` Viva mode. No new flag, credential or activation is introduced. The existing
+`TRAINING_REGISTRATION_ENABLED` gate independently controls registration. An active actor session,
+existing encrypted OAuth delegation, verified `TenantAuthBinding` and Redis snapshot store are
+prerequisites. The helper checks tenant/provider binding before and after token refresh; only
+server code receives the user token and provider tenant. No system credential or provider read-job
+is sent to Android. OAuth refresh can update its existing delegation/session linkage; this is a
+business-read catalogue, not a claim of zero authentication/cache writes.
+
+The server keeps at most 64 adapters keyed by authoritative provider tenant, retaining circuit
+state instead of recreating it per request. Each request reads at most seven dates, in parallel,
+once per date with a maximum 2.5-second timeout and a 12-second overall budget including access
+acquisition. A late access refresh cannot start schedule reads after that budget. Refresh already
+in flight may finish its existing session bookkeeping. Full provider failure gives a redacted
+unavailable error; incomplete days give `PARTIAL` with no exact totals/facets.
+
+The strict adapter currently supports only the existing bare-array day representation, with at
+most 500 source entries. It rejects wrappers/pagination, malformed entries, duplicate source IDs,
+wrong-day training instants, missing end times, unknown explicit states, redirects and non-200
+responses. Known cancelled/archived training records are excluded. This does not certify the
+provider's undocumented pagination or completeness behavior: real schedule-format acceptance is
+still required. Unsupported shapes remain unavailable rather than inventing a continuation API.
+The recommendation adapter's permissive legacy `readDate` behavior is unchanged.
+
+Snapshots retain the existing ten-minute observation lifetime, tenant/actor/query identity and
+page-size binding. The new route enforces original `staleAt` even when cursor storage TTL is
+extended. Its internal catalogue marker rejects cursors from other catalogue producers. Neither
+cursor reuse nor a partial result refreshes attendance, price or entitlement authority. Public
+UUIDs use the existing exercise hash that #271 independently verifies with the Moscow date hint;
+station/court aliases remain display data and are not CREATE location bindings.
+
+Android permits only this catalogue GET and the existing exact training registration POST/original
+operation GET. POST has exactly `dateHint` and public `subscriptionId`; operation GET retains the
+original idempotency key. Unknown query keys, duplicate parameters, malformed bodies and other
+provider/native routes remain rejected. The #520 custody controller persists the key before HTTP,
+keeps it across ambiguity/reload, checks account lifetime and requires explicit retry. It never
+replays a mutation after 401 or network failure. Historical operation completion remains separate
+from the fresh registration observation; WAITLIST/cancellation/unavailable never becomes current
+confirmed attendance from a cached receipt.
+
+Rollback is source-compatible: an older API returns unavailable/404 for the new catalogue; Android
+must not fall back to direct Viva. An unresolved registration key remains retained if its read
+endpoint is unavailable. No schema, migration, provider configuration, signing, store publication,
+iOS capability or production activation is part of this packet. Source/host-JVM/synthetic UI/CI
+checks do not replace device, real authenticated provider, or production acceptance.

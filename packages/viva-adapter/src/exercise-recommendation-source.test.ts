@@ -242,3 +242,93 @@ describe('Viva exercise recommendation source', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('server complete training day', () => {
+  const date = '2035-04-02';
+  const exercise = {
+    id: 'private-exercise',
+    type: { id: 605, name: 'Групповая тренировка' },
+    direction: { name: 'Падел групповая тренировка' },
+    timeFrom: `${date}T10:00:00+03:00`,
+    timeTo: `${date}T11:00:00+03:00`,
+    studio: { id: 'private-studio', name: 'Station' },
+    freePlaces: 2,
+  };
+  function setup(payload: unknown, status = 200, responseUrl?: string) {
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const response = Response.json(payload, { status });
+      Object.defineProperty(response, 'url', {
+        value:
+          responseUrl ??
+          (typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url),
+      });
+      return Promise.resolve(response);
+    });
+    return {
+      fetchImplementation,
+      adapter: new VivaExerciseRecommendationSourceAdapter({
+        mode: 'production',
+        apiBaseUrl: 'https://provider.example.test/userapi/',
+        providerTenantKey: 'bound-tenant',
+        timeoutMs: 500,
+        maxAttempts: 1,
+        fetchImplementation,
+      }),
+    };
+  }
+  const input = () => ({
+    date,
+    accessToken: 'synthetic-delegation',
+    correlationId: 'synthetic-correlation',
+    signal: new AbortController().signal,
+  });
+  it('reads one exact complete day without returning source identifiers or credentials', async () => {
+    const { adapter, fetchImplementation } = setup([
+      exercise,
+      { ...exercise, id: 'cancelled', isCancelled: true },
+    ]);
+    const items = await adapter.readCompleteTrainingDate(input());
+    expect(items).toHaveLength(1);
+    expect(JSON.stringify(items)).not.toMatch(
+      /private-exercise|private-studio|synthetic-delegation/,
+    );
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      new URL(`https://provider.example.test/userapi/v1/bound-tenant/exercises?date=${date}`),
+      expect.objectContaining({ method: 'GET', redirect: 'error', credentials: 'omit' }),
+    );
+  });
+  it.each([
+    {},
+    { content: [exercise] },
+    { items: [exercise], next: 'page2' },
+    [exercise, exercise],
+    Array.from({ length: 501 }, (_, i) => ({ ...exercise, id: String(i) })),
+    [{ ...exercise, timeTo: undefined }],
+    [{ ...exercise, timeFrom: '2035-04-03T10:00:00+03:00' }],
+    [{ ...exercise, timeFrom: '2035-02-30T10:00:00+03:00' }],
+    [{ ...exercise, status: 'WAITLIST' }],
+    [{ ...exercise, isCancelled: 'false' }],
+    [null],
+    [{ id: 'incomplete-classification' }],
+  ])('does not certify malformed, incomplete or ambiguous payload %j', async (payload) => {
+    await expect(setup(payload).adapter.readCompleteTrainingDate(input())).rejects.toThrow();
+  });
+  it('rejects redirects, wrong response path and non-200 success', async () => {
+    await expect(
+      setup([], 200, 'https://other.example.test/exercises').adapter.readCompleteTrainingDate(
+        input(),
+      ),
+    ).rejects.toThrow();
+    await expect(setup([], 202).adapter.readCompleteTrainingDate(input())).rejects.toThrow();
+  });
+  it('keeps the legacy read behavior and does not fake availability for disabled complete reads', async () => {
+    const adapter = new VivaExerciseRecommendationSourceAdapter({
+      mode: 'disabled',
+      apiBaseUrl: 'https://provider.example.test/',
+      providerTenantKey: 'bound',
+      timeoutMs: 500,
+    });
+    await expect(adapter.readDate(input())).resolves.toEqual([]);
+    await expect(adapter.readCompleteTrainingDate(input())).rejects.toThrow();
+  });
+});
