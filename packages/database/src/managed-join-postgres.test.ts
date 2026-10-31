@@ -404,9 +404,9 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
       await withTenantTransaction(second, tenantId, (client) =>
         client.query(
           mode === 'REVOKED'
-            ? "update integration.game_create_location_bindings set state='REVOKED' where tenant_id=$1 and id=$2"
+            ? "update integration.game_create_location_bindings set state='REVOKED',revoked_at=now() where tenant_id=$1 and id=$2"
             : mode === 'EXPIRED'
-              ? "update integration.game_create_location_bindings set expires_at=now()-interval '1 second' where tenant_id=$1 and id=$2"
+              ? "update integration.game_create_location_bindings set verified_at=now()-interval '301 seconds',expires_at=now()-interval '1 second' where tenant_id=$1 and id=$2"
               : "update integration.external_entity_map set external_id=external_id||'-retargeted' where tenant_id=$1 and id=$2",
           [
             tenantId,
