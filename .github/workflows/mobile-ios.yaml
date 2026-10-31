@@ -12,6 +12,7 @@ on:
     paths:
       - '.github/workflows/mobile-ios.yaml'
       - 'scripts/ios-native-build.test.ts'
+      - 'scripts/ios-native-direct-test*'
       - 'apps/mobile/ios/**'
       - 'apps/mobile/src/**'
       - 'apps/mobile/index.html'
@@ -60,6 +61,24 @@ jobs:
         run: swift test --package-path apps/mobile/ios/PadlHubSession
       - name: Build the native App without signing
         run: npm run ios:build:simulator -w @phub/mobile
+      - name: Compile Release with the test flag to verify the DEBUG boundary
+        run: >-
+          xcodebuild -project apps/mobile/ios/App/App.xcodeproj -scheme App
+          -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath apps/mobile/ios/DerivedData/ReleaseBoundary CODE_SIGNING_ALLOWED=NO
+          'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PADLHUB_B07_TEST_HOST' build
+      - name: Verify real native DIRECT bridge with synthetic transport
+        run: |
+          npx vitest run scripts/ios-native-direct-test.test.ts scripts/ios-native-direct-test-boundary.test.ts --maxWorkers=2
+          node --experimental-strip-types scripts/ios-native-direct-test.ts --ci-owned-simulator
+      - name: Retain synthetic native test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-native-direct-synthetic
+          path: .ci-artifacts/ios-native-direct/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Record the unsigned verification boundary
         run: |
           test -d apps/mobile/ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app
@@ -67,7 +86,8 @@ jobs:
           test "$bundle_id" = ru.padlhub.app
           {
             echo '### Unsigned native verification'
-            echo 'Swift package tests and an iOS Simulator App build completed.'
+            echo 'Swift package tests, unsigned App build and synthetic native DIRECT simulator tests completed.'
+            echo 'Only a newly created nonce-named CI simulator was used; fixture transport cannot fall back to real HTTP.'
             echo 'CODE_SIGNING_ALLOWED=NO; runtime push disabled; no API target.'
             echo 'No signed archive, IPA export, APNs device delivery or TestFlight upload was performed.'
             echo 'Signed release remains blocked pending separately reviewed signing and store inputs.'

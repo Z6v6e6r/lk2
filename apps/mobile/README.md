@@ -255,6 +255,29 @@ A native opaque shield covers windows before iOS captures an inactive/background
 by the production entry or used as an API fallback. Block non-loopback network in that preview.
 Its browser evidence proves rendering/navigation, not live API/Keychain end-to-end behavior.
 
+The separate native `AppTests/PadlHubDirectIntegrationTests.swift` acceptance suite runs only
+when a Debug simulator test host is compiled with `PADLHUB_B07_TEST_HOST`. The flag is never
+enabled in project build settings, normal Debug, or Release. Its internal Swift installation
+hook is absent from Release and the JavaScript plugin method table. This host cannot initialize
+the production URLSession/Keychain session transport: AppTests supplies the existing injected
+`SessionTransport` initializer with an in-memory credential store and strict synthetic replies.
+The bundled production TypeScript entry, Capacitor command parser and Swift validators remain
+in the path. Synthetic OTP verification must create a native credential before protected reads.
+
+Before its first WebView load, this host installs a WebKit HTTP(S) content blocker and an
+all-frame document-start WebSocket-constructor denial; failure to install the content blocker
+leaves the WebView blank. This is browser-level denial plus an injected native transport, not
+an OS network namespace. Unknown fixture calls fail without a network fallback. Push remains
+disabled; realtime tickets return the existing disabled response so only HTTP polling is used.
+
+CI owns a fresh disposable simulator and executes this suite without signing. Local execution
+requires a separately established task-owned simulator and sufficient disk space; never install
+over an existing user/production app. The suite covers participant→OTHER profile→DIRECT, lost
+response reconciliation, offline manual same-key retry, capability denial and logout with a
+late read. Rendered synthetic profile/error/thread/logout snapshots are retained in `.xcresult`.
+Simulator fixtures do not verify real OTP delivery, Keychain persistence, APNs, provider writes,
+physical-device behavior or store readiness. No production credential/configuration is required.
+
 Remaining work: connect booking/payment commands and the remaining cabinet modules through
 their reviewed native contracts; validate legal-document return, keyboard/safe areas and a
 physical device; implement system-browser
