@@ -2,7 +2,7 @@
 
 ## Актуальное решение после подтверждённого CI
 
-**NO-GO сохраняется.** #517 exact source/physical CI и оба#270 workflow green. #518 full source green, но два native run дали0/5;53a8 correction ожидает actual execution. Consumer0106 и training owner ещё проходят локальные gates/review. Денежный game refund contract отсутствует; для tournament требуется source-owner binding при наличии реальных CUP level/CAS foundations. CREATE tariff question, station choices и #511 exact merge/flag cycle остаются pending. Main refs неизменны; #508 cycle завершён ранее. Новых merge/deploy/provider/store действий не было.
+**NO-GO сохраняется.** #517 source/physical CI, LK#270/#271 workflows и LK2#519 SELF consumer CI green. #519 физически прошёл4new SELF PostgreSQL cases, но native/provider acceptance и unsupported-key recovery остаются. #518 full source7301passed, native a644 исполнил5 и все5failed на fixture reset; исправление не принято до actual run. Training consumer0107 ещё в реализации. Денежный game refund contract отсутствует; tournament требует authoritative source-owner binding. CREATE tariff question, station choices и #511 exact merge/flag cycle остаются pending. #508 cycle завершён ранее; новых merge/deploy/provider/store действий не было.
 
 Дата: 2026-10-31. **NO-GO: полный production release iOS + Android не готов.** Это результат актуального source/CI аудита, а не проверка состояния уже работающего production.
 
