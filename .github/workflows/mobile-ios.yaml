@@ -39,7 +39,7 @@ jobs:
   unsigned-native:
     name: iOS unsigned simulator build
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       # Inert build: no API tenant, registration or real-account interaction.
       VITE_PHUB_API_BASE_URL: ''

@@ -21,15 +21,18 @@ const syntheticHookCheck = () => undefined;
 function fixture(
   options: {
     failTest?: boolean;
+    failBoot?: boolean;
     drift?: boolean;
     invalidId?: boolean;
     failShutdown?: boolean;
   } = {},
 ) {
   const calls: string[][] = [];
+  const budgets: { args: readonly string[]; timeout: number }[] = [];
   let state = 'Shutdown';
   let tested = false;
-  const run = (args: readonly string[]) => {
+  const run = (args: readonly string[], timeout: number) => {
+    budgets.push({ args, timeout });
     calls.push([...args]);
     if (args[2] === 'runtimes') return JSON.stringify({ runtimes: [runtime] });
     if (args[2] === 'devicetypes') return JSON.stringify({ devicetypes: [device] });
@@ -47,6 +50,8 @@ function fixture(
         },
       });
     if (args[1] === 'boot') state = 'Booted';
+    if (args[1] === 'bootstatus' && options.failBoot)
+      throw new Error('synthetic first-boot timeout');
     if (args[0] === 'xcodebuild') {
       tested = true;
       if (options.failTest) throw new Error('synthetic test failure');
@@ -57,7 +62,7 @@ function fixture(
     }
     return '';
   };
-  return { run, calls };
+  return { run, calls, budgets };
 }
 
 describe('owned synthetic native simulator execution', () => {
@@ -95,6 +100,18 @@ describe('owned synthetic native simulator execution', () => {
       'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DEBUG PADLHUB_B07_TEST_HOST',
     );
     expect(build).toContain(`platform=iOS Simulator,id=${id}`);
+    expect(calls.filter((args) => ['shutdown', 'delete'].includes(args[1] ?? ''))).toEqual([
+      ['simctl', 'shutdown', id],
+      ['simctl', 'delete', id],
+    ]);
+  });
+  it('bounds fresh data migration and cleans only the owned simulator if first boot times out', () => {
+    const { run, calls, budgets } = fixture({ failBoot: true });
+    expect(() => runNativeDirectTests(run, nonce, syntheticHookCheck)).toThrow(
+      'synthetic first-boot timeout',
+    );
+    expect(budgets.find(({ args }) => args[1] === 'bootstatus')?.timeout).toBe(600_000);
+    expect(calls.some((args) => args[0] === 'xcodebuild')).toBe(false);
     expect(calls.filter((args) => ['shutdown', 'delete'].includes(args[1] ?? ''))).toEqual([
       ['simctl', 'shutdown', id],
       ['simctl', 'delete', id],

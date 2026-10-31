@@ -117,7 +117,9 @@ export function runNativeDirectTests(
   let failure: unknown;
   try {
     run(['simctl', 'boot', id], 60_000);
-    run(['simctl', 'bootstatus', id, '-b'], 180_000);
+    // A fresh hosted simulator performs first-boot data migrations before XCTest can start.
+    // Keep that separate bounded budget; timeout still takes the same owned cleanup path.
+    run(['simctl', 'bootstatus', id, '-b'], 10 * 60_000);
     readOwned();
     run(
       [
