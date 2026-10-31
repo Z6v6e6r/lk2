@@ -23,6 +23,12 @@ export interface ClaimedNotificationDelivery {
   readonly attemptNo: number;
   readonly startedAt: string;
   readonly scenarioDelivery?: boolean;
+  /** Fence late ordinary APNs invalidation against token rotation and account transfer. */
+  readonly dispatchedEndpoint?: {
+    readonly ciphertext: Buffer;
+    readonly encryptionKeyId: string;
+    readonly recipientUserId: string;
+  };
 }
 
 export type NotificationDeliveryFinalization = 'sent' | 'retry' | 'dead' | 'stale';
@@ -84,6 +90,12 @@ async function updateIntentState(
   tenantId: string,
   intentId: string,
 ): Promise<void> {
+  // All sibling finalizers lock delivery first, then intent. Re-read siblings only after this
+  // lock so the last finisher observes prior commits instead of leaving PROCESSING forever.
+  await client.query(
+    'select id from notifications.intents where tenant_id=$1 and id=$2 for update',
+    [tenantId, intentId],
+  );
   const states = await client.query<DeliveryStateRow>(
     `select state
        from notifications.deliveries
@@ -261,8 +273,21 @@ export async function finalizeNotificationDelivery(options: {
         ? await client.query(
             `update integration.notification_endpoints
                 set status = $3, updated_at = now()
-              where tenant_id = $1 and id = $2 and status = 'ACTIVE'`,
-            [options.job.tenantId, options.job.endpointId, endpointStatus],
+              where tenant_id = $1 and id = $2 and status = 'ACTIVE'
+                ${options.job.dispatchedEndpoint ? 'and address_ciphertext = $4 and encryption_key_id = $5 and user_id = $6 and provider_account_id = $7' : ''}`,
+            [
+              options.job.tenantId,
+              options.job.endpointId,
+              endpointStatus,
+              ...(options.job.dispatchedEndpoint
+                ? [
+                    options.job.dispatchedEndpoint.ciphertext,
+                    options.job.dispatchedEndpoint.encryptionKeyId,
+                    options.job.dispatchedEndpoint.recipientUserId,
+                    options.job.providerAccountId,
+                  ]
+                : []),
+            ],
           )
         : undefined;
       if (endpointAction && endpointStatus && endpointUpdated?.rowCount === 1) {

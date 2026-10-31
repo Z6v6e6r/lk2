@@ -2,6 +2,7 @@ import Redis from 'ioredis';
 import { VivaIdentityProvider } from '@phub/viva-adapter';
 import { VivaNotificationSource } from '@phub/viva-adapter/notification-lifecycle';
 import { ApnsDeliveryAdapter, ApnsTokenProvider } from './apns-adapter.js';
+import { runApnsDeliveryBatch } from './apns-delivery.js';
 import { YandexSmtpAdapter } from './yandex-smtp-adapter.js';
 import { runExtendedScenarioDelivery } from './extended-scenario-delivery.js';
 import {
@@ -498,6 +499,15 @@ await registerNotificationProjectorConsumer({
   channel: consumerChannel,
   pool,
   logger,
+  ...(apnsRuntime
+    ? {
+        iosPush: {
+          appId: config.APNS_APP_ID,
+          environment: config.APNS_ENVIRONMENT,
+          credentialRef: config.APNS_CREDENTIAL_REF,
+        },
+      }
+    : {}),
   ...(config.WEB_PUSH_ENABLED
     ? {
         webPush: {
@@ -1236,6 +1246,40 @@ const runScenarioCycle = async (): Promise<void> => {
     if (!shuttingDown) setTimeout(() => void runScenarioCycle(), 15_000);
   }
 };
+let apnsTenantOffset = 0;
+const runApnsCycle = async (): Promise<void> => {
+  if (shuttingDown || !apnsRuntime || !extendedCipher) return;
+  try {
+    const cycle = await runWebPushTenantCycle({
+      pool,
+      startOffset: apnsTenantOffset,
+      maxDeliveriesPerTenant: 20,
+      shouldStop: () => shuttingDown,
+      runTenant: (tenantId) =>
+        runApnsDeliveryBatch({
+          pool,
+          tenantId,
+          appId: config.APNS_APP_ID,
+          environment: config.APNS_ENVIRONMENT,
+          credentialRef: config.APNS_CREDENTIAL_REF,
+          cipher: extendedCipher,
+          adapter: apnsRuntime,
+          enabled: true,
+        }),
+      onTenantFailure: (tenantId) =>
+        logger.error(
+          { tenantId, code: 'APNS_CYCLE_FAILED' },
+          'ordinary APNs tenant delivery failed',
+        ),
+      onProgress: () => {},
+    });
+    apnsTenantOffset = cycle.nextStartOffset;
+  } catch {
+    logger.error({ code: 'APNS_CYCLE_FAILED' }, 'ordinary APNs delivery cycle failed');
+  } finally {
+    if (!shuttingDown) setTimeout(() => void runApnsCycle(), 15_000);
+  }
+};
 const runWebPushCycle = async (): Promise<void> => {
   if (shuttingDown || !webPushRuntime) return;
   const startedAt = Date.now();
@@ -1589,6 +1633,7 @@ void runHomeBaseCycle();
 void runPromotionSyncCycle();
 void runLegacyGamesRosterSync();
 void runLegacyGameReminderSource();
+void runApnsCycle();
 void runWebPushCycle();
 void runFcmCycle();
 void runGiftCertificateDeliveryCycle();
