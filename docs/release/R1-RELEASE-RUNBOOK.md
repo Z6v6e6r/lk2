@@ -49,3 +49,26 @@ Owner одобряет конкретные package/target и перечисле
 При ambiguous write — остановить повторную отправку и выполнить предусмотренный authoritative readback; при failed gate/drift — остановить переход. Rollback не является универсальным разрешением менять БД/платежи. Не объявлять PRODUCTION success до фактической приемки этого уровня.
 
 Store upload/internal testing, review submission и public rollout — разные состояния. Записать соответствующее owner approval и фактический store receipt для каждого исполненного перехода; отсутствие ответа от store не означает approval.
+
+## Merge без неявной доставки
+
+Fresh GitHub read 2026-10-31: repository variable `LK2_STANDARD_DELIVERY_ENABLED=true`;
+`timeweb-standard-delivery` environment имеет branch policy без required reviewers. Workflow
+`timeweb-standard-delivery.yaml` реагирует на завершённый успешный push/main CI и вызывает
+production operator. Поэтому разрешение merge нельзя автоматически трактовать как разрешение
+на этот вызов. Исторический RANGE_INELIGIBLE не является защитой от самого operator invocation.
+
+Для согласованного source-only merge требуется отдельное разрешение на конкретный временный
+цикл repository variable либо другой уже утверждённый способ изоляции. Предложенный цикл:
+проверить исходный value/updated_at и отсутствие незавершённых main CI, delivery/publication/deploy
+runs; установить false и подтвердить readback; повторить inventory; проверить exact PR head/main;
+merge только разрешённого head; проверить resulting main SHA/tree и его push CI; дождаться
+соответствующего workflow_run с terminal `standard-web: skipped` без transport steps. Перед
+restore повторно проверить main, отсутствие outstanding main-CI/delivery runs и свой false,
+затем вернуть исходный true и проверить readback. Любое чужое изменение требует переоценки.
+
+Variable проверяется при admission job: false не останавливает уже запущенную/допущенную задачу.
+Не отменять такие задачи и не переключать flag автоматически. Не восстанавливать true в finally:
+поздно завершившийся main CI способен вызвать delivery. Отсутствие run или прошедшее время не
+доказывает skip. Этот документ описывает процедуру, но не предоставляет authority; временный цикл и merge #508 одобрены отдельно. False установлен и merge `14ebdca6` выполнен;
+restore пока ожидает main CI `41201792854` и exact downstream skip.

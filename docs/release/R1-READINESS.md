@@ -9,7 +9,7 @@
 | Пакет               | Изменение и commit                                                                                                                                                                                                    | Доказательство                                                                                                                                                                                                                                                                                                                                                                                                             | Остаток                                                                                               |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | B02 local safety    | [Draft #503](https://github.com/Z6v6e6r/lk2/pull/503), `d8af48b2` (основной fix `d51e5c9c`): strict persisted refs, отказ bound JOIN до dispatch, запрет v1 confirmation/replay для bound snapshot, CREATE units echo | LOCAL: 207 коммерческих тестов; финальный повтор с bundle/Git verifier 269 passed. Независимый payment/security/reliability review approved. Secret scan passed. [CI quality-full success](https://github.com/Z6v6e6r/lk2/actions/runs/41188455531): 7165 passed / 126 skipped; отдельно PostgreSQL suite 4 passed. Source-quality и Docker builds зелёные; workflow/pr-gate красные из-за dependency-security.            | PARTIAL: нет согласованного owner v2; v1 не превращён в binding wire. Нет provider/device acceptance. |
-| F1 / B12 dependency | [Draft #508](https://github.com/Z6v6e6r/lk2/pull/508), `18061aa8`: только systeminformation 5.31.16 → 5.33.16 в lockfile                                                                                              | LOCAL: clean install, import, 9 observability tests; audit high gate exit 0 (0 high/critical, 16 moderate). [CI dependency-security success](https://github.com/Z6v6e6r/lk2/actions/runs/41188184138/job/124499477726), весь workflow success: source-quality, quality-full и пять Docker builds. CI tests: 7087 passed / 126 skipped; отдельно PostgreSQL migration suite 4 passed. Independent security review approved. | Не merged; high gate на main/#503 остаётся зависимостью интеграции. Moderate findings не закрыты.     |
+| F1 / B12 dependency | [Merged #508](https://github.com/Z6v6e6r/lk2/pull/508), `18061aa8`: только systeminformation 5.31.16 → 5.33.16 в lockfile                                                                                             | LOCAL: clean install, import, 9 observability tests; audit high gate exit 0 (0 high/critical, 16 moderate). [CI dependency-security success](https://github.com/Z6v6e6r/lk2/actions/runs/41188184138/job/124499477726), весь workflow success: source-quality, quality-full и пять Docker builds. CI tests: 7087 passed / 126 skipped; отдельно PostgreSQL migration suite 4 passed. Independent security review approved. | Merged по отдельному approval: main `14ebdca6`; новый main CI pending. Moderate findings не закрыты.  |
 
 Дополнительный owner compensation packet: [ph-admin Draft #57](https://github.com/Z6v6e6r/ph-admin/pull/57),
 `d5000a4d207bd078a776902c918b9d35a13a7f77` от main `83b1c17b`. Воспроизведён дефект:
@@ -44,7 +44,7 @@ Producer выключен по умолчанию; crypto/key runtime custody и
 CI документационного #507 `2e1d005f`, [run 41190654423](https://github.com/Z6v6e6r/lk2/actions/runs/41190654423):
 source-quality, quality-full, deployment-contract и secret-scan success; общий gate failed только
 из-за dependency-security. `npm audit --omit=dev --audit-level=high`: 16 moderate / 1 high
-(systeminformation <=5.33.15). #508 содержит fix, но ещё не merged; новых dependency изменений
+(systeminformation <=5.33.15). #508 содержал отдельный fix и позднее merged; в этом историческом run его ещё нет. Новых dependency изменений
 в owner producer или отчётах нет.
 
 Для B02 полный LOCAL `npm run check` выполнил static/build/runtime-import stages, но первоначальный
@@ -56,11 +56,28 @@ source-test run дал 116 failed / 6835 passed / 340 skipped (705 files) в Nod
 а не утверждение об одном чистом полном прогоне. Exact-head CI завершился: source-quality/quality-full passed; полный workflow #503 остаётся failed из-за dependency-security до интеграции #508. Skipped DB/
 broker cases остаются пропусками, не runtime acceptance.
 
-NO-GO полного R1 сохраняется. Исходный baseline ниже не включает новые task-head commits.
+Обновление source/CI после первого snapshot:
+
+- LK2 #508 merged по отдельному owner approval: main `14ebdca6a7553e35c274e9fce77d953e066467cf`,
+  tree `0d1f67d7dee3f5623d6ef8364d959832714dea1c`, только lockfile +4/-4. Main CI `41201792854`
+  выполняется. Разрешённый временный цикл `LK2_STANDARD_DELIVERY_ENABLED`: true → false выполнен
+  до merge; restore ожидает exact downstream skip. Публикация/deploy не разрешены.
+- #503 обновлён в собственной ветке до `39feed0c` с этим dependency fix; business source неизменён
+  относительно `d8af48b2`. Новый combined CI pending; прежние CI результаты не переименованы.
+- LK #264 `53732cd6` добавил bound split CREATE rejection. Exact-head CI `41200538848` success:
+  critical matrix 1325 passed / 48 skipped. Fresh local split/custody closure:196 passed /1 skipped.
+- ph-admin #58 `cab33ce7345a14a7cb347de616849d0daa13496f` зависит от #57. Все четыре automatic
+  workflow success; physical suite в `41201269983` исполнила independent-client reserve/confirm/release,
+  proof/ownership negatives, final-outbox rollback и separate-process response-loss replay,
+  skipped=0. Runtime provider/HTTP/device acceptance не проводился. Первый failed fixture run
+  `41200668400` сохранён в E2E matrix вместе с причиной и исправлением.
+
+NO-GO полного R1 сохраняется. Baseline ниже — исходный snapshot первого аудита; последующие
+source/CI изменения перечислены выше, а не выданы за повторный полный inventory.
 
 ## Зафиксированный baseline
 
-| Репозиторий                                     | Актуальный main SHA                        | Git tree                                   | Ветки / открытые PR |
+| Репозиторий                                     | Main SHA первого snapshot                  | Git tree                                   | Ветки / открытые PR |
 | ----------------------------------------------- | ------------------------------------------ | ------------------------------------------ | ------------------- |
 | [lk2](https://github.com/Z6v6e6r/lk2)           | `d6a0458a1ae79aac3efccb0396486444d27d73e7` | `7623734ef91099186595600d51a483d6e15519db` | 511 / 33            |
 | [lk](https://github.com/Z6v6e6r/lk)             | `788fdb96b3efd60fb09e4187b4ca4b5b00e2daaa` | `c0c66ce7c6b7a27858b6b90d54af1be32b8f30d0` | 272 / 34            |
@@ -112,7 +129,7 @@ GitHub refs прочитаны заново; branches полностью паг�
 | ph-admin `83b1c17b`    | [40451185434](https://github.com/Z6v6e6r/ph-admin/actions/runs/40451185434), [40451185414](https://github.com/Z6v6e6r/ph-admin/actions/runs/40451185414), [40451185401](https://github.com/Z6v6e6r/ph-admin/actions/runs/40451185401) | VERIFIED CI: runtime artifact/recovery, subscriptions-binding-promotion, traffic-quarantine success; не доказательство установленного runtime                    |
 | LK2 PR #503 `6d140606` | [40819637475](https://github.com/Z6v6e6r/lk2/actions/runs/40819637475)                                                                                                                                                                | dependency-security/pr-gate failure: npm audit 12 findings, включая 1 high в systeminformation. Остальные quality jobs success                                   |
 
-Main lock содержит `systeminformation 5.31.16` (`package-lock.json:10565`) и `fastify 5.12.4`; более поздний audit на PR #503 требует переоценки dependency gate. Исторический green main не является свежим vulnerability verdict. Эксплуатируемость этого пакета в продукте аудитом не доказана.
+Исходный baseline lock содержит `systeminformation 5.31.16` (`package-lock.json:10565`) и `fastify 5.12.4`; более поздний audit на PR #503 требует переоценки dependency gate. Исторический green main не является свежим vulnerability verdict. Эксплуатируемость этого пакета в продукте аудитом не доказана.
 
 В том же quality-full job **реально прошли** `access-session-postgres.test.ts` (16), `messaging-concurrency-postgres.test.ts` (10), `notification-scenarios-postgres.test.ts` (14), `game-commercial-join.test.ts` (37), `extended-notification-adapters.test.ts` (12), `profile-view.test.ts` (7). Эти результаты VERIFIED на уровне CI соответствующих suites, не provider/device acceptance. Нельзя распространять пропуски одних PG suites на все integration tests.
 

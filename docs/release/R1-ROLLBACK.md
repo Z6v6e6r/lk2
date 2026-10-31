@@ -40,3 +40,13 @@ WebSocket stream содержит recoverable hints, а не durable history: `a
 ## Закрытие инцидента
 
 Сохранить exact before/after package identities, выполненные команды/receipts, DB/event compatibility и пользовательский smoke, provider reconciliation и observation. Успешный image rollback не отменяет migration или уже совершённый платёж. Решение закрыть инцидент принимает назначенный owner по фактическим business invariants, а не по зелёному health endpoint.
+
+## Временное подавление automatic delivery при source merge
+
+Если отдельно разрешённый flag cycle прерван, сначала прочитать variable, exact main/PR state,
+main push CI и связанный delivery run. Не повторять неоднозначный merge и не делать безусловный
+restore=true. При неразрешённой очереди/чужом drift оставить подтверждённый false, сообщить
+точный hold владельцу и получить указание для изменившегося recovery scope. Если variable уже
+изменена другим владельцем, не перезаписывать её. Revert main, workflow cancel/rerun/dispatch,
+publication и host rollback этим планом не разрешаются. Восстановление исходного true разрешено
+только в пределах одобренного цикла после доказанного skip и проверки quiescent main/delivery.

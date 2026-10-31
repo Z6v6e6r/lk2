@@ -84,3 +84,26 @@ CI [41198689845](https://github.com/Z6v6e6r/lk/actions/runs/41198689845) success
 Critical subscription CI matrix: 1322 passed / 48 skipped; новые signer regressions выполнены.
 Ни provider cancellation, ни физический Mongo concurrent release, ни mobile E2E
 этим прогоном не доказаны. Live-flow fixture test остался skipped без живого flow export.
+
+## Дополнительное evidence — split CREATE и physical ledger
+
+LK #264 `53732cd64ae8bb2ab1dbfac0f70521d9bae294e9`: actual split response → bound attempt/full
+recovery target → release-v1 → CUP acknowledgement → local CAS. Allowed rejection statuses,
+transport ambiguity, changed actor/tenant/subscription/instance/target, created/adopted/recovered
+exercise, inherited receipt and evidence expiry проверены LOCAL. Affected split/gateway/deploy
+custody: 196 passed / 1 skipped; gateway/diagnostics/candidate closure: 133 passed / 1 skipped.
+Exact-head CI [41200538848](https://github.com/Z6v6e6r/lk/actions/runs/41200538848) — success.
+Исторические deployment preimages закреплены immutable Git blob; новый source не внесён в live
+allowlist. Context-loss recovery и provider rejection semantics остаются непроверенными.
+
+ph-admin [#58](https://github.com/Z6v6e6r/ph-admin/pull/58), отдельный QA packet поверх #57:
+реальные independent Mongo clients и canonical repository transactions; barriers на reserve,
+confirm/release; no-write proof/ownership negatives; final-outbox collision rollback; committed
+response loss и child-process retry. Первый CI `41200668400` на `90c43d2` FAILED до бизнес-проверок:
+отсутствовала `subscription_canonical_target_snapshots`. Это setup failure, не physical acceptance.
+Follow-up `cab33ce` добавляет штатный guarded index installer только в уже проверенную уникальную
+fixture DB, repository остаётся verify-only. Повторный exact-head CI
+[41201269983](https://github.com/Z6v6e6r/ph-admin/actions/runs/41201269983) — success на `cab33ce`.
+Physical step вывел PASS для last-unit/confirm/release и proof/ownership, outbox rollback,
+commit-response-loss/child replay; skipped=0, provider writes=0. Это CI на Mongo, не provider/device
+acceptance. Остальные три workflow того же head также success.

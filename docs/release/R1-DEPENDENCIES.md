@@ -86,9 +86,9 @@ flowchart TD
 
 1. ph-admin #57 (`d5000a4d`) — release verification/replay prerequisite на существующем canonical
    ledger; отдельная ветка, без новой коллекции, миграции или изменения v1 confirmation.
-2. LK signer реализован в Draft #264 (`453e8459`): exact confirmation/cancellation и ограниченный
-   definite booking rejection, negative/retry tests. Следующий bounded packet — provenance для
-   split/local abort и physical ledger/recovery harness. Общий secret/config уже предусмотрен контрактом,
+2. LK signer реализован в Draft #264 (`53732cd6`): exact confirmation/cancellation, definite
+   booking rejection и bound split CREATE rejection, negative/retry tests. Следующий bounded packet —
+   local pre-write abort/context-loss recovery. Physical ledger harness находится в ph-admin #58. Общий secret/config уже предусмотрен контрактом,
    но создание/установка/смена секрета не разрешены текущим запросом.
 3. Связать reserve/confirm/release с точными policy/instance/target/usage refs будущего owner v2;
    пройти физический ledger/response-loss acceptance и отдельно provider sandbox readback.
@@ -100,3 +100,32 @@ Owner integration order: ph-admin #57 receiver → LK #264 producer → разр
 runtime configuration / sandbox acceptance. Merge любого из этих PR не включает strict mode.
 До runtime acceptance проверить Node-RED crypto injection, согласованную конфигурацию receiver/producer
 и оставшиеся abort paths. Полный B02/B04 exit criterion не закрыт.
+
+## Уточнение CREATE target и social contracts — 2026-10-31
+
+B03: `games.games.station_id/court_id` — канонические LK2 UUID; importer хранит associations
+`game_station/game_court` под `LK_LEGACY_SNAPSHOT`. Sanitized identifiers необратимы, raw aliases
+не обязательны, а migration 0042 допускает несколько aliases. Первый попавшийся alias не является
+доверенным Viva ID для записи. Следующий CREATE-specific adapter должен читать organizer draft и
+revision из одной версии, разрешать однозначное server-owned write mapping и повторно проверять
+room/studio у LK owner. Missing/ambiguous mapping означает отказ до POST, не `LIMIT 1`.
+
+Текущий admission receiver принимает JOIN+USE_SUBSCRIPTION с уже существующим exercise. CREATE
+admission route возвращает 503, transport reserve не сохраняет reservation в итоговом PENDING,
+confirm не связан с orchestration. Ни #503, ни #264 не закрывают этот consumer. Не расширять JOIN
+claims фиктивным exercise ID; нужен отдельный CREATE action/target binding к существующему split
+preflight/attempt/recovery, без второго usage ledger. Provider mapping/write authority и sandbox
+acceptance остаются зависимостями, production guards сохраняются.
+
+B04: LK split leave уже имеет actor/organizer authorization, durable claim/retry/CAS и provider
+cancellation/readback. Однако просмотренный daily-limit route освобождает локальную allowance,
+а bridge к CUP canonical entitlement release отсутствует. Согласовать этот шаг с одним owner;
+cleanup scheduler не считать actor-authorized CANCEL API автоматически.
+
+B07: Android уже отображает directory/history UI, но native session policy не разрешает существующий
+GET `/community-views/:uuid/chat`. Это отдельный узкий read-access fix с negative native policy tests.
+Он не завершает writable chat: community endpoint только GET, generic message repository разрешает
+DIRECT/GAME, canonical community/tournament-to-conversation binding не найден. iOS дополнительно
+требует Swift/TS session validation и controller/UI. #330 не добавляет community sending; #453/#466
+затрагивают Android policy для GAME JOIN, поэтому будущий read-access PR должен объявить порядок
+интеграции. Нельзя обойти membership checks клиентским вызовом generic send.

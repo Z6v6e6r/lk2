@@ -44,7 +44,7 @@ ph-admin #57 (`d5000a4d`) устраняет подтверждённый source
 определённый отказ без созданного booking; таймаут не считается отказом. Подпись
 сама по себе не доказывает provider outcome — требуется sandbox readback acceptance.
 
-LK #264 (`453e8459`) реализует opt-in signer для подтверждения/отмены и ограниченного definite
-booking rejection. B02/B04 остаются открытыми: split/local abort ещё не имеют accepted provenance,
+LK #264 (`53732cd6`) реализует opt-in signer для подтверждения/отмены и ограниченного definite
+booking rejection и exact bound split CREATE rejection. B02/B04 остаются открытыми: local pre-write abort и потеря server context ещё требуют recovery contract,
 provider/physical ledger/native acceptance отсутствуют; key/crypto runtime readiness UNKNOWN.
-Пустая история после таймаута не получает подпись отказа. CI producer success: run 41198689845, exact head `453e8459`.
+Пустая история после таймаута не получает подпись отказа. CI producer success: run 41200538848, exact head `53732cd6`.

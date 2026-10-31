@@ -40,4 +40,6 @@
 
 ## Выполненные и невыполненные действия
 
-На первом этапе подготовлены семь audit documents без application changes. После разрешения реализации созданы task-branch commits и Draft PR: LK2 #503/#508, ph-admin #57 и LK #264; application tests/builds выполнены с результатами в READINESS. Это SOURCE/LOCAL/CI evidence, без runtime acceptance. Merge не выполнялся. Деплой, workflow dispatch/rerun, publication, secret creation, live/shared database/provider writes, реальные push-уведомления, store upload/publication не выполнялись. Commit/branch/PR custody документационного пакета фиксируется в handoff/PR; это не acceptance продукта.
+На первом этапе подготовлены семь audit documents без application changes. После разрешения реализации созданы task-branch commits и Draft PR: LK2 #503/#508, ph-admin #57 и LK #264; application tests/builds выполнены с результатами в READINESS. Это SOURCE/LOCAL/CI evidence, без runtime acceptance. По отдельному owner approval merged только LK2 #508 (`14ebdca6`). Остальные PR не merged.
+Также отдельно разрешён временный cycle repository delivery flag; сейчас false до exact CI/skip
+readback. Это подавление автодоставки, не production activation. Деплой, workflow dispatch/rerun, publication, secret creation, live/shared database/provider writes, реальные push-уведомления, store upload/publication не выполнялись. Commit/branch/PR custody документационного пакета фиксируется в handoff/PR; это не acceptance продукта.
