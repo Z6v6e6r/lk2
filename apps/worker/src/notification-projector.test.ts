@@ -29,119 +29,155 @@ const event: NotificationSourceEvent = {
 };
 
 describe('notification intent projector', () => {
-  it('does not resolve Android endpoints while its tenant gate is disabled', async () => {
-    const query = vi.fn((text: string) => {
-      if (text === 'begin' || text === 'commit' || text.includes('set_config'))
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      if (text.includes('insert into audit.inbox_events'))
-        return Promise.resolve({ rows: [{ event_id: event.id }], rowCount: 1 });
-      if (text.includes('pg_advisory_xact_lock') || text.includes('projection_fences'))
-        return Promise.resolve({ rows: [], rowCount: 1 });
-      if (text.includes('tenant_runtime_settings'))
-        return Promise.resolve({
-          rows: [{ in_app_enabled: false, web_push_enabled: false, android_push_enabled: false }],
-          rowCount: 1,
-        });
-      if (text.includes('update audit.inbox_events'))
-        return Promise.resolve({ rows: [], rowCount: 1 });
-      throw new Error(`Unexpected query: ${text}`);
-    });
-    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
-    await expect(
-      applyNotificationSourceEvent({
-        pool: pool as never,
-        event,
-        androidPush: { appId: 'ru.padlhub.app', environment: 'SANDBOX' },
-      }),
-    ).resolves.toMatchObject({ outcome: 'disabled' });
-    expect(
-      query.mock.calls.some(([text]) =>
-        String(text).includes('from integration.notification_endpoints'),
-      ),
-    ).toBe(false);
-  });
+  it.each(['ANDROID', 'IOS'] as const)(
+    'does not resolve %s endpoints while its tenant gate is disabled',
+    async (platform) => {
+      const query = vi.fn((text: string) => {
+        if (text === 'begin' || text === 'commit' || text.includes('set_config'))
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        if (text.includes('insert into audit.inbox_events'))
+          return Promise.resolve({ rows: [{ event_id: event.id }], rowCount: 1 });
+        if (text.includes('pg_advisory_xact_lock') || text.includes('projection_fences'))
+          return Promise.resolve({ rows: [], rowCount: 1 });
+        if (text.includes('tenant_runtime_settings'))
+          return Promise.resolve({
+            rows: [{ in_app_enabled: false, web_push_enabled: false, android_push_enabled: false }],
+            rowCount: 1,
+          });
+        if (text.includes('update audit.inbox_events'))
+          return Promise.resolve({ rows: [], rowCount: 1 });
+        throw new Error(`Unexpected query: ${text}`);
+      });
+      const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+      await expect(
+        applyNotificationSourceEvent({
+          pool: pool as never,
+          event,
+          ...(platform === 'IOS'
+            ? {
+                iosPush: {
+                  appId: 'ru.padlhub.app',
+                  environment: 'SANDBOX' as const,
+                  credentialRef: 'apns-test',
+                },
+              }
+            : { androidPush: { appId: 'ru.padlhub.app', environment: 'SANDBOX' as const } }),
+        }),
+      ).resolves.toMatchObject({ outcome: 'disabled' });
+      expect(
+        query.mock.calls.some(([text]) =>
+          String(text).includes('from integration.notification_endpoints'),
+        ),
+      ).toBe(false);
+    },
+  );
 
-  it('uses only active Android FCM endpoint selectors when Android push is enabled', async () => {
-    const observed: { text: string; values: readonly unknown[] }[] = [];
-    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
-      observed.push({ text, values });
-      if (text === 'begin' || text === 'commit' || text.includes('set_config'))
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      if (text.includes('insert into audit.inbox_events'))
-        return Promise.resolve({ rows: [{ event_id: event.id }], rowCount: 1 });
-      if (text.includes('pg_advisory_xact_lock') || text.includes('projection_fences'))
-        return Promise.resolve({ rows: [], rowCount: 1 });
-      if (text.includes('tenant_runtime_settings'))
-        return Promise.resolve({
-          rows: [{ in_app_enabled: false, web_push_enabled: false, android_push_enabled: true }],
-          rowCount: 1,
-        });
-      if (text.includes('trigger_rules'))
-        return Promise.resolve({
-          rows: [
-            {
-              rule_id: '66666666-6666-4666-8666-666666666666',
-              template_id: '77777777-7777-4777-8777-777777777777',
-              audience_selector: { type: 'EVENT_USER', field: 'userId' },
-              mandatory: false,
-              effective_channels: ['PUSH'],
-              category: 'MESSAGING',
-              title_template: 'Новое',
-              body_template: 'Откройте чат',
-              deep_link_template: '/chats/{{gameId}}',
-            },
-          ],
-          rowCount: 1,
-        });
-      if (text.includes('from identity.users'))
-        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
-      if (text.includes('user_preferences')) return Promise.resolve({ rows: [], rowCount: 0 });
-      if (text.includes('from integration.notification_endpoints'))
-        return Promise.resolve({
-          rows: [{ id: '88888888-8888-4888-8888-888888888888' }],
-          rowCount: 1,
-        });
-      if (text.includes('insert into notifications.intents'))
-        return Promise.resolve({
-          rows: [{ id: '99999999-9999-4999-8999-999999999999' }],
-          rowCount: 1,
-        });
-      if (text.includes('insert into notifications.deliveries'))
-        return Promise.resolve({
-          rows: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
-          rowCount: 1,
-        });
-      if (
-        text.includes('insert into audit.outbox_events') ||
-        text.includes('insert into audit.audit_log') ||
-        text.includes('update audit.inbox_events')
-      )
-        return Promise.resolve({ rows: [], rowCount: 1 });
-      throw new Error(`Unexpected query: ${text}`);
-    });
-    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
-    await expect(
-      applyNotificationSourceEvent({
-        pool: pool as never,
-        event,
-        androidPush: { appId: 'ru.padlhub.app', environment: 'SANDBOX' },
-      }),
-    ).resolves.toMatchObject({ outcome: 'processed', pushQueued: 1 });
-    const endpoints = observed.find((entry) =>
-      entry.text.includes('from integration.notification_endpoints'),
-    );
-    expect(endpoints?.text).toContain("a.platform = 'ANDROID' and a.provider = 'FCM'");
-    expect(endpoints?.values).toEqual([
-      tenantId,
-      userId,
-      false,
-      true,
-      '',
-      'ru.padlhub.app',
-      'SANDBOX',
-      'SANDBOX',
-    ]);
-  });
+  it.each(['ANDROID', 'IOS'] as const)(
+    'uses only matching %s endpoint selectors when native push is enabled',
+    async (platform) => {
+      const observed: { text: string; values: readonly unknown[] }[] = [];
+      const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+        observed.push({ text, values });
+        if (text === 'begin' || text === 'commit' || text.includes('set_config'))
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        if (text.includes('insert into audit.inbox_events'))
+          return Promise.resolve({ rows: [{ event_id: event.id }], rowCount: 1 });
+        if (text.includes('pg_advisory_xact_lock') || text.includes('projection_fences'))
+          return Promise.resolve({ rows: [], rowCount: 1 });
+        if (text.includes('tenant_runtime_settings'))
+          return Promise.resolve({
+            rows: [
+              {
+                in_app_enabled: false,
+                web_push_enabled: false,
+                android_push_enabled: platform === 'ANDROID',
+                ios_push_enabled: platform === 'IOS',
+              },
+            ],
+            rowCount: 1,
+          });
+        if (text.includes('trigger_rules'))
+          return Promise.resolve({
+            rows: [
+              {
+                rule_id: '66666666-6666-4666-8666-666666666666',
+                template_id: '77777777-7777-4777-8777-777777777777',
+                audience_selector: { type: 'EVENT_USER', field: 'userId' },
+                mandatory: false,
+                effective_channels: ['PUSH'],
+                category: 'MESSAGING',
+                title_template: 'Новое',
+                body_template: 'Откройте чат',
+                deep_link_template: '/chats/{{gameId}}',
+              },
+            ],
+            rowCount: 1,
+          });
+        if (text.includes('from identity.users'))
+          return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+        if (text.includes('user_preferences')) return Promise.resolve({ rows: [], rowCount: 0 });
+        if (text.includes('from integration.notification_endpoints'))
+          return Promise.resolve({
+            rows: [{ id: '88888888-8888-4888-8888-888888888888' }],
+            rowCount: 1,
+          });
+        if (text.includes('insert into notifications.intents'))
+          return Promise.resolve({
+            rows: [{ id: '99999999-9999-4999-8999-999999999999' }],
+            rowCount: 1,
+          });
+        if (text.includes('insert into notifications.deliveries'))
+          return Promise.resolve({
+            rows: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+            rowCount: 1,
+          });
+        if (
+          text.includes('insert into audit.outbox_events') ||
+          text.includes('insert into audit.audit_log') ||
+          text.includes('update audit.inbox_events')
+        )
+          return Promise.resolve({ rows: [], rowCount: 1 });
+        throw new Error(`Unexpected query: ${text}`);
+      });
+      const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+      await expect(
+        applyNotificationSourceEvent({
+          pool: pool as never,
+          event,
+          ...(platform === 'IOS'
+            ? {
+                iosPush: {
+                  appId: 'ru.padlhub.app',
+                  environment: 'SANDBOX' as const,
+                  credentialRef: 'apns-test',
+                },
+              }
+            : { androidPush: { appId: 'ru.padlhub.app', environment: 'SANDBOX' as const } }),
+        }),
+      ).resolves.toMatchObject({ outcome: 'processed', pushQueued: 1 });
+      const endpoints = observed.find((entry) =>
+        entry.text.includes('from integration.notification_endpoints'),
+      );
+      expect(endpoints?.text).toContain("a.platform = 'ANDROID' and a.provider = 'FCM'");
+      expect(endpoints?.text).toContain(
+        "a.platform = 'IOS' and a.provider = 'APNS' and $9::boolean and a.credential_ref = $12",
+      );
+      expect(endpoints?.values).toEqual([
+        tenantId,
+        userId,
+        false,
+        platform === 'ANDROID',
+        '',
+        platform === 'ANDROID' ? 'ru.padlhub.app' : '',
+        'SANDBOX',
+        'SANDBOX',
+        platform === 'IOS',
+        platform === 'IOS' ? 'ru.padlhub.app' : '',
+        'SANDBOX',
+        platform === 'IOS' ? 'apns-test' : '',
+      ]);
+    },
+  );
   it('commits a duplicate source event without evaluating runtime or rules again', async () => {
     const query = vi.fn((text: string) => {
       if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
@@ -1240,132 +1276,149 @@ describe('booking notification projection fence', () => {
     );
   });
 
-  it('withholds only the push while the recipient is inside their quiet hours', async () => {
-    const conversationId = '73333333-3333-4333-8333-333333333333';
-    const messageEvent: NotificationSourceEvent = {
-      id: '75444444-4444-4444-8444-444444444444',
-      type: 'messaging.message.created.v1',
-      aggregateId: conversationId,
-      tenantId,
-      occurredAt: '2026-08-03T20:30:00.000Z',
-      correlationId: 'messaging-quiet-hours-worker-test',
-      payload: {
-        conversationId,
-        messageId: '75555555-5555-4555-8555-555555555555',
-        sequence: 8,
-        recipientUserIds: [userId],
-      },
-    };
-    const observed: { readonly text: string; readonly values: readonly unknown[] }[] = [];
-    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
-      observed.push({ text, values });
-      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      }
-      if (text.includes('insert into audit.inbox_events')) {
-        return Promise.resolve({ rows: [{ event_id: messageEvent.id }], rowCount: 1 });
-      }
-      if (text.includes('from notifications.tenant_runtime_settings')) {
-        return Promise.resolve({
-          rows: [{ in_app_enabled: true, web_push_enabled: true }],
-          rowCount: 1,
-        });
-      }
-      if (text.includes('from notifications.trigger_rules')) {
-        return Promise.resolve({
-          rows: [
-            {
-              rule_id: '76666666-6666-4666-8666-666666666661',
-              template_id: '77777777-7777-4777-8777-777777777771',
-              audience_selector: { type: 'EVENT_USERS', field: 'recipientUserIds' },
-              mandatory: false,
-              effective_channels: ['IN_APP', 'PUSH'],
-              category: 'MESSAGING',
-              title_template: 'Новое сообщение',
-              body_template: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
-              deep_link_template: '/chats/{{conversationId}}',
-            },
-          ],
-          rowCount: 1,
-        });
-      }
-      if (text.includes('from identity.users')) {
-        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
-      }
-      if (text.includes('from notifications.user_preferences')) {
-        return Promise.resolve({
-          rows: [
-            {
-              channel: 'PUSH',
-              enabled: true,
-              quiet_from: '23:00',
-              quiet_until: '07:00',
-              timezone: 'Europe/Moscow',
-            },
-          ],
-          rowCount: 1,
-        });
-      }
-      if (text.includes('insert into notifications.intents')) {
-        return Promise.resolve({
-          rows: [{ id: '80000000-0000-4000-8000-000000000001' }],
-          rowCount: 1,
-        });
-      }
-      if (text.includes('insert into notifications.deliveries')) {
-        return Promise.resolve({
-          rows: [{ id: '81000000-0000-4000-8000-000000000001' }],
-          rowCount: 1,
-        });
-      }
-      if (text.includes('insert into notifications.inbox_items')) {
-        return Promise.resolve({
-          rows: [{ id: '82000000-0000-4000-8000-000000000001' }],
-          rowCount: 1,
-        });
-      }
-      if (
-        text.includes('insert into audit.outbox_events') ||
-        text.includes('insert into audit.audit_log') ||
-        text.includes('update audit.inbox_events')
-      ) {
-        return Promise.resolve({ rows: [], rowCount: 1 });
-      }
-      throw new Error(`Unexpected query: ${text}`);
-    });
-    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+  it.each(['WEB', 'IOS_QUIET', 'IOS_OPT_OUT'] as const)(
+    'preserves the inbox while withholding %s push',
+    async (platform) => {
+      const conversationId = '73333333-3333-4333-8333-333333333333';
+      const messageEvent: NotificationSourceEvent = {
+        id: '75444444-4444-4444-8444-444444444444',
+        type: 'messaging.message.created.v1',
+        aggregateId: conversationId,
+        tenantId,
+        occurredAt: '2026-08-03T20:30:00.000Z',
+        correlationId: 'messaging-quiet-hours-worker-test',
+        payload: {
+          conversationId,
+          messageId: '75555555-5555-4555-8555-555555555555',
+          sequence: 8,
+          recipientUserIds: [userId],
+        },
+      };
+      const observed: { readonly text: string; readonly values: readonly unknown[] }[] = [];
+      const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+        observed.push({ text, values });
+        if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        }
+        if (text.includes('insert into audit.inbox_events')) {
+          return Promise.resolve({ rows: [{ event_id: messageEvent.id }], rowCount: 1 });
+        }
+        if (text.includes('from notifications.tenant_runtime_settings')) {
+          return Promise.resolve({
+            rows: [
+              {
+                in_app_enabled: true,
+                web_push_enabled: platform === 'WEB',
+                ios_push_enabled: platform !== 'WEB',
+              },
+            ],
+            rowCount: 1,
+          });
+        }
+        if (text.includes('from notifications.trigger_rules')) {
+          return Promise.resolve({
+            rows: [
+              {
+                rule_id: '76666666-6666-4666-8666-666666666661',
+                template_id: '77777777-7777-4777-8777-777777777771',
+                audience_selector: { type: 'EVENT_USERS', field: 'recipientUserIds' },
+                mandatory: false,
+                effective_channels: ['IN_APP', 'PUSH'],
+                category: 'MESSAGING',
+                title_template: 'Новое сообщение',
+                body_template: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
+                deep_link_template: '/chats/{{conversationId}}',
+              },
+            ],
+            rowCount: 1,
+          });
+        }
+        if (text.includes('from identity.users')) {
+          return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+        }
+        if (text.includes('from notifications.user_preferences')) {
+          return Promise.resolve({
+            rows: [
+              {
+                channel: 'PUSH',
+                enabled: platform !== 'IOS_OPT_OUT',
+                quiet_from: '23:00',
+                quiet_until: '07:00',
+                timezone: 'Europe/Moscow',
+              },
+            ],
+            rowCount: 1,
+          });
+        }
+        if (text.includes('insert into notifications.intents')) {
+          return Promise.resolve({
+            rows: [{ id: '80000000-0000-4000-8000-000000000001' }],
+            rowCount: 1,
+          });
+        }
+        if (text.includes('insert into notifications.deliveries')) {
+          return Promise.resolve({
+            rows: [{ id: '81000000-0000-4000-8000-000000000001' }],
+            rowCount: 1,
+          });
+        }
+        if (text.includes('insert into notifications.inbox_items')) {
+          return Promise.resolve({
+            rows: [{ id: '82000000-0000-4000-8000-000000000001' }],
+            rowCount: 1,
+          });
+        }
+        if (
+          text.includes('insert into audit.outbox_events') ||
+          text.includes('insert into audit.audit_log') ||
+          text.includes('update audit.inbox_events')
+        ) {
+          return Promise.resolve({ rows: [], rowCount: 1 });
+        }
+        throw new Error(`Unexpected query: ${text}`);
+      });
+      const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
 
-    await expect(
-      applyNotificationSourceEvent({
-        pool: pool as never,
-        event: messageEvent,
-        // 2026-08-03T20:30:00Z is 23:30 in Moscow, inside the stored window.
-        now: new Date('2026-08-03T20:30:00.000Z'),
-        webPush: { appId: 'phub-test', environment: 'SANDBOX' },
-      }),
-    ).resolves.toEqual({
-      outcome: 'processed',
-      created: 1,
-      suppressed: 0,
-      pushQueued: 0,
-      skippedRules: 0,
-      quietSuppressed: 1,
-    });
-    // The durable item still lands, and the push channel never resolves an endpoint.
-    expect(
-      observed.filter((call) => call.text.includes('insert into notifications.inbox_items')),
-    ).toHaveLength(1);
-    expect(
-      observed.some((call) => call.text.includes('from integration.notification_endpoints')),
-    ).toBe(false);
-    expect(
-      observed.filter(
-        (call) =>
-          call.text.includes('insert into notifications.deliveries') &&
-          call.text.includes("'PUSH'"),
-      ),
-    ).toHaveLength(0);
-  });
+      await expect(
+        applyNotificationSourceEvent({
+          pool: pool as never,
+          event: messageEvent,
+          // 2026-08-03T20:30:00Z is 23:30 in Moscow, inside the stored window.
+          now: new Date('2026-08-03T20:30:00.000Z'),
+          ...(platform === 'WEB'
+            ? { webPush: { appId: 'phub-test', environment: 'SANDBOX' as const } }
+            : {
+                iosPush: {
+                  appId: 'phub-test',
+                  environment: 'SANDBOX' as const,
+                  credentialRef: 'apns-test',
+                },
+              }),
+        }),
+      ).resolves.toEqual({
+        outcome: 'processed',
+        created: 1,
+        suppressed: 0,
+        pushQueued: 0,
+        skippedRules: 0,
+        quietSuppressed: platform === 'IOS_OPT_OUT' ? 0 : 1,
+      });
+      // The durable item still lands, and the push channel never resolves an endpoint.
+      expect(
+        observed.filter((call) => call.text.includes('insert into notifications.inbox_items')),
+      ).toHaveLength(1);
+      expect(
+        observed.some((call) => call.text.includes('from integration.notification_endpoints')),
+      ).toBe(false);
+      expect(
+        observed.filter(
+          (call) =>
+            call.text.includes('insert into notifications.deliveries') &&
+            call.text.includes("'PUSH'"),
+        ),
+      ).toHaveLength(0);
+    },
+  );
 
   it('queues the push outside the quiet window and never counts a suppressed push', async () => {
     const conversationId = '73333333-3333-4333-8333-333333333333';
