@@ -2712,3 +2712,58 @@ it('does not refresh or retry a stable-key SELF DELETE on 401 after session repl
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(requestUrl(fetcher.mock.calls[0]![0])).toContain('/participants/me');
 });
+
+describe('training stable-key boundary', () => {
+  it('sends only the original public request/key once after network loss, then reads without a mutation', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError('synthetic lost response'))
+      .mockResolvedValueOnce(
+        jsonResponse({ operation: { status: 'UNKNOWN' }, registration: { status: 'UNKNOWN' } }),
+      );
+    const client = createClient(fetcher),
+      key = 'synthetic-training-original';
+    const input = {
+      dateHint: '2035-04-02',
+      subscriptionId: '80000000-0000-4000-8000-000000000001',
+    };
+    await expect(client.registerTraining('public-training', input, key)).rejects.toThrow(
+      'synthetic lost response',
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await client.getTrainingRegistration('public-training', key);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(stringRequestBody(fetcher.mock.calls[0]![1]?.body))).toEqual(input);
+    expect(fetcher.mock.calls[1]![1]?.method ?? 'GET').toBe('GET');
+    expect(fetcher.mock.calls[1]![1]?.body).toBeUndefined();
+    for (const call of fetcher.mock.calls)
+      expect(new Headers(call[1]?.headers).get('Idempotency-Key')).toBe(key);
+  });
+  it('does not refresh or retry either training route on 401', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            code: 'AUTH_REQUIRED',
+            message: 'synthetic expired',
+            correlationId: 'synthetic',
+          },
+        },
+        401,
+      ),
+    );
+    const client = createClient(fetcher, { initialAccessToken: authenticatedSession.accessToken });
+    await expect(
+      client.registerTraining(
+        'public-training',
+        { dateHint: '2035-04-02', subscriptionId: 'public-subscription' },
+        'synthetic-training-original',
+      ),
+    ).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await expect(
+      client.getTrainingRegistration('public-training', 'synthetic-training-original'),
+    ).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});

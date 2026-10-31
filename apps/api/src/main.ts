@@ -1,3 +1,6 @@
+import { createTrainingRegistrationRepository } from '@phub/database/training-registration';
+import { TrainingRegistrationOwnerClient } from '@phub/subscription-runtime-adapter';
+import { createTrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
 import { createManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { createNotificationScenarioRepository } from '@phub/database/notification-scenarios';
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
@@ -598,6 +601,39 @@ const communityMediaObjectStore = config.COMMUNITY_MEDIA_ENABLED
 const communityMediaRuntime = communityMediaObjectStore
   ? createCommunityMediaRuntime({ config, pool, objectStore: communityMediaObjectStore })
   : undefined;
+// Independent concrete TRAINING gate: never activates or widens WARN quote/game paths.
+const trainingRegistration = (() => {
+  const repository = createTrainingRegistrationRepository(pool);
+  if (!config.TRAINING_REGISTRATION_ENABLED)
+    return createTrainingRegistrationRuntime({ enabled: false, repository });
+  const keys = JSON.parse(config.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!) as Record<
+      string,
+      string
+    >,
+    keyId = config.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID!;
+  const issuer = new SubscriptionRuntimeActorDelegationIssuer({
+    privateKeyPem: keys[keyId]!,
+    keyId,
+    issuer: config.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER!,
+    audience: config.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE!,
+    ttlSeconds: config.SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS,
+  });
+  return createTrainingRegistrationRuntime({
+    enabled: true,
+    repository,
+    issuer,
+    client: new TrainingRegistrationOwnerClient({
+      baseUrl: config.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL!,
+      timeoutMs: config.GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS,
+      environment: ['local', 'ci'].includes(config.APP_ENV) ? 'development' : 'production',
+    }),
+    token: async (actor) => {
+      const issued = await authService.issueVivaAccessToken(actor);
+      return { token: issued.accessToken, expiresAt: issued.expiresAt };
+    },
+    metric: (outcome) => logger.info({ outcome }, 'training registration boundary'),
+  });
+})();
 const subscriptionRuntimeWarnBoundary = (() => {
   if (config.SUBSCRIPTION_RUNTIME_WARN_MODE !== 'WARN') return undefined;
   const privateKeys = JSON.parse(
@@ -712,6 +748,7 @@ const app = await buildApp({
   phoneSubjectLinkService,
   ...(subscriptionPolicyRegistryClient ? { subscriptionPolicyRegistryClient } : {}),
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
+  trainingRegistration,
   gameManagedSelfLeave,
   ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
   ...(gameCommercialCreate ? { gameCommercialCreate } : {}),
