@@ -2,6 +2,13 @@ import { createHash, createPrivateKey, randomUUID } from 'node:crypto';
 
 import { importPKCS8, SignJWT } from 'jose';
 import {
+  MANAGED_SELF_LEAVE_ADMISSION_PATH,
+  MANAGED_SELF_LEAVE_READ_PREFIX,
+  MANAGED_SELF_LEAVE_ADMISSION_SCOPE,
+  MANAGED_SELF_LEAVE_READ_SCOPE,
+  managedSelfLeaveOperationId,
+  managedSelfLeaveRequestSha256,
+  type ManagedSelfLeaveRequest,
   MANAGED_JOIN_PREFLIGHT_PATH,
   MANAGED_JOIN_ADMISSION_PATH,
   MANAGED_JOIN_READ_PREFIX,
@@ -99,6 +106,145 @@ export class SubscriptionRuntimeActorDelegationIssuer {
         'SUBSCRIPTION_RUNTIME_DELEGATION_CONFIGURATION_INVALID',
       );
     }
+  }
+
+  async issueManagedSelfLeaveAdmission(input: {
+    readonly userId: string;
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly sessionId: string;
+    readonly providerClientId: string;
+    readonly providerMappingId: string;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly idempotencyKey: string;
+    readonly request: ManagedSelfLeaveRequest;
+    readonly legacyGameId: string;
+    readonly legacyGameMappingId: string;
+    readonly legacyGameMappingVersion: string;
+    readonly actorToken: { readonly token: string; readonly expiresAt: string };
+    readonly recoveryOnly?: true;
+  }): Promise<string> {
+    const keyHash = subscriptionRuntimeIdempotencyKeySha256(input.idempotencyKey);
+    const opaque = (value: unknown): value is string =>
+      typeof value === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value) &&
+      !/[\r\n]/.test(value);
+    if (
+      input.idempotencyKey.length < 16 ||
+      input.idempotencyKey.length > 128 ||
+      !opaque(input.legacyGameId) ||
+      !uuidPattern.test(input.legacyGameMappingId) ||
+      input.legacyGameMappingId !== input.legacyGameMappingId.toLowerCase() ||
+      !opaque(input.legacyGameMappingVersion) ||
+      input.legacyGameMappingVersion.length > 128 ||
+      (input.recoveryOnly !== undefined && input.recoveryOnly !== true) ||
+      !input.actorToken ||
+      !/^[!-~]{16,4096}$/.test(input.actorToken.token) ||
+      /[\r\n]/.test(input.actorToken.token) ||
+      !Number.isFinite(Date.parse(input.actorToken.expiresAt)) ||
+      new Date(input.actorToken.expiresAt).toISOString() !== input.actorToken.expiresAt ||
+      Date.parse(input.actorToken.expiresAt) <= Date.now() + 5000 ||
+      (await managedSelfLeaveOperationId({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        idempotencyKeySha256: keyHash,
+      })) !== input.operationId
+    )
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    return this.signManagedSelfLeave(
+      input,
+      {
+        request_sha256: await managedSelfLeaveRequestSha256(input.request),
+        idempotency_key_sha256: keyHash,
+        actor_token_sha256:
+          'sha256:' + createHash('sha256').update(input.actorToken.token).digest('hex'),
+        actor_token_expires_at: input.actorToken.expiresAt,
+        legacy_game_id: input.legacyGameId,
+        legacy_game_mapping_id: input.legacyGameMappingId,
+        legacy_game_mapping_version: input.legacyGameMappingVersion,
+        ...(input.recoveryOnly === true ? { recovery_only: true } : {}),
+      },
+      false,
+    );
+  }
+  async issueManagedSelfLeaveRead(input: {
+    readonly userId: string;
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly sessionId: string;
+    readonly providerClientId: string;
+    readonly providerMappingId: string;
+    readonly operationId: string;
+    readonly correlationId: string;
+  }): Promise<string> {
+    return this.signManagedSelfLeave(input, { receipt_version: 1 }, true);
+  }
+  private async signManagedSelfLeave(
+    input: {
+      readonly userId: string;
+      readonly tenantId: string;
+      readonly tenantKey: string;
+      readonly sessionId: string;
+      readonly providerClientId: string;
+      readonly providerMappingId: string;
+      readonly operationId: string;
+      readonly correlationId: string;
+    },
+    claims: Record<string, unknown>,
+    read: boolean,
+  ): Promise<string> {
+    if (
+      ![
+        input.userId,
+        input.tenantId,
+        input.sessionId,
+        input.providerMappingId,
+        input.operationId,
+      ].every((v) => v.length === 36 && uuidPattern.test(v) && v === v.toLowerCase()) ||
+      input.tenantKey !== 'iSkq6G' ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.providerClientId) ||
+      /[\r\n]/.test(input.providerClientId) ||
+      !correlationPattern.test(input.correlationId) ||
+      /[\r\n]/.test(input.correlationId)
+    )
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      contract_version: 1,
+      scope: read ? MANAGED_SELF_LEAVE_READ_SCOPE : MANAGED_SELF_LEAVE_ADMISSION_SCOPE,
+      caller: 'lk2-api',
+      method: read ? 'GET' : 'POST',
+      path: read
+        ? MANAGED_SELF_LEAVE_READ_PREFIX + input.operationId
+        : MANAGED_SELF_LEAVE_ADMISSION_PATH,
+      operation_id: input.operationId,
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: input.providerClientId,
+      provider_mapping_id: input.providerMappingId,
+      correlation_id: input.correlationId,
+      ...claims,
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + this.options.ttlSeconds)
+      .setJti(randomUUID())
+      .sign(await importPKCS8(this.options.privateKeyPem, 'RS256'));
   }
 
   async issueManagedJoinPreflight(

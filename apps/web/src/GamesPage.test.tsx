@@ -2276,3 +2276,116 @@ describe('GamesPage paid JOIN', () => {
     expect(api.joinPaidGame).not.toHaveBeenCalled();
   });
 });
+
+describe('GamesPage managed SELF leave recovery', () => {
+  const originalLocks = Object.getOwnPropertyDescriptor(window.navigator, 'locks');
+  beforeEach(() => {
+    window.localStorage.clear();
+    Object.defineProperty(window.navigator, 'locks', {
+      configurable: true,
+      value: {
+        request: (_n: string, _o: unknown, fn: () => unknown) => Promise.resolve().then(() => fn()),
+      },
+    });
+  });
+  afterEach(() => {
+    window.localStorage.clear();
+    if (originalLocks) Object.defineProperty(window.navigator, 'locks', originalLocks);
+    else Reflect.deleteProperty(window.navigator, 'locks');
+  });
+  it('shows a typed unsupported refusal without claiming owner acceptance or erasing the key', async () => {
+    const api: AuthGateway = {
+      ...gateway(),
+      leaveGame: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('unsupported'), { code: 'GAME_PAYMENT_REQUIRED' }),
+        ),
+      getManagedLeaveOperation: vi.fn(),
+    };
+    const userId = '00000000-0000-4000-8000-000000000001';
+    vi.mocked(api.getGame).mockResolvedValue({
+      ...(await api.getGame(game.id)),
+      startsAt: new Date(Date.now() + 172800000).toISOString(),
+      endsAt: new Date(Date.now() + 176400000).toISOString(),
+      allowedActions: ['OPEN_DETAILS', 'LEAVE'],
+    });
+    render(
+      <GamesPage
+        gateway={api}
+        gameId={game.id}
+        joinPrincipal={{ tenantId: 'tenant', userId }}
+        chatNavigationScope={{ tenantKey: 'local-padel', userId }}
+      />,
+    );
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Покинуть игру' }));
+    await screen.findByText('Сервер отклонил выход: возврат по подписке сейчас недоступен.');
+    expect(screen.queryByText('Выход из игры подтверждён.')).not.toBeInTheDocument();
+    expect(window.localStorage.length).toBeGreaterThan(0);
+    expect(api.leaveGame).toHaveBeenCalledOnce();
+  });
+  it('renders UNKNOWN as pending, preserves key across reload and manual retry, clears view on account change', async () => {
+    const user = userEvent.setup();
+    const operationId = '22222222-2222-4222-8222-222222222222';
+    const result = {
+      commandId: operationId,
+      operation: {
+        id: operationId,
+        type: 'LEAVE_GAME',
+        status: 'UNKNOWN',
+        gameId: game.id,
+        aggregateRevision: 8,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        nextAction: { type: 'WAIT_FOR_RECONCILIATION', retryAfterSeconds: 15 },
+        error: null,
+      },
+      game: null,
+      replayed: true,
+    };
+    const api: AuthGateway = {
+      ...gateway(),
+      leaveGame: vi.fn().mockResolvedValue(result),
+      getManagedLeaveOperation: vi.fn().mockResolvedValue(result),
+    };
+    const detail: ViewerGameCard = {
+      ...(await api.getGame(game.id)),
+      startsAt: new Date(Date.now() + 172800000).toISOString(),
+      endsAt: new Date(Date.now() + 176400000).toISOString(),
+      allowedActions: ['OPEN_DETAILS', 'LEAVE'],
+    };
+    vi.mocked(api.getGame).mockResolvedValue(detail);
+    const principal = { tenantId: 'tenant', userId: '00000000-0000-4000-8000-000000000001' };
+    const view = render(
+      <GamesPage
+        gateway={api}
+        gameId={game.id}
+        joinPrincipal={principal}
+        chatNavigationScope={{ tenantKey: 'local-padel', userId: principal.userId }}
+      />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Покинуть игру' }));
+    await screen.findByRole('button', { name: 'Повторить исходный запрос' });
+    expect(screen.queryByText('Выход из игры подтверждён.')).not.toBeInTheDocument();
+    const key = vi.mocked(api.leaveGame).mock.calls[0]?.[1]?.idempotencyKey;
+    expect(key).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Повторить исходный запрос' }));
+    expect(vi.mocked(api.leaveGame).mock.calls[1]?.[1]?.idempotencyKey).toBe(key);
+    view.unmount();
+    const next = render(<GamesPage gateway={api} gameId={game.id} joinPrincipal={principal} />);
+    await waitFor(() => expect(api.getManagedLeaveOperation).toHaveBeenCalledWith(game.id, key));
+    expect(api.leaveGame).toHaveBeenCalledTimes(2);
+    next.rerender(
+      <GamesPage
+        gateway={api}
+        gameId={game.id}
+        joinPrincipal={{ ...principal, userId: 'other-account' }}
+      />,
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: 'Повторить исходный запрос' }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+});

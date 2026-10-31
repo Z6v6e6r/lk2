@@ -1428,6 +1428,103 @@ function managedJoinFromSnapshot(snapshot: unknown): ManagedJoinBinding | undefi
   return binding;
 }
 
+/** Exact historical paid JOIN authority for SELF LEAVE; never selects a latest reservation. */
+export async function loadManagedSelfLeaveJoinAuthority(
+  client: PoolClient,
+  input: {
+    tenantId: string;
+    gameId: string;
+    actorUserId: string;
+    participationId: string;
+    eligibilityDecisionId: string;
+  },
+): Promise<{
+  receipt: ManagedJoinReceipt;
+  evidenceId: string;
+  reservationId: string;
+  eligibilityDecisionId: string;
+} | null> {
+  const rows = await client.query<{
+    evidence_id: string;
+    reservation_id: string;
+    eligibility_decision_id: string;
+    snapshot: unknown;
+    join_request_hash: string;
+    evidence_hash: string;
+    provider_booking_id: string;
+    provider_exercise_id: string;
+    provider_operation_id: string;
+    verified_at: Date | string;
+    result_payload: Record<string, unknown>;
+  }>(
+    `select e.id as evidence_id,e.reservation_id,e.eligibility_decision_id,s.snapshot,c.request_hash as join_request_hash,
+    e.evidence_hash,e.provider_booking_id,s.snapshot->'providerBinding'->>'providerExerciseId' as provider_exercise_id,e.provider_operation_id,e.verified_at,c.result_payload
+    from games.payment_confirmation_evidence e
+    join games.seat_reservations r on r.tenant_id=e.tenant_id and r.game_id=e.game_id and r.id=e.reservation_id
+      and r.user_id=e.user_id and r.eligibility_decision_id=e.eligibility_decision_id and r.state='CONFIRMED' and r.payment_state='PAID'
+    join eligibility.payment_snapshots s on s.tenant_id=e.tenant_id and s.operation_id::text=e.provider_operation_id
+      and s.decision_id=e.eligibility_decision_id and s.player_id=e.user_id and s.activity_type='GAME' and s.activity_id=e.game_id
+    join games.command_idempotency c on c.tenant_id=s.tenant_id and c.id=s.operation_id and c.actor_user_id=e.user_id
+      and c.aggregate_id=e.game_id and c.command_type='game.join.paid.v1' and c.state='COMPLETED'
+    where e.tenant_id=$1 and e.game_id=$2 and e.user_id=$3 and e.participation_id=$4 and e.eligibility_decision_id=$5
+      and e.resolution='APPLIED' and e.provider='VIVA' and e.provider_operation_type='SUBSCRIPTION_BOOKING'
+      and e.payment_mode='SUBSCRIPTION' and e.verified_by='LEGACY_NODE_RED'`,
+    [
+      input.tenantId,
+      input.gameId,
+      input.actorUserId,
+      input.participationId,
+      input.eligibilityDecisionId,
+    ],
+  );
+  if (rows.rows.length !== 1) return null;
+  const row = rows.rows[0]!;
+  const receipt = managedReceiptFromSnapshot(row.snapshot);
+  const managed = managedJoinFromSnapshot(row.snapshot);
+  const snapshot = row.snapshot as Record<string, unknown>;
+  const result = row.result_payload;
+  if (
+    !receipt ||
+    !managed ||
+    snapshot.decisionId !== input.eligibilityDecisionId ||
+    row.join_request_hash !== (await managedRequestHash(managed)) ||
+    result?.participationId !== input.participationId ||
+    result.reservationId !== row.reservation_id ||
+    result.commandId !== receipt.operationId ||
+    result.gameId !== input.gameId ||
+    !(await managedConfirmationMatches(
+      row.snapshot,
+      {
+        ...input,
+        idempotencyKey: 'managed-self-leave-authority',
+        requestHash: row.evidence_hash,
+        correlationId: 'managed-self-leave-authority',
+        reservationId: row.reservation_id,
+        managedJoinReceipt: receipt,
+        paidJoinBinding: snapshot.providerBinding as PaidJoinProviderBinding,
+        evidence: {
+          provider: 'VIVA',
+          operationType: 'SUBSCRIPTION_BOOKING',
+          operationId: row.provider_operation_id,
+          bookingId: row.provider_booking_id,
+          exerciseId: row.provider_exercise_id,
+          evidenceHash: row.evidence_hash,
+          verifiedAt: timestamp(row.verified_at),
+          verifiedBy: 'LEGACY_NODE_RED',
+        },
+      },
+      true,
+    ))
+  )
+    return null;
+  return {
+    receipt,
+    evidenceId: row.evidence_id,
+    reservationId: row.reservation_id,
+    eligibilityDecisionId: row.eligibility_decision_id,
+  };
+}
+
 function managedReceiptFromSnapshot(snapshot: unknown): ManagedJoinReceipt | undefined {
   const row = snapshot as Record<string, unknown> | undefined;
   return row && Object.prototype.hasOwnProperty.call(row, 'managedJoinReceipt')
@@ -1784,6 +1881,74 @@ async function scheduleWaitlistPromotion(
      ) values ($1, $2, 'game.waitlist.promote.v1', now(), $3, $4::jsonb)`,
     [input.tenantId, input.gameId, revision, JSON.stringify({ waitlistEntryId: entry.id })],
   );
+}
+
+/** Called only inside the concrete SELF journal transaction after its exact owner receipt check. */
+export async function finalizeManagedSelfLeaveParticipation(
+  client: PoolClient,
+  input: GameRosterUserCommandInput & {
+    readonly operationId: string;
+    readonly participationId: string;
+    readonly eligibilityDecisionId: string;
+  },
+): Promise<Extract<GameRosterCommandResult, { outcome: 'applied' }>> {
+  const game = await lockGame(client, input);
+  if (!game) throw new Error('GAME_NOT_FOUND');
+  const capacity = await loadCapacity(client, input.tenantId, input.gameId);
+  const changed = await client.query(
+    `update games.participations set state='LEFT',left_at=now(),updated_at=now()
+ where tenant_id=$1 and game_id=$2 and id=$3 and user_id=$4 and role='PLAYER' and state='ACTIVE'
+ and eligibility_decision_id=$5 returning id`,
+    [
+      input.tenantId,
+      input.gameId,
+      input.participationId,
+      input.actorUserId,
+      input.eligibilityDecisionId,
+    ],
+  );
+  if (changed.rowCount !== 1) throw new Error('MANAGED_SELF_LEAVE_GENERATION_CONFLICT');
+  const revision = await bumpRevision(client, input),
+    now = timestamp(game.database_now);
+  const result = {
+    outcome: 'applied' as const,
+    commandId: input.operationId,
+    gameId: input.gameId,
+    revision,
+    viewerRelation: 'NONE' as const,
+    participationId: input.participationId,
+    committedAt: now,
+    replayed: false,
+  };
+  const base = eventBase(input, input.operationId, revision, now);
+  await appendEvent(client, {
+    ...base,
+    type: 'game.participation.left.v1',
+    payload: { ...base.payload, userId: input.actorUserId, participationId: input.participationId },
+  });
+  if (
+    game.lifecycle_state === 'SCHEDULED' &&
+    capacity.active_participant_count + capacity.active_reservation_count >= game.capacity
+  ) {
+    await appendEvent(client, {
+      ...eventBase(input, input.operationId, revision, now),
+      type: 'game.roster.reopened.v1',
+      payload: { ...base.payload, participantUserIds: await participantUserIds(client, input) },
+    });
+    await scheduleWaitlistPromotion(client, input, revision);
+  }
+  await client.query(
+    `insert into audit.audit_log(tenant_id,actor_id,action,resource_type,resource_id,result,correlation_id,new_value)
+ values($1,$2,'GAME_LEAVE_V1','GAME',$3,'SUCCESS',$4,$5::jsonb)`,
+    [
+      input.tenantId,
+      input.actorUserId,
+      input.gameId,
+      input.correlationId,
+      JSON.stringify({ revision, viewerRelation: 'NONE', participationId: input.participationId }),
+    ],
+  );
+  return result;
 }
 
 export function createGameRosterRepository(

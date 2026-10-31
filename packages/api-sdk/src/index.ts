@@ -1647,8 +1647,32 @@ export class PadlHubApiClient {
     });
   }
 
-  public leaveGame(gameId: string): Promise<GameCommandResult> {
+  public leaveGame(
+    gameId: string,
+    options?: { readonly idempotencyKey?: string },
+  ): Promise<GameCommandResult> {
+    if (options?.idempotencyKey !== undefined)
+      return this.request<GameCommandResult>(
+        `/games/${encodeURIComponent(gameId)}/participants/me`,
+        {
+          method: 'DELETE',
+          idempotencyKey: options.idempotencyKey,
+          retryOnUnauthorized: false,
+        },
+      );
     return this.gameCommand(gameId, '/participants/me', 'DELETE');
+  }
+
+  /** Read-only recovery. A missing response/404 never authorizes a replacement leave key. */
+  public getManagedLeaveOperation(
+    gameId: string,
+    idempotencyKey: string,
+  ): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(`/games/${encodeURIComponent(gameId)}/leave-operation`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+      idempotencyKey,
+    });
   }
 
   public joinGameWaitlist(gameId: string, invitationId?: string): Promise<GameCommandResult> {

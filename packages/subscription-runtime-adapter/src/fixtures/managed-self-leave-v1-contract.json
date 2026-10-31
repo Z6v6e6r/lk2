@@ -1,0 +1,113 @@
+{
+  "fixtureVersion": 1,
+  "purpose": "Synthetic proposed owner wire contract; approval required, no runtime authority",
+  "identity": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "userId": "22222222-2222-4222-8222-222222222222",
+    "operationId": "be8539f3-ac9e-824c-ba39-5cb651b80a7b",
+    "idempotencyKeySha256": "sha256:ce3c583e97e4de6255f956bea9e465c474dad66779100b3cc4d84859bf494f8c"
+  },
+  "paths": {
+    "admission": "/lk/integrations/v1/managed-self-leave-admissions",
+    "read": "/lk/integrations/v1/managed-self-leaves/be8539f3-ac9e-824c-ba39-5cb651b80a7b"
+  },
+  "request": {
+    "contractVersion": 1,
+    "action": "LEAVE_GAME",
+    "target": {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "expectedRevision": 8
+    },
+    "participationId": "88888888-8888-4888-8888-888888888888",
+    "reservationId": "44444444-4444-4444-8444-444444444444",
+    "joinOperationId": "3568928f-f5c5-8bc1-9370-06af857cd429",
+    "joinReceiptSha256": "sha256:e80c39854b5a51b78e06d06af05a9a361bc4d98bf28c7e19e6b70a04faa78a8c",
+    "returnMode": "SERVICE"
+  },
+  "requestSha256": "sha256:1b806fa3fde6418b2a43829bf1fede0e9dacdfce834996e56394864300e0c60a",
+  "originalJoinReceipt": {
+    "contractVersion": 2,
+    "source": "LK1_SUBSCRIPTION_BOOKING_OWNER",
+    "operationId": "3568928f-f5c5-8bc1-9370-06af857cd429",
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "userId": "22222222-2222-4222-8222-222222222222",
+    "gameId": "33333333-3333-4333-8333-333333333333",
+    "reservationId": "44444444-4444-4444-8444-444444444444",
+    "providerClientId": "fixture-client",
+    "providerClientSubscriptionId": "fixture-client-subscription",
+    "providerExerciseId": "fixture-exercise",
+    "providerMappingId": "55555555-5555-4555-8555-555555555555",
+    "targetMappingId": "66666666-6666-4666-8666-666666666666",
+    "targetVersion": "fixture-target-v11",
+    "requestSha256": "sha256:562bb431f460f54425369444c54da267e1848ed65a7b029916cb29acb109390b",
+    "idempotencyKeySha256": "sha256:7736f4841296589a6663995b202dedecd94054e563dc83de3fb77d621cfd93bf",
+    "bookingId": "fixture-booking",
+    "verifiedAt": "2026-10-31T12:00:00.000Z",
+    "entitlement": {
+      "subscriptionInstanceId": "subscription:r1-managed-v2",
+      "policyRef": {
+        "policyVersion": 3,
+        "policyDigest": "sha256:a31c56cef33c012bf5ce0ecd98b63cceb8aef62a72a9544854f223fc141701c7"
+      },
+      "usageRef": {
+        "usageRef": "booking:64bfc8bb48b881ca34a645da62b75b011399604807968c9b",
+        "reservationUnits": 1
+      }
+    }
+  },
+  "pending": {
+    "contractVersion": 1,
+    "operationId": "be8539f3-ac9e-824c-ba39-5cb651b80a7b",
+    "status": "PENDING",
+    "asOf": null,
+    "reason": "OWNER_PENDING"
+  },
+  "unknown": {
+    "contractVersion": 1,
+    "operationId": "be8539f3-ac9e-824c-ba39-5cb651b80a7b",
+    "status": "UNKNOWN",
+    "asOf": null,
+    "reason": "RECONCILIATION_REQUIRED"
+  },
+  "confirmed": {
+    "contractVersion": 1,
+    "operationId": "be8539f3-ac9e-824c-ba39-5cb651b80a7b",
+    "status": "CONFIRMED",
+    "asOf": "2026-10-31T15:00:00.000Z",
+    "reason": "OWNER_LEAVE_CONFIRMED",
+    "receipt": {
+      "contractVersion": 1,
+      "source": "LK1_MANAGED_SELF_LEAVE_OWNER",
+      "operationId": "be8539f3-ac9e-824c-ba39-5cb651b80a7b",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "userId": "22222222-2222-4222-8222-222222222222",
+      "gameId": "33333333-3333-4333-8333-333333333333",
+      "participationId": "88888888-8888-4888-8888-888888888888",
+      "reservationId": "44444444-4444-4444-8444-444444444444",
+      "joinOperationId": "3568928f-f5c5-8bc1-9370-06af857cd429",
+      "joinReceiptSha256": "sha256:e80c39854b5a51b78e06d06af05a9a361bc4d98bf28c7e19e6b70a04faa78a8c",
+      "legacyGameId": "fixture-legacy-game",
+      "ownerLeaveOperationId": "self-leave:fixture-legacy-game:fixture-client:fixture-generation",
+      "membershipVersion": "fixture-generation",
+      "providerClientId": "fixture-client",
+      "providerClientSubscriptionId": "fixture-client-subscription",
+      "providerExerciseId": "fixture-exercise",
+      "providerBookingId": "fixture-booking",
+      "completedAt": "2026-10-31T15:00:00.000Z",
+      "compensation": {
+        "schemaVersion": 1,
+        "operationId": "booking:64bfc8bb48b881ca34a645da62b75b011399604807968c9b",
+        "subscriptionInstanceId": "subscription:r1-managed-v2",
+        "operationState": "COMPENSATED",
+        "compensationState": "APPLIED",
+        "releaseReason": "BOOKING_CANCELLED",
+        "providerBookingId": "fixture-booking"
+      },
+      "requestSha256": "sha256:1b806fa3fde6418b2a43829bf1fede0e9dacdfce834996e56394864300e0c60a",
+      "idempotencyKeySha256": "sha256:ce3c583e97e4de6255f956bea9e465c474dad66779100b3cc4d84859bf494f8c",
+      "providerMappingId": "55555555-5555-4555-8555-555555555555",
+      "legacyGameMappingId": "99999999-9999-4999-8999-999999999999",
+      "legacyGameMappingVersion": "fixture-legacy-game-v3"
+    }
+  }
+}

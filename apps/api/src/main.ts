@@ -1,3 +1,4 @@
+import { createManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { createNotificationScenarioRepository } from '@phub/database/notification-scenarios';
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
 import { RedisPasswordLoginLimiter } from './auth/password-login-limiter.js';
@@ -638,6 +639,16 @@ const subscriptionPolicyRegistryClient = config.SUBSCRIPTION_POLICY_REGISTRY_ENA
 const gameJoinConditionsOwner = createGameJoinConditionsRuntime({ config, pool, authService });
 // Paid JOIN reaches the existing owner only when the flag, the join-conditions owner and the
 // existing actor-delegation material are all composed; otherwise the route keeps GAME_PAYMENT_REQUIRED.
+const gameManagedSelfLeave = createManagedSelfLeaveRuntime({
+  config,
+  pool,
+  ...(subscriptionRuntimeWarnBoundary ? { boundary: subscriptionRuntimeWarnBoundary } : {}),
+  issueActorToken: async (actor) => {
+    const issued = await authService.issueVivaAccessToken(actor);
+    return { token: issued.accessToken, expiresAt: issued.expiresAt };
+  },
+  onMetric: (outcome) => logger.info({ outcome }, 'managed self leave boundary'),
+});
 const gameCommercialJoin = gameRosterRepository
   ? createGameCommercialJoinRuntime({
       config,
@@ -701,6 +712,7 @@ const app = await buildApp({
   phoneSubjectLinkService,
   ...(subscriptionPolicyRegistryClient ? { subscriptionPolicyRegistryClient } : {}),
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
+  gameManagedSelfLeave,
   ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
   ...(gameCommercialCreate ? { gameCommercialCreate } : {}),
   ...(subscriptionRuntimeWarnBoundary
