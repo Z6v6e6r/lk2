@@ -146,6 +146,7 @@ const environmentSchema = z.object({
   GAMES_READ_ENABLED: booleanFromEnvironment,
   GAMES_COMMANDS_ENABLED: booleanFromEnvironment,
   GAMES_TEST_COURTS_ENABLED: booleanFromEnvironment,
+  TRAINING_REGISTRATION_ENABLED: booleanFromEnvironment,
   SUBSCRIPTION_RUNTIME_WARN_MODE: z.enum(['OFF', 'WARN']).default('OFF'),
   SUBSCRIPTION_RUNTIME_BASE_URL: z.string().url().optional(),
   SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: z.string().min(32).optional(),
@@ -854,6 +855,50 @@ export function loadConfig(
         'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID must select a PKCS8 private key',
       );
     }
+  }
+  if (parsed.data.TRAINING_REGISTRATION_ENABLED) {
+    if (
+      !parsed.data.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL ||
+      !parsed.data.VIVA_OAUTH_ENABLED ||
+      parsed.data.VIVA_AUTH_TENANT_KEY !== 'iSkq6G' ||
+      !['sandbox', 'production'].includes(parsed.data.VIVA_MODE) ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE
+    )
+      throw new Error(
+        'TRAINING_REGISTRATION_ENABLED requires complete owner and actor signing configuration',
+      );
+    const owner = new URL(parsed.data.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL);
+    if (
+      owner.username ||
+      owner.password ||
+      owner.search ||
+      owner.hash ||
+      owner.pathname !== '/' ||
+      (parsed.data.APP_ENV === 'production'
+        ? owner.href !== 'https://padlhub.su/'
+        : owner.protocol !== 'https:' &&
+          !(
+            owner.protocol === 'http:' &&
+            ['localhost', '127.0.0.1', '[::1]'].includes(owner.hostname)
+          ))
+    )
+      throw new Error('TRAINING_REGISTRATION_OWNER_URL_INVALID');
+    let keys: Record<string, unknown>;
+    try {
+      const raw: unknown = JSON.parse(parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error();
+      keys = raw as Record<string, unknown>;
+    } catch {
+      throw new Error('SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS must be a JSON object');
+    }
+    const key = keys[parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID];
+    if (typeof key !== 'string' || !key.startsWith(pkcs8PrivateKeyHeader))
+      throw new Error(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID must select a PKCS8 private key',
+      );
   }
   if (parsed.data.SUBSCRIPTION_POLICY_REGISTRY_ENABLED) {
     if (parsed.data.APP_ENV === 'production') {

@@ -5758,6 +5758,11 @@ paths:
       description:
         ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
         ticket before an explicit fresh command.'
+  /{tenantKey}/trainings/{trainingId}/registrations:
+    $ref: ./training-registrations.yaml#/paths/~1{tenantKey}~1trainings~1{trainingId}~1registrations
+  /{tenantKey}/trainings/{trainingId}/registration-operation:
+    $ref: ./training-registrations.yaml#/paths/~1{tenantKey}~1trainings~1{trainingId}~1registration-operation
+
 components:
   schemas:
     GameJoinConditions:

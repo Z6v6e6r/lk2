@@ -1,3 +1,4 @@
+import { TrainingRegistrationPanel } from './TrainingRegistrationPanel.js';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { BookingActivityCard } from './BookingRecommendations.js';
@@ -159,13 +160,18 @@ function MultiSelectFilter({
 
 export interface TrainingsPageProps {
   readonly gateway: AuthGateway;
+  readonly principal?: { tenantId: string; userId: string };
+  readonly eventId?: string;
   readonly individualTrainingRoute?: string;
 }
 
 export function TrainingsPage({
   gateway,
+  principal,
+  eventId,
   individualTrainingRoute = '/coaches',
 }: TrainingsPageProps): React.JSX.Element {
+  const [registrationId, setRegistrationId] = useState<string | null>(eventId ?? null);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<readonly string[]>([]);
   const [selectedStationIds, setSelectedStationIds] = useState<readonly string[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -519,6 +525,30 @@ export function TrainingsPage({
         </p>
       ) : null}
 
+      {registrationId && principal
+        ? (() => {
+            const target = activities.find((a) => a.id === registrationId);
+            return target ? (
+              <TrainingRegistrationPanel
+                key={`${principal.tenantId}:${principal.userId}:${target.id}`}
+                gateway={gateway}
+                principal={principal}
+                training={target}
+                onClose={() => setRegistrationId(null)}
+              />
+            ) : (
+              <section role="status">
+                <p>
+                  Тренировка не найдена в загруженном расписании. Загрузите следующие события или
+                  измените дату.
+                </p>
+                <button type="button" onClick={() => setRegistrationId(null)}>
+                  Закрыть
+                </button>
+              </section>
+            );
+          })()
+        : null}
       <section className="games-list trainings-list" aria-live="polite" aria-busy={loading}>
         {loading ? (
           <div className="games-loading" role="status">
@@ -533,7 +563,18 @@ export function TrainingsPage({
           </div>
         ) : null}
         {activities.map((activity) => (
-          <BookingActivityCard activity={activity} key={activity.id} />
+          <div key={activity.id}>
+            <BookingActivityCard activity={activity} />
+            {principal && gateway.registerTraining && activity.kind === 'TRAINING' ? (
+              <button
+                className="games-level-recovery__secondary"
+                type="button"
+                onClick={() => setRegistrationId(activity.id)}
+              >
+                Запись по подписке
+              </button>
+            ) : null}
+          </div>
         ))}
         {nextCursor ? (
           <button
