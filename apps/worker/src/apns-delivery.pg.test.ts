@@ -393,7 +393,9 @@ physical('ordinary APNs physical PostgreSQL delivery and RLS', () => {
     const item = await fixture();
     await withTenantTransaction(owner, tenantId, (client) =>
       client.query(
-        `update notifications.deliveries set scenario_v2_available_at=clock_timestamp() where tenant_id=$1 and id=$2`,
+        // Migration 0101 parks scenario-v2 rows outside both legacy delivery queues.
+        `update notifications.deliveries set scenario_v2_available_at=clock_timestamp(),
+          scenario_available_at=null,next_attempt_at='infinity'::timestamptz where tenant_id=$1 and id=$2`,
         [tenantId, item.delivery],
       ),
     );
