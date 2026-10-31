@@ -1,14 +1,27 @@
 # B2: LK2 policy/usage binding — план среза
 
-Статус: **план, не разрешение на реализацию.** Срез затрагивает CRITICAL-границы (коммерческая
-операция, бронирование, платёжный/entitlement-контур), поэтому выполняется только после
-предусловий из раздела 1, с negative/recovery-тестами и независимым review. Документ фиксирует
-порядок шагов, точки вставки и non-goals, чтобы не начинать работу дважды.
+Статус на 2026-10-31: **локальная защитная часть реализована в Draft PR #503;
+end-to-end binding заблокирован отсутствующим owner v2**. Реализация разрешена в рамках R1;
+это не разрешение на merge, публикацию или provider/live операции.
 
-- Задача: B2 (`agent/lk2-policy-usage-binding-v1`, ветка ещё не создана).
-- Контракт LK1, который нужен до старта: `docs/plans/lk1-policy-usage-binding-contract-request.md`.
-- Границы LK2: не хранить entitlement/счётчики/ledger, не публиковать и не исполнять правила;
-  хранить только opaque refs и digest receipt.
+- Ветка: `agent/lk2-policy-usage-binding-v1`; базовый main LK2 `d6a0458a1ae79aac3efccb0396486444d27d73e7`.
+- Повторно проверены main LK1 `788fdb96b3efd60fb09e4187b4ca4b5b00e2daaa` и ph-admin
+  `83b1c17bc4c5edaec65387b25b5695e48337c3cf`: quote остаётся non-binding v1,
+  admission/delegation/receipt не несут согласованный policy/usage binding v2.
+- Строгий parser в `@phub/domain` используется БД и adapter; старые импорты adapter сохранены.
+  JSON snapshot сохраняет refs без миграции. Отсутствие refs допускает v1; explicit null,
+  неполные или повреждённые refs отвергаются, а не понижаются до legacy.
+- JOIN с refs отклоняется до DB/provider dispatch. Чтение и reconciliation существующей bound
+  попытки возвращают UNKNOWN; confirmation callback не может погасить её receipt v1.
+- CREATE seam сверяет echo refs и запрошенные reservationUnits. Это LOCAL synthetic evidence,
+  не подтверждение реального контракта provider.
+- `commercialJoinRequestHashV2` — подготовленная локальная функция; не активный wire v2.
+  Legacy v1 fingerprint и owner contract сохранены. Новый флаг активации не добавлен.
+- Следующий dependency gate: [точный upstream контракт](lk1-policy-usage-binding-contract-request.md),
+  затем owner implementation, совместимость v1/v2 и интеграционное acceptance.
+
+Ниже сохранена исходная декомпозиция от 2026-10-27; её исторические статусы не являются текущим
+подтверждением готовности. LK2 не получает собственный entitlement/usage ledger.
 
 ## 1. База и предусловия
 
@@ -72,8 +85,7 @@ ref; строгий WARN→binding контракт; персистенция т
    `sha256:[a-f0-9]{64}`, лишние ключи. Юнит-тесты accept/reject.
 2. **Персистенция без миграции.** Протянуть optional refs:
    `CommercialJoinCommandEnvelope` → `beginPaidJoin` → `payment_snapshots.snapshot` рядом с
-   `providerBinding`; читать в `loadPaidJoinAttempt` (`snapshot->'policyRef'`,
-   `snapshot->'usageRef'`), отдавать только во внутренний attempt view. Никаких новых колонок,
+   `providerBinding`; читать в `loadPaidJoinAttempt` (целый jsonb, чтобы отличать отсутствующее поле от explicit null), отдавать только во внутренний attempt view. Никаких новых колонок,
    индексов и таблиц; размер refs ограничить (snapshot читается под 1500 ms statement timeout).
 3. **Owner binding и receipt v2.** Для CREATE базовый reserve/confirm/release-клиент уже есть в
    #499 (`game-create-commercial-runtime.ts:157-360`): расширяем его `policyRef`/`decisionId`/

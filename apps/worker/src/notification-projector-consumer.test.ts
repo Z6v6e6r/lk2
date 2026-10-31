@@ -211,6 +211,7 @@ describe('notification projector topology', () => {
       channel: channel as never,
       pool: {} as never,
       logger: logger as never,
+      iosPush: { appId: 'ios-test', environment: 'SANDBOX', credentialRef: 'apns-test' },
     });
     const gameId = '22222222-2222-4222-8222-222222222222';
     const message = {
@@ -244,6 +245,11 @@ describe('notification projector topology', () => {
     handlers[1]?.(message);
     await vi.waitFor(() => expect(channel.ack).toHaveBeenCalledWith(message));
     expect(projector.applyNotificationSourceEvent).toHaveBeenCalledOnce();
+    expect(projector.applyNotificationSourceEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        iosPush: { appId: 'ios-test', environment: 'SANDBOX', credentialRef: 'apns-test' },
+      }),
+    );
     const projectedInput = projector.applyNotificationSourceEvent.mock.calls[0]?.[0] as unknown as {
       readonly event: { readonly type: string; readonly aggregateId: string };
     };

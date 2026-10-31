@@ -7,7 +7,9 @@ import type {
 } from '@phub/database';
 import {
   bookedOperationAdmissionId,
+  parseCommercialBindingRefs,
   type BookedOperationReceipt,
+  type CommercialBindingRefs,
 } from '@phub/subscription-runtime-adapter';
 
 import {
@@ -93,6 +95,7 @@ export interface CommercialJoinRepositoryPort {
     readonly invitationId?: string;
     readonly reservationTtlSeconds: number;
     readonly providerBinding?: PaidJoinProviderBinding;
+    readonly bindingRefs?: CommercialBindingRefs;
   }): Promise<CommercialJoinBeginResult>;
   getPaidJoinAttempt(input: {
     readonly tenantId: string;
@@ -139,6 +142,7 @@ export type CommercialJoinBeginResult =
   | { readonly outcome: 'reservation_conflict' };
 
 export interface CommercialJoinAttemptView {
+  readonly bindingRefs?: CommercialBindingRefs;
   readonly providerBinding?: PaidJoinProviderBinding;
   readonly commandId: string;
   readonly gameId: string;
@@ -233,6 +237,11 @@ export interface CommercialJoinCommandEnvelope {
   readonly subscriptionInstanceId?: string | undefined;
   readonly priceConsent?: { readonly amountMinor: number; readonly currency: 'RUB' } | undefined;
   readonly invitationId?: string | undefined;
+  /**
+   * B2 binding evidence from a binding quote. Internal only: it is validated here and persisted
+   * opaquely with the attempt; it never leaves the API in a public body.
+   */
+  readonly bindingRefs?: CommercialBindingRefs | undefined;
 }
 
 /** Fields the request fingerprint is derived from; never the derived ids themselves. */
@@ -341,6 +350,38 @@ export function commercialJoinRequestHash(input: CommercialJoinRequestFingerprin
 }
 
 /**
+ * Prepared local fingerprint for a future bound operation, distinct from the unchanged v1 hash.
+ * Refs are validated before hashing. This is not a wire-contract version: bound dispatch remains
+ * disabled until the canonical owner can carry and prove the same policy/usage binding.
+ */
+export function commercialJoinRequestHashV2(
+  input: CommercialJoinRequestFingerprintInput & { readonly bindingRefs: CommercialBindingRefs },
+): string {
+  const binding = parseCommercialBindingRefs(input.bindingRefs);
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        command: 'JOIN_GAME',
+        contract: 'game.join.paid.v2',
+        tenantId: input.tenantId,
+        userId: input.userId,
+        gameId: input.gameId,
+        expectedRevision: input.expectedRevision,
+        subscriptionInstanceId: input.subscriptionInstanceId ?? null,
+        amountMinor: input.priceConsent?.amountMinor ?? null,
+        currency: input.priceConsent?.currency ?? null,
+        invitationId: input.invitationId ?? null,
+        policyVersion: binding.policyRef.policyVersion,
+        policyDigest: binding.policyRef.policyDigest,
+        decisionId: binding.decisionId ?? null,
+        usageRef: binding.usageRef?.usageRef ?? null,
+        reservationUnits: binding.usageRef?.reservationUnits ?? null,
+      }),
+    )
+    .digest('hex');
+}
+
+/**
  * The owner-visible operation id reuses the existing booked-operation derivation: one key can only
  * ever name one commercial operation, so a repeat cannot mint a second purchase.
  */
@@ -430,6 +471,13 @@ export async function executeCommercialJoin(
   const now = dependencies.now ?? Date.now;
   const retryAfter = dependencies.reconciliationRetryAfterSeconds ?? 5;
   const reservationTtlSeconds = dependencies.reservationTtlSeconds ?? 900;
+  // Fail closed before any durable write or owner call: a malformed binding ref is a programming
+  // error, not a business refusal, so it throws instead of producing a payable fallback.
+  const bindingRefs =
+    input.bindingRefs === undefined ? undefined : parseCommercialBindingRefs(input.bindingRefs);
+  // The installed owner accepts only v1 and cannot prove policy/usage binding. Keep this
+  // foundation dormant rather than dispatching an apparently bound request over unbound wire.
+  if (bindingRefs !== undefined) return commercialFailure('GAME_RECONCILIATION_REQUIRED');
 
   if (!input.subscriptionInstanceId)
     return commercialFailure('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
@@ -743,6 +791,31 @@ export async function executeCommercialJoin(
   };
 }
 
+/** Current v1 evidence cannot establish the refs of a previously prepared bound attempt. */
+function unresolvedBoundJoinOperation(
+  attempt: CommercialJoinAttemptView,
+  now: () => number,
+): CommercialJoinResponseBody {
+  const observedAt = new Date(now()).toISOString();
+  return operationBody({
+    operationId: attempt.commandId,
+    status: 'UNKNOWN',
+    gameId: attempt.gameId,
+    revision: null,
+    createdAt: observedAt,
+    updatedAt: observedAt,
+    retryAfterSeconds: 5,
+    commercial: attemptView(
+      'UNKNOWN',
+      attempt.reservation,
+      null,
+      null,
+      'GAME_RECONCILIATION_REQUIRED',
+    ),
+    replayed: true,
+  });
+}
+
 /**
  * Readback of a commercial operation. Read-only: it never reserves, confirms, releases or fails.
  */
@@ -764,6 +837,8 @@ export async function readCommercialJoinOperation(
     operationId: input.operationId,
   });
   if (!attempt) return null;
+  if (attempt.bindingRefs !== undefined)
+    return unresolvedBoundJoinOperation(attempt, dependencies.now ?? Date.now);
   const updatedAt = attempt.receipt?.confirmedAt ?? new Date(now()).toISOString();
   const price: CommercialJoinCommercialView['price'] = null;
 
@@ -876,6 +951,8 @@ export async function reconcileCommercialJoinOperation(
     operationId: input.operationId,
   });
   if (!attempt) return null;
+  if (attempt.bindingRefs !== undefined)
+    return unresolvedBoundJoinOperation(attempt, dependencies.now ?? Date.now);
   const binding = attempt.providerBinding;
   if (
     attempt.state === 'IN_PROGRESS' &&
