@@ -104,9 +104,17 @@ export function runNativeDirectTests(
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id))
     throw new Error('IOS_NATIVE_TEST_CREATE_RECEIPT_INVALID');
   const readOwned = () => {
-    const { devices } = JSON.parse(run(['simctl', 'list', 'devices', '--json'], 30_000)) as {
-      devices: Record<string, Device[]>;
-    };
+    // First boot can temporarily stall CoreSimulator inventory IPC. Ask only for our
+    // UUID and retry a timed-out read once; mutations and ownership drift are never retried.
+    let snapshot: string;
+    try {
+      snapshot = run(['simctl', 'list', 'devices', id, '--json'], 90_000);
+    } catch (error) {
+      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ETIMEDOUT')
+        throw error;
+      snapshot = run(['simctl', 'list', 'devices', id, '--json'], 90_000);
+    }
+    const { devices } = JSON.parse(snapshot) as { devices: Record<string, Device[]> };
     const matches = (devices[runtime.identifier] ?? []).filter((row) => row.udid === id);
     if (matches.length !== 1 || matches[0]?.name !== name)
       throw new Error('IOS_NATIVE_TEST_DEVICE_OWNERSHIP_CHANGED');
@@ -185,12 +193,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     throw new Error('IOS_NATIVE_TEST_REQUIRES_OWNED_MACOS_CI');
   mkdirSync('.ci-artifacts/ios-native-direct', { recursive: true });
   runNativeDirectTests((args, timeout, inherit = false) => {
+    const label = args.slice(0, args[1] === 'list' ? 5 : 3).join(' ');
+    console.info(`IOS_NATIVE_TEST_COMMAND_START ${label} timeoutMs=${timeout}`);
     const result = execFileSync('xcrun', [...args], {
       timeout,
       encoding: 'utf8',
       stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
       maxBuffer: 8 * 1024 * 1024,
     });
+    console.info(`IOS_NATIVE_TEST_COMMAND_COMPLETE ${label}`);
     return result ?? '';
   });
 }

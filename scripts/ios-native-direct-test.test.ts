@@ -117,6 +117,52 @@ describe('owned synthetic native simulator execution', () => {
       ['simctl', 'delete', id],
     ]);
   });
+  it('retries only a transient targeted inventory read after first boot', () => {
+    const { run, calls } = fixture();
+    let booted = false;
+    let timeouts = 0;
+    runNativeDirectTests(
+      (args, timeout) => {
+        if (args[1] === 'bootstatus') booted = true;
+        if (args[2] === 'devices') {
+          expect(args).toEqual(['simctl', 'list', 'devices', id, '--json']);
+          expect(timeout).toBe(90_000);
+          if (booted && timeouts++ === 0)
+            throw Object.assign(new Error('synthetic inventory timeout'), { code: 'ETIMEDOUT' });
+        }
+        return run(args, timeout);
+      },
+      nonce,
+      syntheticHookCheck,
+    );
+    expect(calls.filter((args) => args[1] === 'create')).toHaveLength(1);
+    expect(calls.filter((args) => args[1] === 'boot')).toHaveLength(1);
+    expect(calls.filter((args) => args[0] === 'xcodebuild')).toHaveLength(1);
+    expect(calls.filter((args) => args[1] === 'delete')).toEqual([['simctl', 'delete', id]]);
+  });
+  it('does not run tests or delete if targeted inventory remains unavailable', () => {
+    const { run, calls } = fixture();
+    let booted = false;
+    let reads = 0;
+    expect(() =>
+      runNativeDirectTests(
+        (args, timeout) => {
+          if (args[1] === 'bootstatus') booted = true;
+          if (args[2] === 'devices' && booted) {
+            reads++;
+            throw Object.assign(new Error('synthetic inventory unavailable'), {
+              code: 'ETIMEDOUT',
+            });
+          }
+          return run(args, timeout);
+        },
+        nonce,
+        syntheticHookCheck,
+      ),
+    ).toThrow('IOS_NATIVE_TEST_AND_CLEANUP_FAILED');
+    expect(reads).toBe(4); // two bounded attempts at each original/cleanup read
+    expect(calls.some((args) => args[0] === 'xcodebuild' || args[1] === 'delete')).toBe(false);
+  });
   it('preserves test failure while cleaning its simulator', () => {
     const { run, calls } = fixture({ failTest: true });
     expect(() => runNativeDirectTests(run, nonce, syntheticHookCheck)).toThrow(
