@@ -37,7 +37,7 @@
 
 ## Следующий практический шаг
 
-Получить green physical CI исправленного LK2 JOIN #515 и совместную runtime приёмку с LK #267/CUP #60; сохранить prerequisite chain CUP #57 → #58 → #59 и LK #264. #511 уже имеет combined green CI, но merge требует отдельного exact-head разрешения и подавления automatic delivery. Physical canonical ledger и post-TTL readback cases уже passed; следующий коммерческий residual — acceptance B02 и authoritative CREATE B03, затем paid cancellation B04 и signup B05. Local pre-write abort и provider acceptance остаются отдельными gap. Native journeys B06, social B07, signed/device/store acceptance развивать ограниченными задачами. Не проводить широкую переработку архитектуры и не активировать production flags для обхода blockers.
+После green physical CI исправленного LK2 JOIN #515 выполнить совместную runtime приёмку с LK #267/CUP #60; сохранить prerequisite chain CUP #57 → #58 → #59 и LK #264. #511 уже имеет combined green CI, но merge требует отдельного exact-head разрешения и подавления automatic delivery. Physical canonical ledger и post-TTL readback cases уже passed; следующий коммерческий residual — acceptance B02 и authoritative CREATE B03, затем paid cancellation B04 и signup B05. Local pre-write abort и provider acceptance остаются отдельными gap. Native journeys B06, social B07, signed/device/store acceptance развивать ограниченными задачами. Не проводить широкую переработку архитектуры и не активировать production flags для обхода blockers.
 
 ## Выполненные и невыполненные действия
 
@@ -58,8 +58,8 @@ Owner v2 и LK2 consumer теперь оформлены в #267/#515; теку�
 
 ## Новый source progress без изменения verdict
 
-LK owner #267 `72688c66` и CI kernel correction #268 `cc1811a2` прошли CI. LK2 JOIN #515 `b55bd4d2` подготовлен с LOCAL checks и specialist CLEAR, CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 LOCAL186/static/review passed, новый CI pending. Managed SELF compensation LK #269 `8d46b9b5` имеет LOCAL/review PASS и CI `41215625582` / `41215625485` success. Это закрывает ограниченные source gaps B02/B04, но не complete commercial participation acceptance.
+LK owner #267 `72688c66` и CI kernel correction #268 `cc1811a2` прошли CI. LK2 JOIN #515 `b55bd4d2` подготовлен с LOCAL checks и specialist CLEAR, CI выявил два physical PG replay/receipt failures; исправление b55bd4d2 LOCAL186/static/review passed, CI `41216151985` success (7267 passed /126 skipped, managed JOIN PostgreSQL3/3). Managed SELF compensation LK #269 `8d46b9b5` имеет LOCAL/review PASS и CI `41215625582` / `41215625485` success. Это закрывает ограниченные source gaps B02/B04, но не complete commercial participation acceptance.
 
 **NO-GO сохраняется**: canonical CREATE mapping/owner, monetary refund/organizer cancel, signup consumers, четыре социальных контекста, signed/device/provider acceptance и production custody ещё не завершены. Кроме ранее разрешённого #508, merge не выполнялся. #511 merge/flag approval и station choices ожидаются; source-only продолжение их не подменяет.
 
-#516 `3e9c566a` теперь оформляет iOS participant/profile/new-DIRECT source, LOCAL/native/mock UI passed, CI pending. CREATE binding producer начат после отдельного аудита authority, а B04 LK2 consumer требует нового original-generation owner admission; простая пересылка в legacy SELF небезопасна. Эти задачи сохраняют NO-GO до соответствующих exit criteria.
+#516 `3e9c566a` теперь оформляет iOS participant/profile/new-DIRECT source, LOCAL/native/mock UI и CI `41216456571` / `41216456863` passed. CREATE binding producer начат после отдельного аудита authority, а B04 LK2 consumer требует нового original-generation owner admission; простая пересылка в legacy SELF небезопасна. Эти задачи сохраняют NO-GO до соответствующих exit criteria.

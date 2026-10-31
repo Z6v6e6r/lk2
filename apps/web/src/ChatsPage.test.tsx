@@ -761,7 +761,7 @@ describe('ChatsPage', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
     expect(await screen.findByRole('list', { name: 'Станции и каналы ПадлхАБ' })).toBeVisible();
-    expect(screen.getByText('Когда свободен корт?')).toBeVisible();
+    expect(await screen.findByText('Когда свободен корт?')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /Ясенево/ }));
     expect(await screen.findByText('Когда свободен корт?')).toBeVisible();
     const composer = screen.getByLabelText('Сообщение');
