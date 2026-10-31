@@ -2,7 +2,9 @@
 
 ## Актуальное evidence
 
-#524 current477404e7: fullCI41237803621/native41237803616 SUCCESS,7400passed/126skipped и frozenPG4/4. LOCAL290TS+JVM12+UI390/1280 остаются отдельной evidence. #52630598d97 AndroidCI41238685334 SUCCESS: actual unsignedAPK/Gradle build и16JVM, zero skipped/failed; fullCI41238685061 pending. #525eb993ff6 integrated four heads: LOCAL226 across7files/36typed closure, fullCI41236564284 SUCCESS7497passed/126skipped+frozenPG4/4 и required27physical+8guards. Device/PROVIDER acceptance не заявляется.
+CUP#62 current41c744d5 CI41240145187 SUCCESS: exact profile/forged identity/unknown/mismatch/MIXED/pending-payment scenarios и physicalMongo raw-rule+revision CAS для reserve/participant/waitlist прошли. Existing payment recovery и majority+j wire concern прошли. Initial failedCI41239749876 остановился доMongo на неполной test fixture; test-only correction сохранила исходные запреты. Provider identity/profile и native tournament signup acceptance отсутствуют.
+
+#524 current477404e7: fullCI41237803621/native41237803616 SUCCESS,7400passed/126skipped и frozenPG4/4. LOCAL290TS+JVM12+UI390/1280 остаются отдельной evidence. #52630598d97 AndroidCI41238685334 SUCCESS: actual unsignedAPK/Gradle build и16JVM, zero skipped/failed; fullCI41238685061 SUCCESS:7411passed/126skipped и frozenPG4/4. #525eb993ff6 integrated four heads: LOCAL226 across7files/36typed closure, fullCI41236564284 SUCCESS7497passed/126skipped+frozenPG4/4 и required27physical+8guards. Device/PROVIDER acceptance не заявляется.
 
 #523f5c33149 добавляет обязательные8 notification resilience cases (PG4/Rabbit4) поверх#522, отдельные owned fixtures; LOCAL49harness cases PASS; CI41235695070 SUCCESS: новые8physical и все35physical+8guards PASS/zero skips, five reports и cleanup3DB/2vhost verified. Provider push/device evidence отсутствует.
 

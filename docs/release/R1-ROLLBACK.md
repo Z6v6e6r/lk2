@@ -109,3 +109,5 @@ rehearsal rollback выбранного production target. Rollback не дол�
 - Старые managed leave rows без stored tenant требуют отдельного доказанного recovery/backfill решения; source rollback не добавляет им authority. Не удалять additive proof/receipt поля при откате consumer. Все описанные runtime действия требуют отдельного exact-target разрешения.
 
 #516 можно откатить отдельным consumer revert до создания новых DIRECT, сохранив #513 existing chat reader. Уже созданные server conversations остаются canonical; удалять их для rollback нельзя. Незавершённый create key хранится в памяти authenticated cabinet; после process death новый запрос полагается также на server unique pair, а не обещанное восстановление памяти.
+
+CUP#62: rollback gender enforcement на старый binary может снова разрешить restricted registration/legacyEnergy. До такого rollback отдельно ограничить соответствующий admission; не стирать pending payment, original identity/gender snapshots и roster journals. Новый пакет не требует index/migration execution.
