@@ -13,6 +13,7 @@ import org.json.JSONObject;
 
 /** The native bundle owns the destination. JavaScript cannot choose a host or tenant. */
 final class AndroidSessionPolicy {
+    private static final String TRAINING_UUID = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}";
     final String origin;
     final String tenant;
     final String version;
@@ -79,8 +80,10 @@ final class AndroidSessionPolicy {
             || cleanPath.contains("%") || cleanPath.contains("..") || cleanPath.contains("//")) throw rejected();
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
         String relativePath = cleanPath.substring(userRoot.length());
-        if (!validQuery(relativePath, method, relativePath.startsWith("/games") ? uri.getRawQuery() : uri.getQuery())) throw rejected();
+        if (!validQuery(relativePath, method, (relativePath.startsWith("/games") || relativePath.startsWith("/trainings/")) ? uri.getRawQuery() : uri.getQuery())) throw rejected();
         String gameUuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        boolean trainingRegistration = "POST".equals(method) && relativePath.matches("/trainings/" + TRAINING_UUID + "/registrations");
+        boolean trainingRecovery = "GET".equals(method) && relativePath.matches("/trainings/" + TRAINING_UUID + "/registration-operation");
         boolean gameJoin = "POST".equals(method) && relativePath.matches("/games/" + gameUuid + "/join");
         // Canonical receipt reconciliation (merged main #455): GET-only recovery advanced the
         // operation; this POST asks the owner for the trusted receipt on the same idempotency key.
@@ -101,7 +104,7 @@ final class AndroidSessionPolicy {
             boolean notificationWrite = "PUT".equals(method) && (cleanPath.equals(userRoot + "/notifications/read-cursor")
                 || cleanPath.equals(userRoot + "/notifications/preferences"));
             if (!("GET".equals(method) && allowedRead(relativePath))
-                && !notificationWrite && !gameJoin && !gameReconcile && !allowedMessagingWrite(relativePath, method)) throw rejected();
+                && !notificationWrite && !gameJoin && !gameReconcile && !trainingRegistration && !allowedMessagingWrite(relativePath, method)) throw rejected();
             operation = Operation.API;
         }
         boolean auth = operation != Operation.API && operation != Operation.PUBLIC;
@@ -120,7 +123,7 @@ final class AndroidSessionPolicy {
         if (operation == Operation.PUBLIC) headers.remove("authorization");
         if (operation == Operation.API && !headers.getOrDefault("authorization", "").matches("Bearer [A-Za-z0-9._-]{8,8192}")) throw rejected();
         if (!"GET".equals(method) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9._:-]{16,128}")) throw rejected();
-        if ((gameJoin || gameReconcile || gameRecovery) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}")) throw rejected();
+        if ((gameJoin || gameReconcile || gameRecovery || trainingRegistration || trainingRecovery) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}")) throw rejected();
         String intent = operation == Operation.REFRESH ? "refresh" : operation == Operation.LOGOUT ? "logout" : null;
         if (!java.util.Objects.equals(intent, headers.get("x-session-intent"))) throw rejected();
         headers.put("accept", isBinaryContentRead(relativePath, method) ? "*/*" : "application/json");
@@ -135,6 +138,7 @@ final class AndroidSessionPolicy {
             return new Request(path, method, headers, binaryBody, "application/octet-stream", operation);
         }
         if (textBody != null && textBody.getBytes(StandardCharsets.UTF_8).length > maxJsonBodyBytes(relativePath, method)) throw rejected();
+        if (trainingRegistration) validateTrainingBody(textBody);
         if (operation == Operation.CHALLENGE || operation == Operation.VERIFY) validateAuthBody(operation, textBody);
         else if (("GET".equals(method) || auth) && textBody != null) throw rejected();
         if (textBody != null) headers.put("content-type", "application/json");
@@ -151,6 +155,7 @@ final class AndroidSessionPolicy {
             "/notifications", "/notifications/preferences", "/support/stations", "/support/dialogs",
             "/notification-endpoints/android/config", "/games").contains(path)) return true;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.equals("/trainings/catalog") || path.matches("/trainings/" + TRAINING_UUID + "/registration-operation")) return true;
         if (path.matches("/games/" + uuid + "(?:/join-conditions|/join-operation)?")) return true;
         if (path.matches("/conversations/" + uuid + "/messages")
             || path.matches("/conversations/" + uuid + "/media/" + uuid)
@@ -191,6 +196,8 @@ final class AndroidSessionPolicy {
     private boolean validQuery(String path, String method, String query) {
         if (!"GET".equals(method)) return query == null;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.equals("/trainings/catalog")) return validTrainingCatalogueQuery(query, TRAINING_UUID);
+        if (path.matches("/trainings/" + TRAINING_UUID + "/registration-operation")) return query == null;
         if (path.equals("/games")) {
             if (query == null) return true;
             Set<String> seen = new HashSet<>();
@@ -224,6 +231,59 @@ final class AndroidSessionPolicy {
         if (path.matches("/conversations/" + uuid + "/media/" + uuid + "(?:/content)?")
             || path.matches("/support/attachments/[A-Za-z0-9_-]{43}/content")) return query == null;
         return true;
+    }
+
+    private boolean validTrainingDate(String value) {
+        if (value == null || !value.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}")) return false;
+        java.text.SimpleDateFormat format = new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.ROOT);
+        format.setLenient(false);
+        format.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        java.text.ParsePosition position = new java.text.ParsePosition(0);
+        return format.parse(value, position) != null && position.getIndex() == value.length();
+    }
+
+    private boolean validTrainingCatalogueQuery(String query, String uuid) {
+        if (query == null || query.length() > 8192) return false;
+        Map<String, String> values = new HashMap<>();
+        try {
+            for (String part : query.split("&", -1)) {
+                String[] pair = part.split("=", -1);
+                if (pair.length != 2 || !pair[0].matches("[A-Za-z]+")) return false;
+                String value = java.net.URLDecoder.decode(pair[1], "UTF-8");
+                if (values.put(pair[0], value) != null) return false;
+            }
+        } catch (Exception ignored) { return false; }
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            String key = entry.getKey(), value = entry.getValue();
+            if (key.equals("limit")) { if (!value.matches("[1-9]|[1-4][0-9]|50")) return false; }
+            else if (key.equals("cursor")) { if (!value.matches(uuid)) return false; }
+            else if (key.equals("localDates")) {
+                String[] dates = value.split(",", -1);
+                if (dates.length < 1 || dates.length > 7 || new HashSet<>(Arrays.asList(dates)).size() != dates.length) return false;
+                for (String date : dates) if (!validTrainingDate(date)) return false;
+            } else if (key.equals("kinds")) {
+                if (!value.matches("(?:COACH_GAME|GROUP_TRAINING|SPLIT)(?:,(?:COACH_GAME|GROUP_TRAINING|SPLIT)){0,2}")) return false;
+            } else if (key.equals("categoryIds") || key.equals("stationIds")) {
+                if (!value.matches(uuid + "(?:," + uuid + "){0,49}")) return false;
+            } else if (key.equals("availability")) { if (!value.matches("INCLUDE_FULL|EXCLUDE_FULL")) return false; }
+            else if (key.equals("levelFrom") || key.equals("levelTo")) { if (!value.matches("D\\+?|C\\+?|B\\+?|A")) return false; }
+            else if (key.equals("startsAfterLocal")) { if (!value.matches("(?:[01][0-9]|2[0-3]):[0-5][0-9]")) return false; }
+            else return false;
+        }
+        if (values.containsKey("cursor")) return values.size() == (values.containsKey("limit") ? 2 : 1);
+        return values.containsKey("localDates") && values.containsKey("kinds") && values.containsKey("availability");
+    }
+
+    private void validateTrainingBody(String body) throws Failure {
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}";
+        String date = "\\\"dateHint\\\"\\s*:\\s*\\\"[0-9]{4}-[0-9]{2}-[0-9]{2}\\\"";
+        String sub = "\\\"subscriptionId\\\"\\s*:\\s*\\\"" + uuid + "\\\"";
+        if (body == null || body.length() > 256 || !body.matches("\\s*\\{\\s*(?:" + date + "\\s*,\\s*" + sub + "|" + sub + "\\s*,\\s*" + date + ")\\s*\\}\\s*")) throw rejected();
+        try {
+            JSONObject parsed = new JSONObject(body);
+            if (parsed.length() != 2 || !validTrainingDate(parsed.getString("dateHint"))) throw rejected();
+        } catch (Failure error) { throw error; }
+        catch (Exception ignored) { throw rejected(); }
     }
 
     private void validateAuthBody(Operation operation, String body) throws Failure {

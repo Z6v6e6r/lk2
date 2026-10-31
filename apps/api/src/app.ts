@@ -1,3 +1,5 @@
+import { registerTrainingCatalogueRoutes } from './bookings/training-catalogue-routes.js';
+import type { TrainingCatalogueSource } from './bookings/training-catalogue-source.js';
 import { registerTrainingRegistrationRoutes } from './bookings/training-registration-routes.js';
 import type { TrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
 import type { ManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
@@ -373,6 +375,7 @@ export interface BuildAppOptions {
   readonly communityLogoMediaRepository?: CommunityLogoMediaRepository;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
+  readonly trainingCatalogueSource?: TrainingCatalogueSource;
   readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
   readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
   readonly upcomingBookingsRepository?: UpcomingBookingsRepository;
@@ -1220,6 +1223,11 @@ export async function buildApp(options: BuildAppOptions) {
   registerTrainingRegistrationRoutes(app as unknown as FastifyInstance, {
     ...(options.trainingRegistration ? { runtime: options.trainingRegistration } : {}),
     handlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerTrainingCatalogueRoutes(app as unknown as FastifyInstance, {
+    ...(options.trainingCatalogueSource ? { source: options.trainingCatalogueSource } : {}),
+    ...(options.eventCatalogSnapshotStore ? { store: options.eventCatalogSnapshotStore } : {}),
+    handlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
   registerBookingRecommendationRoutes(app as unknown as FastifyInstance, {
     ...(options.gameReadRepository?.listRecommendationCardProjections
