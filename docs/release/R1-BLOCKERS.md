@@ -43,3 +43,8 @@ ph-admin #57 (`d5000a4d`) устраняет подтверждённый source
 зависимость до strict activation: LK owner подписывает только подтверждённую отмену либо
 определённый отказ без созданного booking; таймаут не считается отказом. Подпись
 сама по себе не доказывает provider outcome — требуется sandbox readback acceptance.
+
+LK #264 (`453e8459`) реализует opt-in signer для подтверждения/отмены и ограниченного definite
+booking rejection. B02/B04 остаются открытыми: split/local abort ещё не имеют accepted provenance,
+provider/physical ledger/native acceptance отсутствуют; key/crypto runtime readiness UNKNOWN.
+Пустая история после таймаута не получает подпись отказа. CI producer success: run 41198689845, exact head `453e8459`.

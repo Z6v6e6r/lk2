@@ -25,6 +25,28 @@ CI: [subscriptions-binding-promotion](https://github.com/Z6v6e6r/ph-admin/action
 readback, физическая concurrent Mongo приёмка и полный LK2 paid LEAVE/CANCEL отсутствуют в этом пакете.
 Strict-mode activation и изменения секретов не выполнялись.
 
+LK owner producer: [Draft #264](https://github.com/Z6v6e6r/lk/pull/264),
+`453e8459f713e75d2fee006a394c7d222da6f227` от main `788fdb96`. Opt-in producer формирует
+confirm v1 и release-v1 после exact actor/target/subscription/booking readback. Recovery не
+перезаписывает другой booking до проверки доказательства и сохраняет исходный timestamp Viva.
+Явно активная запись не получает cancellation proof даже при противоречивом cancelled flag.
+Timeout/conflict/throttling, пустая сверка, generic/local/split abort без provenance остаются pending.
+LOCAL: final gateway/custody 102 passed / 1 skipped (live-flow fixture); related closure имел
+135 passed / 2 failed, затем source pin исправлен и проверен, loopback EPERM case прошёл с
+разрешённым локальным listener. Это составное evidence, не один чистый aggregate run.
+Actual ph-admin #57 verifier принял три LK wire формата на synthetic data; lint 0 errors /
+467 warnings, полный production/dev build с inert URL passed. Независимое review и secret/PII
+сканирование passed. [CI LK](https://github.com/Z6v6e6r/lk/actions/runs/41198689845) success на exact head `453e8459`: critical
+subscription matrix 1322 passed / 48 skipped, candidate/drift, compatibility/custody, typecheck, lint,
+full inert build и required gate passed. Skipped external fixtures не приняты как выполненные.
+Producer выключен по умолчанию; crypto/key runtime custody и provider acceptance не проверены.
+
+CI документационного #507 `2e1d005f`, [run 41190654423](https://github.com/Z6v6e6r/lk2/actions/runs/41190654423):
+source-quality, quality-full, deployment-contract и secret-scan success; общий gate failed только
+из-за dependency-security. `npm audit --omit=dev --audit-level=high`: 16 moderate / 1 high
+(systeminformation <=5.33.15). #508 содержит fix, но ещё не merged; новых dependency изменений
+в owner producer или отчётах нет.
+
 Для B02 полный LOCAL `npm run check` выполнил static/build/runtime-import stages, но первоначальный
 source-test run дал 116 failed / 6835 passed / 340 skipped (705 files) в Node 26 sandbox.
 Разобраны все 13 failed suites: Node native webstorage, запрет loopback/Docker, macOS TMPDIR alias,

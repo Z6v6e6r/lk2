@@ -71,3 +71,16 @@ main. Configured subscription closure, runtime-contracts, adapter, auth, TypeScr
 Оба exact-head CI workflow success (runs 41190093733 / 41190093707); новые regressions выполнены
 в `test:subscriptions`. Это in-memory service/contract evidence, не physical Mongo transaction/concurrency,
 не реальный network failure, не provider cancellation/refund и не native E2E. Q08/B04 не закрыт.
+
+## LK producer evidence — Q03/Q08
+
+LK #264 (`453e8459`): LOCAL gateway/custody 102 passed / 1 skipped. Новые случаи включают
+exact cancel/retry, nullable rejection proof, normal/recovery confirm, wrong booking при rebook,
+повтор без переписывания canonical booking, wrong actor/tenant/target/subscription, stale provider
+receipt через Mongo wait, contradictory active/cancelled status, missing crypto/key, no unsigned
+fallback, пустую history reconciliation и generic failure. Подпись не сохраняется в operation
+или response. Три формата проверены настоящим verifier из ph-admin #57 на synthetic данных.
+CI [41198689845](https://github.com/Z6v6e6r/lk/actions/runs/41198689845) success на `453e8459`.
+Critical subscription CI matrix: 1322 passed / 48 skipped; новые signer regressions выполнены.
+Ни provider cancellation, ни физический Mongo concurrent release, ни mobile E2E
+этим прогоном не доказаны. Live-flow fixture test остался skipped без живого flow export.

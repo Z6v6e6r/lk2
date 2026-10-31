@@ -86,11 +86,17 @@ flowchart TD
 
 1. ph-admin #57 (`d5000a4d`) — release verification/replay prerequisite на существующем canonical
    ledger; отдельная ветка, без новой коллекции, миграции или изменения v1 confirmation.
-2. Следующий bounded LK owner packet: signer для подтверждённой cancellation/definite rejection
-   и интеграционные negative/retry tests. Общий secret/config уже предусмотрен контрактом,
+2. LK signer реализован в Draft #264 (`453e8459`): exact confirmation/cancellation и ограниченный
+   definite booking rejection, negative/retry tests. Следующий bounded packet — provenance для
+   split/local abort и physical ledger/recovery harness. Общий secret/config уже предусмотрен контрактом,
    но создание/установка/смена секрета не разрешены текущим запросом.
 3. Связать reserve/confirm/release с точными policy/instance/target/usage refs будущего owner v2;
    пройти физический ledger/response-loss acceptance и отдельно provider sandbox readback.
 4. После принятия owner contract завершить LK2 consumers. Не включать strict mode до готовности
    producer и не снимать production guards. #57 не зависит от merge #503/#508 на уровне кода,
    но не заменяет их и не доказывает совместный acceptance.
+
+Owner integration order: ph-admin #57 receiver → LK #264 producer → разрешённая отдельно
+runtime configuration / sandbox acceptance. Merge любого из этих PR не включает strict mode.
+До runtime acceptance проверить Node-RED crypto injection, согласованную конфигурацию receiver/producer
+и оставшиеся abort paths. Полный B02/B04 exit criterion не закрыт.
