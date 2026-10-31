@@ -1,5 +1,11 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Station recovery addendum — 2026-11-01
+
+The station lifetime contract is now implemented in unmerged source packets LK#275/#276, CUP#63, LK2#527/#528; runtime recovery remains unverified. Rollback disables the coordinated producer/consumer flag and retains Mongo admissions, generation claims, community epoch/barrier and PostgreSQL0108 nullable markers. Existing protected roster writes remain fenced when the flag is off. Never delete those records or replace an original admission with the current membership epoch.
+
+TRAINING INTENT retains the complete original canonical authority before owner POST. Recovery pins studio/actor/request/expiry and uses the original receiptId. Terminal NO_ENROLLMENT cannot be upgraded by a late ACK. Old code may complete a booking while its marker remains INTENT; the new worker must not enroll it. NULL rows remain permanent legacy. Removing0108/backfilling old records is not application rollback. The additive CHECK can scan the table; lock/statement timeouts do not replace an authorized migration rehearsal.
+
 ## Дополнительные original-operation ограничения
 
 #525 объединяет source миграций0105/0106/0107 без изменения их bytes или frozen closed108 пакета. Это не применение миграций: существующий closed deploy mode по-прежнему отвергает неподтверждённый расширенный ledger. Application rollback сохраняет новые attempts/receipts; фактический forward migration/backup/old binary compatibility требуют отдельного принятого runtime package.

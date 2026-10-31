@@ -1,5 +1,17 @@
 # LK2 R1 — E2E и acceptance matrix
 
+## Station evidence delta — 2026-11-01
+
+| Scope                          | Actual evidence                                                                                                                               | Not yet accepted                                                               |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| LK lifetime/roster fences #275 | CI41243766263/41243766274 SUCCESS; prior same-runtime6 physical Mongo cases                                                                   | Cross-repo production writes                                                   |
+| CUP moderation/deletion #63    | CI41242978082 SUCCESS, physical Mongo case                                                                                                    | Runtime ACL rollout                                                            |
+| TRAINING owner #276            | CI41244133042 station28/28 incl physical training kind/replay/LEFT/separate generation; full41244132874 SUCCESS                               | Provider/device enrollment                                                     |
+| GAME producer #5273143ffbe     | LOCAL337 and bundle2; updatedfullCI41244545169 pending                                                                                        | NewPGfixture results pending; earlier81a failed2 fixtures + bundle             |
+| TRAINING consumer #52826c5ceaa | LOCAL runtime18, HTTP3, station protocol12, training protocol5, worker9, markers5, bundle2 =54 distinct PASS; types/lint/reviews/scanner PASS | Eleven PG cases locallySKIPPED, five new; no CI until parent conflict resolved |
+
+New TRAINING cases cover durable intent before POST, pin ACK loss, claim-time identity race, JSONB order recovery, old NULL exclusion, expiry/no reprepare, owner timeout without booking loss, wrong wire enum, exact persisted outbox and receipt generation. Physical cases add concurrent lease/intent CAS, stale ACK, terminal negative monotonicity, studio tampering, atomic preparation/outbox rollback and old-shaped SQL compatibility. The last case is not a standalone old-schema DB rehearsal. No provider/device/production evidence is inferred.
+
 ## Актуальное evidence
 
 CUP#62 current41c744d5 CI41240145187 SUCCESS: exact profile/forged identity/unknown/mismatch/MIXED/pending-payment scenarios и physicalMongo raw-rule+revision CAS для reserve/participant/waitlist прошли. Existing payment recovery и majority+j wire concern прошли. Initial failedCI41239749876 остановился доMongo на неполной test fixture; test-only correction сохранила исходные запреты. Provider identity/profile и native tournament signup acceptance отсутствуют.

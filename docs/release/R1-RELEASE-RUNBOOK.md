@@ -1,5 +1,11 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## Station preparation addendum — 2026-11-01
+
+Source packet consists of LK#275/#276, CUP#63, LK2#527/#528. Require their exact-head CI and coordinated integration before selecting release artifacts. #528 currently has an unresolved parent bundle conflict and no PR CI; local merge approval is pending. No main merge, feature activation or delivery authorization is supplied by these Draft PRs.
+
+Before activation: approved0108 migration with bounded locks and backup/old-binary acceptance; existing private signing issuer/key with separate station audience; all roster/moderation/create/delete writers honoring the epoch barrier; immutable original admissions/generation claims; retained outbox and bounded quorum retry/DLQ procedure. Validate GAME and TRAINING original facts, cancellation retention, LEFT/new-generation return, admin block and ACK-loss recovery. No automatic historical enrollment/backfill. Subscription training target fencing remains until its own leave/rejoin contract exists.
+
 ## Текущие prerequisites
 
 #525eb993ff6 — конкретный source integration candidate четырёх heads#517/#521/#520/#522, с успешными integratedCI41236559609/41236564284 и native41236564207, без merge authority. Перед возможным source-only merge нужны exact-head checks, свежий main и отдельно разрешённое подавление automatic delivery. #523/#524 и cross-repo owners не входят в эту партию; её source merge не разрешает их runtime activation.

@@ -1,5 +1,21 @@
 # LK2 R1 — аудит готовности к production release
 
+## Station communities checkpoint — 2026-11-01
+
+**NO-GO сохраняется.** Свежий GitHub main: LK2 `a37c05a2b2a28c8d53cb14447d357ad9a96bda1f`, LK `608ebe20689e74749fcd8cea6ab97d35c335f214`, CUP `83b1c17bc4c5edaec65387b25b5695e48337c3cf`. Перечисленные ниже изменения — отдельные Draft PR, не main/runtime. Этот checkpoint уточняет историческое состояние B07 ниже.
+
+| Packet                                                            | Evidence                                                                                                                                                 | Remaining boundary                                                                                                 |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| [LK #275](https://github.com/Z6v6e6r/lk/pull/275) `741543d2`      | CI41243766263/41243766274 SUCCESS; immutable admission, generation claims, lifecycle writer fences; prior identical-runtime physical suite 6 Mongo cases | Default-off, signer/coordinated writers/runtime acceptance                                                         |
+| [CUP #63](https://github.com/Z6v6e6r/ph-admin/pull/63) `1abc9150` | CI41242978082 SUCCESS, actual Mongo lifetime/deletion case; specialist CLEAR                                                                             | No live ACL/data changes or activation                                                                             |
+| [LK #276](https://github.com/Z6v6e6r/lk/pull/276) `62e32f7b`      | CI41244133042/41244132874 SUCCESS; station suite28/28 includes new physical TRAINING kind/replay/LEFT/generation case                                    | Owner source only; depends on #275                                                                                 |
+| [LK2 #527](https://github.com/Z6v6e6r/lk2/pull/527) `3143ffbe`    | LOCAL337 + bundle2 PASS; review/scanner CLEAR. Latest fullCI41244545169 pending                                                                          | Prior81a18f15 CI failed2 invalid PG fixtures and stale generated bundle; corrected in3143, physical result pending |
+| [LK2 #528](https://github.com/Z6v6e6r/lk2/pull/528) `26c5ceaa`    | LOCAL54 distinct focused cases, owned types0, lint, two specialist reviews and scanner PASS;11 trainingPG cases CI-only,5new                             | Parent bundle conflict blocks PR CI; exact local parent-merge approval requested, not performed                    |
+
+B07 is now **PARTIAL source/CI**, not a completed station runtime feature. GAME producer covers newly adopted managed JOIN; TRAINING consumer covers the concrete subscription registration path. Legacy/unadopted operations never gain membership retroactively. One official community per station is resolved by owner policy; missing/ambiguous association is immutable no-enrollment. Cancellation keeps membership; LEFT needs a new operation/generation; removed/banned users cannot auto-return. Community/tournament chat consumers, remaining native routes and cross-repository delivery acceptance remain separate gaps.
+
+TRAINING0108 stores nullable private admission state. A durable INTENT pins the original preparation before owner POST, including studio/actor/request identity; retries cannot refresh it. Claim-time identity, JSONB canonicalization, exact persisted confirmation and original receiptId protect recovery. No schema execution, provider/payment calls, flags, publication, deploy or store actions occurred.
+
 ## Текущий checkpoint — 2026-10-31
 
 Решение: **NO-GO для полного production release iOS + Android**. Свежие refs: LK2 `a37c05a2b2a28c8d53cb14447d357ad9a96bda1f`, LK `608ebe20689e74749fcd8cea6ab97d35c335f214`, ph-admin `83b1c17bc4c5edaec65387b25b5695e48337c3cf`. Полная инвентаризация ниже — датированный исходный аудит; новые результаты в этом разделе имеют приоритет над историческими checkpoint.
