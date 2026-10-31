@@ -1,3 +1,6 @@
+import { createStationMembershipRepository } from './station-membership-repository.js';
+import { createGameCreateLocationBindingRepository } from './game-create-location-binding-repository.js';
+import { stationAdmissionId, type StationMarker } from '@phub/subscription-runtime-adapter';
 import { createHash, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -78,8 +81,11 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
           'games.command_idempotency',
           'eligibility.payment_snapshots',
           'eligibility.decisions',
+          'integration.game_create_location_bindings',
           'integration.external_entity_map',
           'games.games',
+          'locations.profiles',
+          'integration.identity_provider_bindings',
           'profile.user_summaries',
           'identity.users',
         ])
@@ -263,6 +269,225 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
       },
     };
   }
+  async function adopt(
+    input: BeginPaidJoinInput,
+  ): Promise<Extract<StationMarker, { outcome: 'OWNER_ADMISSION' }>> {
+    const courtId = randomUUID();
+    await withTenantTransaction(first, tenantId, async (client) => {
+      await client.query('update games.games set court_id=$3 where tenant_id=$1 and id=$2', [
+        tenantId,
+        input.gameId,
+        courtId,
+      ]);
+      await client.query(
+        "insert into integration.identity_provider_bindings(tenant_id,provider,provider_tenant_key) values($1,'VIVA','iSkq6G') on conflict do nothing",
+        [tenantId],
+      );
+      await client.query(
+        "insert into locations.profiles(tenant_id,id,slug,title,created_by,updated_by,publication_status,published_at) values($1,$2,'synthetic-station','Synthetic station',$3,$3,'PUBLISHED',now()) on conflict do nothing",
+        [tenantId, stationId, organizer],
+      );
+      await client.query(
+        "insert into integration.external_entity_map(tenant_id,external_system,entity_type,internal_id,external_id,external_version,sync_status,last_synced_at) values($1,'LK_LEGACY_SNAPSHOT','game_court',$2,$3,'v1','synced',now()),($1,'LK_LEGACY_SNAPSHOT','game',$4,$5,'v1','synced',now())",
+        [
+          tenantId,
+          courtId,
+          'room:' + courtId,
+          input.gameId,
+          input.providerBinding!.providerExerciseId,
+        ],
+      );
+    });
+    const locations = createGameCreateLocationBindingRepository(first);
+    const snapshot = await locations.snapshot(tenantId);
+    const mapping = snapshot!.lineage.mappings.find((m) => m.internal_id === courtId)!;
+    expect(
+      await locations.publish({
+        tenantId,
+        expectedRevision: null,
+        commandId: randomUUID(),
+        candidate: {
+          courtId,
+          stationId,
+          courtMappingId: mapping.id,
+          studioId: 'synthetic-studio',
+          roomId: 'room:' + courtId,
+          lineageDigest: snapshot!.lineage.digest,
+          evidenceDigest: hash('synthetic-attestation'),
+          verifiedAt: new Date().toISOString(),
+        },
+      }),
+    ).toBe('APPLIED');
+    const location = await createStationMembershipRepository(first).resolveLocation({
+      ...input,
+      providerBinding: input.providerBinding!,
+    });
+    expect(location).not.toBeNull();
+    return {
+      version: 1,
+      outcome: 'OWNER_ADMISSION',
+      actor: {
+        tenantId,
+        canonicalUserId: input.actorUserId,
+        playerId: input.providerBinding!.providerClientId,
+        providerMappingId: input.providerBinding!.providerMappingId,
+      },
+      location: location!,
+      request: {
+        contractVersion: 1,
+        operationId: input.operationId,
+        requestSha256: 'sha256:' + input.managedJoin!.requestFingerprint,
+        stationId: 'synthetic-studio',
+        activity: { kind: 'GAME', id: input.gameId },
+      },
+      response: {
+        contractVersion: 1,
+        operationId: input.operationId,
+        replayed: false,
+        admission: {
+          outcome: 'ADMITTED',
+          admissionId: stationAdmissionId(tenantId, input.operationId),
+          communityId: 'synthetic-community',
+          membershipEpoch: 0,
+          reason: 'ELIGIBLE',
+          bindingSha256: 'sha256:' + hash('synthetic-admission'),
+        },
+      },
+    };
+  }
+  async function marker(input: BeginPaidJoinInput) {
+    return withTenantTransaction(
+      first,
+      tenantId,
+      async (client) =>
+        (
+          await client.query<{ marker: unknown }>(
+            "select snapshot->'stationMembership' marker from eligibility.payment_snapshots where tenant_id=$1 and operation_id=$2",
+            [tenantId, input.operationId],
+          )
+        ).rows[0]?.marker,
+    );
+  }
+  it('station adoption has one immutable winner across concurrent adopted and disabled clients', async () => {
+    const input = command(await fixtureGame());
+    const adopted = { ...input, stationMembership: await adopt(input) };
+    const results = await Promise.all([repo1.beginPaidJoin(input), repo2.beginPaidJoin(adopted)]);
+    expect(results.map((r) => r.outcome).sort()).toEqual(['replayed', 'reserved']);
+    const winner =
+      results[0]?.outcome === 'reserved'
+        ? { version: 1, outcome: 'NO_ENROLLMENT', reason: 'DISABLED' }
+        : adopted.stationMembership;
+    expect(await marker(input)).toEqual(winner);
+    await repo2.beginPaidJoin(adopted);
+    expect(await marker(input)).toEqual(winner);
+  });
+  it('a pre-adoption snapshot can never acquire a marker on retry', async () => {
+    const input = command(await fixtureGame());
+    const stationMembership = await adopt(input);
+    await repo1.beginPaidJoin(input);
+    await withTenantTransaction(first, tenantId, (client) =>
+      client.query(
+        "update eligibility.payment_snapshots set snapshot=snapshot-'stationMembership' where tenant_id=$1 and operation_id=$2",
+        [tenantId, input.operationId],
+      ),
+    );
+    expect(await repo2.beginPaidJoin({ ...input, stationMembership })).toMatchObject({
+      outcome: 'replayed',
+    });
+    expect(await marker(input)).toBeNull();
+  });
+  it.each(['REVOKED', 'EXPIRED', 'RETARGETED'] as const)(
+    'station binding %s after admission preserves booking but freezes no enrollment',
+    async (mode) => {
+      const input = command(await fixtureGame());
+      const stationMembership = await adopt(input);
+      await withTenantTransaction(second, tenantId, (client) =>
+        client.query(
+          mode === 'REVOKED'
+            ? "update integration.game_create_location_bindings set state='REVOKED' where tenant_id=$1 and id=$2"
+            : mode === 'EXPIRED'
+              ? "update integration.game_create_location_bindings set expires_at=now()-interval '1 second' where tenant_id=$1 and id=$2"
+              : "update integration.external_entity_map set external_id=external_id||'-retargeted' where tenant_id=$1 and id=$2",
+          [
+            tenantId,
+            mode === 'RETARGETED'
+              ? stationMembership.location.targetMappingId
+              : stationMembership.location.bindingId,
+          ],
+        ),
+      );
+      const result = await repo1.beginPaidJoin({ ...input, stationMembership });
+      if (mode === 'RETARGETED') {
+        expect(result).toMatchObject({ outcome: 'rejected', code: 'GAME_REVISION_CONFLICT' });
+        expect(await marker(input)).toBeUndefined();
+      } else {
+        expect(result.outcome).toBe('reserved');
+        expect(await marker(input)).toEqual({
+          version: 1,
+          outcome: 'NO_ENROLLMENT',
+          reason: 'STATION_BINDING_CHANGED',
+        });
+      }
+    },
+  );
+  it.each(['SUBSCRIPTION', 'SPLIT'] as const)(
+    'loads only the original confirmed %s generation, including delayed delivery after leave',
+    async (paymentMode) => {
+      const input = command(await fixtureGame());
+      await withTenantTransaction(first, tenantId, (client) =>
+        client.query('update games.games set payment_mode=$3 where tenant_id=$1 and id=$2', [
+          tenantId,
+          input.gameId,
+          paymentMode,
+        ]),
+      );
+      const stationMembership = await adopt(input);
+      const reserved = await repo1.beginPaidJoin({ ...input, stationMembership });
+      if (reserved.outcome !== 'reserved') throw Error('RESERVATION_REQUIRED');
+      const confirmed = await repo2.confirmPayment(confirmation(input, reserved.reservationId));
+      if (confirmed.outcome !== 'applied' || !confirmed.participationId)
+        throw Error('CONFIRMATION_REQUIRED');
+      const eventId = await withTenantTransaction(
+        first,
+        tenantId,
+        async (client) =>
+          (
+            await client.query<{ id: string }>(
+              "select id from audit.outbox_events where tenant_id=$1 and aggregate_id=$2 and event_type='game.participation.confirmed.v1'",
+              [tenantId, input.gameId],
+            )
+          ).rows[0]!.id,
+      );
+      const repository = createStationMembershipRepository(second);
+      const event = {
+        tenantId,
+        eventId,
+        gameId: input.gameId,
+        userId: player1,
+        participationId: confirmed.participationId,
+      };
+      expect(await repository.loadConfirmedFact(event)).toMatchObject({
+        request: {
+          operationId: input.operationId,
+          confirmation: { generationId: confirmed.participationId },
+        },
+      });
+      expect(
+        await repository.loadConfirmedFact({ ...event, participationId: randomUUID() }),
+      ).toBeNull();
+      expect(await repository.loadConfirmedFact({ ...event, eventId: randomUUID() })).toBeNull();
+      expect(await repository.loadConfirmedFact({ ...event, userId: player2 })).toBeNull();
+      await withTenantTransaction(first, tenantId, (client) =>
+        client.query(
+          "update games.participations set state='LEFT',left_at=now() where tenant_id=$1 and id=$2",
+          [tenantId, confirmed.participationId],
+        ),
+      );
+      expect(await repository.loadConfirmedFact(event)).toMatchObject({
+        request: { operationId: input.operationId },
+      });
+    },
+  );
   it('serializes same key on independent clients to one seat, attempt and immutable snapshot', async () => {
     const game = await fixtureGame();
     const input = command(game);

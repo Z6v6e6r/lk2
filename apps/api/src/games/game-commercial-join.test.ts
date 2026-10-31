@@ -933,6 +933,93 @@ describe('managed JOIN v2 expectation acquisition', () => {
       } else expect(begin.mock.calls[0]?.[0]).not.toHaveProperty('managedJoin');
     },
   );
+  it.each(['disabled', 'admission', 'lost-ack'] as const)(
+    'persists %s station adoption before original booking dispatch',
+    async (mode) => {
+      const order: string[] = [];
+      const begin = vi.fn<CommercialJoinRepositoryPort['beginPaidJoin']>(() => {
+        order.push('reserve');
+        return resolved({
+          outcome: 'reserved',
+          operationId,
+          reservationId,
+          expiresAt: new Date(Date.now() + 900000).toISOString(),
+          revision: 9,
+        });
+      });
+      const stationMembership = vi.fn(() => {
+        order.push('station');
+        if (mode === 'lost-ack') return Promise.reject(new Error('owner response lost'));
+        return resolved({
+          version: 1 as const,
+          outcome: 'NO_ENROLLMENT' as const,
+          reason: 'STATION_BINDING_UNAVAILABLE' as const,
+        });
+      });
+      const execute = vi.fn(() => {
+        order.push('booking');
+        return resolved({ status: 'PENDING' as const });
+      });
+      const result = await executeCommercialJoin(
+        { ...envelope, priceConsent: { amountMinor: 0, currency: 'RUB' } },
+        {
+          ...dependencies(
+            repository({ beginPaidJoin: begin }).repository,
+            { execute, read: () => resolved(null) },
+            freeFixture(),
+          ),
+          owner: {
+            prepareManaged: () => resolved({ outcome: 'prepared' as const, binding, managedJoin }),
+            execute,
+            read: () => resolved(null),
+          },
+          ...(mode === 'disabled' ? {} : { stationMembership }),
+        },
+      );
+      expect(result.kind).toBe('accepted');
+      expect(order).toEqual(
+        mode === 'disabled' ? ['reserve', 'booking'] : ['station', 'reserve', 'booking'],
+      );
+      expect(begin.mock.calls[0]?.[0].stationMembership).toEqual({
+        version: 1,
+        outcome: 'NO_ENROLLMENT',
+        reason:
+          mode === 'disabled'
+            ? 'DISABLED'
+            : mode === 'lost-ack'
+              ? 'OWNER_UNAVAILABLE'
+              : 'STATION_BINDING_UNAVAILABLE',
+      });
+      expect(execute).toHaveBeenCalledOnce();
+    },
+  );
+  it('never upgrades an existing unadopted operation or dispatches another booking', async () => {
+    const stationMembership = vi.fn(),
+      execute = vi.fn(),
+      prepareManaged = vi.fn();
+    const prior: CommercialJoinAttemptView = {
+      requestHash: envelope.requestHash,
+      commandId: operationId,
+      gameId: envelope.gameId,
+      state: 'IN_PROGRESS',
+      result: null,
+      errorCode: null,
+      reservation: null,
+      receipt: null,
+    };
+    await executeCommercialJoin(envelope, {
+      ...dependencies(
+        repository({ getPaidJoinAttempt: () => resolved(prior) }).repository,
+        { execute, read: () => resolved(null) },
+        freeFixture(),
+      ),
+      owner: { prepareManaged, execute, read: () => resolved(null) },
+      stationMembership,
+    });
+    expect(stationMembership).not.toHaveBeenCalled();
+    expect(prepareManaged).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
   it('never treats an unavailable preflight as legacy or reserves a seat', async () => {
     const begin = vi.fn();
     const prepare = vi.fn();

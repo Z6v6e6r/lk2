@@ -1,3 +1,6 @@
+import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
+import { createStationMembershipRepository } from '../../../packages/database/src/station-membership-repository.js';
+import { registerStationMembershipConsumer } from './station-membership-consumer.js';
 import { runGameCreateLocationBindingSync } from './game-create-location-binding-sync.js';
 import Redis from 'ioredis';
 import { VivaIdentityProvider, VivaCreateLocationSource } from '@phub/viva-adapter';
@@ -484,6 +487,17 @@ await registerGameMessagingMembershipConsumer({
   repository: messagingRepository,
   logger,
 });
+const stationMembershipTransport = createStationMembershipTransport(config, (outcome) =>
+  logger.info({ outcome }, 'station membership owner transport'),
+);
+if (stationMembershipTransport) {
+  await registerStationMembershipConsumer({
+    channel: consumerChannel,
+    logger,
+    repository: createStationMembershipRepository(pool),
+    ...stationMembershipTransport,
+  });
+}
 if (config.CUP_RATING_CONSUMER_ENABLED) {
   await registerCupRatingConsumer({
     channel: consumerChannel,

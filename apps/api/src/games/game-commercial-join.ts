@@ -1,3 +1,4 @@
+import { parseStationMarker, type StationMarker } from '@phub/subscription-runtime-adapter';
 import { createHash } from 'node:crypto';
 
 import type {
@@ -102,6 +103,7 @@ export interface CommercialJoinRepositoryPort {
     readonly providerBinding?: PaidJoinProviderBinding;
     readonly bindingRefs?: CommercialBindingRefs;
     readonly managedJoin?: ManagedJoinBinding;
+    readonly stationMembership?: StationMarker;
   }): Promise<CommercialJoinBeginResult>;
   getPaidJoinAttempt(input: {
     readonly tenantId: string;
@@ -428,6 +430,10 @@ export function commercialOperationId(input: {
 }
 
 export interface CommercialJoinDependencies {
+  readonly stationMembership?: (input: {
+    command: CommercialJoinCommandEnvelope;
+    providerBinding: PaidJoinProviderBinding;
+  }) => Promise<StationMarker>;
   readonly repository: CommercialJoinRepositoryPort;
   readonly conditionsOwner: GameJoinConditionsOwner;
   readonly owner: CommercialJoinOwnerPort;
@@ -735,6 +741,21 @@ export async function executeCommercialJoin(
     }
   }
 
+  // Only a NEW managed attempt reaches here. A prior command above never regenerates adoption.
+  let stationMembership: StationMarker | undefined;
+  if (managedJoin && providerBinding) {
+    stationMembership = { version: 1, outcome: 'NO_ENROLLMENT', reason: 'DISABLED' };
+    if (dependencies.stationMembership) {
+      try {
+        stationMembership = parseStationMarker(
+          await dependencies.stationMembership({ command: input, providerBinding }),
+        );
+      } catch {
+        stationMembership = { version: 1, outcome: 'NO_ENROLLMENT', reason: 'OWNER_UNAVAILABLE' };
+      }
+    }
+  }
+
   // 3. Durable attempt + seat reservation. The operation exists before the owner call.
   let begin: CommercialJoinBeginResult;
   try {
@@ -763,6 +784,7 @@ export async function executeCommercialJoin(
       ...(input.invitationId === undefined ? {} : { invitationId: input.invitationId }),
       reservationTtlSeconds,
       ...(providerBinding ? { providerBinding } : {}),
+      ...(stationMembership ? { stationMembership } : {}),
     });
   } catch {
     return commercialFailure('GAME_OWNER_UNAVAILABLE');

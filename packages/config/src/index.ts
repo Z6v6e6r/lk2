@@ -225,6 +225,10 @@ const environmentSchema = z.object({
   // Removal/review condition: replace when a dedicated booked-operation owner adapter lands, and
   // review this flag no later than the next delivery batch.
   GAME_MANAGED_SELF_LEAVE_ENABLED: booleanFromEnvironment,
+  // Owner: R1 station communities. Coherent owner/writers/producer/delivery acceptance before activation;
+  // review/remove after full migration. No live flag or signer is provisioned by source defaults.
+  LK_STATION_MEMBERSHIP_LIFETIME_ENABLED: booleanFromEnvironment,
+  LK2_STATION_MEMBERSHIP_DELEGATION_AUDIENCE: z.string().min(1).max(256).optional(),
   GAME_COMMERCIAL_JOIN_ENABLED: booleanFromEnvironment,
   GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: z.string().url().optional(),
   GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(5_000).default(3_000),

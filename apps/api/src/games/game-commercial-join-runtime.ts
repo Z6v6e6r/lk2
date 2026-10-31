@@ -1,3 +1,4 @@
+import { createGameStationMembershipAdmission } from './game-station-membership.js';
 import { createHash } from 'node:crypto';
 
 import type { AppConfig } from '@phub/config';
@@ -45,13 +46,23 @@ import type { GameCommercialJoinOptions } from './game-routes.js';
  * answering `GAME_PAYMENT_REQUIRED` exactly as before.
  */
 
-type CommercialJoinConfig = Pick<
-  AppConfig,
-  | 'APP_ENV'
-  | 'GAME_COMMERCIAL_JOIN_ENABLED'
-  | 'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL'
-  | 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS'
->;
+type CommercialJoinConfig = Partial<
+  Pick<
+    AppConfig,
+    | 'LK_STATION_MEMBERSHIP_LIFETIME_ENABLED'
+    | 'LK2_STATION_MEMBERSHIP_DELEGATION_AUDIENCE'
+    | 'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS'
+    | 'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID'
+    | 'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER'
+  >
+> &
+  Pick<
+    AppConfig,
+    | 'APP_ENV'
+    | 'GAME_COMMERCIAL_JOIN_ENABLED'
+    | 'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL'
+    | 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS'
+  >;
 
 /** User-scoped, backend-issued provider credential handed to the owner for exactly one operation. */
 export interface CommercialJoinActorToken {
@@ -550,7 +561,9 @@ export function createGameCommercialJoinRuntime(
       createBookedOperationAdmissionTargetRepository(options.pool),
     ...(options.issueActorToken ? { issueActorToken: options.issueActorToken } : {}),
   });
+  const stationMembership = createGameStationMembershipAdmission({ config, pool: options.pool });
   return {
+    ...(stationMembership ? { stationMembership } : {}),
     repository: options.rosterRepository as unknown as GameCommercialJoinOptions['repository'],
     conditionsOwner: options.conditionsOwner,
     owner,

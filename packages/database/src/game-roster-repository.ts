@@ -1,3 +1,5 @@
+import { fenceStationMarker } from './station-membership-repository.js';
+import { parseStationMarker, type StationMarker } from '@phub/subscription-runtime-adapter';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -230,6 +232,7 @@ export interface PaidJoinProviderBinding {
 export type PaidJoinBindingRefs = CommercialBindingRefs;
 
 export interface BeginPaidJoinInput {
+  readonly stationMembership?: StationMarker;
   readonly tenantId: string;
   readonly actorUserId: string;
   readonly gameId: string;
@@ -1437,6 +1440,8 @@ export async function loadManagedSelfLeaveJoinAuthority(
     actorUserId: string;
     participationId: string;
     eligibilityDecisionId: string;
+    /** Station delivery also accepts a verified subscription booking on a SPLIT game. */
+    allowSplitSubscription?: true;
   },
 ): Promise<{
   receipt: ManagedJoinReceipt;
@@ -1468,13 +1473,14 @@ export async function loadManagedSelfLeaveJoinAuthority(
       and c.aggregate_id=e.game_id and c.command_type='game.join.paid.v1' and c.state='COMPLETED'
     where e.tenant_id=$1 and e.game_id=$2 and e.user_id=$3 and e.participation_id=$4 and e.eligibility_decision_id=$5
       and e.resolution='APPLIED' and e.provider='VIVA' and e.provider_operation_type='SUBSCRIPTION_BOOKING'
-      and e.payment_mode='SUBSCRIPTION' and e.verified_by='LEGACY_NODE_RED'`,
+      and (e.payment_mode='SUBSCRIPTION' or ($6::boolean and e.payment_mode='SPLIT')) and e.verified_by='LEGACY_NODE_RED'`,
     [
       input.tenantId,
       input.gameId,
       input.actorUserId,
       input.participationId,
       input.eligibilityDecisionId,
+      input.allowSplitSubscription === true,
     ],
   );
   if (rows.rows.length !== 1) return null;
@@ -2201,6 +2207,24 @@ export function createGameRosterRepository(
         );
         if (!reservation) return { outcome: 'reservation_conflict' as const };
         const expiresAt = timestamp(reservation.expires_at);
+        if (
+          managedJoin &&
+          input.stationMembership?.outcome === 'OWNER_ADMISSION' &&
+          input.stationMembership.request.requestSha256 !==
+            'sha256:' + managedJoin.requestFingerprint
+        )
+          throw new Error('STATION_MEMBERSHIP_BINDING_INVALID');
+        const stationMembership = managedJoin
+          ? await fenceStationMarker(
+              client,
+              input,
+              input.stationMembership ?? {
+                version: 1,
+                outcome: 'NO_ENROLLMENT',
+                reason: 'DISABLED',
+              },
+            )
+          : undefined;
         const snapshot = await client.query(
           `insert into eligibility.payment_snapshots (
              tenant_id, operation_id, decision_id, player_id, activity_type, activity_id,
@@ -2221,6 +2245,9 @@ export function createGameRosterRepository(
               subscriptionInstanceId: input.subscriptionInstanceId,
               ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
               ...(managedJoin ? { managedJoin } : {}),
+              ...(stationMembership
+                ? { stationMembership: parseStationMarker(stationMembership) }
+                : {}),
               ...(bindingRefs
                 ? {
                     policyRef: bindingRefs.policyRef,
