@@ -54,7 +54,13 @@ export function registerTournamentLocalRoutes(
             sessionId: request.padlHubClaims.sid,
             correlationId: request.id,
           };
-          if (kind !== 'command' && request.body !== undefined)
+          // Android HttpsURLConnection marks a bodyless POST text/plain to avoid
+          // its implicit form Content-Type. This accepts no additional command data.
+          const emptyNativeRetry =
+            kind === 'retry' &&
+            request.body === '' &&
+            /^text\/plain(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '');
+          if (kind !== 'command' && request.body !== undefined && !emptyNativeRetry)
             throw new TournamentLocalError('TOURNAMENT_LOCAL_INPUT_INVALID', 400);
           if (kind === 'read')
             return await options.runtime.read(actor, p.tournamentId, {

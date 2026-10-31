@@ -137,6 +137,11 @@ const ProfileLevelHistoryPage = lazy(() =>
 const TrainingsPage = lazy(() =>
   import('./TrainingsPage.js').then((module) => ({ default: module.TrainingsPage })),
 );
+const TournamentDirectoryPage = lazy(() =>
+  import('./TournamentDirectoryPage.js').then((module) => ({
+    default: module.TournamentDirectoryPage,
+  })),
+);
 const TournamentDetailPage = lazy(() =>
   import('./TournamentDetailPage.js').then((module) => ({ default: module.TournamentDetailPage })),
 );
@@ -870,6 +875,7 @@ export function App({
   // The first native increment exposes canonical API screens. Browser-only provider, payment
   // and upload routes stay unavailable until their native handoff contracts are implemented.
   const nativeSections = new Set([
+    'tournaments',
     'home',
     'home-v2',
     'home-v3',
@@ -2950,6 +2956,8 @@ export function App({
         typeof window === 'undefined'
           ? null
           : new URLSearchParams(window.location.search).get('event');
+      if (clientPlatform === 'android' && !tournamentId)
+        return <TournamentDirectoryPage gateway={gateway} />;
       return (
         <TournamentDetailPage
           key={`${context.tenant.id}:${context.user.id}`}
