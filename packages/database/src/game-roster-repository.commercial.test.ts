@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { parseManagedJoinReceipt, type ManagedJoinBinding } from '@phub/domain';
+import managedFixture from '../../subscription-runtime-adapter/src/fixtures/managed-join-v2.json';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -635,6 +638,7 @@ describe('game roster commercial paid join', () => {
         operationId,
       }),
     ).resolves.toEqual({
+      requestHash: 'a'.repeat(64),
       commandId: operationId,
       gameId,
       state: 'IN_PROGRESS',
@@ -653,6 +657,7 @@ describe('game roster commercial paid join', () => {
 
   it('reads a confirmed attempt with its reservation and trusted receipt', async () => {
     const context: PaidJoinAttemptView = {
+      requestHash: 'a'.repeat(64),
       commandId: operationId,
       gameId,
       state: 'COMPLETED',
@@ -1085,7 +1090,8 @@ describe('immutable paid JOIN confirmation binding', () => {
         return { rowCount: options.completion ?? 1 };
       if (
         text.includes('update games.seat_reservations') ||
-        text.includes('update games.payment_confirmation_evidence')
+        text.includes('update games.payment_confirmation_evidence') ||
+        text.includes('update eligibility.payment_snapshots')
       )
         return { rowCount: 1 };
       return baseHandler(text, { paymentMode: 'SUBSCRIPTION' });
@@ -1129,6 +1135,178 @@ describe('immutable paid JOIN confirmation binding', () => {
       expect(read?.[1]).toEqual([tenantId, gameId, reservationId, playerId]);
     },
   );
+
+  function managedInput() {
+    const receipt = parseManagedJoinReceipt({
+      ...managedFixture.confirmed.receipt,
+      ...Object.fromEntries(
+        [
+          'providerClientId',
+          'providerClientSubscriptionId',
+          'providerExerciseId',
+          'providerMappingId',
+          'targetMappingId',
+          'targetVersion',
+          'requestSha256',
+          'idempotencyKeySha256',
+        ].map((key) => [key, binding[key as keyof typeof binding]]),
+      ),
+      tenantId,
+      userId: playerId,
+      gameId,
+      reservationId,
+      operationId,
+    });
+    const evidenceHash = createHash('sha256')
+      .update(JSON.stringify(Object.entries(receipt).sort(([a], [b]) => a.localeCompare(b))))
+      .digest('hex');
+    const confirmation: ConfirmGamePaymentInput = {
+      ...input(),
+      requestHash: evidenceHash,
+      managedJoinReceipt: receipt,
+      evidence: {
+        ...input().evidence,
+        bookingId: receipt.bookingId,
+        verifiedAt: receipt.verifiedAt,
+        evidenceHash,
+      },
+    };
+    const managedJoin: ManagedJoinBinding = {
+      contractVersion: 2,
+      requestFingerprint: 'a'.repeat(64),
+      entitlement: managedFixture.admission.request
+        .entitlement as ManagedJoinBinding['entitlement'],
+    };
+    const snapshot = {
+      operationId,
+      providerBinding: binding,
+      managedJoin,
+      policyRef: receipt.entitlement.policyRef,
+      price: { amountMinor: 0, currency: 'RUB', freeMinutes: 90, paidMinutes: 0 },
+    };
+    return { confirmation, snapshot, receipt };
+  }
+  it('settles managed FREE with full minted usage receipt atomically in the original snapshot', async () => {
+    const { confirmation, snapshot, receipt } = managedInput();
+    const { pool, query } = database(binding, { bindingSnapshot: snapshot });
+    expect(
+      await createGameRosterRepository(pool as never).confirmPayment(confirmation),
+    ).toMatchObject({ outcome: 'applied' });
+    const write = query.mock.calls.find(([sql]) =>
+      sql.includes('update eligibility.payment_snapshots'),
+    );
+    expect(write?.[1]).toEqual([
+      tenantId,
+      operationId,
+      playerId,
+      eligibilityDecisionId,
+      JSON.stringify(receipt),
+      gameId,
+    ]);
+    expect(query.mock.calls.some(([sql]) => sql === 'commit')).toBe(true);
+  });
+  it.each([
+    'subscription',
+    'policy',
+    'usage',
+    'instance',
+    'provider',
+    'actor',
+    'v1',
+    'malformed',
+  ] as const)('denies %s mismatch on already applied managed confirmation', async (change) => {
+    const { confirmation, snapshot, receipt } = managedInput();
+    const stored = {
+      ...receipt,
+      entitlement: {
+        ...receipt.entitlement,
+        policyRef: { ...receipt.entitlement.policyRef },
+        usageRef: { ...receipt.entitlement.usageRef },
+      },
+    };
+    if (change === 'subscription') stored.providerClientSubscriptionId = 'foreign-subscription';
+    if (change === 'policy') stored.entitlement.policyRef.policyVersion += 1;
+    if (change === 'usage') stored.entitlement.usageRef.reservationUnits += 1;
+    if (change === 'instance') stored.entitlement.subscriptionInstanceId = 'subscription:foreign';
+    if (change === 'provider') stored.providerExerciseId = 'exercise:foreign';
+    if (change === 'actor') stored.userId = otherPlayerId;
+    const row = {
+      ...snapshot,
+      managedJoinReceipt: stored,
+      ...(change === 'malformed' ? { managedJoin: null } : {}),
+    };
+    const supplied = change === 'v1' ? input() : confirmation;
+    const { pool, query } = poolWithHandler((text) =>
+      text.includes('select snapshot.snapshot as binding_snapshot')
+        ? { rows: [{ binding_snapshot: row }] }
+        : baseHandler(text, {
+            replayRow: commandRow({
+              command_type: 'game.payment.confirm.v1',
+              request_hash: supplied.requestHash,
+              state: 'COMPLETED',
+              result_payload: appliedAttemptPayload(),
+            }),
+          }),
+    );
+    const result = createGameRosterRepository(pool as never).confirmPayment(supplied);
+    if (change === 'malformed') await expect(result).rejects.toThrow();
+    else
+      await expect(result).resolves.toMatchObject({
+        outcome: 'rejected',
+        code: 'GAME_PAYMENT_EVIDENCE_CONFLICT',
+      });
+    expect(writtenStatements(query)).toEqual([]);
+  });
+  it('replays exact managed evidence even when JSONB reorders nested fields, with zero writes', async () => {
+    const { confirmation, snapshot, receipt } = managedInput();
+    const stored = {
+      ...receipt,
+      entitlement: {
+        usageRef: {
+          reservationUnits: receipt.entitlement.usageRef.reservationUnits,
+          usageRef: receipt.entitlement.usageRef.usageRef,
+        },
+        policyRef: {
+          policyDigest: receipt.entitlement.policyRef.policyDigest,
+          policyVersion: receipt.entitlement.policyRef.policyVersion,
+        },
+        subscriptionInstanceId: receipt.entitlement.subscriptionInstanceId,
+      },
+    };
+    const { pool, query } = poolWithHandler((text) =>
+      text.includes('select snapshot.snapshot as binding_snapshot')
+        ? { rows: [{ binding_snapshot: { ...snapshot, managedJoinReceipt: stored } }] }
+        : baseHandler(text, {
+            replayRow: commandRow({
+              command_type: 'game.payment.confirm.v1',
+              request_hash: confirmation.requestHash,
+              state: 'COMPLETED',
+              result_payload: appliedAttemptPayload(),
+            }),
+          }),
+    );
+    expect(
+      await createGameRosterRepository(pool as never).confirmPayment(confirmation),
+    ).toMatchObject({ outcome: 'applied', replayed: true });
+    expect(writtenStatements(query)).toEqual([]);
+  });
+  it('denies bound v1 callbacks and malformed refs before evidence or roster mutation', async () => {
+    const { snapshot } = managedInput();
+    for (const changed of [
+      snapshot,
+      { ...snapshot, policyRef: { ...snapshot.policyRef, policyVersion: 99 } },
+    ]) {
+      const { pool, query } = database(binding, { bindingSnapshot: changed });
+      const promise = createGameRosterRepository(pool as never).confirmPayment(input());
+      if (changed === snapshot)
+        await expect(promise).resolves.toMatchObject({
+          outcome: 'rejected',
+          code: 'GAME_PAYMENT_EVIDENCE_CONFLICT',
+        });
+      else await expect(promise).rejects.toThrow();
+      expect(writtenStatements(query)).toEqual([]);
+    }
+  });
 
   it('derives phone inside the transaction and atomically completes the original paid attempt', async () => {
     const { pool, query } = database();
@@ -1360,5 +1538,158 @@ describe('paid join policy/usage binding refs (B2)', () => {
       }),
     ).rejects.toMatchObject({ code: 'COMMERCIAL_POLICY_REF_INVALID' });
     expect(connect).not.toHaveBeenCalled();
+  });
+});
+
+describe('managed JOIN durable preflight snapshot', () => {
+  function boundInput(): BeginPaidJoinInput {
+    const managedJoin: ManagedJoinBinding = {
+      contractVersion: 2,
+      requestFingerprint: 'f'.repeat(64),
+      entitlement: managedFixture.admission.request
+        .entitlement as ManagedJoinBinding['entitlement'],
+    };
+    const receipt = managedFixture.confirmed.receipt;
+    return {
+      ...paidJoinInput(),
+      managedJoin,
+      requestHash: createHash('sha256')
+        .update('game.join.managed.v2\0' + JSON.stringify(managedJoin))
+        .digest('hex'),
+      bindingRefs: { policyRef: receipt.entitlement.policyRef },
+      price: { ...paidJoinInput().price, amountMinor: 0, freeMinutes: 90, paidMinutes: 0 },
+      providerBinding: {
+        providerClientId: receipt.providerClientId,
+        providerClientSubscriptionId: receipt.providerClientSubscriptionId,
+        providerMappingId: receipt.providerMappingId,
+        providerExerciseId: receipt.providerExerciseId,
+        targetMappingId: receipt.targetMappingId,
+        targetVersion: receipt.targetVersion,
+        requestSha256: receipt.requestSha256,
+        idempotencyKeySha256: receipt.idempotencyKeySha256,
+        startsAt: '2026-08-01T18:00:00.000Z',
+        durationMinutes: 90,
+        capacity: 2,
+        admissible: true,
+      },
+    };
+  }
+  it('pins authoritative expectation before admission and never invents usage or decision UUID', async () => {
+    const input = boundInput();
+    const b = input.providerBinding!;
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from integration.external_entity_map'))
+        return {
+          rows: [
+            {
+              id: b.targetMappingId,
+              external_id: b.providerExerciseId,
+              external_version: b.targetVersion,
+            },
+          ],
+        };
+      if (text.includes('from games.games') && text.includes('for update'))
+        return { rows: [{ ...lockedGame('SUBSCRIPTION'), ends_at: '2026-08-01T19:30:00.000Z' }] };
+      return baseHandler(text);
+    });
+    expect(await createGameRosterRepository(pool as never).beginPaidJoin(input)).toMatchObject({
+      outcome: 'reserved',
+    });
+    const stored = query.mock.calls.find(([sql]) =>
+      sql.includes('insert into eligibility.payment_snapshots'),
+    )?.[1]?.[5];
+    const snapshot = JSON.parse(String(stored)) as Record<string, unknown>;
+    expect(snapshot.managedJoin).toEqual(input.managedJoin);
+    expect(snapshot.policyRef).toEqual(input.bindingRefs?.policyRef);
+    expect(snapshot).not.toHaveProperty('usageRef');
+    expect(snapshot.managedJoin).not.toHaveProperty('decisionId');
+  });
+  it.each(['paid', 'hash', 'policy', 'binding'] as const)(
+    'rejects invalid %s managed input before a transaction',
+    async (change) => {
+      const input = boundInput();
+      const { pool, connect } = poolWithHandler((text) => baseHandler(text));
+      const changed = {
+        ...input,
+        ...(change === 'paid' ? { price: { ...input.price, amountMinor: 1 } } : {}),
+        ...(change === 'hash' ? { requestHash: 'e'.repeat(64) } : {}),
+        ...(change === 'policy'
+          ? {
+              bindingRefs: {
+                policyRef: {
+                  policyVersion: 99,
+                  policyDigest: input.bindingRefs!.policyRef.policyDigest,
+                },
+              },
+            }
+          : {}),
+        ...(change === 'binding' ? { managedJoin: null } : {}),
+      };
+      await expect(
+        createGameRosterRepository(pool as never).beginPaidJoin(changed as BeginPaidJoinInput),
+      ).rejects.toThrow();
+      expect(connect).not.toHaveBeenCalled();
+    },
+  );
+  it('reads exact pinned expectation and hash with no current policy or provider lookup', async () => {
+    const input = boundInput();
+    const snapshot = {
+      managedJoin: input.managedJoin,
+      ...input.bindingRefs,
+      providerBinding: input.providerBinding,
+      operationId,
+      price: input.price,
+    };
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency'))
+        return { rows: [commandRow({ request_hash: input.requestHash })] };
+      if (text.includes('from eligibility.payment_snapshots snapshot'))
+        return {
+          rows: [
+            {
+              id: reservationId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+              binding_snapshot: snapshot,
+              provider_binding: input.providerBinding,
+            },
+          ],
+        };
+      return { rows: [] };
+    });
+    expect(
+      await createGameRosterRepository(pool as never).getPaidJoinAttempt({
+        tenantId,
+        actorUserId: playerId,
+        operationId,
+      }),
+    ).toMatchObject({ managedJoin: input.managedJoin, requestHash: input.requestHash });
+    expect(writtenStatements(query)).toEqual([]);
+  });
+  it('retains the original expectation on a durable eligibility refusal before any seat exists', async () => {
+    const input = boundInput();
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency'))
+        return {
+          rows: [
+            commandRow({
+              state: 'FAILED',
+              error_code: 'PLAYER_LEVEL_REQUIRED',
+              request_hash: input.requestHash,
+              result_payload: { managedJoin: input.managedJoin, ...input.bindingRefs },
+            }),
+          ],
+        };
+      return { rows: [] };
+    });
+    expect(
+      await createGameRosterRepository(pool as never).getPaidJoinAttempt({
+        tenantId,
+        actorUserId: playerId,
+        operationId,
+      }),
+    ).toMatchObject({ managedJoin: input.managedJoin, state: 'FAILED' });
+    expect(writtenStatements(query)).toEqual([]);
   });
 });

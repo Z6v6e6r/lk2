@@ -2,6 +2,14 @@ import { createHash, createPrivateKey, randomUUID } from 'node:crypto';
 
 import { importPKCS8, SignJWT } from 'jose';
 import {
+  MANAGED_JOIN_PREFLIGHT_PATH,
+  MANAGED_JOIN_ADMISSION_PATH,
+  MANAGED_JOIN_READ_PREFIX,
+  MANAGED_JOIN_PREFLIGHT_SCOPE,
+  managedJoinPreflightSha256,
+  managedJoinAdmissionSha256,
+  type ManagedJoinPreflightRequest,
+  type ManagedJoinAdmissionRequest,
   BOOKED_OPERATION_READ_PREFIX,
   BOOKED_OPERATION_READ_SCOPE,
   BOOKED_OPERATION_ADMISSION_PATH,
@@ -91,6 +99,241 @@ export class SubscriptionRuntimeActorDelegationIssuer {
         'SUBSCRIPTION_RUNTIME_DELEGATION_CONFIGURATION_INVALID',
       );
     }
+  }
+
+  async issueManagedJoinPreflight(
+    input: Omit<
+      Parameters<SubscriptionRuntimeActorDelegationIssuer['issueBookedOperationAdmission']>[0],
+      'request' | 'reservationId'
+    > & { readonly request: ManagedJoinPreflightRequest },
+  ): Promise<string> {
+    return this.issueManagedJoinCommand(input, true);
+  }
+  async issueManagedJoinAdmission(
+    input: Omit<
+      Parameters<SubscriptionRuntimeActorDelegationIssuer['issueBookedOperationAdmission']>[0],
+      'request'
+    > & { readonly request: ManagedJoinAdmissionRequest; readonly recoveryOnly?: true },
+  ): Promise<string> {
+    return this.issueManagedJoinCommand(input, false);
+  }
+  private async issueManagedJoinCommand(
+    input: {
+      readonly userId: string;
+      readonly tenantId: string;
+      readonly tenantKey: string;
+      readonly sessionId: string;
+      readonly providerClientId: string;
+      readonly providerMappingId: string;
+      readonly providerExerciseId: string;
+      readonly targetMappingId: string;
+      readonly targetVersion: string;
+      readonly startsAt: string;
+      readonly durationMinutes: number;
+      readonly capacity: number;
+      readonly admissible: boolean;
+      readonly operationId: string;
+      readonly correlationId: string;
+      readonly idempotencyKey: string;
+      readonly request: ManagedJoinPreflightRequest | ManagedJoinAdmissionRequest;
+      /**
+       * Backend-issued short-lived user-scoped provider credential for exactly this operation.
+       * When present the delegation binds its sha256 and the wire header must carry the same token;
+       * the owner refuses a swapped or missing token.
+       */
+      readonly actorToken?: { readonly token: string; readonly expiresAt: string };
+      /** Provider client subscription id resolved server-side for the selected product. */
+      readonly providerClientSubscriptionId?: string;
+      readonly reservationId?: string;
+      readonly recoveryOnly?: true;
+    },
+    preflight: boolean,
+  ): Promise<string> {
+    if (
+      (input.recoveryOnly !== undefined && input.recoveryOnly !== true) ||
+      (preflight && input.recoveryOnly !== undefined)
+    )
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    if (
+      !input.actorToken ||
+      !input.providerClientSubscriptionId ||
+      (preflight ? input.reservationId !== undefined : !uuidPattern.test(input.reservationId ?? ''))
+    ) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    const keyHash = subscriptionRuntimeIdempotencyKeySha256(input.idempotencyKey);
+    if (
+      ![
+        input.userId,
+        input.tenantId,
+        input.sessionId,
+        input.providerMappingId,
+        input.targetMappingId,
+        input.operationId,
+      ].every((v) => uuidPattern.test(v) && v === v.toLowerCase()) ||
+      !idPattern.test(input.tenantKey) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.providerClientId) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.providerExerciseId) ||
+      !correlationPattern.test(input.correlationId) ||
+      !correlationPattern.test(input.idempotencyKey) ||
+      !/^[A-Za-z0-9._:-]{1,128}$/.test(input.targetVersion) ||
+      !Number.isSafeInteger(input.durationMinutes) ||
+      input.durationMinutes < 1 ||
+      input.durationMinutes > 1440 ||
+      !Number.isInteger(input.capacity) ||
+      input.capacity < 1 ||
+      input.capacity > 1000 ||
+      typeof input.admissible !== 'boolean' ||
+      !Number.isFinite(Date.parse(input.startsAt)) ||
+      new Date(input.startsAt).toISOString() !== input.startsAt ||
+      input.operationId !== bookedOperationAdmissionId(input.tenantId, input.userId, keyHash)
+    ) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    if ((input.actorToken === undefined) !== (input.providerClientSubscriptionId === undefined)) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    let actorTokenSha256: string | undefined;
+    if (input.actorToken !== undefined) {
+      const expiresAtMs = Date.parse(input.actorToken.expiresAt);
+      if (
+        !printableAsciiPattern.test(input.actorToken.token) ||
+        input.actorToken.token.length < 16 ||
+        input.actorToken.token.length > 4096 ||
+        !Number.isFinite(expiresAtMs) ||
+        new Date(expiresAtMs).toISOString() !== input.actorToken.expiresAt ||
+        expiresAtMs <= Date.now() ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.providerClientSubscriptionId ?? '') ||
+        /[\r\n]/.test(input.providerClientSubscriptionId ?? '')
+      ) {
+        throw new SubscriptionRuntimeActorDelegationError(
+          'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+        );
+      }
+      actorTokenSha256 = `sha256:${createHash('sha256')
+        .update(input.actorToken.token, 'utf8')
+        .digest('hex')}`;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      contract_version: 2,
+      ...(input.recoveryOnly ? { recovery_only: true } : {}),
+      scope: preflight ? MANAGED_JOIN_PREFLIGHT_SCOPE : BOOKED_OPERATION_ADMISSION_SCOPE,
+      caller: 'lk2-api',
+      method: 'POST',
+      path: preflight ? MANAGED_JOIN_PREFLIGHT_PATH : MANAGED_JOIN_ADMISSION_PATH,
+      operation_id: input.operationId,
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: input.providerClientId,
+      provider_mapping_id: input.providerMappingId,
+      correlation_id: input.correlationId,
+      request_sha256: preflight
+        ? managedJoinPreflightSha256(input.request)
+        : managedJoinAdmissionSha256(input.request as ManagedJoinAdmissionRequest),
+      idempotency_key_sha256: keyHash,
+      target_id: input.request.target.id,
+      expected_revision: input.request.target.expectedRevision,
+      target_mapping_id: input.targetMappingId,
+      provider_exercise_id: input.providerExerciseId,
+      target_version: input.targetVersion,
+      target_starts_at: input.startsAt,
+      target_duration_minutes: input.durationMinutes,
+      target_capacity: input.capacity,
+      target_admissible: input.admissible,
+      ...(input.reservationId ? { reservation_id: input.reservationId } : {}),
+      ...(input.actorToken === undefined
+        ? {}
+        : {
+            actor_token_sha256: actorTokenSha256,
+            actor_token_expires_at: input.actorToken.expiresAt,
+            provider_client_subscription_id: input.providerClientSubscriptionId,
+          }),
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + this.options.ttlSeconds)
+      .setJti(randomUUID())
+      .sign(await importPKCS8(this.options.privateKeyPem, 'RS256'));
+  }
+
+  async issueManagedJoinRead(input: {
+    readonly userId: string;
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly sessionId: string;
+    readonly providerClientId: string;
+    readonly providerMappingId: string;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly includeReceipt?: boolean;
+  }): Promise<string> {
+    if (
+      ![
+        input.userId,
+        input.tenantId,
+        input.sessionId,
+        input.providerMappingId,
+        input.operationId,
+      ].every((value) => uuidPattern.test(value) && value === value.toLowerCase()) ||
+      !idPattern.test(input.tenantKey) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.providerClientId) ||
+      /[\r\n]/.test(input.providerClientId) ||
+      !correlationPattern.test(input.correlationId)
+    ) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    const key = await importPKCS8(this.options.privateKeyPem, 'RS256');
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      contract_version: 2,
+      scope: BOOKED_OPERATION_READ_SCOPE,
+      caller: 'lk2-api',
+      method: 'GET',
+      path: MANAGED_JOIN_READ_PREFIX + input.operationId,
+      operation_id: input.operationId,
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: input.providerClientId,
+      provider_mapping_id: input.providerMappingId,
+      correlation_id: input.correlationId,
+      receipt_version: 2,
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + this.options.ttlSeconds)
+      .setJti(randomUUID())
+      .sign(key);
   }
 
   async issueBookedOperationAdmission(input: {

@@ -472,3 +472,200 @@ export function commercialBindingRefsEqual(
       : right.usageRef !== undefined && commercialUsageRefsEqual(left.usageRef, right.usageRef))
   );
 }
+
+/** Exact internal managed JOIN contracts shared by the API and its persistence boundary. */
+export interface ManagedJoinExpectations {
+  readonly schemaVersion: 1;
+  readonly policyVersion: number;
+  readonly policyDigest: string;
+  readonly targetSnapshot: {
+    readonly snapshotId: string;
+    readonly revision: number;
+    readonly evidenceRef: string;
+  };
+}
+export interface ManagedJoinEntitlement {
+  readonly subscriptionInstanceId: string;
+  readonly expectations: ManagedJoinExpectations;
+}
+export interface ManagedJoinBinding {
+  readonly contractVersion: 2;
+  /** Original public request fingerprint, without generated policy/usage references. */
+  readonly requestFingerprint: string;
+  readonly entitlement: ManagedJoinEntitlement;
+}
+export interface ManagedJoinReceipt {
+  readonly contractVersion: 2;
+  readonly source: 'LK1_SUBSCRIPTION_BOOKING_OWNER';
+  readonly operationId: string;
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly gameId: string;
+  readonly reservationId: string;
+  readonly providerClientId: string;
+  readonly providerClientSubscriptionId: string;
+  readonly providerExerciseId: string;
+  readonly providerMappingId: string;
+  readonly targetMappingId: string;
+  readonly targetVersion: string;
+  readonly requestSha256: string;
+  readonly idempotencyKeySha256: string;
+  readonly bookingId: string;
+  readonly verifiedAt: string;
+  readonly entitlement: {
+    readonly subscriptionInstanceId: string;
+    readonly policyRef: { readonly policyVersion: number; readonly policyDigest: string };
+    readonly usageRef: { readonly usageRef: string; readonly reservationUnits: number };
+  };
+}
+const managedObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const managedKeys = (value: unknown, expected: string): value is Record<string, unknown> =>
+  managedObject(value) && Object.keys(value).sort().join() === expected.split(',').sort().join();
+const managedId = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/.test(value) &&
+  !/[\r\n]/.test(value);
+const managedDigest = (value: unknown): value is string =>
+  typeof value === 'string' && value.length === 71 && /^sha256:[a-f0-9]{64}$/.test(value);
+const managedPositive = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && Number(value) > 0;
+const managedUuid = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+const managedInvalid = (): never => {
+  throw new Error('MANAGED_JOIN_BINDING_INVALID');
+};
+export function parseManagedJoinEntitlement(value: unknown): ManagedJoinEntitlement {
+  if (
+    !managedKeys(value, 'subscriptionInstanceId,expectations') ||
+    !managedId(value.subscriptionInstanceId)
+  )
+    return managedInvalid();
+  const e = value.expectations;
+  if (
+    !managedKeys(e, 'schemaVersion,policyVersion,policyDigest,targetSnapshot') ||
+    e.schemaVersion !== 1 ||
+    !managedPositive(e.policyVersion) ||
+    !managedDigest(e.policyDigest) ||
+    !managedKeys(e.targetSnapshot, 'snapshotId,revision,evidenceRef') ||
+    !managedId(e.targetSnapshot.snapshotId) ||
+    !managedPositive(e.targetSnapshot.revision) ||
+    !managedId(e.targetSnapshot.evidenceRef)
+  )
+    return managedInvalid();
+  return {
+    subscriptionInstanceId: value.subscriptionInstanceId,
+    expectations: {
+      schemaVersion: 1,
+      policyVersion: e.policyVersion,
+      policyDigest: e.policyDigest,
+      targetSnapshot: {
+        snapshotId: e.targetSnapshot.snapshotId,
+        revision: e.targetSnapshot.revision,
+        evidenceRef: e.targetSnapshot.evidenceRef,
+      },
+    },
+  };
+}
+export function parseManagedJoinBinding(value: unknown): ManagedJoinBinding {
+  if (
+    !managedKeys(value, 'contractVersion,requestFingerprint,entitlement') ||
+    value.contractVersion !== 2 ||
+    typeof value.requestFingerprint !== 'string' ||
+    value.requestFingerprint.length !== 64 ||
+    !/^[a-f0-9]{64}$/.test(value.requestFingerprint)
+  )
+    return managedInvalid();
+  return {
+    contractVersion: 2,
+    requestFingerprint: value.requestFingerprint,
+    entitlement: parseManagedJoinEntitlement(value.entitlement),
+  };
+}
+export function parseManagedJoinReceipt(value: unknown): ManagedJoinReceipt {
+  const ids = [
+    'operationId',
+    'tenantId',
+    'userId',
+    'gameId',
+    'reservationId',
+    'providerMappingId',
+    'targetMappingId',
+  ];
+  const providerIds = [
+    'providerClientId',
+    'providerClientSubscriptionId',
+    'providerExerciseId',
+    'bookingId',
+  ];
+  if (
+    !managedKeys(
+      value,
+      [
+        ...ids,
+        ...providerIds,
+        'contractVersion',
+        'source',
+        'targetVersion',
+        'requestSha256',
+        'idempotencyKeySha256',
+        'verifiedAt',
+        'entitlement',
+      ].join(),
+    ) ||
+    value.contractVersion !== 2 ||
+    value.source !== 'LK1_SUBSCRIPTION_BOOKING_OWNER' ||
+    ids.some((key) => !managedUuid(value[key])) ||
+    providerIds.some(
+      (key) =>
+        typeof value[key] !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value[key]) ||
+        /[\r\n]/.test(value[key]),
+    ) ||
+    !managedDigest(value.requestSha256) ||
+    !managedDigest(value.idempotencyKeySha256) ||
+    typeof value.targetVersion !== 'string' ||
+    !/^[A-Za-z0-9._:-]{1,128}$/.test(value.targetVersion) ||
+    /[\r\n]/.test(value.targetVersion) ||
+    typeof value.verifiedAt !== 'string' ||
+    !Number.isFinite(Date.parse(value.verifiedAt)) ||
+    new Date(value.verifiedAt).toISOString() !== value.verifiedAt
+  )
+    return managedInvalid();
+  const e = value.entitlement;
+  if (
+    !managedKeys(e, 'subscriptionInstanceId,policyRef,usageRef') ||
+    !managedId(e.subscriptionInstanceId) ||
+    !managedKeys(e.policyRef, 'policyVersion,policyDigest') ||
+    !managedPositive(e.policyRef.policyVersion) ||
+    !managedDigest(e.policyRef.policyDigest) ||
+    !managedKeys(e.usageRef, 'usageRef,reservationUnits') ||
+    typeof e.usageRef.usageRef !== 'string' ||
+    !/^booking:[a-f0-9]{48}$/.test(e.usageRef.usageRef) ||
+    e.usageRef.usageRef.length !== 56 ||
+    !managedPositive(e.usageRef.reservationUnits)
+  )
+    return managedInvalid();
+  return {
+    ...structuredClone(value),
+    entitlement: {
+      subscriptionInstanceId: e.subscriptionInstanceId,
+      policyRef: {
+        policyVersion: e.policyRef.policyVersion,
+        policyDigest: e.policyRef.policyDigest,
+      },
+      usageRef: { usageRef: e.usageRef.usageRef, reservationUnits: e.usageRef.reservationUnits },
+    },
+  } as unknown as ManagedJoinReceipt;
+}
+export function managedJoinReceiptMatchesEntitlement(
+  receipt: ManagedJoinReceipt,
+  expected: ManagedJoinEntitlement,
+): boolean {
+  return (
+    receipt.entitlement.subscriptionInstanceId === expected.subscriptionInstanceId &&
+    receipt.entitlement.policyRef.policyVersion === expected.expectations.policyVersion &&
+    receipt.entitlement.policyRef.policyDigest === expected.expectations.policyDigest
+  );
+}

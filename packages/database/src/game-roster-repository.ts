@@ -15,6 +15,11 @@ import {
 import {
   evaluateLevelEligibility,
   parseCommercialBindingRefs,
+  parseManagedJoinBinding,
+  parseManagedJoinReceipt,
+  managedJoinReceiptMatchesEntitlement,
+  type ManagedJoinBinding,
+  type ManagedJoinReceipt,
   type CommercialBindingRefs,
   type LevelEligibilityReasonCode,
   type LevelEligibilityPolicy,
@@ -96,6 +101,7 @@ export interface ConfirmGamePaymentInput extends GameRosterUserCommandInput {
   readonly reservationId: string;
   /** Required for new paid JOIN snapshots. The repository validates it in the confirmation transaction. */
   readonly paidJoinBinding?: PaidJoinProviderBinding;
+  readonly managedJoinReceipt?: ManagedJoinReceipt;
   readonly evidence: {
     readonly provider: 'VIVA';
     readonly operationType: 'TRANSACTION' | 'SUBSCRIPTION_BOOKING';
@@ -240,6 +246,7 @@ export interface BeginPaidJoinInput {
   readonly providerBinding?: PaidJoinProviderBinding;
   /** Optional B2 binding loaded from a binding quote; absent means legacy/unbound behavior. */
   readonly bindingRefs?: PaidJoinBindingRefs;
+  readonly managedJoin?: ManagedJoinBinding;
 }
 
 export interface PaidJoinAttemptResult {
@@ -277,8 +284,11 @@ export type BeginPaidJoinResult =
   | { readonly outcome: 'reservation_conflict' };
 
 export interface PaidJoinAttemptView {
+  readonly requestHash?: string;
+  readonly managedReceipt?: ManagedJoinReceipt;
   readonly providerBinding?: PaidJoinProviderBinding;
   readonly bindingRefs?: PaidJoinBindingRefs;
+  readonly managedJoin?: ManagedJoinBinding;
   readonly commandId: string;
   readonly gameId: string;
   readonly state: PaidJoinAttemptState;
@@ -1113,8 +1123,8 @@ async function storePaidJoinRejection(
   await client.query(
     `insert into games.command_idempotency (
        tenant_id, id, actor_user_id, principal_key, idempotency_key,
-       command_type, request_hash, aggregate_id, state, error_code, completed_at
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, 'FAILED', $9, now())
+       command_type, request_hash, aggregate_id, state, error_code, completed_at${input.managedJoin ? ', result_payload' : ''}
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, 'FAILED', $9, now()${input.managedJoin ? ', $10::jsonb' : ''})
      on conflict (tenant_id, principal_key, idempotency_key) do nothing`,
     [
       input.tenantId,
@@ -1126,6 +1136,9 @@ async function storePaidJoinRejection(
       input.requestHash,
       input.gameId,
       code,
+      ...(input.managedJoin
+        ? [JSON.stringify({ managedJoin: input.managedJoin, ...input.bindingRefs })]
+        : []),
     ],
   );
   await client.query(
@@ -1372,6 +1385,113 @@ function paidJoinBindingRefsFromSnapshot(snapshot: unknown): PaidJoinBindingRefs
   }
 }
 
+function managedJoinFromSnapshot(snapshot: unknown): ManagedJoinBinding | undefined {
+  if (typeof snapshot !== 'object' || snapshot === null || Array.isArray(snapshot))
+    return undefined;
+  const row = snapshot as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(row, 'managedJoin')) return undefined;
+  const binding = parseManagedJoinBinding(row.managedJoin);
+  const refs = paidJoinBindingRefsFromSnapshot(snapshot);
+  if (
+    !refs ||
+    refs.decisionId !== undefined ||
+    refs.usageRef !== undefined ||
+    refs.policyRef.policyVersion !== binding.entitlement.expectations.policyVersion ||
+    refs.policyRef.policyDigest !== binding.entitlement.expectations.policyDigest
+  )
+    throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+  return binding;
+}
+
+function managedReceiptFromSnapshot(snapshot: unknown): ManagedJoinReceipt | undefined {
+  const row = snapshot as Record<string, unknown> | undefined;
+  return row && Object.prototype.hasOwnProperty.call(row, 'managedJoinReceipt')
+    ? parseManagedJoinReceipt(row.managedJoinReceipt)
+    : undefined;
+}
+
+async function managedRequestHash(binding: ManagedJoinBinding): Promise<string> {
+  const { createHash } = await import('node:crypto');
+  return createHash('sha256')
+    .update('game.join.managed.v2\0' + JSON.stringify(parseManagedJoinBinding(binding)))
+    .digest('hex');
+}
+
+async function managedReceiptHash(receipt: ManagedJoinReceipt): Promise<string> {
+  const { createHash } = await import('node:crypto');
+  return createHash('sha256')
+    .update(
+      JSON.stringify(
+        Object.entries(parseManagedJoinReceipt(receipt)).sort(([a], [b]) => a.localeCompare(b)),
+      ),
+    )
+    .digest('hex');
+}
+
+/** Both initial settlement and an already applied replay must prove the original full binding. */
+async function managedConfirmationMatches(
+  snapshot: unknown,
+  input: ConfirmGamePaymentInput,
+  replay: boolean,
+): Promise<boolean> {
+  const managed = managedJoinFromSnapshot(snapshot);
+  if (!managed)
+    return (
+      input.managedJoinReceipt === undefined &&
+      paidJoinBindingRefsFromSnapshot(snapshot) === undefined
+    );
+  if (!input.managedJoinReceipt) return false;
+  const receipt = parseManagedJoinReceipt(input.managedJoinReceipt);
+  const row = snapshot as Record<string, unknown>;
+  const price = row.price as Record<string, unknown> | undefined;
+  if (
+    !price ||
+    price.amountMinor !== 0 ||
+    price.currency !== 'RUB' ||
+    !Number.isSafeInteger(price.freeMinutes) ||
+    Number(price.freeMinutes) <= 0 ||
+    price.paidMinutes !== 0
+  )
+    return false;
+  const binding = row.providerBinding as PaidJoinProviderBinding | undefined;
+  const stored = managedReceiptFromSnapshot(snapshot);
+  if (
+    !binding ||
+    (replay && !stored) ||
+    (stored && (await managedReceiptHash(stored)) !== (await managedReceiptHash(receipt)))
+  )
+    return false;
+  return (
+    managedJoinReceiptMatchesEntitlement(receipt, managed.entitlement) &&
+    receipt.tenantId === input.tenantId &&
+    receipt.userId === input.actorUserId &&
+    receipt.gameId === input.gameId &&
+    receipt.reservationId === input.reservationId &&
+    receipt.operationId === row.operationId &&
+    receipt.operationId === input.evidence.operationId &&
+    input.evidence.operationType === 'SUBSCRIPTION_BOOKING' &&
+    input.evidence.provider === 'VIVA' &&
+    input.evidence.verifiedBy === 'LEGACY_NODE_RED' &&
+    receipt.bookingId === input.evidence.bookingId &&
+    receipt.providerExerciseId === input.evidence.exerciseId &&
+    receipt.verifiedAt === input.evidence.verifiedAt &&
+    (await managedReceiptHash(receipt)) === input.evidence.evidenceHash &&
+    input.requestHash === input.evidence.evidenceHash &&
+    (
+      [
+        'providerClientId',
+        'providerClientSubscriptionId',
+        'providerExerciseId',
+        'providerMappingId',
+        'targetMappingId',
+        'targetVersion',
+        'requestSha256',
+        'idempotencyKeySha256',
+      ] as const
+    ).every((key) => receipt[key] === binding[key] && binding[key] === input.paidJoinBinding?.[key])
+  );
+}
+
 async function loadPaidJoinAttempt(
   client: PoolClient,
   input: GameRosterOperationInput,
@@ -1432,7 +1552,48 @@ async function loadPaidJoinAttempt(
     }
   }
   const bindingRefs = paidJoinBindingRefsFromSnapshot(reservationRow?.binding_snapshot);
+  const managedJoin = managedJoinFromSnapshot(
+    reservationRow?.binding_snapshot ?? (row.state === 'FAILED' ? row.result_payload : undefined),
+  );
+  const managedReceipt = managedReceiptFromSnapshot(reservationRow?.binding_snapshot);
+  if (managedJoin && row.request_hash !== (await managedRequestHash(managedJoin)))
+    throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+  if (
+    managedReceipt &&
+    (!managedJoin ||
+      !reservationRow ||
+      !(await managedConfirmationMatches(
+        reservationRow.binding_snapshot,
+        {
+          ...input,
+          gameId: row.aggregate_id,
+          reservationId: reservationRow.id,
+          idempotencyKey: 'stored-receipt',
+          requestHash: await managedReceiptHash(managedReceipt),
+          correlationId: 'stored-receipt',
+          ...(reservationRow.provider_binding
+            ? { paidJoinBinding: reservationRow.provider_binding }
+            : {}),
+          managedJoinReceipt: managedReceipt,
+          evidence: {
+            provider: 'VIVA',
+            operationType: 'SUBSCRIPTION_BOOKING',
+            operationId: input.operationId,
+            bookingId: managedReceipt.bookingId,
+            exerciseId: managedReceipt.providerExerciseId,
+            evidenceHash: await managedReceiptHash(managedReceipt),
+            verifiedAt: managedReceipt.verifiedAt,
+            verifiedBy: 'LEGACY_NODE_RED',
+          },
+        },
+        true,
+      )))
+  )
+    throw new Error('GAME_PAYMENT_EVIDENCE_CONFLICT');
   return {
+    requestHash: row.request_hash,
+    ...(managedJoin ? { managedJoin } : {}),
+    ...(managedReceipt ? { managedReceipt } : {}),
     ...(bindingRefs ? { bindingRefs } : {}),
     ...(reservationRow?.provider_binding
       ? { providerBinding: reservationRow.provider_binding }
@@ -1718,6 +1879,18 @@ export function createGameRosterRepository(
     async beginPaidJoin(input) {
       const bindingRefs =
         input.bindingRefs === undefined ? undefined : parseCommercialBindingRefs(input.bindingRefs);
+      const managedJoin =
+        input.managedJoin === undefined ? undefined : parseManagedJoinBinding(input.managedJoin);
+      if (
+        managedJoin &&
+        (!input.providerBinding ||
+          input.price.amountMinor !== 0 ||
+          input.price.freeMinutes <= 0 ||
+          input.price.paidMinutes !== 0 ||
+          input.requestHash !== (await managedRequestHash(managedJoin)) ||
+          !managedJoinFromSnapshot({ managedJoin, ...bindingRefs }))
+      )
+        throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
       assertPaidJoinInput(input);
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const replay = replayPaidJoin(await lockIdempotency(client, input), input.requestHash);
@@ -1857,6 +2030,7 @@ export function createGameRosterRepository(
               paymentMode: game.payment_mode,
               subscriptionInstanceId: input.subscriptionInstanceId,
               ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
+              ...(managedJoin ? { managedJoin } : {}),
               ...(bindingRefs
                 ? {
                     policyRef: bindingRefs.policyRef,
@@ -2046,7 +2220,7 @@ export function createGameRosterRepository(
             [input.tenantId, input.gameId, input.reservationId, input.actorUserId],
           );
           if (!snapshot) throw new Error('GAME_PAYMENT_SNAPSHOT_MISSING');
-          if (paidJoinBindingRefsFromSnapshot(snapshot.binding_snapshot) !== undefined) {
+          if (!(await managedConfirmationMatches(snapshot.binding_snapshot, input, true))) {
             return {
               outcome: 'rejected' as const,
               code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
@@ -2116,7 +2290,7 @@ export function createGameRosterRepository(
         // Legacy confirmation evidence has no policy/usage proof. Do not let a callback bypass
         // the orchestrator guard and settle a bound reservation as an ordinary v1 operation.
         // Malformed stored binding throws and rolls back; a valid bound attempt stays unresolved.
-        if (paidJoinBindingRefsFromSnapshot(paidSnapshot?.binding_snapshot) !== undefined) {
+        if (!(await managedConfirmationMatches(paidSnapshot?.binding_snapshot, input, false))) {
           return {
             outcome: 'rejected' as const,
             code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
@@ -2232,6 +2406,12 @@ export function createGameRosterRepository(
           );
         }
         if (exactEvidence?.resolution === 'APPLIED') {
+          if (!(await managedConfirmationMatches(paidSnapshot?.binding_snapshot, input, true)))
+            return {
+              outcome: 'rejected' as const,
+              code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
+              replayed: true,
+            };
           if (
             !exactEvidence.participation_id ||
             exactEvidence.aggregate_revision === null ||
@@ -2401,6 +2581,23 @@ export function createGameRosterRepository(
           [input.tenantId, evidence.id, participation.id, revision],
         );
         if (appliedEvidence.rowCount !== 1) throw new Error('GAME_PAYMENT_EVIDENCE_APPLY_LOST');
+        if (input.managedJoinReceipt) {
+          const receiptStored = await client.query(
+            `update eligibility.payment_snapshots set snapshot = jsonb_set(snapshot, '{managedJoinReceipt}', $5::jsonb)
+              where tenant_id=$1 and operation_id=$2 and player_id=$3 and decision_id=$4
+                and activity_type='GAME' and activity_id=$6 and snapshot ? 'managedJoin'
+                and not (snapshot ? 'managedJoinReceipt')`,
+            [
+              input.tenantId,
+              input.evidence.operationId,
+              input.actorUserId,
+              reservation.eligibility_decision_id,
+              JSON.stringify(parseManagedJoinReceipt(input.managedJoinReceipt)),
+              input.gameId,
+            ],
+          );
+          if (receiptStored.rowCount !== 1) throw new Error('GAME_PAYMENT_EVIDENCE_APPLY_LOST');
+        }
         const result = {
           outcome: 'applied' as const,
           commandId,
