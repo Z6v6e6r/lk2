@@ -2,7 +2,7 @@
 
 ## Решение после station packets — 2026-11-01
 
-**NO-GO.** Дополнительно приняты source/CI пакеты LK#275741543d2, LK#27662e32f7b и CUP#631abc9150. Они подтверждают owner lifetime/roster fences и физический TRAINING replay/LEFT case. LK2#5273143ffbe ожидает исправленныйfullCI41244545169; #52826c5ceaa имеет54 LOCAL cases/review/scanner PASS, но CI блокирует конфликт с родительским bundle. Для точного локального merge запрошено разрешение; действие не выполнено.
+**NO-GO.** Дополнительно приняты source/CI пакеты LK#275741543d2, LK#27662e32f7b и CUP#631abc9150. Они подтверждают owner lifetime/roster fences и физический TRAINING replay/LEFT case. LK2#5273143ffbe принят на fullCI41244545169 SUCCESS:7529passed/126skipped, managedJOIN PG10/10, required27physical+8guards zeroSKIP; #52826c5ceaa имеет54 LOCAL cases/review/scanner PASS, но CI блокирует конфликт с родительским bundle. Для точного локального merge запрошено разрешение; действие не выполнено.
 
 Эти результаты не закрывают CREATE1/4, денежное settlement/recovery, полный tournament/signup/leave, оставшиеся native/chat journeys, signing/provider/device/store и production acceptance. Новые merge, migration, activation, publication, deploy и live mutations не выполнялись. Свежие main остаются LK2a37c05a2, LK608ebe20, CUP83b1c17b. Подробности и точные SHA — в [READINESS](R1-READINESS.md).
 

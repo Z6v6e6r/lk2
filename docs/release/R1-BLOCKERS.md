@@ -2,9 +2,9 @@
 
 ## Station packet delta — 2026-11-01
 
-**B07 PARTIAL:** LK#275741543d2, LK#27662e32f7b and CUP#631abc9150 have green CI, including physical membership-lifetime cases. LK2#5273143ffbe awaits corrected full CI; #52826c5ceaa has54 LOCAL cases and independent reviews but parent bundle conflict blocks CI. Local synchronization needs exact approval; it is not main merge authority. Old statements that the entire station lifetime contract is unimplemented are superseded by this source-only delta.
+**B07 PARTIAL:** LK#275741543d2, LK#27662e32f7b and CUP#631abc9150 have green CI, including physical membership-lifetime cases. LK2#5273143ffbe fullCI41244545169 SUCCESS:7529passed/126skipped, managedJOIN PG10/10, required27physical+8guards zeroSKIP; #52826c5ceaa has54 LOCAL cases and independent reviews but parent bundle conflict blocks CI. Local synchronization needs exact approval; it is not main merge authority. Old statements that the entire station lifetime contract is unimplemented are superseded by this source-only delta.
 
-Residual station blockers: LK2 physical PostgreSQL acceptance, coordinated cross-repo activation/signing, original outbox retention/DLQ recovery, legacy/unadopted and remaining native consumers. Cancellation retains membership; new registration returns after LEFT; admin removal/ban never auto-returns. B03 CREATE, monetary B04, tournament owner/consumer B05, native B06, delivery/signing/runtime B08–B11 remain open. No P0 is closed solely by green CI.
+Residual station blockers: TRAINING consumer physical PostgreSQL acceptance, coordinated cross-repo activation/signing, original outbox retention/DLQ recovery, legacy/unadopted and remaining native consumers. Cancellation retains membership; new registration returns after LEFT; admin removal/ban never auto-returns. B03 CREATE, monetary B04, tournament owner/consumer B05, native B06, delivery/signing/runtime B08–B11 remain open. No P0 is closed solely by green CI.
 
 ## Текущие P0 остатки
 

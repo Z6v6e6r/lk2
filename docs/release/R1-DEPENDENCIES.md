@@ -4,7 +4,7 @@
 
 `LK#275 + CUP#63 → LK#276 → LK2#527/#528 physical CI → reviewed0108 migration/signing/coordinated writer package → separately approved runtime/device acceptance`.
 
-LK#275/#276 and CUP#63 CI are green. #527 corrected head3143ffbe is pendingCI. #52826c5ceaa is source-reviewed with54 LOCAL cases, but needs exact approved local synchronization with parent3143 before PR CI can start. This is independent of the still-pending local #525 update request; no merge is inferred from a development request. All production transitions remain separately gated.
+LK#275/#276 and CUP#63 CI are green. #527 corrected head3143ffbe has fullCI41244545169 SUCCESS (managedJOIN PG10/10, required27physical+8guards zeroSKIP). #52826c5ceaa is source-reviewed with54 LOCAL cases, but needs exact approved local synchronization with parent3143 before PR CI can start. This is independent of the still-pending local #525 update request; no merge is inferred from a development request. All production transitions remain separately gated.
 
 Training uses authoritative providerStudioId from its verified original capsule and validated receiptId as generation. It does not depend on GAME court-binding0105. Legacy NULL and pre-adoption GAME snapshots stay excluded; no retrofit/backfill. Current subscription training actor/target fence remains until a real training LEAVE/rejoin contract exists.
 
