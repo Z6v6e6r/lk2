@@ -3,6 +3,27 @@ import XCTest
 @testable import PadlHubSession
 
 final class MessagingCommandTests: XCTestCase {
+  func testDirectCreationAndOtherProfileAreExactAuthenticatedResources() throws {
+    let body = "{\"otherUserId\":\"\(id)\"}"
+    let command = MessagingCommand(resource: "createDirect")
+    let request = try SessionRequest(operation: .messaging, headers: ["Authorization":"Bearer synthetic", "Idempotency-Key":key], body:body, messaging:command).urlRequest(configuration:configuration)
+    XCTAssertEqual(request.httpMethod, "POST")
+    XCTAssertEqual(request.url?.path, "/user/api/v1/synthetic/conversations/direct")
+    XCTAssertFalse(request.httpShouldHandleCookies)
+    XCTAssertEqual(request.value(forHTTPHeaderField:"Idempotency-Key"), key)
+    XCTAssertThrowsError(try MessagingCommand(resource:"createDirect", id:id).path(configuration:configuration))
+    for body in ["{}", "[]", "{\"otherUserId\":true}", "{\"otherUserId\":\"../x\"}", "{\"otherUserId\":\"\(id)\",\"tenant\":\"other\"}"] {
+      XCTAssertThrowsError(try command.validatedBody(body, key:key))
+    }
+    for headers in [["Authorization":"Bearer synthetic"], ["Idempotency-Key":key]] {
+      XCTAssertThrowsError(try SessionRequest(operation:.messaging, headers:headers, body:body, messaging:command).urlRequest(configuration:configuration))
+    }
+    let read = CabinetRead(resource:.playerProfile, id:id)
+    XCTAssertEqual(try read.url(configuration:configuration).path, "/user/api/v1/synthetic/profiles/\(id)")
+    XCTAssertThrowsError(try CabinetRead(resource:.playerProfile, id:id, query:["tenant":"other"]).url(configuration:configuration))
+    XCTAssertThrowsError(try CabinetRead(resource:.playerProfile, id:"../x").url(configuration:configuration))
+    XCTAssertThrowsError(try SessionRequest(operation:.read, read:read).urlRequest(configuration:configuration))
+  }
   let id = "00000000-0000-4000-8000-000000000001"
   let key = "synthetic-message-key"
   var configuration: SessionConfiguration {

@@ -1,7 +1,7 @@
 import Foundation
 import CoreFoundation
 
-/// A closed set of existing conversation commands. No caller-supplied URL or HTTP method.
+/// A closed set of text conversation commands. No caller-supplied URL or HTTP method.
 public struct MessagingCommand: Sendable {
   public let resource: String
   public let id: String?
@@ -10,13 +10,17 @@ public struct MessagingCommand: Sendable {
     self.id = id
   }
   var isTicket: Bool { resource == "realtimeTicket" }
-  var method: String { resource == "sendMessage" || isTicket ? "POST" : "PUT" }
+  var method: String { resource == "sendMessage" || resource == "createDirect" || isTicket ? "POST" : "PUT" }
 
   func path(configuration: SessionConfiguration) throws -> String {
     let root = "/user/api/v1/\(configuration.tenant)"
     if isTicket {
       guard id == nil else { throw SessionFailure.request }
       return root + "/messaging/realtime-ticket"
+    }
+    if resource == "createDirect" {
+      guard id == nil else { throw SessionFailure.request }
+      return root + "/conversations/direct"
     }
     guard let id, UUID(uuidString: id) != nil else { throw SessionFailure.request }
     let suffix: String
@@ -38,6 +42,11 @@ public struct MessagingCommand: Sendable {
       let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { throw SessionFailure.request }
     switch resource {
+    case "createDirect":
+      guard Set(object.keys) == ["otherUserId"], let userID = object["otherUserId"] as? String,
+        UUID(uuidString: userID) != nil,
+        userID.range(of: "^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$", options: .regularExpression) != nil
+      else { throw SessionFailure.request }
     case "sendMessage":
       guard Set(object.keys) == ["clientMessageId", "body"],
         let clientID = object["clientMessageId"] as? String, clientID == key,

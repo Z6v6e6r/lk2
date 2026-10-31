@@ -17,6 +17,49 @@ function fixture() {
   };
 }
 describe('iOS existing-conversation native boundary', () => {
+  it('maps only an exact direct-create command and denies extra bodies/methods', async () => {
+    const { fetch, request } = fixture();
+    await fetch(`${root}/conversations/direct`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ otherUserId: viewerId }),
+    });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'messaging', resource: 'createDirect' }),
+    );
+    expect(request.mock.calls[0]?.[0]).not.toHaveProperty('resourceId');
+    request.mockClear();
+    for (const body of [
+      { otherUserId: viewerId, tenantId: viewerId },
+      { otherUserId: '../x' },
+      { otherUserId: 1 },
+      {},
+    ]) {
+      await expect(
+        fetch(`${root}/conversations/direct`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        }),
+      ).rejects.toMatchObject({ code: 'NATIVE_REQUEST_REJECTED' });
+    }
+    for (const path of ['/conversations/direct?x=1', '/conversations/%64irect'])
+      await expect(
+        fetch(root + path, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ otherUserId: viewerId }),
+        }),
+      ).rejects.toBeDefined();
+    await expect(
+      fetch(`${root}/conversations/direct`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ otherUserId: viewerId }),
+      }),
+    ).rejects.toBeDefined();
+    expect(request).not.toHaveBeenCalled();
+  });
   it.each([
     ['/conversations?limit=100', 'conversations'],
     [`/conversations/${viewerId}/messages?afterSequence=0&limit=100`, 'conversationMessages'],

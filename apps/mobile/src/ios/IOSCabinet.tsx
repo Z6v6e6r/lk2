@@ -6,6 +6,13 @@ import {
 } from '../android-push.js';
 import { IOSNotifications } from './IOSNotifications.js';
 import { IOSChats } from './IOSChats.js';
+import { IOSDirectStart } from './IOSDirectStart.js';
+import {
+  IOSDirectController,
+  directRecipient,
+  readOtherProfile,
+  playerIdPattern,
+} from './direct-start.js';
 import { readIOSConversations } from './chat-data.js';
 import {
   CHATS_UNREAD_REFRESH_INTERVAL_MS,
@@ -207,6 +214,46 @@ function Home({
           onRetryViewer={viewer.retry}
           onRetryUpcoming={bookings.retry}
           onLogout={onLogout}
+        />
+      )}
+    </QueryResult>
+  );
+}
+
+function OtherProfile({
+  session,
+  viewerId,
+  userId,
+  onLogout,
+}: {
+  readonly session: IOSSession;
+  readonly viewerId: string;
+  readonly userId: string;
+  readonly onLogout: () => void;
+}) {
+  const load = useCallback(
+    () => readOtherProfile(session, viewerId, userId),
+    [session, viewerId, userId],
+  );
+  const profile = useQuery(load);
+  if (!profile.value)
+    return (
+      <Page title="Профиль игрока">
+        <QueryResult query={profile}>{() => null}</QueryResult>
+      </Page>
+    );
+  return (
+    <QueryResult query={profile}>
+      {(value) => (
+        <ProfilePage
+          profile={value}
+          logoutBusy={false}
+          onLogout={onLogout}
+          navigation={<Navigation />}
+          publicProfileOrigin={session.configuration.apiBaseUrl}
+          notificationsAvailable={false}
+          friendsAvailable={false}
+          subscriptionRenewalAvailable={false}
         />
       )}
     </QueryResult>
@@ -436,6 +483,10 @@ export function IOSCabinet({
   readonly auth: AuthenticatedSession;
 }): React.JSX.Element {
   const route = useCabinetRoute();
+  const directController = useMemo(
+    () => new IOSDirectController(session, auth.user.id),
+    [session, auth.user.id],
+  );
   useEffect(() => {
     let active = true;
     setChatsUnreadCount(0);
@@ -509,6 +560,8 @@ export function IOSCabinet({
     path,
   );
   if (path === '/') content = <Home data={data} auth={auth} onLogout={logout} />;
+  else if (path === '/chats/new')
+    content = <IOSDirectStart controller={directController} recipient={directRecipient(route)} />;
   else if (path === '/chats' || chat)
     content = (
       <IOSChats
@@ -519,6 +572,19 @@ export function IOSCabinet({
     );
   else if (path === '/profile' || path === `/profile/${auth.user.id}`)
     content = <Profile data={data} origin={session.configuration.apiBaseUrl} onLogout={logout} />;
+  else if (
+    route === path &&
+    path.startsWith('/profile/') &&
+    playerIdPattern.test(path.slice('/profile/'.length))
+  )
+    content = (
+      <OtherProfile
+        session={session}
+        viewerId={auth.user.id}
+        userId={path.slice('/profile/'.length)}
+        onLogout={logout}
+      />
+    );
   else if (path === '/notifications')
     content = (
       <IOSNotifications
