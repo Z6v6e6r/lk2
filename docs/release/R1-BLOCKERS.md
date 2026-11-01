@@ -2,7 +2,7 @@
 
 ## Актуальные блокеры — 2026-11-01
 
-B07 PARTIAL: station Web/native и tournament Web/API/READ имеют SOURCE/CI, CUP73 закрывает type-flip epoch defect, CUP74/LK2546 — causal baseline/READ. Native tournament/realtime, common integration и runtime acceptance открыты. B08: station producer→current-recipient ACL→inbox→guarded push больше не MISSING —545 SOURCE/CI VERIFIED,26 physical cases. Tournament query adapter в реализации; durable importer/dispatch ещё MISSING. Runtime privileges/provider/device остаются UNKNOWN/BLOCKED.
+B07 PARTIAL: station Web/native и tournament Web/API/READ имеют SOURCE/CI, CUP73 закрывает type-flip epoch defect, CUP74/LK2546 — causal baseline/READ. Общий source549 прошёл combined CI; согласование native, tournament realtime и runtime acceptance открыты. B08: station producer→current-recipient ACL→inbox→guarded push больше не MISSING —545 SOURCE/CI VERIFIED,26 physical cases. Tournament query adapter548/CUP75 SOURCE/CI VERIFIED, включая6PG/10Mongo; durable importer/dispatch ещё MISSING. Runtime privileges/provider/device остаются UNKNOWN/BLOCKED.
 
 B04 monetary settlement BLOCKED: недоступный Swagger не заменяется общим балансом или cancellation status. Новый aggregate-only managed compensation запрещён286; исторические exact receipts сохранены. Training LEAVE аудит выявил отсутствие leave-generation/re-registration и per-booking visit-credit proof: иной возврат может изменить общий visitsLeft, baseline старого split flow сохраняется после DELETE. SERVICE/NONE передают одинаковый EndUser payload `{}`; UI-режим не доказывает сохранение посещения.
 

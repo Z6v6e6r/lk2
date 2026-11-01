@@ -6,7 +6,7 @@
 
 CUP74/LK2546 требуют согласованных owner/API,0113 lookup index, existing Mongo index readiness/read-marker adoption и хранения original receipts. MESSAGE547 сохраняет original custody; уже отправленный запрос не отзывает. Новые HEAD/CI: [READINESS](R1-READINESS.md).
 
-Обновлённая source batch A только запрошена; native542 — следующий отдельный этап. Merge/main, publication, dispatch, ключи/подпись, realDB/index/adoption и deploy не выполнялись и не разрешаются этим runbook. Успешный source CI не является сигналом включения production config.
+Source batch A выполнена в Draft549, combined full/Android/iOS CI SUCCESS; native542 — следующий отдельно согласуемый этап. Query548/CUP75 имеет SOURCE/CI, но не importer/sender; activation требует dedicated purpose keys, existing indexes/0113, stream/floor, clock bounds и согласованных current mappings. Создание ключей и любые grants не входят в source-пакет. Merge/main, publication, dispatch, ключи/подпись, realDB/index/adoption и deploy не выполнялись и не разрешаются этим runbook. Успешный source CI не является сигналом включения production config.
 
 ## Предыдущая контрольная точка source/CI — 2026-11-01
 

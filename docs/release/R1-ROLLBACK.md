@@ -6,6 +6,8 @@
 
 CUP74/LK2546: сохранить read positions/baselines/receipts/original UUID; не сбрасывать stream/readThrough, не повторять READ POST из reload. MESSAGE547 блокирует ещё не отправленный stale original, но не отзывает уже отправленный запрос: GET original recovery сохраняется.
 
+Query548/CUP75 не создаёт delivery custody; будущий importer обязан сохранять global message/user key, выбранный original context и watermark только после полного bounded scan. Нельзя переключить повторную обработку на новую membership generation или считать старую eligibility свежей. Source integration549 сохраняет frozen ledger и исходные0111–0113; bundle воспроизводится побайтно.
+
 Фактический runtime rollback/restore не выполнялся. Source отключение совместимо лишь при сохранении новых данных и writer floors; возвращение к старым aggregate-only compensation или type-flip writers восстанавливает известные дефекты. Evidence: [READINESS](R1-READINESS.md).
 
 ## Предыдущая контрольная точка source/CI — 2026-11-01

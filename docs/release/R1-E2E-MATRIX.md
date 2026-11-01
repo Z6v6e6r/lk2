@@ -5,9 +5,10 @@
 - Station545 CI:26 physical PG cases — immutable context, current mapping/epoch, ordinary/scenario restricted-role compatibility, dispatch marker ACK loss/UNKNOWN, safe transport и no-resend после возможной отправки. Синтетические providers; реальные push receipts отсутствуют.
 - Tournament CUP74:9 physical Mongo cases — immutable original READ result, lost ACK/stale cleanup, publication↔JOIN/ASSIGN, leave/revoke, adoption/readiness. LK2546:6 physical PG identity/generation cases; невозможный duplicate теперь проверяет реальное unique constraint.
 - MESSAGE547: gateway7+SDK6 выполняются в fullCI; pending revoke, повторный login с тем же token во время WebCrypto, сохранение исходного UUID/body, отказ раскрыть stale response. Unit totals не складываются с повторными адресными suite.
+- Polling550:37 LOCAL cases/4suites проверяют idle arrival, hidden/offline/unmount/logout, no overlap/event storms, history/read-position failures, combined429+history error, zero automatic MESSAGE/READ. Full CI pending; независимое review CLEAR.
 - Native CI545/546/547 unsigned; Keychain app-hosted case пропущен явно. Android54516JVM и APK metadata не заменяют physical install/upgrade. Полная native/provider матрица остаётся PARTIAL.
 
-Точные commits/runs и пределы — в [READINESS](R1-READINESS.md). Новые query-adapter tests пока не приняты; прежние LOCAL temp receipts недоступны после перерыва, повторное исполнение заявляется только по новым логам.
+Точные commits/runs и пределы — в [READINESS](R1-READINESS.md). Query548/CUP75: owner14+wire1,6physicalPG,9unit+3proof и10physicalMongo PASS; покрыты missing-current-marker, identity ambiguity, fixed frontier и immutable original witness. Общая integration549: LOCAL251focused+30bundle/inventory PASS, полный CI41334645268 SUCCESS8403PASS/127SKIP,36physical+8guards без пропусков; прежние LOCAL temp receipts недоступны после перерыва, повторное исполнение заявляется только по новым логам.
 
 ## Предыдущая контрольная точка source/CI — 2026-11-01
 

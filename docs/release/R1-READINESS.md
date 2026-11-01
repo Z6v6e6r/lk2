@@ -1,6 +1,16 @@
 # LK2 R1 — аудит готовности к production release
 
-## Актуальная контрольная точка — 2026-11-01 (после возобновления)
+## Актуальная source-интеграция — 2026-11-01
+
+**NO-GO для production.** Разрешённая локальная партия A выполнена: [#549](https://github.com/Z6v6e6r/lk2/pull/549) `ea99810c9ff1ecf9dee77d20467468bc620fd980` объединяет точные #5470869bc3b, #545a81b774b, #53663bd45ff и #5391de0ef60. Независимое security/reliability/compatibility review CLEAR. LOCAL:251 профильный тест в15 suites (составное evidence после восстановления двух dependency collection failures),30 bundle/inventory tests, пять TypeScript configs, scoped lint, OpenAPI/migration safety PASS.117 миграций; frozen ledger сохранён. Canonical bundle побайтно совпадает, SHA256 `ee2965e6b16b96377de2dcebb1a3b78f4fcc60b6324b412b537151fad6bcbff4`.100-file delta и15 новых исходящих commits прошли secret scan; единственный PII-regex match — reserved example.test unsafe-origin fixture. Full CI41334645268 SUCCESS:8403PASS/127SKIP, stationPG26, quarterPG20, trainingPG11, managedJOIN10, SELF9, tournamentPG7/generation6/actor5/organizer3, closedPG4; required36physical+8guards без пропусков. Static/security/deployment/provenance и5Docker PASS. Android41334645385 SUCCESS (unsigned build/JVM gate), iOS41334645543 SUCCESS44PASS/1app-hosted KeychainSKIP,unsigned simulator. Native542 и query548 не включены.
+
+Tournament query [LK2#548](https://github.com/Z6v6e6r/lk2/pull/548) `40916fd3c5c36bfd2db61e41a9a008200e038438` и [CUP#75](https://github.com/Z6v6e6r/ph-admin/pull/75) `5d134c8779c35a822dedc06151dbeefe63f453e5` SOURCE/CI VERIFIED только для readonly publications/recipients/eligibility и canonical identity resolver. LK2 full41333537281 SUCCESS:8130PASS/127SKIP, новыеPG6, owner14, actual-wire1, closedPG4, required28physical+8guards без пропусков;5Docker/static/security PASS. iOS41333537269:44PASS/1app-hosted KeychainSKIP,unsigned simulator. CUP41333531805 SUCCESS:10notificationMongo без пропусков,unit9/proof3,build. Global message/user dedup, durable importer/outbox/dispatch ещё отсутствуют; текущая дедупликация ограничена страницей. Query proof не гарантирует доставку или отмену конкурентного изменения ACL.
+
+Отдельный [#550](https://github.com/Z6v6e6r/lk2/pull/550) `1f4e7e801f195240522b50b7ffcdab487e6ced46` добавляет автоматический visible/online HTTP catch-up турнирного чата: отсутствие параллельных запросов,20→60s backoff,42960s, original-principal/ACL/gap fences, ноль автоматических MESSAGE/READ. LOCAL37cases/4suites PASS, typecheck/lint/format/scans PASS, независимое review CLEAR; ошибка combined position429+history failure воспроизведена RED2 и исправлена. Full41335534485/native CI выполняются. Это не push-based realtime или delivery SLA.
+
+Далее: отдельно согласованная native-интеграция542 после общего green549; tournament durable consumer и native Stage B; attributable settlement остаётся BLOCKED. Main merge, публикация, flags, realDB/provider/signing/deploy/store операции не выполнялись. Ни CI, ни unsigned builds не подтверждают STAGING/PROVIDER/PRODUCTION/device acceptance.
+
+## Предыдущая контрольная точка — 2026-11-01 (после возобновления)
 
 **NO-GO для production.** Последний live readback GitHub main: LK2 `a37c05a2b2a28c8d53cb14447d357ad9a96bda1f`, LK `608ebe20689e74749fcd8cea6ab97d35c335f214`, CUP `83b1c17bc4c5edaec65387b25b5695e48337c3cf`; drift относительно предыдущего checkpoint нет. Новые пакеты остаются отдельными Draft PR. Текущий раздел имеет приоритет над историческими статусами ниже.
 
