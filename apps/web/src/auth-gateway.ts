@@ -1929,7 +1929,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       }
       return session;
     } catch (error) {
-      client.clearAccessToken();
+      // The SDK retires only the refresh generation that failed. A stale restore must
+      // not clear credentials installed by a newer successful authentication.
       if (isUnauthorized(error)) return null;
       throw error;
     }

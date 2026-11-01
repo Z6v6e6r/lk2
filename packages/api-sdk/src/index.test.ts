@@ -1377,14 +1377,14 @@ describe('PadlHubApiClient authentication boundary', () => {
     expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBe(firstKey);
   });
 
-  it('keeps the in-memory access token when logout does not reach the server', async () => {
+  it('retires local credentials when logout cannot confirm server revocation', async () => {
     const fetchImplementation: typeof fetch = () => Promise.reject(new TypeError('offline'));
     const client = createClient(fetchImplementation, {
       initialAccessToken: authenticatedSession.accessToken,
     });
 
     await expect(client.revokeSession()).rejects.toThrow('offline');
-    expect(client.getAccessToken()).toBe(authenticatedSession.accessToken);
+    expect(client.getAccessToken()).toBeUndefined();
   });
 
   it('does not try to refresh a rejected public authentication request', async () => {

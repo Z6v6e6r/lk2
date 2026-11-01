@@ -180,3 +180,81 @@ it('unchanged native principal retains exactly one bounded retry with original k
     expect(new Headers(input?.headers).get('Authorization')).toBe('Bearer synthetic-original');
   }
 });
+
+it.each(['success', 'failure'] as const)(
+  'late initial restore %s cannot clear a newly verified gateway session',
+  async (outcome) => {
+    let finish!: (r: Response) => void, fail!: (e: Error) => void;
+    const sent: RequestInit[] = [];
+    const transport = vi.fn<typeof fetch>((raw, init) => {
+      const url = urlOf(raw);
+      if (url.endsWith('/auth/session/refresh'))
+        return new Promise((yes, no) => {
+          finish = yes;
+          fail = no;
+        });
+      if (url.endsWith('/verify'))
+        return Promise.resolve(
+          Response.json({
+            ...original,
+            accessToken: 'synthetic-new',
+            user: { ...original.user, id: other },
+            context: { ...original.context, userId: other },
+          }),
+        );
+      sent.push(init!);
+      return Promise.resolve(Response.json({}));
+    });
+    const g = createBrowserAuthGateway({
+      baseUrl: 'https://api.invalid',
+      tenantKey: 'synthetic',
+      appVersion: 'test',
+      fetchImplementation: transport,
+    });
+    const old = g.restoreSession();
+    await g.verifyCode({
+      challengeId: id,
+      code: '0000',
+      acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+    });
+    if (outcome === 'success') finish(Response.json(original));
+    else fail(new TypeError('synthetic'));
+    expect(await old).toBeNull();
+    await g.createDirectConversation(id, key);
+    expect(sent).toHaveLength(1);
+    expect(new Headers(sent[0]?.headers).get('Authorization')).toBe('Bearer synthetic-new');
+  },
+);
+it('changed cookie identity cannot silently authorize a messaging command; explicit restore adopts it', async () => {
+  let refreshes = 0,
+    commandsSent = 0;
+  const newSession = {
+    ...original,
+    accessToken: 'synthetic-new',
+    user: { ...original.user, id: other },
+    context: { ...original.context, userId: other },
+  };
+  const transport = vi.fn<typeof fetch>((raw) => {
+    const url = urlOf(raw);
+    if (url.endsWith('/auth/session/refresh'))
+      return Promise.resolve(Response.json(++refreshes === 1 ? original : newSession));
+    if (url.includes('/messages?')) return Promise.resolve(new Response(null, { status: 401 }));
+    commandsSent++;
+    return Promise.resolve(Response.json({}));
+  });
+  const g = createBrowserAuthGateway({
+    baseUrl: 'https://api.invalid',
+    tenantKey: 'synthetic',
+    appVersion: 'test',
+    fetchImplementation: transport,
+  });
+  await g.restoreSession();
+  await expect(g.listConversationMessages(id)).rejects.toMatchObject({
+    code: 'AUTH_PRINCIPAL_CHANGED',
+  });
+  await expect(g.createDirectConversation(id, key)).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+  expect(commandsSent).toBe(0);
+  expect((await g.restoreSession())?.context.user.id).toBe(other);
+  await g.createDirectConversation(id, key);
+  expect(commandsSent).toBe(1);
+});
