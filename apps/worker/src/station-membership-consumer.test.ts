@@ -138,7 +138,7 @@ describe('station delivery from persisted confirmation', () => {
     expect(f.signer.issue).not.toHaveBeenCalled();
     expect(f.channel.nack).toHaveBeenCalledOnce();
   });
-  it('declares a durable bounded-retry queue for only the existing confirmed event', async () => {
+  it('declares a durable bounded-retry queue for the three explicit confirmed events', async () => {
     const f = fixture();
     await registerStationMembershipConsumer(f.options);
     expect(f.channel.assertQueue).toHaveBeenCalledWith(STATION_MEMBERSHIP_QUEUE, {
@@ -149,7 +149,7 @@ describe('station delivery from persisted confirmation', () => {
         'x-dead-letter-exchange': 'phub.dead-letter',
       },
     });
-    expect(f.channel.bindQueue).toHaveBeenCalledTimes(2);
+    expect(f.channel.bindQueue).toHaveBeenCalledTimes(3);
     expect(f.channel.bindQueue).toHaveBeenCalledWith(
       STATION_MEMBERSHIP_QUEUE,
       'phub.events',
@@ -196,4 +196,88 @@ it('training event uses only original receipt-backed fact; wrong status and kind
   );
   expect(trainingRepository.loadTrainingConfirmedFact).toHaveBeenCalledOnce();
   expect(f.channel.nack).toHaveBeenCalledOnce();
+});
+
+describe('explicit CREATE organizer confirmation event', () => {
+  const created = {
+    id: id(1),
+    type: 'game.quarter-create.organizer-confirmed.v1',
+    tenantId: id(2),
+    aggregateId: id(7),
+    occurredAt: '2026-11-01T10:00:00.000Z',
+    correlationId: 'synthetic-create',
+    payload: {
+      operationId: id(7),
+      draftId: id(3),
+      userId: id(4),
+      generationId: id(5),
+      status: 'CONFIRMED',
+    },
+  };
+  it('loads original durable CREATE fact, signs exact explicit kind and retries same generation after ACK loss', async () => {
+    const f = fixture(),
+      fact = {
+        ...f.fact,
+        request: {
+          ...f.fact.request,
+          confirmation: {
+            kind: 'GAME_CREATE_ORGANIZER' as const,
+            generationId: id(5),
+            activityId: id(3),
+          },
+        },
+      },
+      quarterRepository = { loadQuarterConfirmedFact: vi.fn(() => Promise.resolve(fact)) },
+      options = { ...f.options, quarterRepository };
+    f.client.confirm.mockRejectedValueOnce(new Error('lost ack'));
+    const m = message(created);
+    await handleStationMembershipMessage(options, m);
+    expect(f.channel.reject).toHaveBeenCalledWith(m, true);
+    await handleStationMembershipMessage(options, m);
+    expect(f.channel.ack).toHaveBeenCalledOnce();
+    expect(f.repository.loadConfirmedFact).not.toHaveBeenCalled();
+    expect(quarterRepository.loadQuarterConfirmedFact).toHaveBeenCalledWith({
+      tenantId: id(2),
+      eventId: id(1),
+      operationId: id(7),
+      draftId: id(3),
+      userId: id(4),
+      generationId: id(5),
+    });
+    expect(f.signer.issue).toHaveBeenCalledWith({
+      mode: 'confirmation',
+      caller: 'lk2-worker',
+      ...fact,
+    });
+    expect(f.client.confirm.mock.calls[0]).toEqual(f.client.confirm.mock.calls[1]);
+    expect(JSON.stringify(f.logger.info.mock.calls)).not.toContain('synthetic.delegation');
+  });
+  it('missing or corrupt CREATE journal retries without signing; malformed/foreign payload is rejected', async () => {
+    const f = fixture(),
+      m = message(created);
+    await handleStationMembershipMessage(f.options, m);
+    expect(f.channel.reject).toHaveBeenCalledWith(m, true);
+    const options = {
+      ...f.options,
+      quarterRepository: {
+        loadQuarterConfirmedFact: vi.fn(() => Promise.reject(new Error('corrupt receipt'))),
+      },
+    };
+    await handleStationMembershipMessage(options, m);
+    expect(f.signer.issue).not.toHaveBeenCalled();
+    await handleStationMembershipMessage(
+      options,
+      message({ ...created, payload: { ...created.payload, providerExerciseId: 'private' } }),
+    );
+    expect(f.channel.nack).toHaveBeenCalled();
+  });
+  it('binds exact CREATE event on existing durable bounded queue', async () => {
+    const f = fixture();
+    await registerStationMembershipConsumer(f.options);
+    expect(f.channel.bindQueue).toHaveBeenCalledWith(
+      STATION_MEMBERSHIP_QUEUE,
+      'phub.events',
+      'game.quarter-create.organizer-confirmed.v1',
+    );
+  });
 });

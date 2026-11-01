@@ -106,3 +106,71 @@ remains off; this source packet does not activate the feature.
 The additive CHECK may scan existing journal rows under ALTER lock. Lock/statement
 timeouts bound failure; production lock-duration acceptance requires separate rehearsal
 and migration approval. Rollback retains the column rather than dropping data.
+
+## Quarter CREATE organizer producer
+
+This source adds explicit `GAME_CREATE` admission and `GAME_CREATE_ORGANIZER`
+confirmation. It does not relabel CREATE as JOIN. The reviewed LK receiver #280
+must be installed before this producer; older receivers reject the new kinds.
+The quarter CREATE journal remains separate from canonical game/roster projection:
+the existing importer is the only writer of those rows. Enrollment does not wait
+for projection and does not manufacture a game, participant or provider booking.
+
+Migration 0111 adds only nullable private `station_membership` to 0110. NULL is
+permanent pre-adoption: existing, completed and restrictive absent-row refusals
+are never upgraded. New commands under the existing station lifetime flag begin
+with `PENDING_ADMISSION`. The preparation lease pins the complete verified original
+CREATE admission and its canonical hash as `INTENT` **before** station admission
+POST. Subsequent retries reuse exactly that capsule, actor, request and operation;
+no newer preparation timestamp or membership epoch is substituted. The existing
+station signer supplies a fresh session-bound delegation. No bearer token, signing
+material, provider response body or delegation is persisted in this marker.
+
+Only an exact validated receiver response becomes `OWNER_ADMISSION`, atomically
+with the same original CREATE capsule in PREPARED. The existing finite explicit
+NO_ENROLLMENT reasons are preserved (including blocked membership); such a result
+permits booking without enrollment. Disabled/unready receivers, missing transport,
+malformed responses and timeouts hold the operation before any CREATE dispatch.
+A handled failure releases only its own preparation lease; it never releases key
+custody or refreshes the capsule. A crash retains the bounded lease. A command can
+expire an original pinned capsule using the DB clock, recording
+EXPIRED_NOT_DISPATCHED with that same capsule; reads never expire or dispatch.
+Pending station admission is exposed as GAME_QUARTER_CREATE_STATION_ADMISSION_PENDING.
+No claimDispatch/recoveryOnly marker is created merely to guard station admission.
+
+Exact terminal combinations are PENDING_ADMISSION + pre-prepare refusal,
+INTENT + pinned expiry, OWNER_ADMISSION + prepared expiry or owner REJECTED,
+and CONFIRMED_FACT + confirmed original receipt. The additive CHECK rejects old
+prepare/dispatch writes for incomplete adopted markers and old completion without
+CONFIRMED_FACT. Canonical hashes and every capsule/actor/context/receipt binding are
+verified again on reload; SQL constraints alone are not cryptographic verification.
+
+Confirmation writes the immutable receipt, CONFIRMED_FACT, audit and (only for an
+ADMITTED original receiver result) `game.quarter-create.organizer-confirmed.v1`
+outbox event in one transaction. Its payload contains public operationId, draftId,
+userId, generationId and status only. Generation is UUIDv8 of the canonical hash
+under `station-quarter-create-generation:v1` over tenantId and original provider
+client/exercise/booking IDs. Operation/key/timestamps are deliberately excluded:
+replaying one original booking with a different key cannot create a new generation.
+Provider IDs stay in private integration custody, never in this event/public DTO.
+
+The worker reloads the exact persisted event, canonical command fence and confirmed
+journal, recomputes receipt/capsule/generation hashes, and signs the explicit CREATE
+fact. Missing or corrupt facts retry through the existing quorum delivery limit/DLQ;
+no provider read, user impersonation, re-admission or new booking occurs. Receiver
+claims are kind-namespaced: no cross-kind JOIN/CREATE deduplication is claimed.
+Cancellation retains membership; same original CREATE generation cannot restore
+LEFT; a genuinely new confirmed registration may restore LEFT only under its new
+admission. REMOVED/BANNED remain blocked. Explicit NO_ENROLLMENT emits no enrollment
+event; it is not an ambiguous worker skip.
+
+Activation requires separately authorized 0111 migration, coherent API/worker and
+receiver versions, draining old in-flight API writers, signer/queue readiness and
+physical CI plus runtime acceptance. An old binary can still insert NULL; this
+packet does not invent a writer-floor service. Defaults/credentials are unchanged.
+Rollback stops producer/delivery via existing gates and retains all markers,
+receipts, outbox and receiver claims. Adopted INTENT stays held while transport is
+disabled, never downgraded to NO_ENROLLMENT. Do not drop the column or backfill NULL.
+The CHECK may scan existing rows; bounded lock/statement timeouts are not production
+lock-duration evidence. LOCAL synthetic tests and CI-only physical fixtures do not
+prove provider, deployment, device or production acceptance.

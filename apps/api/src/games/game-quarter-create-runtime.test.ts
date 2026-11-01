@@ -1,9 +1,11 @@
+import { quarterStationFixture } from '../../../../packages/subscription-runtime-adapter/src/quarter-create-station.test-fixture.js';
+import { quarterStationIntent } from '@phub/subscription-runtime-adapter';
 import { describe, it, expect, vi } from 'vitest';
 import { createQuarterCreateRuntime } from './game-quarter-create-runtime.js';
 import { quarterFixture } from '../../../../packages/subscription-runtime-adapter/src/quarter-create.test-fixture.js';
 import type { QuarterAttempt, QuarterCreateRepository } from '@phub/database/quarter-create';
 import { qcAdmissionHash, type QuarterOutcome } from '@phub/domain/quarter-create';
-async function setup() {
+async function setup(adoptStation = false) {
   const f = await quarterFixture(),
     actor = {
       tenantKey: 'public-tenant',
@@ -62,6 +64,8 @@ async function setup() {
           receipt: null,
           gameId: null,
           leaseToken: null,
+          stationMembership:
+            adoptStation && !refuse ? { version: 1, outcome: 'PENDING_ADMISSION' } : null,
         });
       },
     ),
@@ -69,11 +73,36 @@ async function setup() {
       await Promise.resolve();
       return '11111111-1111-4111-8111-000000000070' as const;
     }),
+    releasePreparation: vi.fn(async () => {
+      await Promise.resolve();
+      return a;
+    }),
+    expireStationIntent: vi.fn(async () => {
+      await Promise.resolve();
+      return a;
+    }),
+    pinStationPreparation: vi.fn<QuarterCreateRepository['pinStationPreparation']>(
+      async (
+        _s: Parameters<QuarterCreateRepository['pinStationPreparation']>[0],
+        _t: string,
+        q: Parameters<QuarterCreateRepository['pinStationPreparation']>[2],
+      ) => {
+        a = { ...a!, stationMembership: await quarterStationIntent(q) };
+        return a;
+      },
+    ),
     prepared: vi.fn(
-      async () =>
+      async (
+        _s: Parameters<QuarterCreateRepository['prepared']>[0],
+        _t: string,
+        _q: Parameters<QuarterCreateRepository['prepared']>[2],
+        _c: string,
+        marker?: Parameters<QuarterCreateRepository['prepared']>[4],
+      ) =>
         (a = {
           ...a!,
           state: 'PREPARED',
+          ...(marker ? { stationMembership: marker } : {}),
           admission: f.admission,
           admissionHash: await qcAdmissionHash(f.admission),
         }),
@@ -272,6 +301,143 @@ describe('quarter command and read separation', () => {
     });
     const v = await t.runtime.execute(t.actor, t.f.key, t.f.input);
     expect(v.operation.status).toBe('EXPIRED_NOT_DISPATCHED');
+    expect(t.client.admit).not.toHaveBeenCalled();
+  });
+});
+
+describe('quarter CREATE station admission custody', () => {
+  async function adopted() {
+    const t = await setup(true),
+      m = await quarterStationFixture(t.f.admission);
+    const station = {
+      signer: { issue: vi.fn(() => 'synthetic-station-delegation') },
+      client: {
+        admit: vi.fn(async () => {
+          await Promise.resolve();
+          expect(t.get()?.stationMembership?.outcome).toBe('INTENT');
+          expect(t.repo.claimDispatch).not.toHaveBeenCalled();
+          return m.response;
+        }),
+      },
+    };
+    return {
+      ...t,
+      m,
+      station,
+      runtime: createQuarterCreateRuntime({ ...t.options, stationMembership: station }),
+    };
+  }
+  it('pins before station POST and settles before sole original provider dispatch', async () => {
+    const t = await adopted();
+    expect((await t.runtime.execute(t.actor, t.f.key, t.f.input)).operation.status).toBe(
+      'CONFIRMED',
+    );
+    expect(t.repo.pinStationPreparation).toHaveBeenCalledTimes(1);
+    expect(t.station.client.admit).toHaveBeenCalledTimes(1);
+    expect(t.client.admit).toHaveBeenCalledTimes(1);
+    expect(t.repo.prepared.mock.calls[0]?.[4]).toEqual(t.m);
+    expect(t.repo.claimDispatch).toHaveBeenCalledTimes(1);
+  });
+  it('transport failure holds INTENT and releases own lease; retry reuses exact capsule without new prepare', async () => {
+    const t = await adopted();
+    t.station.client.admit.mockRejectedValueOnce(new Error('timeout'));
+    const first = await t.runtime.execute(t.actor, t.f.key, t.f.input);
+    expect(first.operation.status).toBe('PENDING');
+    expect(t.repo.claimDispatch).not.toHaveBeenCalled();
+    expect(t.repo.releasePreparation).toHaveBeenCalledTimes(1);
+    const pinned = structuredClone(t.get()?.stationMembership);
+    await t.runtime.read(t.actor, t.f.key);
+    expect(t.get()?.stationMembership).toEqual(pinned);
+    await t.runtime.execute(t.actor, t.f.key, t.f.input, true);
+    expect(t.client.prepare).toHaveBeenCalledTimes(1);
+    expect(t.client.admit).toHaveBeenCalledTimes(1);
+    expect(t.station.client.admit.mock.calls[0]).toEqual(t.station.client.admit.mock.calls[1]);
+  });
+  it('missing station transport holds adopted attempt, while null history remains legacy', async () => {
+    const t = await setup(true);
+    expect((await t.runtime.execute(t.actor, t.f.key, t.f.input)).operation.status).toBe('PENDING');
+    expect(t.client.prepare).not.toHaveBeenCalled();
+    expect(t.repo.claimDispatch).not.toHaveBeenCalled();
+    const legacy = await setup();
+    expect(
+      (await legacy.runtime.execute(legacy.actor, legacy.f.key, legacy.f.input)).operation.status,
+    ).toBe('CONFIRMED');
+  });
+  it('ambiguous pin ACK does not send station or CREATE; original stored intent survives', async () => {
+    const t = await adopted();
+    const original = t.repo.pinStationPreparation.getMockImplementation()!;
+    t.repo.pinStationPreparation.mockImplementationOnce(async (...args) => {
+      await original(...args);
+      throw new Error('lost pin ack');
+    });
+    await t.runtime.execute(t.actor, t.f.key, t.f.input);
+    expect(t.get()?.stationMembership?.outcome).toBe('INTENT');
+    expect(t.station.client.admit).not.toHaveBeenCalled();
+    expect(t.client.admit).not.toHaveBeenCalled();
+    await t.runtime.execute(t.actor, t.f.key, t.f.input, true);
+    expect(t.client.prepare).toHaveBeenCalledTimes(1);
+  });
+  it('explicit blocked membership permits booking without replacing original receiver result', async () => {
+    const t = await adopted();
+    t.station.client.admit.mockResolvedValue(
+      (await quarterStationFixture(t.f.admission, true)).response,
+    );
+    expect((await t.runtime.execute(t.actor, t.f.key, t.f.input)).operation.status).toBe(
+      'CONFIRMED',
+    );
+    expect(t.get()?.stationMembership?.outcome).toBe('OWNER_ADMISSION');
+    expect(t.repo.prepared.mock.calls[0]?.[4]).toMatchObject({
+      response: { admission: { reason: 'MEMBERSHIP_BLOCKED' } },
+    });
+  });
+  it('malformed disabled response and signer failure never dispatch or manufacture NO_ENROLLMENT', async () => {
+    const t = await adopted();
+    t.station.client.admit.mockResolvedValue({
+      ...t.m.response,
+      admission: { ...t.m.response.admission, reason: 'DISABLED', outcome: 'NO_ENROLLMENT' },
+    });
+    await t.runtime.execute(t.actor, t.f.key, t.f.input);
+    expect(t.repo.claimDispatch).not.toHaveBeenCalled();
+    expect(t.get()?.stationMembership?.outcome).toBe('INTENT');
+    t.station.signer.issue.mockImplementation(() => {
+      throw new Error('signer unavailable');
+    });
+    await t.runtime.execute(t.actor, t.f.key, t.f.input, true);
+    expect(t.repo.claimDispatch).not.toHaveBeenCalled();
+  });
+  it('expired pinned capsule terminalizes before station or booking; no fresh preparation', async () => {
+    const t = await adopted();
+    t.station.client.admit.mockRejectedValueOnce(new Error('timeout'));
+    await t.runtime.execute(t.actor, t.f.key, t.f.input);
+    t.repo.expireStationIntent.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      const a = t.get()!;
+      t.set({ ...a, state: 'EXPIRED_NOT_DISPATCHED', admission: t.f.admission });
+      return t.get();
+    });
+    expect((await t.runtime.execute(t.actor, t.f.key, t.f.input, true)).operation.status).toBe(
+      'EXPIRED_NOT_DISPATCHED',
+    );
+    expect(t.client.prepare).toHaveBeenCalledTimes(1);
+    expect(t.station.client.admit).toHaveBeenCalledTimes(1);
+    expect(t.client.admit).not.toHaveBeenCalled();
+  });
+  it('stale preparation lease cannot POST station admission even with an existing pinned intent', async () => {
+    const t = await adopted();
+    t.station.client.admit.mockRejectedValueOnce(new Error('timeout'));
+    await t.runtime.execute(t.actor, t.f.key, t.f.input);
+    t.repo.pinStationPreparation.mockResolvedValueOnce(null);
+    await t.runtime.execute(t.actor, t.f.key, t.f.input, true);
+    expect(t.station.client.admit).toHaveBeenCalledTimes(1);
+    expect(t.repo.claimDispatch).not.toHaveBeenCalled();
+  });
+  it('unready marker schema blocks all owner/provider access before a new attempt', async () => {
+    const t = await adopted();
+    t.repo.ready.mockResolvedValue(false);
+    await expect(t.runtime.execute(t.actor, t.f.key, t.f.input)).rejects.toThrow();
+    expect(t.repo.begin).not.toHaveBeenCalled();
+    expect(t.client.prepare).not.toHaveBeenCalled();
+    expect(t.station.client.admit).not.toHaveBeenCalled();
     expect(t.client.admit).not.toHaveBeenCalled();
   });
 });

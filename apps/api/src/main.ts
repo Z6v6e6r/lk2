@@ -786,7 +786,13 @@ const gameQuarterCreate = (() => {
     keyId = config.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID!;
   return createQuarterCreateRuntime({
     enabled: true,
-    repository: createQuarterCreateRepository(pool),
+    repository: createQuarterCreateRepository(pool, {
+      stationMembershipEnabled: config.LK_STATION_MEMBERSHIP_LIFETIME_ENABLED,
+    }),
+    stationMembership:
+      createStationMembershipTransport(config, (outcome) =>
+        logger.info({ outcome }, 'quarter CREATE station membership'),
+      ) ?? undefined,
     issuer: new SubscriptionRuntimeActorDelegationIssuer({
       privateKeyPem: keys[keyId]!,
       keyId,

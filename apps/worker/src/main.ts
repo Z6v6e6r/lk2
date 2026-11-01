@@ -1,3 +1,4 @@
+import { createQuarterStationFactRepository } from '../../../packages/database/src/game-quarter-create-repository.js';
 import { createTrainingStationFactRepository } from '../../../packages/database/src/training-registration-repository.js';
 import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
 import { createStationMembershipRepository } from '../../../packages/database/src/station-membership-repository.js';
@@ -497,6 +498,7 @@ if (stationMembershipTransport) {
     logger,
     repository: createStationMembershipRepository(pool),
     trainingRepository: createTrainingStationFactRepository(pool),
+    quarterRepository: createQuarterStationFactRepository(pool),
     ...stationMembershipTransport,
   });
 }
