@@ -51,6 +51,8 @@
       "@phub/viva-adapter/notification-lifecycle": [
         "packages/viva-adapter/src/notification-lifecycle-source.ts"
       ],
+      "@phub/domain/quarter-create": ["packages/domain/src/quarter-create.ts"],
+      "@phub/database/quarter-create": ["packages/database/src/game-quarter-create-repository.ts"],
       "@phub/domain/training-registration": ["packages/domain/src/training-registration.ts"],
       "@phub/database/training-registration": [
         "packages/database/src/training-registration-repository.ts"

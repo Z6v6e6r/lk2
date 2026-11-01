@@ -591,6 +591,12 @@ export interface AuthGateway {
    * without it keeps the untouched free-create behavior.
    */
   readonly createPaidGame?: PadlHubApiClient['createPaidGame'];
+  readonly quarterCreatePrincipal?: () => string | null;
+  readonly getQuarterCreateLocations?: PadlHubApiClient['getQuarterCreateLocations'];
+  readonly getQuarterCreateCapability?: PadlHubApiClient['getQuarterCreateCapability'];
+  readonly createQuarterGame?: PadlHubApiClient['createQuarterGame'];
+  readonly getQuarterCreateOperation?: PadlHubApiClient['getQuarterCreateOperation'];
+  readonly reconcileQuarterCreateOperation?: PadlHubApiClient['reconcileQuarterCreateOperation'];
   readonly cancelGame: (gameId: string, input: CancelGameRequest) => Promise<GameCommandResult>;
   readonly joinGame: (
     gameId: string,
@@ -1001,6 +1007,17 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let tournamentLogoutStarted = false;
   let tournamentLogoutPending = 0;
   let tournamentSessionEpoch = 0;
+  function quarterCreatePrincipal(): string | null {
+    return !nativeClient && !tournamentLogoutStarted && currentUserId && currentTenantId
+      ? `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`
+      : null;
+  }
+  function requireQuarterPrincipal(original?: string): string {
+    const current = quarterCreatePrincipal();
+    if (!current || (original !== undefined && original !== current))
+      throw new Error('AUTH_PRINCIPAL_CHANGED');
+    return current;
+  }
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
   let bookingPreferencesPromise: Promise<BookingPreferences> | undefined;
@@ -2336,6 +2353,42 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.createGame(input, options);
     },
 
+    quarterCreatePrincipal,
+    async getQuarterCreateLocations() {
+      if (nativeClient) return nativeUnavailable();
+      const principal = requireQuarterPrincipal(),
+        result = await client.getQuarterCreateLocations();
+      requireQuarterPrincipal(principal);
+      return result;
+    },
+    async getQuarterCreateCapability() {
+      if (nativeClient) return { contractVersion: 1, available: false };
+      const principal = requireQuarterPrincipal(),
+        result = await client.getQuarterCreateCapability();
+      requireQuarterPrincipal(principal);
+      return result;
+    },
+    async createQuarterGame(input, key) {
+      if (nativeClient) return nativeUnavailable();
+      const principal = requireQuarterPrincipal(),
+        result = await client.createQuarterGame(input, key);
+      requireQuarterPrincipal(principal);
+      return result;
+    },
+    async getQuarterCreateOperation(key) {
+      if (nativeClient) return nativeUnavailable();
+      const principal = requireQuarterPrincipal(),
+        result = await client.getQuarterCreateOperation(key);
+      requireQuarterPrincipal(principal);
+      return result;
+    },
+    async reconcileQuarterCreateOperation(id, input, key) {
+      if (nativeClient) return nativeUnavailable();
+      const principal = requireQuarterPrincipal(),
+        result = await client.reconcileQuarterCreateOperation(id, input, key);
+      requireQuarterPrincipal(principal);
+      return result;
+    },
     createPaidGame(input, idempotencyKey) {
       return client.createPaidGame(input, idempotencyKey);
     },

@@ -1,3 +1,5 @@
+import { registerQuarterCreateRoutes } from './games/game-quarter-create-routes.js';
+import type { QuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
 import { registerTournamentLocalRoutes } from './tournaments/tournament-local-routes.js';
 import type { TournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';
 import { registerTrainingRegistrationRoutes } from './bookings/training-registration-routes.js';
@@ -416,6 +418,7 @@ export interface BuildAppOptions {
   readonly gameCommercialJoin?: GameCommercialJoinOptions;
   /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
   readonly gameCommercialCreate?: GameCommercialCreateOptions;
+  readonly gameQuarterCreate?: QuarterCreateRuntime;
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
   readonly bookedOperationRead?: Omit<
     BookedOperationReadRouteOptions,
@@ -1101,6 +1104,11 @@ export async function buildApp(options: BuildAppOptions) {
       chat: userRuntimeCapabilities.communityReadChat,
       rating: userRuntimeCapabilities.communityReadRating,
     },
+  });
+  registerQuarterCreateRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameQuarterCreate ? { runtime: options.gameQuarterCreate } : {}),
+    readHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+    commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });
   registerGameRoutes(app as unknown as FastifyInstance, {
     ...(options.gameTestCourtRepository

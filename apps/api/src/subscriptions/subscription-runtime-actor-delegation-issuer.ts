@@ -1,4 +1,22 @@
 import {
+  qcUuid,
+  qcId,
+  qcDigest,
+  qcIso,
+  qcEqual,
+  qcHash,
+  qcOperationId,
+  qcPrepareHash,
+  qcAdmissionHash,
+  qcReadBody,
+  qcReadHash,
+  parseQuarterRequest,
+  parseQuarterAdmission,
+  type QuarterRequest,
+  type QuarterAdmission,
+  type QuarterContext,
+} from '@phub/domain/quarter-create';
+import {
   parseTrainingRequest,
   parseTrainingAdmission,
   trainingHash,
@@ -119,6 +137,144 @@ export class SubscriptionRuntimeActorDelegationIssuer {
     }
   }
 
+  async issueQuarterCreate(input: {
+    mode: 'prepare' | 'admit' | 'read';
+    tenantId: string;
+    userId: string;
+    sessionId: string;
+    keySha256: string;
+    operationId: string;
+    request: QuarterRequest | QuarterAdmission;
+    context: QuarterContext;
+    correlationId: string;
+    actorToken: { token: string; expiresAt: string };
+    recoveryOnly?: true;
+  }): Promise<string> {
+    const bad = () => {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    };
+    const { context: c, mode } = input;
+    if (
+      !['prepare', 'admit', 'read'].includes(mode) ||
+      ![
+        input.tenantId,
+        input.userId,
+        input.sessionId,
+        input.operationId,
+        c.providerMappingId,
+        c.stationMappingId,
+        c.courtMappingId,
+      ].every(qcUuid) ||
+      ![
+        c.providerClientId,
+        c.providerClientSubscriptionId,
+        c.mappingVersion,
+        c.providerStationId,
+        c.providerRoomId,
+      ].every(qcId) ||
+      !qcDigest(input.keySha256) ||
+      input.operationId !== (await qcOperationId(input.tenantId, input.userId, input.keySha256)) ||
+      !correlationPattern.test(input.correlationId) ||
+      /[\r\n]/.test(input.correlationId) ||
+      !printableAsciiPattern.test(input.actorToken.token) ||
+      input.actorToken.token.length < 16 ||
+      input.actorToken.token.length > 4096 ||
+      !qcIso(input.actorToken.expiresAt) ||
+      Date.parse(input.actorToken.expiresAt) <= Date.now() + 5000 ||
+      (input.recoveryOnly !== undefined && (mode !== 'admit' || input.recoveryOnly !== true))
+    )
+      bad();
+    const q =
+      mode === 'prepare'
+        ? parseQuarterRequest(input.request)
+        : await parseQuarterAdmission(input.request);
+    if (mode !== 'prepare') {
+      const p = (q as QuarterAdmission).preparation;
+      if (
+        p.actor.tenantId !== input.tenantId ||
+        p.actor.userId !== input.userId ||
+        p.operationId !== input.operationId ||
+        p.idempotencyKeySha256 !== input.keySha256 ||
+        !qcEqual(c, {
+          providerClientId: p.actor.providerClientId,
+          providerMappingId: p.actor.providerMappingId,
+          providerClientSubscriptionId: p.subscription.providerClientSubscriptionId,
+          stationMappingId: p.target.stationMappingId,
+          courtMappingId: p.target.courtMappingId,
+          mappingVersion: p.target.mappingVersion,
+          providerStationId: p.target.providerStationId,
+          providerRoomId: p.target.providerRoomId,
+        })
+      )
+        bad();
+    }
+    const now = Math.floor(Date.now() / 1000),
+      path =
+        mode === 'prepare'
+          ? '/lk/integrations/v1/game-create-preparations'
+          : mode === 'admit'
+            ? '/lk/integrations/v1/game-create-operations/admissions'
+            : '/lk/integrations/v1/game-create-operations/' + input.operationId + '/read';
+    const hash =
+      mode === 'prepare'
+        ? await qcPrepareHash(q)
+        : mode === 'admit'
+          ? await qcAdmissionHash(q as QuarterAdmission)
+          : await qcReadHash(
+              qcReadBody(input.operationId, await qcAdmissionHash(q as QuarterAdmission)),
+            );
+    return new SignJWT({
+      contract_version: 1,
+      caller: 'lk2-api',
+      scope: 'subscription-runtime.game-create.' + mode,
+      method: 'POST',
+      path,
+      tenant_id: input.tenantId,
+      tenant_key: 'iSkq6G',
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: c.providerClientId,
+      provider_mapping_id: c.providerMappingId,
+      subscription_id: q.subscriptionId,
+      provider_client_subscription_id: c.providerClientSubscriptionId,
+      operation_id: input.operationId,
+      idempotency_key_sha256: input.keySha256,
+      request_sha256: hash,
+      correlation_id: input.correlationId,
+      actor_token_sha256: await qcHash(input.actorToken.token),
+      actor_token_expires_at: input.actorToken.expiresAt,
+      draft_id: q.target.draftId,
+      expected_revision: q.target.expectedRevision,
+      station_id: q.target.stationId,
+      court_id: q.target.courtId,
+      station_mapping_id: c.stationMappingId,
+      court_mapping_id: c.courtMappingId,
+      mapping_version: c.mappingVersion,
+      provider_station_id: c.providerStationId,
+      provider_room_id: c.providerRoomId,
+      ...(input.recoveryOnly ? { recovery_only: true } : {}),
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        kid: this.options.keyId,
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setJti(randomUUID())
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(
+        Math.min(
+          now + this.options.ttlSeconds,
+          Math.floor(Date.parse(input.actorToken.expiresAt) / 1000),
+        ),
+      )
+      .sign(await importPKCS8(this.options.privateKeyPem, 'RS256'));
+  }
   trainingSigningIdentity(): { issuer: string; audience: string } {
     return { issuer: this.options.issuer, audience: this.options.audience };
   }

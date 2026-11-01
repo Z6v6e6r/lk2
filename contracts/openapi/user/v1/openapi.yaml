@@ -32,6 +32,209 @@ tags:
   - name: subscriptions
     description: Non-binding WARN-only subscription-runtime checks through a server-owned actor delegation.
 paths:
+  /{tenantKey}/game-create-operations/capability:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [games]
+      operationId: getQuarterCreateCapability
+      summary: Read default-off quarter CREATE availability
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      responses:
+        '200':
+          description: Authenticated read; no command mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateCapability'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/game-create-operations/locations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [games]
+      operationId: getQuarterCreateLocations
+      summary: Read fresh typed station and court pairs; not capacity availability
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      responses:
+        '200':
+          description: Authenticated read; no command mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateLocations'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/game-create-operations/by-key:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    get:
+      tags: [games]
+      operationId: getQuarterCreateOperation
+      summary: Read original private command custody by its unchanged key
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      responses:
+        '200':
+          description: Authenticated read; no command mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+        '404':
+          description: Original operation not found; absence is never permission to discard custody.
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+  /{tenantKey}/game-create-operations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [games]
+      operationId: createQuarterGame
+      summary: Create one quarter-court game through the original owner
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuarterCreateInput'
+      responses:
+        '200':
+          description: Original command state; an unknown result retains custody.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '202':
+          description: Original command state; an unknown result retains custody.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+        '404':
+          description: Original operation not found; absence is never permission to discard custody.
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+  /{tenantKey}/game-create-operations/{operationId}/reconcile:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: operationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [games]
+      operationId: reconcileQuarterCreateOperation
+      summary: Reconcile only the original command without another provider CREATE
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuarterCreateInput'
+      responses:
+        '200':
+          description: Original command state; an unknown result retains custody.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '202':
+          description: Original command state; an unknown result retains custody.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+        '404':
+          description: Original operation not found; absence is never permission to discard custody.
+        '409':
+          $ref: '#/components/responses/CommandConflict'
   /{tenantKey}/booked-operation-admissions:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -5773,6 +5976,82 @@ paths:
 
 components:
   schemas:
+    QuarterCreateInput:
+      type: object
+      additionalProperties: false
+      required: [stationId, courtId, startsAt, subscriptionId]
+      properties:
+        stationId: { type: string, format: uuid }
+        courtId: { type: string, format: uuid }
+        startsAt: { type: string, format: date-time }
+        subscriptionId: { type: string, format: uuid }
+    QuarterCreateCapability:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, available]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        available: { type: boolean }
+    QuarterCreateLocations:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 25
+          items:
+            type: object
+            additionalProperties: false
+            required: [stationId, courtId, stationTitle, courtName]
+            properties:
+              stationId: { type: string, format: uuid }
+              courtId: { type: string, format: uuid }
+              stationTitle: { type: string }
+              courtName: { type: string }
+    QuarterCreateResult:
+      type: object
+      additionalProperties: false
+      required:
+        [contractVersion, request, keySha256, operation, gameProjection, registration, reason]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        request:
+          $ref: '#/components/schemas/QuarterCreateInput'
+        keySha256: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        operation:
+          type: object
+          additionalProperties: false
+          required: [id, draftId, status]
+          properties:
+            id: { type: string, format: uuid }
+            draftId: { type: string, format: uuid }
+            status:
+              type: string
+              enum:
+                [
+                  PENDING,
+                  UNKNOWN,
+                  CONFIRMED,
+                  REJECTED,
+                  EXPIRED_NOT_DISPATCHED,
+                  REFUSED_NOT_DISPATCHED,
+                ]
+        gameProjection:
+          type: object
+          additionalProperties: false
+          required: [status, gameId]
+          properties:
+            status: { type: string, enum: [PENDING, AVAILABLE] }
+            gameId: { type: [string, 'null'], format: uuid }
+        registration:
+          type: object
+          additionalProperties: false
+          required: [status, asOf]
+          properties:
+            status: { type: string, enum: [UNKNOWN, CONFIRMED] }
+            asOf: { type: [string, 'null'], format: date-time }
+        reason: { type: [string, 'null'] }
     GameJoinConditions:
       type: object
       additionalProperties: false
