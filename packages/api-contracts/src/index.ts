@@ -46,3 +46,30 @@ export type {
   TournamentLocalInput,
   TournamentLocalStatus,
 } from '@phub/domain';
+
+/** Quarter CREATE custody is distinct from imported game/attendance state. */
+export interface QuarterCreateInput {
+  stationId: string;
+  courtId: string;
+  startsAt: string;
+  subscriptionId: string;
+}
+export interface QuarterCreateResult {
+  contractVersion: 1;
+  request: QuarterCreateInput;
+  keySha256: string;
+  operation: {
+    id: string;
+    draftId: string;
+    status:
+      | 'PENDING'
+      | 'UNKNOWN'
+      | 'CONFIRMED'
+      | 'REJECTED'
+      | 'EXPIRED_NOT_DISPATCHED'
+      | 'REFUSED_NOT_DISPATCHED';
+  };
+  gameProjection: { status: 'PENDING' | 'AVAILABLE'; gameId: string | null };
+  registration: { status: 'CONFIRMED' | 'UNKNOWN'; asOf: string | null };
+  reason: string | null;
+}

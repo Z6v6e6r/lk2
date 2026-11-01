@@ -1,3 +1,6 @@
+import { createQuarterCreateRepository } from '@phub/database/quarter-create';
+import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
+import { createQuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
 import { createTournamentLocalRepository } from '@phub/database';
 import { TournamentLocalOwnerClient } from '@phub/legacy-games-adapter';
 import { createTournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';
@@ -767,7 +770,44 @@ const gameCommercialCreate =
         onMetric: (metric) => logger.info({ metric }, 'commercial CREATE boundary operation'),
       })
     : undefined;
+const gameQuarterCreate = (() => {
+  if (
+    !config.GAME_COMMERCIAL_CREATE_ENABLED ||
+    config.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT !== 'QUARTER_OWNER'
+  )
+    return createQuarterCreateRuntime({
+      enabled: false,
+      repository: createQuarterCreateRepository(pool),
+    });
+  const keys = JSON.parse(config.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!) as Record<
+      string,
+      string
+    >,
+    keyId = config.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID!;
+  return createQuarterCreateRuntime({
+    enabled: true,
+    repository: createQuarterCreateRepository(pool),
+    issuer: new SubscriptionRuntimeActorDelegationIssuer({
+      privateKeyPem: keys[keyId]!,
+      keyId,
+      issuer: config.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER!,
+      audience: config.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE!,
+      ttlSeconds: config.SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS,
+    }),
+    client: new QuarterCreateOwnerClient({
+      onMetric: (metric) => logger.info({ metric }, 'quarter CREATE owner operation'),
+      baseUrl: config.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL!,
+      timeoutMs: config.GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS,
+      environment: ['local', 'ci'].includes(config.APP_ENV) ? 'development' : 'production',
+    }),
+    token: async (actor) => {
+      const issued = await authService.issueVivaAccessToken(actor);
+      return { token: issued.accessToken, expiresAt: issued.expiresAt };
+    },
+  });
+})();
 const app = await buildApp({
+  ...(gameQuarterCreate ? { gameQuarterCreate } : {}),
   config,
   logger,
   pool,

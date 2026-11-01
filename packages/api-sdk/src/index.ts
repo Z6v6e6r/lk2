@@ -1,3 +1,4 @@
+import type { QuarterCreateInput, QuarterCreateResult } from '@phub/api-contracts';
 import type {
   TournamentLocalInput,
   TournamentLocalResult,
@@ -1619,6 +1620,49 @@ export class PadlHubApiClient {
    * while the managed contour is enabled; with the contour disabled the legacy strict body applies
    * and a paid create keeps the existing `GAME_PAYMENT_REQUIRED` refusal.
    */
+  public getQuarterCreateLocations(): Promise<{
+    items: { stationId: string; courtId: string; stationTitle: string; courtName: string }[];
+  }> {
+    return this.request('/game-create-operations/locations', {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public getQuarterCreateCapability(): Promise<{ contractVersion: 1; available: boolean }> {
+    return this.request('/game-create-operations/capability', {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public createQuarterGame(input: QuarterCreateInput, key: string): Promise<QuarterCreateResult> {
+    return this.request('/game-create-operations', {
+      method: 'POST',
+      idempotencyKey: key,
+      body: jsonRequestBody(input),
+      retryOnUnauthorized: false,
+      cache: 'no-store',
+    });
+  }
+  public getQuarterCreateOperation(key: string): Promise<QuarterCreateResult> {
+    return this.request('/game-create-operations/by-key', {
+      headers: { 'Idempotency-Key': key },
+      retryOnUnauthorized: false,
+      cache: 'no-store',
+    });
+  }
+  public reconcileQuarterCreateOperation(
+    id: string,
+    input: QuarterCreateInput,
+    key: string,
+  ): Promise<QuarterCreateResult> {
+    return this.request('/game-create-operations/' + encodeURIComponent(id) + '/reconcile', {
+      method: 'POST',
+      idempotencyKey: key,
+      body: jsonRequestBody(input),
+      retryOnUnauthorized: false,
+      cache: 'no-store',
+    });
+  }
   public createPaidGame(
     input: CreateGameRequest,
     idempotencyKey: string,

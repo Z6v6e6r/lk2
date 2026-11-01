@@ -16,3 +16,6 @@ deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-tru
 scripts/fixtures/timeweb-release-manifest.v1.json
 
 packages/subscription-runtime-adapter/src/fixtures/training-registration-v1-contract.json
+
+# Shared LK/CUP owner fixture must retain its verified bytes.
+packages/domain/src/fixtures/quarter-create-owner-v1.json

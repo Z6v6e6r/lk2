@@ -237,7 +237,8 @@ const environmentSchema = z.object({
   // with a server-owned quote, a local PROVISIONING create and an advisory owner, without a charge,
   // booking or provider call. Activation: local/ci/staging only; production is rejected until the
   // LK1 reserve/confirm/release contract has its own approval. BOOKED_OPERATION transport stays
-  // rejected until then; the WARN advisory owner is the only activatable transport.
+  // rejected until then. ADVISORY remains the WARN path; explicit QUARTER_OWNER supports
+  // the reviewed quarter owner in non-production environments with all existing gates.
   // Removal/review condition: replace or extend when the ENFORCE owner transport is approved, and
   // review this flag no later than the next delivery batch.
   GAME_COMMERCIAL_CREATE_ENABLED: booleanFromEnvironment,
@@ -249,7 +250,7 @@ const environmentSchema = z.object({
     .max(5_000)
     .default(3_000),
   GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: z
-    .enum(['ADVISORY', 'BOOKED_OPERATION'])
+    .enum(['ADVISORY', 'BOOKED_OPERATION', 'QUARTER_OWNER'])
     .default('ADVISORY'),
   ACTIVITY_HISTORY_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_SYNC_ENABLED: booleanFromEnvironment,
@@ -864,6 +865,51 @@ export function loadConfig(
         'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID must select a PKCS8 private key',
       );
     }
+  }
+  if (parsed.data.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT === 'QUARTER_OWNER') {
+    if (
+      !parsed.data.GAME_COMMERCIAL_CREATE_ENABLED ||
+      !parsed.data.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL ||
+      !parsed.data.VIVA_OAUTH_ENABLED ||
+      parsed.data.VIVA_AUTH_TENANT_KEY !== 'iSkq6G' ||
+      !['sandbox', 'production'].includes(parsed.data.VIVA_MODE) ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE
+    )
+      throw new Error(
+        'GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT=QUARTER_OWNER requires complete owner and actor signing configuration',
+      );
+    const owner = new URL(parsed.data.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL);
+    if (
+      owner.username ||
+      owner.password ||
+      owner.search ||
+      owner.hash ||
+      owner.pathname !== '/' ||
+      (parsed.data.APP_ENV === 'production'
+        ? owner.href !== 'https://padlhub.su/'
+        : owner.protocol !== 'https:' &&
+          !(
+            owner.protocol === 'http:' &&
+            ['localhost', '127.0.0.1', '[::1]'].includes(owner.hostname)
+          ))
+    )
+      throw new Error('GAME_QUARTER_CREATE_OWNER_URL_INVALID');
+    let keys: Record<string, unknown>;
+    try {
+      const raw: unknown = JSON.parse(parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error();
+      keys = raw as Record<string, unknown>;
+    } catch {
+      throw new Error('SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS must be a JSON object');
+    }
+    const key = keys[parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID];
+    if (typeof key !== 'string' || !key.startsWith(pkcs8PrivateKeyHeader))
+      throw new Error(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID must select a PKCS8 private key',
+      );
   }
   if (parsed.data.TRAINING_REGISTRATION_ENABLED) {
     if (
