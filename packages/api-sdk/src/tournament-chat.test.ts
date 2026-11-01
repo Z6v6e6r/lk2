@@ -134,3 +134,59 @@ it('explicit READ uses original metadata, no automatic POST for restore and no d
     spy.mockRestore();
   }
 });
+
+it('MESSAGE token replacement during digest never reaches fetch without a gateway callback', async () => {
+  const transport = vi.fn<typeof fetch>();
+  const client = new PadlHubApiClient({
+    baseUrl: 'https://api.invalid',
+    tenantKey: 'synthetic',
+    platform: 'web',
+    appVersion: 'test',
+    fetchImplementation: transport,
+  });
+  const request = fixture.requests[0]!;
+  client.setAccessToken('synthetic-original');
+  const digest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle);
+  const spy = vi.spyOn(globalThis.crypto.subtle, 'digest').mockImplementationOnce((...args) => {
+    client.setAccessToken('synthetic-replacement');
+    return digest(...args);
+  });
+  try {
+    await expect(
+      client.sendTournamentChatMessage(request.tournamentId, {
+        requestId: request.requestId,
+        text: request.text,
+      }),
+    ).rejects.toMatchObject({ code: 'TOURNAMENT_CHAT_FORBIDDEN' });
+    expect(transport).not.toHaveBeenCalled();
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it('MESSAGE per-call original principal is checked again before exposing the response', async () => {
+  let current = true;
+  const request = fixture.requests[0]!;
+  const transport = vi.fn<typeof fetch>(() => {
+    current = false;
+    return Promise.resolve(new Response(JSON.stringify(fixture.receipts[0])));
+  });
+  const client = new PadlHubApiClient({
+    baseUrl: 'https://api.invalid',
+    tenantKey: 'synthetic',
+    platform: 'web',
+    appVersion: 'test',
+    fetchImplementation: transport,
+  });
+  client.setAccessToken('synthetic-original');
+  await expect(
+    client.sendTournamentChatMessage(
+      request.tournamentId,
+      { requestId: request.requestId, text: request.text },
+      () => {
+        if (!current) throw Error('AUTH_PRINCIPAL_CHANGED');
+      },
+    ),
+  ).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+  expect(transport).toHaveBeenCalledTimes(1);
+});
