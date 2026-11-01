@@ -52,6 +52,9 @@
         "packages/viva-adapter/src/notification-lifecycle-source.ts"
       ],
       "@phub/domain/quarter-create": ["packages/domain/src/quarter-create.ts"],
+      "@phub/database/tournament-notifications": [
+        "packages/database/src/tournament-notification-recipient.ts"
+      ],
       "@phub/database/quarter-create": ["packages/database/src/game-quarter-create-repository.ts"],
       "@phub/domain/training-registration": ["packages/domain/src/training-registration.ts"],
       "@phub/database/training-registration": [
@@ -59,6 +62,9 @@
       ],
       "@phub/database/station-message-notifications": [
         "packages/database/src/station-message-notifications.ts"
+      ],
+      "@phub/database/tournament-message-notifications": [
+        "packages/database/src/tournament-message-notifications.ts"
       ]
     },
     "types": ["node", "vitest/globals"]
