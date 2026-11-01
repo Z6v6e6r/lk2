@@ -1,8 +1,18 @@
 # LK2 R1 — приоритетные блокеры
 
+## iOS tournament source checkpoint — 2026-11-01
+
+B06 now has reviewed iOS SOURCE#53199f5d942 and successful nativeCI41254366026 (six new tournament tests and unsigned build); fullCI41254366038 SUCCESS (7670passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP). iOS tournament source is no longer missing, but physical-device/session process-death acceptance remains open. Android packaging still awaits the approved#526 integration. No native paid/provider tournament or full CREATE/chat acceptance is supplied.
+
+## Paired quarter CREATE source checkpoint — 2026-11-01
+
+B03 has reviewed SOURCE candidates CUP#67 `802ed017` and LK#277 `59d3880c`; authenticated intake and original CREATE custody are no longer absent. LK physical Mongo41254002352 and41254342435 passed; corrected full41254342434 SUCCESS. Current LKhead59d3880c is test-only current-hash correction. CUPhead802ed017 fixes only a duplicated synthetic publication key after41253980880; corrected fullCI41254507939 SUCCESS including physical v3 replay. Remaining blockers: matched LK2 consumer and canonical import convergence, CREATE station producer, actual provider/retention/graph acceptance, and a valid reconciliation contract for expired PRECREATE_RESERVED. Existing release reasons PROVIDER_REJECTED/BOOKING_CANCELLED do not cover reserve-only expiry; no guessed compensation or new-key retry is permitted. A provider success with no original attributable ID remains UNKNOWN.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## Android tournament checkpoint — 2026-11-01
 
-B06 PARTIAL: Android#530 `4406a3b2` source/LOCAL/review is ready for LOCAL_ONLY tournament discovery and original-operation recovery; fullCI41252711408 pending. Unsigned package/device acceptance remains blocked on native build prerequisites; iOS tournament consumer is still missing. This does not close paid/provider tournament, game CREATE or chat journeys.
+B06 PARTIAL: Android#530 `4406a3b2` source/LOCAL/review is ready for LOCAL_ONLY tournament discovery and original-operation recovery; fullCI41252711408 SUCCESS (7651passed/126skipped; tournamentPG7/7; required27physical+8guards zeroSKIP). Unsigned package/device acceptance remains blocked on native build prerequisites; iOS tournament SOURCE is supplied by#531; device acceptance remains missing. This does not close paid/provider tournament, game CREATE or chat journeys.
 
 ## Latest tournament consumer delta — 2026-11-01
 

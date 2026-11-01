@@ -1,8 +1,18 @@
 # LK2 R1 — E2E и acceptance matrix
 
+## iOS tournament source checkpoint — 2026-11-01
+
+iOS#53199f5d942: LOCAL96regression/final22overlap covers actual IOSSession/SDK with synthetic native replies, original UNKNOWN/cold restore/manual retry/LEAVE, late ACK/logout and unavailable browser capabilities. Rendered390/1280 inspected. NativeCI41254366026:37tests total, one explicit macOS skip for real iOS Keychain integration, zero failures; six new Swift tournament cases passed and unsigned simulator build succeeded. FullCI41254366038 SUCCESS:7670passed/126skipped, tournamentPG7/7, closed-migrationPG4/4, required27physical+8guards zeroSKIP and all five Docker/static/dependency/deployment gates. Local Swift package attempt failed on relocated PCM cache; CI supplies compiler evidence, not physical-device acceptance.
+
+## Paired quarter CREATE source checkpoint — 2026-11-01
+
+CUP#67/LK#277 paired source uses identical fixture SHA2567d69645b0ce2aea081e723462b97d201560df19e4e2c2a120cd0801e49cb14b0. LOCAL LK234total:229PASS/5SKIP (four CI-only Mongo and one existing LIVE_ROUTER_FLOW_FIXTURE); CUP23 actor cases plus actual producer/intake/resolver/preflight/reserve contract, legacy/quarter/trusted/runtime/lifecycle suites and typechecks passed. No local physical DB execution. LK MongoCI41254002352 passed56/56 including four independent-client LK CAS/nonce/original-ID/reclaim cases. CUP fullCI41254507939 passed the actual v3 repository/reserve/lost-ACK case with zero skips; the first unique-index failure was not runtime acceptance. These HTTP/provider facts are synthetic. No CREATE Web/native/provider/runtime acceptance is inferred.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## Android tournament checkpoint — 2026-11-01
 
-Android#5304406a3b2: LOCAL209regression/67focused/final41subset overlap and must not be added together; actualJava policy/engine12passed with a synthetic sender. Actual App synthetic list→detail→UNKNOWN→reload→same-key manualretry→original-generationLEAVE, strict native credential/path/query/body negatives and immediate outerlogout fence passed. Rendered390/1280 verified. FullCI41252711408 pending; host JVM and browser preview do not prove Android package, OS process-death, device or provider acceptance.
+Android#5304406a3b2: LOCAL209regression/67focused/final41subset overlap and must not be added together; actualJava policy/engine12passed with a synthetic sender. Actual App synthetic list→detail→UNKNOWN→reload→same-key manualretry→original-generationLEAVE, strict native credential/path/query/body negatives and immediate outerlogout fence passed. Rendered390/1280 verified. FullCI41252711408 SUCCESS (7651passed/126skipped; tournamentPG7/7; required27physical+8guards zeroSKIP); host JVM and browser preview do not prove Android package, OS process-death, device or provider acceptance.
 
 ## LK2 tournament consumer evidence — 2026-11-01
 

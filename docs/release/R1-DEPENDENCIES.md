@@ -1,5 +1,15 @@
 # LK2 R1 — зависимости и критический путь
 
+## iOS tournament source checkpoint — 2026-11-01
+
+iOS#53199f5d942 depends on Android#5304406a3b2/API compatibility and Web#5293041f0d9/CUP#64. NativeCI41254366026 passed; fullCI41254366038 SUCCESS (7670passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP). DIRECT/TRAINING native branches are not ancestors and must be integrated once by the authorized integration owner; no silent copy or merge bypass occurred. Real Keychain/process-death and WKWebView capability checks remain separate device gates.
+
+## Paired quarter CREATE source checkpoint — 2026-11-01
+
+Quarter source chain now reaches CUP#65 publication/target → CUP#66 instance adoption → CUP#67 actor-bound v3 intake + LK#277 original CREATE owner. The paired latter source is reviewed and pushed; LK physical Mongo41254002352 and41254342435 passed; corrected full41254342434 SUCCESS. Current LKhead59d3880c is test-only current-hash correction. CUPhead802ed017 fixes only a duplicated synthetic publication key after41253980880; corrected fullCI41254507939 SUCCESS including physical v3 replay. Next: LK2 original draft/operation consumer and canonical importer convergence → explicit CREATE station admission/confirmation → Web/native and provider/device acceptance. Existing JOIN station loader cannot be reused by calling a CREATE receipt JOIN. Canonical LK_LEGACY_SNAPSHOT import ownership must converge with the provider receipt before a public game is claimed.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## Android tournament checkpoint — 2026-11-01
 
 CUP#64 → LK2#5293041f0d9 (fullCI/iOSgreen) → Android#5304406a3b2 (LOCAL/review;CIpending) → approved native build integration#526 and device acceptance. iOS tournament capability is a separate bounded consumer. Android changes overlap pending TRAINING in App/auth-gateway/MobileApp/native-api-fetch/AndroidSessionPolicy; only the approved integration owner resolves them. No existing integration request is bypassed.

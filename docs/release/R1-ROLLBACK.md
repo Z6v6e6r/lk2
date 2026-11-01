@@ -1,5 +1,15 @@
 # LK2 R1 — rollback и recovery readiness
 
+## iOS tournament source checkpoint — 2026-11-01
+
+iOS#531 retains original tournament custody and blocks commands synchronously during logout cleanup in the current process. Do not describe that fence as durable before native Keychain logout intent is written; process death during cleanup retains baseline session restoration, but no automatic tournament mutation. Keep original keys/journals through client downgrade. No device rollback or process-death rehearsal is claimed.
+
+## Paired quarter CREATE source checkpoint — 2026-11-01
+
+For CUP#67/LK#277 retain original outer admissions, canonical daily rows, immutable target/price/actor pins, attempt nonce, original exercise/booking IDs and terminal receipts. Disable new admissions through the existing approved gate; keep compatible read/recovery. Do not downgrade ambiguous CREATE to ordinary LK1, search/adopt a room-time match, retry with a new key, delete custody or roll back to an unfenced reclaim writer. Expired reserve-only operations remain pending until a supported reconciliation contract exists. This is a source recovery plan, not an executed rollback.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## Android tournament checkpoint — 2026-11-01
 
 Android#530 retains the same#529 original request/key/generation custody. On rollback, preserve pending WebView storage and server journals; unavailable older clients may require manual recovery but must not replace original keys or reinterpret HTTP404 as no dispatch. Keep native tenant/origin and public credential isolation; no destructive storage cleanup or automatic retry migration.

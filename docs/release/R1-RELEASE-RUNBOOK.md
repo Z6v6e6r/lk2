@@ -1,5 +1,15 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## iOS tournament source checkpoint — 2026-11-01
+
+iOS#53199f5d942 has native compilation/tests and unsigned simulator build evidence from41254366026; fullCI41254366038 SUCCESS (7670passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP). Before release, integrate its exact shared Session/Plugin/IOSCabinet changes with DIRECT/TRAINING once, then validate real Keychain logout/process death, WKWebView storage/Web Locks/randomUUID and original-operation recovery on devices. This does not authorize signing, store publication or runtime activation.
+
+## Paired quarter CREATE source checkpoint — 2026-11-01
+
+CUP#67 `802ed017` and LK#277 `59d3880c` must pass their exact-head automatic CI and remain paired with #65/#66 and existing LK owner sources before artifact selection. Do not activate until the installed graph matches the reviewed composer; actor credential purpose, original expiry, schema4 adoption and runtime TTL/cleanup retention are verified; all canonical writers are coherent and old in-flight writers are drained. Dedicated target credential provisioning is a separate owner action. LK2 consumer/import/station prerequisites remain open. The PRs authorize no merge, graph import, migration or provider call.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## Android tournament checkpoint — 2026-11-01
 
 Android#5304406a3b2 is a source candidate only. Before native release require fullCI, authorized integration with#526 unsigned build lane, an APK/AAB tied to finalsource and physical install/upgrade/offline/account-switch acceptance. Public tournament reads remain exact first-party/tenant and credential-free; empty text/plain is accepted only for the existing bodyless retry. Do not dispatch the release-only Android workflow or widen generic native transport to bypass a missing package gate.

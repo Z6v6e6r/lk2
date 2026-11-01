@@ -1,8 +1,18 @@
 # LK2 R1 — GO / NO-GO
 
+## iOS tournament source checkpoint — 2026-11-01
+
+**NO-GO remains.** iOS#53199f5d942 now has reviewed SOURCE and nativeCI41254366026 SUCCESS (six new tournament tests, unsigned build); fullCI41254366038 SUCCESS (7670passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP). This closes the missing bounded iOS tournament source claim, not physical-device/provider/store acceptance. CREATE consumer/import projection, monetary settlement, community-message owner and release activation gates remain open.
+
+## Paired quarter CREATE source checkpoint — 2026-11-01
+
+**NO-GO remains.** Actor-bound quarter intake and original CREATE owner now have reviewed Draft PRs CUP#67 `802ed017` and LK#277 `59d3880c`, with LOCAL evidence and outgoing scans; LK physical Mongo passed and LK fullCI41254342434 passed; CUP fullCI41254507939 SUCCESS including physical v3 replay. Android#530 fullCI41252711408 is now SUCCESS (7651passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP), as is its automatic iOS lane. LK2 CREATE consumer/projection, native device acceptance, monetary settlement, community message ownership, device/provider/store and runtime delivery gates remain open. Exact pending local integration approvals have not been executed. No new main merge or live action occurred.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## Android tournament checkpoint — 2026-11-01
 
-**NO-GO remains.** Web/API#5293041f0d9 now has green fullCI41251823614/iOS41251823658 and tournamentPG7/7. Android#5304406a3b2 adds reviewed LOCAL source, fullCI41252711408 pending; package/device and iOS tournament journeys remain unaccepted. CREATE paired owner work is ongoing, monetary settlement and community-message commit contracts remain open. No new main merge, publication, migration, runtime activation or live action occurred.
+**NO-GO remains.** Web/API#5293041f0d9 now has green fullCI41251823614/iOS41251823658 and tournamentPG7/7. Android#5304406a3b2 adds reviewed LOCAL source, fullCI41252711408 SUCCESS (7651passed/126skipped; tournamentPG7/7; required27physical+8guards zeroSKIP); package/device and iOS tournament journeys remain unaccepted. CREATE paired owner work is ongoing, monetary settlement and community-message commit contracts remain open. No new main merge, publication, migration, runtime activation or live action occurred.
 
 ## Web tournament source decision — 2026-11-01
 
