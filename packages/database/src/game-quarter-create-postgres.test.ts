@@ -70,8 +70,8 @@ const url = ci();
         actorId,
       ]);
       await c.query(
-        "insert into locations.profiles(tenant_id,id,slug,title,created_by,updated_by,publication_status,published_at) values($1,$2,$2::text,'Synthetic station',$3,$3,'PUBLISHED',now())",
-        [tenantId, stationId, actorId],
+        "insert into locations.profiles(tenant_id,id,slug,title,created_by,updated_by,publication_status,published_at) values($1,$2,$4,'Synthetic station',$3,$3,'PUBLISHED',now())",
+        [tenantId, stationId, actorId, stationId],
       );
     });
     expect(await a.ready()).toBe(true);
