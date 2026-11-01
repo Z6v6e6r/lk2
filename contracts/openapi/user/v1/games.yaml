@@ -228,6 +228,88 @@ paths:
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 
+  /{tenantKey}/games/{gameId}/leave-operation:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    get:
+      tags: [games]
+      operationId: getManagedLeaveOperation
+      summary: Read the original managed FREE SELF LEAVE attempt by its idempotency key
+      description: |
+        Recovery read for a managed FREE SELF LEAVE whose response was lost. The server resolves the original command link
+        from the original Idempotency-Key, including keys converged to the same participation. The read never reserves,
+        dispatches, confirms, releases or fails an attempt; an unresolved outcome stays UNKNOWN with
+        WAIT_FOR_RECONCILIATION and the caller must not start a new purchase.
+      responses:
+        '200':
+          description: Original operation, including an unresolved (UNKNOWN) outcome.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameCommandResult' }
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/leave-operation/reconcile:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [games]
+      operationId: reconcileManagedLeaveOperation
+      summary: Reconcile the original SELF LEAVE without starting a new leave
+      description: |
+        Explicit recovery with the original key and no body. Never starts a new cancellation or binds a new participation.
+        Atomically records NOT_DISPATCHED only with canonical journal proof, or recovers the original dispatched attempt.
+        Generic failures and missing schema remain unresolved. Older APIs return 404; clients must retain the key.
+      responses:
+        '200':
+          description: Original operation, including an unresolved (UNKNOWN) outcome.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameCommandResult' }
+        '202':
+          description: Original attempt remains unresolved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameCommandResult' }
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
   /{tenantKey}/games/{gameId}/participants/me:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -242,6 +324,11 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/GameCommandCompleted'
+        '202':
+          description: Managed SELF leave remains unresolved; retry only the original key. No local participation change is claimed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameCommandResult' }
         '400':
           $ref: ../../common/components.yaml#/components/responses/BadRequest
         '401':
@@ -1436,6 +1523,15 @@ components:
           oneOf:
             - $ref: '#/components/schemas/GameOperationError'
             - type: 'null'
+        noDispatch:
+          type: object
+          additionalProperties: false
+          description: Present only for a durably refused SELF LEAVE. Does not assert current membership.
+          required: [schemaVersion, outcome, idempotencyKeySha256]
+          properties:
+            schemaVersion: { type: integer, const: 1 }
+            outcome: { type: string, const: NOT_DISPATCHED }
+            idempotencyKeySha256: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
         commercial:
           oneOf:
             - $ref: '#/components/schemas/GameOperationCommercial'

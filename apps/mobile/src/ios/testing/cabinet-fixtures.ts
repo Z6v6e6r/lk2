@@ -77,7 +77,7 @@ export function syntheticSession(
     await Promise.resolve(fixtureReply(input)),
 ): IOSSession {
   const plugin = { configuration: async () => await Promise.resolve(config), request };
-  return new IOSSession(
+  const session: IOSSession = new IOSSession(
     config,
     new PadlHubApiClient({
       baseUrl: config.apiBaseUrl,
@@ -85,9 +85,15 @@ export function syntheticSession(
       platform: 'ios',
       sessionMode: 'cookie',
       appVersion: config.appVersion,
-      fetchImplementation: createIOSFetch(config, plugin),
+      fetchImplementation: createIOSFetch(
+        config,
+        plugin,
+        (id) => session?.canDispatchGameCancellation(id) === true,
+        (request) => session?.canDispatchStation(request) === true,
+      ),
     }),
   );
+  return session;
 }
 
 export const viewerId = '00000000-0000-4000-8000-000000000001';

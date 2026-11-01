@@ -243,6 +243,11 @@ jobs:
           CLOSED_SINGLE_MIGRATION_PG_TESTS: '1'
           CLOSED_SINGLE_MIGRATION_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: npx vitest run apps/migrator/src/closed-single-migration.pg.test.ts --maxWorkers=1
+      - name: Require physical game lifecycle, communications and RabbitMQ cases
+        timeout-minutes: 12
+        env:
+          CI_GAME_RABBIT_CONTAINER: ${{ job.services.rabbitmq.id }}
+        run: node --import tsx scripts/required-game-ci.ts
       - name: Upload test and coverage diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -250,6 +255,7 @@ jobs:
           name: quality-test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .ci-artifacts/test-and-coverage
+            .ci-artifacts/required-game
             coverage
           if-no-files-found: error
           retention-days: 14

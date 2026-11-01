@@ -2201,22 +2201,25 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
   });
 
-  it('loads the trainings route as a real PadlHub page without requesting Home', async () => {
-    window.history.replaceState({}, '', '/trainings');
-    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+  it.each(['web', 'android'] as const)(
+    'loads the trainings route on %s without requesting Home',
+    async (clientPlatform) => {
+      window.history.replaceState({}, '', '/trainings');
+      const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 
-    render(<App gateway={gateway} tenantKey="padlhub" />);
+      render(<App clientPlatform={clientPlatform} gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Тренировки' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Групповые тренировки' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Индивидуальные тренировки' })).toHaveAttribute(
-      'href',
-      '/coaches',
-    );
-    expect(screen.queryByText('Раздел подключается к API ПадлхАБ.')).not.toBeInTheDocument();
-    await waitFor(() => expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1));
-    expect(gateway.getHomeBase).not.toHaveBeenCalled();
-  });
+      expect(await screen.findByRole('heading', { name: 'Тренировки' })).toBeVisible();
+      expect(screen.getByRole('heading', { name: 'Групповые тренировки' })).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Индивидуальные тренировки' })).toHaveAttribute(
+        'href',
+        '/coaches',
+      );
+      expect(screen.queryByText('Раздел подключается к API ПадлхАБ.')).not.toBeInTheDocument();
+      await waitFor(() => expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1));
+      expect(gateway.getHomeBase).not.toHaveBeenCalled();
+    },
+  );
 
   it('keeps the second Home variant available on its own route', async () => {
     window.history.replaceState({}, '', '/home-v2');
@@ -3713,4 +3716,35 @@ describe('PadlHub web authentication', () => {
     expect(screen.queryByRole('list', { name: 'Чаты сообществ' })).toBeNull();
     expect(listCommunityReadExperienceChat).not.toHaveBeenCalled();
   });
+});
+
+it('native quarter entry mounts only the bounded subscription form, not legacy CREATE', async () => {
+  window.history.replaceState(null, '', '/games/new?commercialCreate=1');
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
+    getQuarterCreateCapability: vi.fn().mockResolvedValue({ contractVersion: 1, available: false }),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+  await screen.findByRole('heading', { name: 'Игра по подписке' });
+  expect(await screen.findByText(/Создание сейчас недоступно/)).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Создать игру' })).not.toBeInTheDocument();
+  expect(gateway.createGame).not.toHaveBeenCalled();
+});
+it('native quarter confirmed-game destination remains read-only', async () => {
+  const { game } = await import('../../mobile/src/ios/testing/cabinet-fixtures.js');
+  window.history.replaceState(null, '', '/games/' + game.id);
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
+    getGame: vi.fn().mockResolvedValue(game),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+  await waitFor(() => expect(gateway.getGame).toHaveBeenCalledWith(game.id));
+  expect(await screen.findByRole('link', { name: 'К созданию игры' })).toHaveAttribute(
+    'href',
+    '/games/new?quarterCreate=1',
+  );
+  expect(screen.queryByRole('button', { name: /Вступить|Отменить игру/ })).not.toBeInTheDocument();
+  expect(gateway.joinGame).not.toHaveBeenCalled();
 });

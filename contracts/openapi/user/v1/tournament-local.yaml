@@ -1,0 +1,160 @@
+paths:
+  /{tenantKey}/tournaments/{tournamentId}/registrations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TournamentId'
+      - $ref: '#/components/parameters/CommandKey'
+    post:
+      tags: [bookings]
+      operationId: commandTournament
+      summary: Join or leave a supported local tournament
+      description: Only CUP LOCAL_ONLY without payment or provider booking. Server pins original feed date and verified identity. LEAVE names the original LK2 JOIN operation. Unknown results retain the original request; no fallback or new generation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [action]
+                  properties:
+                    action: { type: string, const: JOIN }
+                - type: object
+                  additionalProperties: false
+                  required: [action, originalJoinOperationId]
+                  properties:
+                    action: { type: string, const: LEAVE }
+                    originalJoinOperationId: { type: string, format: uuid }
+      responses:
+        '200': { $ref: '#/components/responses/Result' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/tournaments/{tournamentId}/registration-operations/{operationId}/retry:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TournamentId'
+      - $ref: '#/components/parameters/CommandKey'
+      - name: operationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [bookings]
+      operationId: retryTournament
+      summary: Explicitly replay only an existing original operation
+      description: No body or new attempt. Requires a fresh session of the pinned actor. Uses the same private CUP key and original immutable body; no preparation or re-target. The public retry key cannot override owner identity.
+      responses:
+        '200': { $ref: '#/components/responses/Result' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/tournaments/{tournamentId}/registration-operation:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TournamentId'
+      - name: operationId
+        in: query
+        schema: { type: string, format: uuid }
+      - name: Idempotency-Key
+        in: header
+        schema: { type: string, minLength: 16, maxLength: 128 }
+    get:
+      tags: [bookings]
+      operationId: getTournamentRegistration
+      summary: Read command availability and own original registration
+      description: No command, lease, local finalization or roster write. commandsEnabled=false forbids new mutations; result=null means no matching local journal and never proves the owner did not receive a previous request. Without selector returns latest own operation.
+      responses:
+        '200':
+          description: Explicit command availability and own operation, or null. No private owner identity or key.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [commandsEnabled, result]
+                properties:
+                  commandsEnabled: { type: boolean }
+                  result:
+                    oneOf:
+                      - $ref: '#/components/schemas/TournamentLocalResult'
+                      - type: 'null'
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+components:
+  parameters:
+    TournamentId:
+      name: tournamentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CommandKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        {
+          type: string,
+          minLength: 16,
+          maxLength: 128,
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$',
+        }
+  responses:
+    Conflict:
+      description: Conflicting original request, unsupported owner or pinned generation.
+      content:
+        application/json:
+          schema: { $ref: ../../common/components.yaml#/components/schemas/ApiError }
+    Result:
+      description: Historical operation and separate current registration. UNKNOWN never implies roster mutation.
+      headers:
+        Cache-Control: { schema: { type: string, const: no-store } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TournamentLocalResult' }
+  schemas:
+    TournamentLocalResult:
+      type: object
+      additionalProperties: false
+      required: [tournamentId, operation, registration, retryAfterSeconds]
+      properties:
+        tournamentId: { type: string, format: uuid }
+        operation:
+          type: object
+          additionalProperties: false
+          required: [id, action, status, reason, generation]
+          properties:
+            id: { type: string, format: uuid }
+            action: { type: string, enum: [JOIN, LEAVE] }
+            status: { type: string, enum: [UNKNOWN, REGISTERED, LEFT, REJECTED] }
+            reason:
+              {
+                type: [string, 'null'],
+                enum: [REGISTERED, LEFT, FULL, MEMBERSHIP_EXISTS, GENERATION_NOT_CURRENT, null],
+              }
+            generation: { type: [string, 'null'], format: uuid }
+        registration:
+          type: object
+          additionalProperties: false
+          required: [status, asOf]
+          properties:
+            status: { type: string, enum: [REGISTERED, NOT_REGISTERED_BY_OPERATION, UNKNOWN] }
+            asOf: { type: [string, 'null'], format: date-time }
+        retryAfterSeconds: { type: [integer, 'null'], minimum: 1, maximum: 3600 }

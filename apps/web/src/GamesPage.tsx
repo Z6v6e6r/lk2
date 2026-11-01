@@ -1,3 +1,5 @@
+import { cancelGameAndRead } from './game-cancel-readback.js';
+import { GameSelfLeaveAttempts } from './game-self-leave-attempt.js';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { BookingActivityCard } from './BookingRecommendations.js';
@@ -301,6 +303,17 @@ function errorCode(error: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
+function selfLeaveRefusal(error: unknown): string | null {
+  const code = errorCode(error);
+  if (code === 'GAME_PAYMENT_REQUIRED')
+    return 'Сервер отклонил выход: возврат по подписке сейчас недоступен.';
+  if (code === 'GAME_NOT_LEAVABLE')
+    return 'Сервер отклонил выход: текущее участие не допускает эту операцию.';
+  if (code === 'IDEMPOTENCY_CONFLICT')
+    return 'Сервер отклонил запрос: ключ уже связан с другой операцией.';
+  return null;
+}
+
 function initialDetailTab(game: ViewerGameCard): GameDetailTab {
   return Date.parse(game.endsAt) <= Date.now() ? 'RESULT' : 'GAME';
 }
@@ -439,6 +452,102 @@ function GamesPageContent({
     () => browserGameJoinAttemptLockManager(),
     [],
   );
+  const leaveAttempts = useMemo(
+    () =>
+      joinPrincipal && joinStorage && joinLockManager && gateway.getManagedLeaveOperation
+        ? new GameSelfLeaveAttempts(
+            joinPrincipal,
+            joinStorage,
+            joinLockManager,
+            gateway,
+            () => joinPageActive.current,
+          )
+        : null,
+    [joinPrincipal, joinStorage, joinLockManager, gateway],
+  );
+  const [pendingLeaveGameId, setPendingLeaveGameId] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    if (!gameId || !leaveAttempts) return;
+    void (async () => {
+      try {
+        if (!leaveAttempts.load(gameId)) return;
+        setPendingLeaveGameId(gameId);
+        const result = await leaveAttempts.read(gameId);
+        if (!active) return;
+        if (result?.operation.noDispatch?.outcome === 'NOT_DISPATCHED') {
+          setPendingLeaveGameId(null);
+          setNotice('Исходный выход не отправлялся. Можно выбрать новое действие.');
+          setReloadToken((n) => n + 1);
+        } else if (result?.operation.status === 'SUCCEEDED') {
+          setPendingLeaveGameId(null);
+          setNotice('Выход из игры подтверждён.');
+          setReloadToken((n) => n + 1);
+        } else
+          setNotice(
+            'Выход из игры ещё не подтверждён. Проверьте состояние или повторите исходный запрос.',
+          );
+      } catch {
+        if (active) setNotice('Ответ о выходе пока недоступен. Исходный запрос сохранён.');
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [gameId, leaveAttempts]);
+  async function recoverSelfLeave(retry: boolean): Promise<void> {
+    if (!pendingLeaveGameId || !leaveAttempts) return;
+    setBusyGameId(pendingLeaveGameId);
+    try {
+      const result = await (retry
+        ? leaveAttempts.submit(pendingLeaveGameId)
+        : leaveAttempts.read(pendingLeaveGameId));
+      if (!joinPageActive.current) return;
+      if (result?.operation.noDispatch?.outcome === 'NOT_DISPATCHED') {
+        setPendingLeaveGameId(null);
+        setError(null);
+        setNotice('Исходный выход не отправлялся. Можно выбрать новое действие.');
+        setReloadToken((n) => n + 1);
+      } else if (result?.operation.status === 'SUCCEEDED') {
+        setPendingLeaveGameId(null);
+        setNotice('Выход из игры подтверждён.');
+        setReloadToken((n) => n + 1);
+      } else setNotice('Выход из игры ещё не подтверждён. Новый запрос не создавался.');
+    } catch (cause) {
+      if (joinPageActive.current) {
+        const refusal = selfLeaveRefusal(cause);
+        if (refusal) setError(refusal);
+        setNotice(
+          refusal
+            ? 'Исходный ключ сохранён. Новая запись заблокирована до проверки результата.'
+            : 'Выход пока не подтверждён. Исходный запрос сохранён.',
+        );
+      }
+    } finally {
+      if (joinPageActive.current) setBusyGameId(null);
+    }
+  }
+  const leaveRecoveryControls = pendingLeaveGameId ? (
+    <div className="games-message games-level-recovery__actions" role="status">
+      <span>Исходный запрос выхода сохранён для проверки. </span>
+      <button
+        className="games-level-recovery__secondary"
+        type="button"
+        disabled={busyGameId !== null}
+        onClick={() => void recoverSelfLeave(false)}
+      >
+        Проверить состояние
+      </button>{' '}
+      <button
+        className="games-level-recovery__secondary"
+        type="button"
+        disabled={busyGameId !== null}
+        onClick={() => void recoverSelfLeave(true)}
+      >
+        Повторить исходный запрос
+      </button>
+    </div>
+  ) : null;
   const canPaidJoin = Boolean(
     typeof gateway.joinPaidGame === 'function' &&
     typeof gateway.getPaidJoinOperation === 'function' &&
@@ -1667,7 +1776,98 @@ function GamesPageContent({
     void handleAction('JOIN', game);
   }
 
+  const cancelInFlight = useRef(false);
+  const cancellationPage = useRef({ gateway, gameId });
+  cancellationPage.current = { gateway, gameId };
+  const [pendingCancellation, setPendingCancellation] = useState<{
+    gameId: string;
+    principal: string;
+    gateway: AuthGateway;
+    pageGameId: string | undefined;
+  } | null>(null);
+  const cancellationCurrent = (attempt: NonNullable<typeof pendingCancellation>): boolean =>
+    joinPageActive.current &&
+    cancellationPage.current.gateway === attempt.gateway &&
+    cancellationPage.current.gameId === attempt.pageGameId &&
+    attempt.gateway.gameCancelPrincipal?.() === attempt.principal;
+
+  async function refreshPendingCancellation(): Promise<void> {
+    const attempt = pendingCancellation;
+    if (!attempt || cancelInFlight.current || !cancellationCurrent(attempt)) return;
+    cancelInFlight.current = true;
+    setBusyGameId(attempt.gameId);
+    try {
+      if (!cancellationCurrent(attempt)) return;
+      const observed = await attempt.gateway.getGame(attempt.gameId);
+      if (!cancellationCurrent(attempt) || observed.id !== attempt.gameId) return;
+      setDetail((previous) => (previous?.id === observed.id ? observed : previous));
+      setGames((previous) => previous.map((item) => (item.id === observed.id ? observed : item)));
+      if (observed.displayState === 'CANCELLED') {
+        setPendingCancellation(null);
+        setNotice('Игра отменена. Статус и состав обновлены.');
+      }
+    } catch {
+      // An unavailable read retains the original pending observation; it never reissues CANCEL.
+    } finally {
+      cancelInFlight.current = false;
+      if (cancellationCurrent(attempt)) setBusyGameId(null);
+    }
+  }
+  const cancellationRecoveryControl =
+    pendingCancellation && cancellationCurrent(pendingCancellation) ? (
+      <button
+        type="button"
+        disabled={busyGameId !== null}
+        onClick={() => void refreshPendingCancellation()}
+      >
+        Обновить статус отмены
+      </button>
+    ) : null;
   async function handleAction(action: GameCardAction, game: GameCardModel): Promise<void> {
+    if (action === 'CANCEL') {
+      const principal = gateway.gameCancelPrincipal?.();
+      if (
+        !principal ||
+        cancelInFlight.current ||
+        !game.allowedActions.some((action: string) => action === 'CANCEL') ||
+        game.viewerRelation !== 'ORGANIZER'
+      )
+        return;
+      if (!window.confirm('Отменить игру для всех участников?')) return;
+      const attempt = { gameId: game.id, principal, gateway, pageGameId: gameId };
+      const current = () => cancellationCurrent(attempt);
+      if (!current()) return;
+      cancelInFlight.current = true;
+      setBusyGameId(game.id);
+      setError(null);
+      try {
+        const observed = await cancelGameAndRead({
+          gameId: game.id,
+          cancel: gateway.cancelGame,
+          read: gateway.getGame,
+          isCurrent: current,
+        });
+        if (!current()) return;
+        if (observed) {
+          setDetail((previous) => (previous?.id === observed.id ? observed : previous));
+          setGames((previous) =>
+            previous.map((item) => (item.id === observed.id ? observed : item)),
+          );
+        }
+        setPendingCancellation(observed?.displayState === 'CANCELLED' ? null : attempt);
+        setNotice(
+          observed?.displayState === 'CANCELLED'
+            ? 'Игра отменена. Статус и состав обновлены.'
+            : 'Отмена пока не подтверждена. Обновите статус игры позже.',
+        );
+      } catch {
+        // Principal/unmount changes discard both the ACK and the readback.
+      } finally {
+        cancelInFlight.current = false;
+        if (current()) setBusyGameId(null);
+      }
+      return;
+    }
     if (
       ['SUBMIT_RESULT', 'CONFIRM_RESULT', 'DISPUTE_RESULT', 'VIEW_RESULT', 'OPEN_DISPUTE'].includes(
         action,
@@ -1719,7 +1919,24 @@ function GamesPageContent({
       busyGameId
     )
       return;
-    if (action === 'CANCEL' && !window.confirm('Отменить игру для всех участников?')) return;
+    if (action === 'LEAVE' && gameJoinRequiresPaidFlow(game) && !leaveAttempts) {
+      setError(
+        'Для безопасного выхода требуется доступное хранилище исходного запроса. Обновите страницу.',
+      );
+      return;
+    }
+    if (action === 'JOIN' && leaveAttempts) {
+      try {
+        if (leaveAttempts.load(game.id)) {
+          setPendingLeaveGameId(game.id);
+          setNotice('Сначала подтвердите результат предыдущего выхода.');
+          return;
+        }
+      } catch {
+        setError('Не удалось прочитать исходный запрос выхода.');
+        return;
+      }
+    }
     if (action === 'JOIN' && detail?.id === game.id && gameJoinRequiresPaidFlow(game)) {
       if (!canPaidJoin) {
         setJoinFlowFor(game.id, {
@@ -1746,9 +1963,10 @@ function GamesPageContent({
             ? await gateway.joinGameWaitlist(game.id, game.id === gameId ? invitationId : undefined)
             : action === 'LEAVE_WAITLIST'
               ? await gateway.leaveGameWaitlist(game.id)
-              : action === 'CANCEL'
-                ? await gateway.cancelGame(game.id, { reasonCode: 'ORGANIZER_REQUEST' })
+              : leaveAttempts
+                ? await leaveAttempts.submit(game.id)
                 : await gateway.leaveGame(game.id);
+      if (!joinPageActive.current) return;
       let result = submitted;
       for (
         let attempt = 0;
@@ -1757,17 +1975,34 @@ function GamesPageContent({
       ) {
         await new Promise((resolve) => setTimeout(resolve, 250));
         result = await gateway.getGameOperation(result.operation.id);
+        if (!joinPageActive.current) return;
+      }
+      if (
+        action === 'LEAVE' &&
+        leaveAttempts &&
+        result.operation.noDispatch?.outcome === 'NOT_DISPATCHED'
+      ) {
+        setPendingLeaveGameId(null);
+        setNotice('Исходный выход не отправлялся. Можно выбрать новое действие.');
+        setReloadToken((n) => n + 1);
+        return;
       }
       if (result.operation.status === 'FAILED') {
         throw Object.assign(new Error(result.operation.error?.message ?? 'Game command failed'), {
           code: result.operation.error?.code,
         });
       }
-      if (['ACCEPTED', 'PROCESSING'].includes(result.operation.status)) {
-        setNotice('Действие принято. Состав обновится после обработки.');
+      if (['ACCEPTED', 'PROCESSING', 'UNKNOWN'].includes(result.operation.status)) {
+        if (action === 'LEAVE') setPendingLeaveGameId(game.id);
+        setNotice(
+          action === 'LEAVE'
+            ? 'Выход из игры ещё не подтверждён. Исходный запрос сохранён.'
+            : 'Действие принято. Состав обновится после обработки.',
+        );
         setReloadToken((current) => current + 1);
         return;
       }
+      if (action === 'LEAVE') setPendingLeaveGameId(null);
       const minimumRevision = result.operation.aggregateRevision;
       const readbackGameId = result.operation.gameId ?? game.id;
       if (minimumRevision !== null) {
@@ -1815,9 +2050,7 @@ function GamesPageContent({
             ? 'Вы в игре. Состав и доступные действия обновлены.'
             : action === 'JOIN_WAITLIST'
               ? 'Вы добавлены в лист ожидания.'
-              : action === 'CANCEL'
-                ? 'Игра отменена. Статус и состав обновлены.'
-                : 'Участие обновлено.',
+              : 'Участие обновлено.',
         );
       }
       if (!gameId && (action === 'JOIN' || action === 'JOIN_WAITLIST')) {
@@ -1829,6 +2062,18 @@ function GamesPageContent({
       }
       clearPendingLevelRecovery();
     } catch (cause) {
+      if (!joinPageActive.current) return;
+      if (action === 'LEAVE' && leaveAttempts) {
+        setPendingLeaveGameId(game.id);
+        const refusal = selfLeaveRefusal(cause);
+        if (refusal) setError(refusal);
+        setNotice(
+          refusal
+            ? 'Исходный ключ сохранён. Новая запись заблокирована до проверки результата.'
+            : 'Выход пока не подтверждён. Исходный запрос сохранён.',
+        );
+        return;
+      }
       if (
         errorCode(cause) === 'PLAYER_LEVEL_REQUIRED' &&
         (action === 'JOIN' || action === 'JOIN_WAITLIST')
@@ -1839,7 +2084,7 @@ function GamesPageContent({
       setError(errorMessage(cause));
       setReloadToken((current) => current + 1);
     } finally {
-      setBusyGameId(null);
+      if (joinPageActive.current) setBusyGameId(null);
     }
   }
 
@@ -2193,6 +2438,8 @@ function GamesPageContent({
             ) : null}
           </div>
         ) : null}
+        {leaveRecoveryControls}
+        {cancellationRecoveryControl}
         {notice ? (
           <p className="games-message" role="status">
             {notice}
@@ -2601,6 +2848,8 @@ function GamesPageContent({
           Повторить загрузку
         </button>
       ) : null}
+      {leaveRecoveryControls}
+      {cancellationRecoveryControl}
       {notice ? (
         <p className="games-message" role="status">
           {notice}

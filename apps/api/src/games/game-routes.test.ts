@@ -1,3 +1,6 @@
+import managedJoinFixture from '../../../../packages/subscription-runtime-adapter/src/fixtures/managed-join-v2.json';
+import { parseManagedJoinEntitlement } from '@phub/domain';
+import { ManagedSelfLeaveError } from '@phub/database/managed-self-leave';
 import { loadConfig } from '@phub/config';
 import type {
   CreateStoredGameInput,
@@ -11,7 +14,11 @@ import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createJoinConditionsFixture } from './game-join-conditions.test-fixture.js';
+import {
+  fixtureActor,
+  fixtureId,
+  createJoinConditionsFixture,
+} from './game-join-conditions.test-fixture.js';
 import {
   commercialCreateDraftGameId,
   commercialCreateOperationId,
@@ -741,6 +748,123 @@ describe('Games roster User API', () => {
 });
 
 describe('paid JOIN reconciliation HTTP boundary', () => {
+  it('carries station adoption through the authenticated HTTP JOIN composition without exposing the private marker', async () => {
+    const fixture = createJoinConditionsFixture(0);
+    fixture.setQuotes({
+      quotes: [
+        {
+          subscriptionId: fixtureId(6),
+          selectionKey: JSON.stringify([
+            'EXISTING_GAME',
+            'pay_synthetic_existing_game',
+            '2099-09-21T07:00:00+03:00',
+            90,
+          ]),
+          status: 'AVAILABLE',
+          basePriceMinor: 300000,
+          amountMinor: 0,
+          freeMinutes: 90,
+          paidMinutes: 0,
+          reasonCode: null,
+          evaluatedAt: Date.now(),
+          expiresAt: Date.now() + 30000,
+        },
+      ],
+    });
+    const stationMembership = vi.fn().mockResolvedValue({
+      version: 1,
+      outcome: 'NO_ENROLLMENT',
+      reason: 'STATION_BINDING_UNAVAILABLE',
+    });
+    const beginPaidJoin = vi.fn().mockImplementation((input: { operationId: string }) =>
+      Promise.resolve({
+        outcome: 'reserved',
+        operationId: input.operationId,
+        reservationId: commandId,
+        expiresAt: new Date(Date.now() + 600000).toISOString(),
+        revision: 9,
+      }),
+    );
+    const execute = vi.fn().mockResolvedValue({ status: 'PENDING' });
+    const app = await buildApp({
+      config,
+      logger: createLogger('station-http-test', 'silent'),
+      pool: fakePool(),
+      gameRosterRepository: repository(),
+      gameCommercialJoin: {
+        repository: {
+          beginPaidJoin,
+          getPaidJoinAttempt: vi.fn().mockResolvedValue(null),
+          failPaidJoinAttempt: vi.fn(),
+        },
+        conditionsOwner: {
+          ...fixture.owner,
+          resolveSelection: async (actor, signal) => {
+            const selection = await fixture.owner.resolveSelection(
+              {
+                ...fixtureActor,
+                tenantKey: 'local-padel',
+                expectedRevision: 8,
+                correlationId: 'fixture-correlation',
+              },
+              signal,
+            );
+            return selection ? { ...selection, ...actor } : null;
+          },
+        },
+        owner: {
+          prepareManaged: (input) =>
+            Promise.resolve({
+              outcome: 'prepared',
+              binding: {
+                ...managedJoinFixture.confirmed.receipt,
+                startsAt: '2099-09-21T04:00:00.000Z',
+                durationMinutes: 90,
+                capacity: 4,
+                admissible: true,
+              },
+              managedJoin: {
+                contractVersion: 2,
+                requestFingerprint: input.requestFingerprint,
+                entitlement: parseManagedJoinEntitlement(
+                  managedJoinFixture.preflight.response.entitlement,
+                ),
+              },
+            }),
+          execute,
+          read: vi.fn().mockResolvedValue(null),
+        },
+        stationMembership,
+      },
+    });
+    apps.push(app);
+    const result = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/games/${gameId}/join`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'station-http-original-join',
+      },
+      payload: {
+        subscriptionInstanceId: fixtureActor.subscriptionInstanceId,
+        expectedRevision: 8,
+        priceConsent: { amountMinor: 0, currency: 'RUB' },
+      },
+    });
+    expect(result.statusCode).toBe(202);
+    expect(stationMembership).toHaveBeenCalledOnce();
+    expect(stationMembership.mock.calls[0]?.[0]).toMatchObject({
+      command: { tenantId, userId, gameId, sessionId: '55555555-5555-4555-8555-555555555555' },
+    });
+    expect(beginPaidJoin.mock.calls[0]?.[0]).toHaveProperty(
+      'stationMembership.reason',
+      'STATION_BINDING_UNAVAILABLE',
+    );
+    expect(result.body).not.toContain('stationMembership');
+    expect(result.body).not.toContain('providerMappingId');
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it('scopes recovery to the authenticated actor and never invokes an owner for a foreign attempt', async () => {
     const getPaidJoinAttempt = vi.fn().mockResolvedValue(null);
     const read = vi.fn();
@@ -1230,5 +1354,136 @@ describe('managed commercial CREATE HTTP boundary (WARN)', () => {
       message: 'В ранней beta можно создать только бесплатную игру.',
     });
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('managed SELF leave route projection', () => {
+  it('keeps bodyless DELETE, returns 202 UNKNOWN, journals before ordinary lookup, scopes both GETs and enforces auth', async () => {
+    const body = {
+      commandId,
+      operation: {
+        id: commandId,
+        type: 'LEAVE_GAME' as const,
+        status: 'UNKNOWN' as const,
+        gameId,
+        aggregateRevision: 8,
+        createdAt: committedAt,
+        updatedAt: committedAt,
+        nextAction: { type: 'WAIT_FOR_RECONCILIATION' as const, retryAfterSeconds: 15 },
+        error: null,
+      },
+      game: null,
+      replayed: true,
+    };
+    const managed = {
+      execute: vi.fn(() => Promise.resolve().then(() => body)),
+      reconcile: vi.fn(() => Promise.resolve().then(() => body)),
+      read: vi.fn(() => Promise.resolve().then(() => body)),
+      readByKey: vi.fn(() => Promise.resolve().then(() => body)),
+    };
+    const roster = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('self-leave-test', 'silent'),
+      pool: fakePool(),
+      gameRosterRepository: roster,
+      gameManagedSelfLeave: managed,
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await accessToken()}`,
+      'idempotency-key': 'self-leave-original-key',
+    };
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/user/api/v1/local-padel/games/${gameId}/participants/me`,
+      headers,
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual(body);
+    expect(managed.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        actorUserId: userId,
+        gameId,
+        idempotencyKey: headers['idempotency-key'],
+      }),
+    );
+    const read = await app.inject({
+      url: `/user/api/v1/local-padel/game-operations/${commandId}`,
+      headers,
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.headers['cache-control']).toContain('no-store');
+    expect(managed.read).toHaveBeenCalledWith({
+      tenantId,
+      actorUserId: userId,
+      operationId: commandId,
+    });
+    const byKey = await app.inject({
+      url: `/user/api/v1/local-padel/games/${gameId}/leave-operation`,
+      headers,
+    });
+    expect(byKey.statusCode).toBe(200);
+    expect(managed.readByKey).toHaveBeenCalledWith({
+      tenantId,
+      actorUserId: userId,
+      gameId,
+      idempotencyKey: headers['idempotency-key'],
+    });
+    const reconcile = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+      headers,
+    });
+    expect(reconcile.statusCode).toBe(202);
+    expect(managed.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ gameId, idempotencyKey: headers['idempotency-key'] }),
+    );
+    expect(roster.leave).not.toHaveBeenCalled();
+    for (const extra of [
+      { payload: { recoveryOnly: true } },
+      { url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile?retry=true` },
+    ]) {
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+            headers,
+            ...extra,
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+    expect(managed.reconcile).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+        })
+      ).statusCode,
+    ).toBe(401);
+    managed.readByKey.mockRejectedValueOnce(new ManagedSelfLeaveError('IDEMPOTENCY_CONFLICT'));
+    const wrongGame = await app.inject({
+      url: `/user/api/v1/local-padel/games/${invitationId}/leave-operation`,
+      headers,
+    });
+    expect(wrongGame.statusCode).toBe(409);
+    expect(wrongGame.json()).toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+
+    expect(
+      (await app.inject({ url: `/user/api/v1/local-padel/games/${gameId}/leave-operation` }))
+        .statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await app.inject({
+          url: `/user/api/v1/local-padel/games/${gameId}/leave-operation`,
+          headers: { authorization: headers.authorization },
+        })
+      ).statusCode,
+    ).toBe(400);
   });
 });

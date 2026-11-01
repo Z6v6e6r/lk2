@@ -37,6 +37,9 @@
       "@phub/ui": ["packages/ui/src/index.tsx"],
       "@phub/viva-adapter": ["packages/viva-adapter/src/index.ts"],
       "@phub/viva-client-adapter": ["packages/viva-client-adapter/src/index.ts"],
+      "@phub/database/managed-self-leave": [
+        "packages/database/src/managed-self-leave-repository.ts"
+      ],
       "@phub/database/contacts": ["packages/database/src/contact-reader.ts"],
       "@phub/database/password-login": ["packages/database/src/local-password-login-repository.ts"],
       "@phub/database/support-tickets": ["packages/database/src/support-ticket-repository.ts"],
@@ -47,6 +50,15 @@
       ],
       "@phub/viva-adapter/notification-lifecycle": [
         "packages/viva-adapter/src/notification-lifecycle-source.ts"
+      ],
+      "@phub/domain/quarter-create": ["packages/domain/src/quarter-create.ts"],
+      "@phub/database/quarter-create": ["packages/database/src/game-quarter-create-repository.ts"],
+      "@phub/domain/training-registration": ["packages/domain/src/training-registration.ts"],
+      "@phub/database/training-registration": [
+        "packages/database/src/training-registration-repository.ts"
+      ],
+      "@phub/database/station-message-notifications": [
+        "packages/database/src/station-message-notifications.ts"
       ]
     },
     "types": ["node", "vitest/globals"]

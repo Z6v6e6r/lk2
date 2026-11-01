@@ -1,3 +1,4 @@
+import { ordinaryPolicyRow } from './ordinary-push-policy.test-helper.js';
 import type { NotificationEndpointCipher, NotificationPushDeliveryPort } from '@phub/notifications';
 import type { Logger } from 'pino';
 import type { Pool, QueryResult } from 'pg';
@@ -30,6 +31,10 @@ function fakePool(
 ) {
   const query = vi.fn((text: string, values: readonly unknown[] = []) => {
     capture.push({ text, values });
+    if (text.includes('live_lease'))
+      return Promise.resolve(
+        result([ordinaryPolicyRow('FCM', { endpoint_status: input.endpoint_status })]),
+      );
     if (text.includes('pg_try_advisory_xact_lock'))
       return Promise.resolve(result([{ acquired: true }]));
     if (text.includes('for update of d skip locked')) return Promise.resolve(result([input]));
@@ -64,6 +69,10 @@ describe('FCM delivery state machine', () => {
       let blocked = true;
       const query = vi.fn((text: string, values: readonly unknown[] = []) => {
         queries.push({ text, values });
+        if (text.includes('live_lease'))
+          return Promise.resolve(
+            result([ordinaryPolicyRow('FCM', { endpoint_status: 'REVOKED' })]),
+          );
         if (text.includes('pg_try_advisory_xact_lock')) {
           const gate = String(values[0]).startsWith('notification-runtime:')
             ? 'runtime'

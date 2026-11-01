@@ -1,3 +1,8 @@
+import { TournamentChatPage } from './TournamentChatPage.js';
+import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
+import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
+import { QuarterCreatePanel } from './QuarterCreatePanel.js';
+import { GameCard } from './GameCard.js';
 import { normalizePhoneE164 } from '@phub/auth';
 import { PrimaryButton } from '@phub/ui';
 import { lazy, useEffect, useMemo, useReducer, useRef, useState } from 'react';
@@ -168,6 +173,7 @@ type ProtectedRoute =
   | { readonly kind: 'game'; readonly gameId: string }
   | { readonly kind: 'trainings' }
   | { readonly kind: 'tournaments' }
+  | { readonly kind: 'tournament-chat'; readonly tournamentId: string }
   | { readonly kind: 'subscriptions'; readonly subscriptionId?: string }
   | { readonly kind: 'gift-certificates' }
   | { readonly kind: 'section'; readonly title: string }
@@ -191,6 +197,11 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   );
   if (profileMatch?.[1]) return { kind: 'profile', userId: profileMatch[1] };
   if (normalizedPath === '/bookings') return { kind: 'bookings' };
+  const tournamentChat =
+    /^\/tournaments\/([a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})\/chat$/.exec(
+      normalizedPath,
+    );
+  if (tournamentChat?.[1]) return { kind: 'tournament-chat', tournamentId: tournamentChat[1] };
   if (normalizedPath === '/chats') return { kind: 'chats', mode: 'list' };
   if (normalizedPath === '/chats/new') return { kind: 'chats', mode: 'new' };
   const chatMatch = normalizedPath.match(
@@ -681,6 +692,36 @@ const HOME_INITIAL_RETRY_DELAYS_MS = [
   400, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000,
 ] as const;
 
+function NativeCreatedGame({ gateway, gameId }: { gateway: AuthGateway; gameId: string }) {
+  const [game, setGame] = useState<Awaited<ReturnType<AuthGateway['getGame']>> | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const principal = gateway.quarterCreatePrincipal?.();
+    void gateway.getGame(gameId).then(
+      (v) => {
+        if (active && principal && gateway.quarterCreatePrincipal?.() === principal) setGame(v);
+      },
+      () => {
+        if (active) setFailed(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [gateway, gameId]);
+  return (
+    <main>
+      <a href="/games/new?quarterCreate=1">К созданию игры</a>
+      {game ? (
+        <GameCard game={game} readOnly />
+      ) : (
+        <p role="status">{failed ? 'Игра пока недоступна.' : 'Загружаем игру…'}</p>
+      )}
+    </main>
+  );
+}
+
 export function App({
   clientPlatform = 'web',
   androidYandexLogin = false,
@@ -732,24 +773,69 @@ export function App({
    */
   const communityDirectoryAvailable =
     state.session !== null &&
+    state.busy !== 'logout' &&
     state.session.context.runtimeCapabilities?.communityDirectory !== false;
   const communityChatReadAvailable =
     state.session !== null && state.session.context.runtimeCapabilities?.communityReadChat === true;
-  const communityChatsSource = useMemo(
-    () =>
-      communityDirectoryAvailable
-        ? {
-            loadCommunities: (cursor?: string) => gateway.listMyCommunities(cursor, 50),
-            ...(communityChatReadAvailable
-              ? {
-                  loadMessages: (communityId: string, cursor?: string) =>
-                    gateway.listCommunityReadExperienceChat(communityId, cursor),
-                }
-              : {}),
-          }
-        : null,
-    [gateway, communityDirectoryAvailable, communityChatReadAvailable],
-  );
+  const communityChatsSource = useMemo(() => {
+    const principal = gateway.stationMessagePrincipal?.();
+    const current = () => Boolean(principal && gateway.stationMessagePrincipal?.() === principal);
+    const read = async <T,>(load: () => Promise<T>): Promise<T> => {
+      if (clientPlatform === 'android' && !current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      const result = await load();
+      if (clientPlatform === 'android' && !current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    };
+    return communityDirectoryAvailable
+      ? {
+          ...((clientPlatform === 'web' || clientPlatform === 'android') &&
+          gateway.sendStationCommunityMessage &&
+          gateway.getStationCommunityMessageRequest
+            ? {
+                custodyScope: JSON.stringify([tenantKey, state.session?.context.user.id]),
+                ...(clientPlatform === 'android'
+                  ? { custodyStorage: 'native-local' as const, isCurrent: current }
+                  : {}),
+                sendMessage: gateway.sendStationCommunityMessage,
+                getMessageRequest: gateway.getStationCommunityMessageRequest,
+              }
+            : {}),
+          ...(clientPlatform === 'web' &&
+          communityChatReadAvailable &&
+          gateway.listStationStreamSummaries &&
+          gateway.getStationCommunityStream &&
+          gateway.requestStationCommunityRead &&
+          gateway.getStationCommunityReadRequest &&
+          principal
+            ? {
+                stream: {
+                  scope: JSON.stringify([tenantKey, state.session?.context.user.id]),
+                  principal,
+                  isCurrent: current,
+                  summaries: gateway.listStationStreamSummaries,
+                  page: gateway.getStationCommunityStream,
+                  read: gateway.requestStationCommunityRead,
+                  status: gateway.getStationCommunityReadRequest,
+                },
+              }
+            : {}),
+          loadCommunities: (cursor?: string) => read(() => gateway.listMyCommunities(cursor, 50)),
+          ...(communityChatReadAvailable
+            ? {
+                loadMessages: (communityId: string, cursor?: string) =>
+                  read(() => gateway.listCommunityReadExperienceChat(communityId, cursor)),
+              }
+            : {}),
+        }
+      : null;
+  }, [
+    gateway,
+    communityDirectoryAvailable,
+    communityChatReadAvailable,
+    clientPlatform,
+    tenantKey,
+    state.session?.context.user.id,
+  ]);
   const [communityInviteToken] = useState(() =>
     typeof window === 'undefined'
       ? null
@@ -870,9 +956,12 @@ export function App({
   // The first native increment exposes canonical API screens. Browser-only provider, payment
   // and upload routes stay unavailable until their native handoff contracts are implemented.
   const nativeSections = new Set([
+    'trainings',
     'home',
     'home-v2',
     'home-v3',
+    'game-create',
+    'game',
     'profile',
     'profile-level-history',
     'support',
@@ -1896,6 +1985,22 @@ export function App({
   }
 
   function handleLogout(): void {
+    if (clientPlatform === 'android') {
+      gateway.closeQuarterCreate?.();
+      try {
+        const userId = state.session?.context.user.id;
+        if (userId) {
+          const scope = JSON.stringify([tenantKey, userId]);
+          const prefix = threadPageCacheKey('community-thread', scope, '');
+          for (const key of Object.keys(window.sessionStorage)) {
+            if (key.startsWith(prefix) || key === communityChatsCacheKey(userId))
+              window.sessionStorage.removeItem(key);
+          }
+        }
+      } catch {
+        /* A denied cache cannot authorize a new message; durable metadata is untouched. */
+      }
+    }
     communityRealtimeTransport?.stop();
     dispatch({ type: 'logout-started' });
     const serviceWorkerUrl =
@@ -2891,6 +2996,15 @@ export function App({
       }
       return <LocationDetailPage location={locationDetail} />;
     }
+    if (clientPlatform === 'android' && protectedRoute.kind === 'game') {
+      return (
+        <NativeCreatedGame
+          key={`${context.tenant.id}:${context.user.id}:${protectedRoute.gameId}`}
+          gateway={gateway}
+          gameId={protectedRoute.gameId}
+        />
+      );
+    }
     if (protectedRoute.kind === 'games' || protectedRoute.kind === 'game') {
       const eventId =
         protectedRoute.kind === 'games' && typeof window !== 'undefined'
@@ -2924,6 +3038,18 @@ export function App({
         tenantId: state.session.context.tenant.id,
         userId: state.session.context.user.id,
       };
+      if (clientPlatform === 'android')
+        return (
+          <QuarterCreatePanel
+            gamesHref="/"
+            gateway={gateway}
+            principal={createGamePrincipal}
+            navigate={(url) => {
+              window.history.pushState(null, '', url);
+              window.dispatchEvent(new PopStateEvent('popstate'));
+            }}
+          />
+        );
       return (
         <CreateGamePage
           key={`${createGamePrincipal.tenantId}:${createGamePrincipal.userId}`}
@@ -2933,14 +3059,73 @@ export function App({
       );
     }
     if (protectedRoute.kind === 'trainings') {
-      return <TrainingsPage gateway={gateway} />;
+      return (
+        <TrainingsPage
+          key={`${context.tenant.id}:${context.user.id}`}
+          gateway={gateway}
+          principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+          {...(typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).get('event')
+            ? { eventId: new URLSearchParams(window.location.search).get('event')! }
+            : {})}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'tournament-chat') {
+      if (
+        clientPlatform !== 'web' ||
+        !gateway.tournamentChatPrincipal ||
+        !gateway.tournamentChatPrincipal() ||
+        !gateway.sendTournamentChatMessage ||
+        !gateway.getTournamentChatRequest ||
+        !gateway.getTournamentChatHistory
+      )
+        return (
+          <main>
+            <h1>Чат турнира пока недоступен</h1>
+            <a href="/games">К событиям</a>
+          </main>
+        );
+      return (
+        <TournamentChatPage
+          key={`${context.tenant.id}:${context.user.id}:${protectedRoute.tournamentId}`}
+          tournamentId={protectedRoute.tournamentId}
+          principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+          gateway={{
+            tournamentChatPrincipal: gateway.tournamentChatPrincipal,
+            sendTournamentChatMessage: gateway.sendTournamentChatMessage,
+            getTournamentChatRequest: gateway.getTournamentChatRequest,
+            getTournamentChatHistory: gateway.getTournamentChatHistory,
+            ...(gateway.getTournamentChatReadPosition &&
+            gateway.advanceTournamentChatRead &&
+            gateway.getTournamentChatReadRequest
+              ? {
+                  getTournamentChatReadPosition: gateway.getTournamentChatReadPosition,
+                  advanceTournamentChatRead: gateway.advanceTournamentChatRead,
+                  getTournamentChatReadRequest: gateway.getTournamentChatReadRequest,
+                }
+              : {}),
+          }}
+        />
+      );
     }
     if (protectedRoute.kind === 'tournaments') {
       const tournamentId =
         typeof window === 'undefined'
           ? null
           : new URLSearchParams(window.location.search).get('event');
-      return <TournamentDetailPage gateway={gateway} tournamentId={tournamentId} />;
+      return (
+        <TournamentDetailPage
+          key={`${context.tenant.id}:${context.user.id}`}
+          gateway={gateway}
+          tournamentId={tournamentId}
+          chatAvailable={
+            clientPlatform === 'web' &&
+            Boolean(gateway.tournamentChatPrincipal?.() && gateway.getTournamentChatHistory)
+          }
+          principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+        />
+      );
     }
     if (protectedRoute.kind === 'subscriptions') {
       return (

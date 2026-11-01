@@ -1,3 +1,8 @@
+import { IOSStationChats } from './IOSStationChats.js';
+import { IOSGameCancel } from './IOSGameCancel.js';
+import '../native-quarter-create.css';
+import { QuarterCreatePanel } from '../../../web/src/QuarterCreatePanel.js';
+import { createIOSQuarterGateway } from './quarter-gateway.js';
 import { registerPlugin } from '@capacitor/core';
 import {
   createAndroidPushController,
@@ -429,6 +434,7 @@ export function IOSCabinet({
   readonly auth: AuthenticatedSession;
 }): React.JSX.Element {
   const route = useCabinetRoute();
+  const quarterGateway = useMemo(() => createIOSQuarterGateway(session), [session]);
   const data = useMemo(() => createCabinetData(session, auth.user.id), [session, auth.user.id]);
   const [push, setPush] = useState(initialAndroidPushState);
   const [logoutError, setLogoutError] = useState<string>();
@@ -463,6 +469,7 @@ export function IOSCabinet({
       path,
     );
   const logout = () => {
+    session.closeQuarterCreate();
     setLogoutError(undefined);
     void controller
       .beforeLogout()
@@ -475,6 +482,18 @@ export function IOSCabinet({
   };
   let content: ReactNode;
   if (path === '/') content = <Home data={data} auth={auth} onLogout={logout} />;
+  else if (path === '/chats') content = <IOSStationChats session={session} />;
+  else if (path === '/games/new')
+    content = (
+      <QuarterCreatePanel
+        gateway={quarterGateway}
+        principal={{ tenantId: auth.context.tenantId, userId: auth.context.userId }}
+        navigate={(url) => {
+          window.history.pushState(null, '', url);
+          window.dispatchEvent(new PopStateEvent('popstate'));
+        }}
+      />
+    );
   else if (path === '/profile' || path === `/profile/${auth.user.id}`)
     content = <Profile data={data} origin={session.configuration.apiBaseUrl} onLogout={logout} />;
   else if (path === '/notifications')
@@ -513,10 +532,8 @@ export function IOSCabinet({
       <Load title="Игра" load={() => data.game(detail[2]!)}>
         {(game) => (
           <Page title="Игра" active="games">
-            <GameCard game={game} readOnly />
-            <p className="ios-cabinet-note">
-              Запись, оплата и управление игрой появятся в следующей версии.
-            </p>
+            <IOSGameCancel key={game.id} game={game} session={session} />
+            <p className="ios-cabinet-note">Запись и оплата пока недоступны.</p>
           </Page>
         )}
       </Load>
@@ -530,6 +547,10 @@ export function IOSCabinet({
     );
   return (
     <div className="ios-cabinet">
+      <nav className="native-quarter-navigation" aria-label="Разделы приложения">
+        <a href="/chats">Чаты сообществ</a>
+        <a href="/games/new?quarterCreate=1">Игра по подписке</a>
+      </nav>
       {logoutError ? <p role="alert">{logoutError}</p> : null}
       <div key={path}>{content}</div>
     </div>

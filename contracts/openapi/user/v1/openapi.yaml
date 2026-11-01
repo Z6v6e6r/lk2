@@ -32,6 +32,209 @@ tags:
   - name: subscriptions
     description: Non-binding WARN-only subscription-runtime checks through a server-owned actor delegation.
 paths:
+  /{tenantKey}/game-create-operations/capability:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [games]
+      operationId: getQuarterCreateCapability
+      summary: Read default-off quarter CREATE availability
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      responses:
+        '200':
+          description: Authenticated read; no command mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateCapability'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/game-create-operations/locations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [games]
+      operationId: getQuarterCreateLocations
+      summary: Read fresh typed station and court pairs; not capacity availability
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      responses:
+        '200':
+          description: Authenticated read; no command mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateLocations'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/game-create-operations/by-key:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    get:
+      tags: [games]
+      operationId: getQuarterCreateOperation
+      summary: Read original private command custody by its unchanged key
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      responses:
+        '200':
+          description: Authenticated read; no command mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+        '404':
+          description: Original operation not found; absence is never permission to discard custody.
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+  /{tenantKey}/game-create-operations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [games]
+      operationId: createQuarterGame
+      summary: Create one quarter-court game through the original owner
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuarterCreateInput'
+      responses:
+        '200':
+          description: Original command state; an unknown result retains custody.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '202':
+          description: Original command state; an unknown result retains custody.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+        '404':
+          description: Original operation not found; absence is never permission to discard custody.
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+  /{tenantKey}/game-create-operations/{operationId}/reconcile:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: operationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [games]
+      operationId: reconcileQuarterCreateOperation
+      summary: Reconcile only the original command without another provider CREATE
+      description: |
+        Requires an active tenant session and games.play. Private provider identifiers and
+        owner proofs never leave this API. Cache-Control is no-store. Commands use the
+        same original key and immutable four-field body; no automatic network/401 retry.
+        Confirmed operation history is distinct from current registration and game projection.
+        The existing importer alone creates canonical games and rosters. Projection pending
+        is not a scheduled public game. No station enrollment is implied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuarterCreateInput'
+      responses:
+        '200':
+          description: Original command state; an unknown result retains custody.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '202':
+          description: Original command state; an unknown result retains custody.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarterCreateResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+        '404':
+          description: Original operation not found; absence is never permission to discard custody.
+        '409':
+          $ref: '#/components/responses/CommandConflict'
   /{tenantKey}/booked-operation-admissions:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -2428,6 +2631,74 @@ paths:
         '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
         '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
         '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/station-stream-summaries:
+    $ref: ./station-stream.yaml#/paths/~1{tenantKey}~1community-views~1station-stream-summaries
+  /{tenantKey}/community-views/{communityId}/station-stream:
+    $ref: ./station-stream.yaml#/paths/~1{tenantKey}~1community-views~1{communityId}~1station-stream
+  /{tenantKey}/community-views/{communityId}/read-requests:
+    $ref: ./station-stream.yaml#/paths/~1{tenantKey}~1community-views~1{communityId}~1read-requests
+  /{tenantKey}/community-views/{communityId}/read-requests/{requestId}:
+    $ref: ./station-stream.yaml#/paths/~1{tenantKey}~1community-views~1{communityId}~1read-requests~1{requestId}
+  /{tenantKey}/community-views/{communityId}/message-requests:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: Idempotency-Key
+        in: header
+        required: true
+        description: Must equal the original requestId in the body.
+        schema: { type: string, format: uuid }
+    post:
+      tags: [communities]
+      operationId: sendStationCommunityMessage
+      summary: Submit original STATION text intent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StationMessageRequest' }
+      responses:
+        '200':
+          description: Durable receipt or UNKNOWN. Neither proves delivery/read; errors never prove no dispatch.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StationMessageReceipt' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/{communityId}/message-requests/{requestId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: requestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [communities]
+      operationId: getStationCommunityMessageRequest
+      summary: Read original STATION message status without dispatch
+      responses:
+        '200':
+          description: Durable receipt or UNKNOWN. Neither proves delivery/read; errors never prove no dispatch.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StationMessageReceipt' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
   /{tenantKey}/community-views/{communityId}/rating:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -3987,6 +4258,10 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join
   /{tenantKey}/games/{gameId}/join-operation:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join-operation
+  /{tenantKey}/games/{gameId}/leave-operation/reconcile:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1leave-operation~1reconcile
+  /{tenantKey}/games/{gameId}/leave-operation:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1leave-operation
   /{tenantKey}/games/{gameId}/participants/me:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1participants~1me
   /{tenantKey}/games/{gameId}/waitlist:
@@ -5756,8 +6031,112 @@ paths:
       description:
         ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
         ticket before an explicit fresh command.'
+  /{tenantKey}/tournaments/{tournamentId}/registrations:
+    $ref: ./tournament-local.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1registrations
+  /{tenantKey}/tournaments/{tournamentId}/registration-operation:
+    $ref: ./tournament-local.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1registration-operation
+  /{tenantKey}/tournaments/{tournamentId}/registration-operations/{operationId}/retry:
+    $ref: ./tournament-local.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1registration-operations~1{operationId}~1retry
+  /{tenantKey}/trainings/catalog:
+    $ref: ./training-catalogue.yaml#/paths/~1{tenantKey}~1trainings~1catalog
+  /{tenantKey}/trainings/{trainingId}/registrations:
+    $ref: ./training-registrations.yaml#/paths/~1{tenantKey}~1trainings~1{trainingId}~1registrations
+  /{tenantKey}/trainings/{trainingId}/registration-operation:
+    $ref: ./training-registrations.yaml#/paths/~1{tenantKey}~1trainings~1{trainingId}~1registration-operation
+
+  /{tenantKey}/tournaments/{tournamentId}/chat/message-requests:
+    $ref: ./tournament-chat.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1chat~1message-requests
+
+  /{tenantKey}/tournaments/{tournamentId}/chat/message-requests/{requestId}:
+    $ref: ./tournament-chat.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1chat~1message-requests~1{requestId}
+
+  /{tenantKey}/tournaments/{tournamentId}/chat/read-position:
+    $ref: ./tournament-chat.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1chat~1read-position
+  /{tenantKey}/tournaments/{tournamentId}/chat/read-requests:
+    $ref: ./tournament-chat.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1chat~1read-requests
+  /{tenantKey}/tournaments/{tournamentId}/chat/read-requests/{requestId}:
+    $ref: ./tournament-chat.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1chat~1read-requests~1{requestId}
+  /{tenantKey}/tournaments/{tournamentId}/chat/messages:
+    $ref: ./tournament-chat.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1chat~1messages
+
 components:
   schemas:
+    QuarterCreateInput:
+      type: object
+      additionalProperties: false
+      required: [stationId, courtId, startsAt, subscriptionId]
+      properties:
+        stationId: { type: string, format: uuid }
+        courtId: { type: string, format: uuid }
+        startsAt: { type: string, format: date-time }
+        subscriptionId: { type: string, format: uuid }
+    QuarterCreateCapability:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, available]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        available: { type: boolean }
+    QuarterCreateLocations:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 25
+          items:
+            type: object
+            additionalProperties: false
+            required: [stationId, courtId, stationTitle, courtName]
+            properties:
+              stationId: { type: string, format: uuid }
+              courtId: { type: string, format: uuid }
+              stationTitle: { type: string }
+              courtName: { type: string }
+    QuarterCreateResult:
+      type: object
+      additionalProperties: false
+      required:
+        [contractVersion, request, keySha256, operation, gameProjection, registration, reason]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        request:
+          $ref: '#/components/schemas/QuarterCreateInput'
+        keySha256: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        operation:
+          type: object
+          additionalProperties: false
+          required: [id, draftId, status]
+          properties:
+            id: { type: string, format: uuid }
+            draftId: { type: string, format: uuid }
+            status:
+              type: string
+              enum:
+                [
+                  PENDING,
+                  UNKNOWN,
+                  CONFIRMED,
+                  REJECTED,
+                  EXPIRED_NOT_DISPATCHED,
+                  REFUSED_NOT_DISPATCHED,
+                ]
+        gameProjection:
+          type: object
+          additionalProperties: false
+          required: [status, gameId]
+          properties:
+            status: { type: string, enum: [PENDING, AVAILABLE] }
+            gameId: { type: [string, 'null'], format: uuid }
+        registration:
+          type: object
+          additionalProperties: false
+          required: [status, asOf]
+          properties:
+            status: { type: string, enum: [UNKNOWN, CONFIRMED] }
+            asOf: { type: [string, 'null'], format: date-time }
+        reason: { type: [string, 'null'] }
     GameJoinConditions:
       type: object
       additionalProperties: false
@@ -7831,11 +8210,84 @@ components:
           maxItems: 20
           items: { $ref: '#/components/schemas/CommunityReadExperienceFeedItem' }
         nextCursor: { type: string, minLength: 16, maxLength: 512 }
+    StationMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, text]
+      properties:
+        requestId: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 8000 }
+    StationStreamPage:
+      $ref: ./station-stream.yaml#/components/schemas/StationStreamPage
+    StationStreamSummary:
+      $ref: ./station-stream.yaml#/components/schemas/StationStreamSummary
+    StationStreamSummaries:
+      $ref: ./station-stream.yaml#/components/schemas/StationStreamSummaries
+    StationReadRequest:
+      $ref: ./station-stream.yaml#/components/schemas/StationReadRequest
+    StationReadReceipt:
+      $ref: ./station-stream.yaml#/components/schemas/StationReadReceipt
+    StationMessageReceipt:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [contractVersion, contract, requestId, outcome, message]
+          properties:
+            contractVersion: { type: integer, enum: [1] }
+            contract: { type: string, enum: [station-message] }
+            requestId: { type: string, format: uuid }
+            outcome: { type: string, enum: [CONFIRMED] }
+            message:
+              type: object
+              additionalProperties: false
+              required: [id, body, sentAt, author, isViewer]
+              properties:
+                id: { type: string, format: uuid }
+                body: { type: string, minLength: 1, maxLength: 8000 }
+                sentAt: { type: string, format: date-time }
+                author: { $ref: '#/components/schemas/CommunityReadExperienceAuthor' }
+                isViewer: { type: boolean, enum: [true] }
+        - type: object
+          additionalProperties: false
+          required: [contractVersion, contract, requestId, outcome, code]
+          properties:
+            contractVersion: { type: integer, enum: [1] }
+            contract: { type: string, enum: [station-message] }
+            requestId: { type: string, format: uuid }
+            outcome: { type: string, enum: [UNKNOWN] }
+            code:
+              type: string
+              enum:
+                [
+                  MESSAGE_CONTRACT_REQUIRED,
+                  COMMUNITY_AUTH_REQUIRED,
+                  MESSAGE_REQUEST_INVALID,
+                  MESSAGE_STATUS_WRITE_FORBIDDEN,
+                  MESSAGE_STORE_UNAVAILABLE,
+                  COMMUNITY_MESSAGE_ACCESS_UNAVAILABLE,
+                  MESSAGE_RECEIPT_UNPROVEN,
+                  MESSAGE_STATUS_STATE_INVALID,
+                  MESSAGE_CUSTODY_UNPROVEN,
+                  MESSAGE_REQUEST_CONFLICT,
+                  MESSAGE_COMMIT_INVALID,
+                  MESSAGE_REQUEST_TERMINAL,
+                  MESSAGE_COMMIT_UNPROVEN,
+                  MESSAGE_ACCEPTANCE_UNPROVEN,
+                  MESSAGE_COMMUNITY_CHANGED,
+                  COMMUNITY_MESSAGE_ACCESS_DENIED,
+                  COMMUNITY_MESSAGE_ACCESS_CHANGED,
+                  MESSAGE_OUTBOX_FULL,
+                  MESSAGE_ACCEPTANCE_CONFLICT,
+                  MESSAGE_EVENT_UNPROVEN,
+                  MESSAGE_STATE_INVALID,
+                  MESSAGE_STEP_LIMIT,
+                ]
     CommunityReadExperienceChatMessage:
       type: object
       additionalProperties: false
       required: [body, sentAt, author, isViewer]
       properties:
+        id: { type: string, format: uuid }
         body: { type: string, minLength: 1, maxLength: 8000 }
         sentAt: { type: string, format: date-time }
         author: { $ref: '#/components/schemas/CommunityReadExperienceAuthor' }
@@ -7845,6 +8297,9 @@ components:
       additionalProperties: false
       required: [items]
       properties:
+        canRequestStationMessage:
+          type: boolean
+          description: Eligible for the canonical STATION request route; not proof the owner is installed or available.
         items:
           type: array
           maxItems: 50

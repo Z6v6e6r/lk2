@@ -1,3 +1,22 @@
+import { registerTournamentChatRoutes } from './tournaments/tournament-chat-routes.js';
+import type { TournamentChatOwner } from './tournaments/tournament-chat-owner-client.js';
+import { registerStationStreamRoutes } from './communities/station-stream-routes.js';
+import type { StationStreamOwner } from './communities/station-stream-owner-client.js';
+import {
+  registerOrganizerProfileLookup,
+  type OrganizerLookupOptions,
+} from './tournaments/organizer-profile-lookup.js';
+import { registerStationMessageRoutes } from './communities/station-message-routes.js';
+import type { StationMessageOwner } from './communities/station-message-owner-client.js';
+import { registerQuarterCreateRoutes } from './games/game-quarter-create-routes.js';
+import type { QuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
+import { registerTournamentLocalRoutes } from './tournaments/tournament-local-routes.js';
+import type { TournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';
+import { registerTrainingCatalogueRoutes } from './bookings/training-catalogue-routes.js';
+import type { TrainingCatalogueSource } from './bookings/training-catalogue-source.js';
+import { registerTrainingRegistrationRoutes } from './bookings/training-registration-routes.js';
+import type { TrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
+import type { ManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { attachUpcomingRosters } from './bookings/upcoming-rosters.js';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -253,6 +272,9 @@ export interface BuildAppOptions {
   readonly authDependencyReady?: () => Promise<boolean>;
   readonly runtimeContourAttestation?: RuntimeContourAttestation;
   readonly communityDirectory?: CommunityDirectoryService;
+  readonly stationMessageOwner?: StationMessageOwner;
+  readonly tournamentChatOwner?: TournamentChatOwner;
+  readonly stationStreamOwner?: StationStreamOwner;
   readonly communityReadExperienceService?: CommunityReadExperienceService;
   readonly communityCreateService?: CommunityCreateService;
   readonly communityMembershipPinService?: CommunityMembershipPinService;
@@ -325,6 +347,7 @@ export interface BuildAppOptions {
   readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
   readonly playerLevelRepository?: PlayerLevelRepository;
   readonly cupPlayerLevelProjectionRepository?: CupPlayerLevelProjectionRepository;
+  readonly organizerProfileLookup?: OrganizerLookupOptions;
   readonly participationCommandRepository?: ParticipationCommandRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
@@ -370,6 +393,7 @@ export interface BuildAppOptions {
   readonly communityLogoMediaRepository?: CommunityLogoMediaRepository;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
+  readonly trainingCatalogueSource?: TrainingCatalogueSource;
   readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
   readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
   readonly upcomingBookingsRepository?: UpcomingBookingsRepository;
@@ -405,9 +429,13 @@ export interface BuildAppOptions {
     'issue'
   >;
   readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
+  readonly trainingRegistration?: TrainingRegistrationRuntime;
+  readonly tournamentLocal?: TournamentLocalRuntime;
+  readonly gameManagedSelfLeave?: ManagedSelfLeaveRuntime;
   readonly gameCommercialJoin?: GameCommercialJoinOptions;
   /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
   readonly gameCommercialCreate?: GameCommercialCreateOptions;
+  readonly gameQuarterCreate?: QuarterCreateRuntime;
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
   readonly bookedOperationRead?: Omit<
     BookedOperationReadRouteOptions,
@@ -1082,6 +1110,18 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });
+  registerTournamentChatRoutes(app as unknown as FastifyInstance, {
+    ...(options.tournamentChatOwner ? { owner: options.tournamentChatOwner } : {}),
+    handlers: [authenticate, resolveTenant],
+  });
+  registerStationMessageRoutes(app as unknown as FastifyInstance, {
+    ...(options.stationMessageOwner ? { owner: options.stationMessageOwner } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerStationStreamRoutes(app as unknown as FastifyInstance, {
+    ...(options.stationStreamOwner ? { owner: options.stationStreamOwner } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
   registerCommunityExperienceRoutes(app as unknown as FastifyInstance, {
     ...(options.communityReadExperienceService
       ? { service: options.communityReadExperienceService }
@@ -1094,6 +1134,11 @@ export async function buildApp(options: BuildAppOptions) {
       rating: userRuntimeCapabilities.communityReadRating,
     },
   });
+  registerQuarterCreateRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameQuarterCreate ? { runtime: options.gameQuarterCreate } : {}),
+    readHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+    commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
   registerGameRoutes(app as unknown as FastifyInstance, {
     ...(options.gameTestCourtRepository
       ? { testCourtRepository: options.gameTestCourtRepository }
@@ -1103,6 +1148,7 @@ export async function buildApp(options: BuildAppOptions) {
       ? { managementRepository: options.gameCommandRepository }
       : {}),
     ...(options.gameCommercialJoin ? { commercialJoin: options.gameCommercialJoin } : {}),
+    ...(options.gameManagedSelfLeave ? { managedSelfLeave: options.gameManagedSelfLeave } : {}),
     ...(options.gameCommercialCreate ? { commercialCreate: options.gameCommercialCreate } : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
@@ -1154,6 +1200,7 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     commandHandlers: [resolvePublicTenant, requireIdempotencyKey],
   });
+  registerOrganizerProfileLookup(app as unknown as FastifyInstance, options.organizerProfileLookup);
   registerCupPlayerLevelProjectionRoutes(app as unknown as FastifyInstance, {
     enabled: options.config.CUP_PLAYER_LEVEL_PROJECTION_ENABLED,
     ...(options.config.CUP_PLAYER_LEVEL_PROJECTION_TOKEN
@@ -1211,6 +1258,19 @@ export async function buildApp(options: BuildAppOptions) {
     publicTenantHandlers: [resolvePublicTenant],
   });
   const bookingRecommendationAuthService = options.authService;
+  registerTournamentLocalRoutes(app as unknown as FastifyInstance, {
+    ...(options.tournamentLocal ? { runtime: options.tournamentLocal } : {}),
+    handlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
+  registerTrainingRegistrationRoutes(app as unknown as FastifyInstance, {
+    ...(options.trainingRegistration ? { runtime: options.trainingRegistration } : {}),
+    handlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerTrainingCatalogueRoutes(app as unknown as FastifyInstance, {
+    ...(options.trainingCatalogueSource ? { source: options.trainingCatalogueSource } : {}),
+    ...(options.eventCatalogSnapshotStore ? { store: options.eventCatalogSnapshotStore } : {}),
+    handlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
   registerBookingRecommendationRoutes(app as unknown as FastifyInstance, {
     ...(options.gameReadRepository?.listRecommendationCardProjections
       ? {
