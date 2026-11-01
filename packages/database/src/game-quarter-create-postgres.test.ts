@@ -295,6 +295,10 @@ const url = ci();
     }
   });
   async function imported(f: Awaited<ReturnType<typeof fixture>>) {
+    // Imported player association and private Viva profile use distinct namespaces.
+    const playerAssociationId = createHash('sha256')
+      .update('synthetic-quarter-player:' + tenantId + ':' + actorId)
+      .digest('hex');
     await withTenantTransaction(admin, tenantId, async (c) => {
       await c.query(
         `insert into integration.external_entity_map(tenant_id,id,external_system,entity_type,internal_id,external_id,external_version,sync_status,last_synced_at) values($1,$2,'VIVA','viva_profile',$3,$4,'v1','synced',now()) on conflict do nothing`,
@@ -331,10 +335,10 @@ const url = ci();
       paymentMode: 'SPLIT',
       levelFrom: null,
       levelTo: null,
-      organizerExternalId: f.context.providerClientId,
+      organizerExternalId: playerAssociationId,
       participants: [
         {
-          externalId: f.context.providerClientId,
+          externalId: playerAssociationId,
           displayName: 'Synthetic organizer',
           level: null,
           levelValue: null,
@@ -348,7 +352,7 @@ const url = ci();
       snapshots: [snapshot],
       correlationId: 'synthetic-import',
       participantUserBindings: [
-        { externalId: f.context.providerClientId, userId: actorId, proofKind: 'VIVA_PROFILE' },
+        { externalId: playerAssociationId, userId: actorId, proofKind: 'VIVA_PROFILE' },
       ],
     });
     return [...r.imported, ...r.existing][0]!.gameId;
