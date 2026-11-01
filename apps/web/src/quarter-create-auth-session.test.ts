@@ -42,7 +42,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-async function setup(mode: 'queued' | 'capability' | 'ack') {
+async function setup(mode: 'queued' | 'capability' | 'ack', native = false) {
   const revoke = deferred<Response>(),
     capability = deferred<Response>(),
     ack = deferred<Response>();
@@ -51,12 +51,13 @@ async function setup(mode: 'queued' | 'capability' | 'ack') {
     baseUrl: 'https://api.padlhub.test/',
     tenantKey: 'padlhub',
     appVersion: 'test',
+    ...(native ? { platform: 'android' as const, nativeSessionTransport: true } : {}),
     fetchImplementation: async (raw, init) => {
       await Promise.resolve();
       const url = typeof raw === 'string' ? raw : raw instanceof URL ? raw.toString() : raw.url,
         method = init?.method ?? 'GET';
       calls.push({ url, method });
-      if (url.endsWith('/auth/session/refresh'))
+      if (url.endsWith('/auth/session/refresh') || url.endsWith('/verify'))
         return Response.json({
           accessToken: 'synthetic-padlhub-token',
           tokenType: 'Bearer',
@@ -176,4 +177,50 @@ it('actual late CREATE ACK during pending logout retains byte-identical original
   expect(h.calls.filter((x) => x.url.includes('/reconcile'))).toHaveLength(0);
   h.revoke.resolve(new Response(null, { status: 204 }));
   await logout;
+});
+
+it('native outer close fences queued custody before cleanup or HTTP and restore cannot reopen', async () => {
+  const h = await setup('queued', true),
+    queue = deferred<void>();
+  const attempts = new QuarterCreateAttempts(
+    principal,
+    localStorage,
+    {
+      request: async (_n, _o, fn) => {
+        await queue.promise;
+        return fn();
+      },
+    },
+    h.gateway,
+    () => true,
+  );
+  const pending = attempts.submit(input);
+  h.gateway.closeQuarterCreate!();
+  queue.resolve();
+  await expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+  expect(localStorage.getItem(quarterStorageKey(principal))).toBeNull();
+  await h.gateway.restoreSession();
+  expect(h.gateway.quarterCreatePrincipal!()).toBeNull();
+  expect(
+    h.calls.filter((x) => x.method === 'POST' && x.url.endsWith('/game-create-operations')),
+  ).toHaveLength(0);
+});
+
+it('native verification during unfinished outer cleanup cannot reopen quarter capability', async () => {
+  const h = await setup('queued', true);
+  h.gateway.closeQuarterCreate!();
+  const verify = () =>
+    h.gateway.verifyCode({
+      challengeId: '11111111-1111-4111-8111-000000000010',
+      code: '1234',
+      acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+    });
+  await verify();
+  expect(h.gateway.quarterCreatePrincipal!()).toBeNull();
+  h.revoke.resolve(new Response(null, { status: 204 }));
+  await h.gateway.logout();
+  await verify();
+  expect(h.gateway.quarterCreatePrincipal!()).toContain(
+    `${principal.tenantId}:${principal.userId}:`,
+  );
 });

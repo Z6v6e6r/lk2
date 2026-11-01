@@ -100,7 +100,7 @@ public actor SessionTransport {
         try acceptCookie(response, previous: nil, accountHash:accountHash)
       }
       return try bridgeResponse(data, response)
-    case .context, .read, .notification:
+    case .context, .read, .notification, .quarterCreate:
       guard let credential = try currentCredential(), credential.logoutKey == nil else {
         return .signedOut
       }

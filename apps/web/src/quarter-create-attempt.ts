@@ -5,6 +5,15 @@ import {
 } from './create-game-attempt.js';
 import type { AuthGateway } from './auth-gateway.js';
 import type { QuarterCreateInput, QuarterCreateResult } from '@phub/api-contracts';
+export type QuarterCreateGateway = Pick<
+  AuthGateway,
+  | 'quarterCreatePrincipal'
+  | 'getQuarterCreateLocations'
+  | 'getQuarterCreateCapability'
+  | 'createQuarterGame'
+  | 'getQuarterCreateOperation'
+  | 'reconcileQuarterCreateOperation'
+>;
 export interface QuarterCustody {
   version: 1;
   tenantId: string;
@@ -172,7 +181,7 @@ export class QuarterCreateAttempts {
     private readonly principal: { tenantId: string; userId: string },
     private readonly storage: Storage,
     private readonly locks: CreateGameAttemptLockManager | undefined,
-    private readonly gateway: AuthGateway,
+    private readonly gateway: QuarterCreateGateway,
     private readonly current: () => boolean,
   ) {
     this.session = gateway.quarterCreatePrincipal?.() ?? null;

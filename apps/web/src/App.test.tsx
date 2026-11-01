@@ -3714,3 +3714,34 @@ describe('PadlHub web authentication', () => {
     expect(listCommunityReadExperienceChat).not.toHaveBeenCalled();
   });
 });
+
+it('native quarter entry mounts only the bounded subscription form, not legacy CREATE', async () => {
+  window.history.replaceState(null, '', '/games/new?commercialCreate=1');
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
+    getQuarterCreateCapability: vi.fn().mockResolvedValue({ contractVersion: 1, available: false }),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+  await screen.findByRole('heading', { name: 'Игра по подписке' });
+  expect(await screen.findByText(/Создание сейчас недоступно/)).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Создать игру' })).not.toBeInTheDocument();
+  expect(gateway.createGame).not.toHaveBeenCalled();
+});
+it('native quarter confirmed-game destination remains read-only', async () => {
+  const { game } = await import('../../mobile/src/ios/testing/cabinet-fixtures.js');
+  window.history.replaceState(null, '', '/games/' + game.id);
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
+    getGame: vi.fn().mockResolvedValue(game),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+  await waitFor(() => expect(gateway.getGame).toHaveBeenCalledWith(game.id));
+  expect(await screen.findByRole('link', { name: 'К созданию игры' })).toHaveAttribute(
+    'href',
+    '/games/new?quarterCreate=1',
+  );
+  expect(screen.queryByRole('button', { name: /Вступить|Отменить игру/ })).not.toBeInTheDocument();
+  expect(gateway.joinGame).not.toHaveBeenCalled();
+});

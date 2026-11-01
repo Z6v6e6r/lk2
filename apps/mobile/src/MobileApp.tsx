@@ -1,3 +1,4 @@
+import './native-quarter-create.css';
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
@@ -109,6 +110,7 @@ function MobileSession({
         }
       },
       async logout() {
+        service.closeQuarterCreate?.();
         // Hide account data immediately; an interrupted revoke must be retried, never called success.
         setBlocked('logout');
         setReadDiagnostics({ failures: {}, expanded: false });
@@ -199,6 +201,9 @@ function MobileSession({
           </div>
         </aside>
       )}
+      <nav className="native-quarter-navigation" aria-label="Создание игры">
+        <a href="/games/new?quarterCreate=1">Игра по подписке</a>
+      </nav>
       <App
         key={dataGeneration}
         gateway={gateway}

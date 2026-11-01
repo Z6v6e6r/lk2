@@ -23,6 +23,7 @@ vi.mock('./AndroidLoginGate.js', () => ({
     children(() => Promise.resolve()),
 }));
 const calls = vi.hoisted(() => ({
+  closeQuarter: vi.fn(),
   cancelBookings: vi.fn(),
   beforeLogout: vi.fn<() => Promise<void>>(),
   restore: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock('./native-api-fetch.js', () => ({
 }));
 vi.mock('../../web/src/auth-gateway.js', () => ({
   createBrowserAuthGateway: () => ({
+    closeQuarterCreate: calls.closeQuarter,
     restoreSession: calls.restore,
     logout: calls.logout,
     getHomeBase: calls.home,
@@ -105,6 +107,7 @@ const config = {
   appVersion: 'test',
 };
 beforeEach(() => {
+  calls.closeQuarter.mockReset();
   calls.cancelBookings.mockReset().mockResolvedValue(undefined);
   calls.beforeLogout.mockReset().mockResolvedValue(undefined);
   calls.observe = undefined;
@@ -315,6 +318,7 @@ it('retires native bookings before push cleanup or session logout can wait', asy
   fireEvent.click(await screen.findByRole('button', { name: 'Выйти' }));
   await waitFor(() => expect(calls.cancelBookings).toHaveBeenCalledOnce());
   expect(screen.queryByText('Личные данные тестового аккаунта')).not.toBeInTheDocument();
+  expect(calls.closeQuarter).toHaveBeenCalledOnce();
   expect(calls.beforeLogout).not.toHaveBeenCalled();
   expect(calls.logout).not.toHaveBeenCalled();
   act(() => cancelled());
