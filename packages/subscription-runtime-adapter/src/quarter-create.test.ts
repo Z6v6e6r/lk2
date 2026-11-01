@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { QuarterCreateOwnerClient } from './quarter-create.js';
-import { quarterFixture } from './quarter-create.test-fixture.js';
+import { quarterFixture, expiredQuarterReceipt } from './quarter-create.test-fixture.js';
 const env = {
   correlationId: 'synthetic-correlation',
   actorDelegation: 'synthetic-delegation-proof',
@@ -234,4 +234,33 @@ it('emits only bounded redacted metrics for success/refusal/malformed response a
     'subscriptionInstanceId',
   ])
     expect(serialized).not.toContain(forbidden);
+});
+
+it('parses schema2 unused expiry through actual admit/read HTTP boundary without retries', async () => {
+  const f = await quarterFixture({ observedAt: new Date(Date.now() - 120000).toISOString() }),
+    receipt = expiredQuarterReceipt(f);
+  const fetchImplementation = vi.fn(
+    async () =>
+      await Promise.resolve(
+        new Response(
+          JSON.stringify({
+            contractVersion: 1,
+            operationId: receipt.operationId,
+            operation: { status: 'REJECTED', receipt },
+            registration: { status: 'UNKNOWN', asOf: null },
+          }),
+        ),
+      ),
+  );
+  const client = new QuarterCreateOwnerClient({
+    baseUrl: 'https://padlhub.su/',
+    environment: 'production',
+    timeoutMs: 1000,
+    fetchImplementation,
+  });
+  for (const mode of ['admit', 'read'] as const)
+    expect(
+      (await client[mode](f.admission, { ...env, operationId: receipt.operationId })).receipt,
+    ).toEqual(receipt);
+  expect(fetchImplementation).toHaveBeenCalledTimes(2);
 });

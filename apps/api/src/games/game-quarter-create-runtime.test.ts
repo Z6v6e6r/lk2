@@ -2,11 +2,16 @@ import { quarterStationFixture } from '../../../../packages/subscription-runtime
 import { quarterStationIntent } from '@phub/subscription-runtime-adapter';
 import { describe, it, expect, vi } from 'vitest';
 import { createQuarterCreateRuntime } from './game-quarter-create-runtime.js';
-import { quarterFixture } from '../../../../packages/subscription-runtime-adapter/src/quarter-create.test-fixture.js';
+import {
+  quarterFixture,
+  expiredQuarterReceipt,
+} from '../../../../packages/subscription-runtime-adapter/src/quarter-create.test-fixture.js';
 import type { QuarterAttempt, QuarterCreateRepository } from '@phub/database/quarter-create';
 import { qcAdmissionHash, type QuarterOutcome } from '@phub/domain/quarter-create';
-async function setup(adoptStation = false) {
-  const f = await quarterFixture(),
+async function setup(adoptStation = false, expired = false) {
+  const f = await quarterFixture(
+      expired ? { observedAt: new Date(Date.now() - 120000).toISOString() } : {},
+    ),
     actor = {
       tenantKey: 'public-tenant',
       tenantId: f.scope.tenantId,
@@ -440,4 +445,41 @@ describe('quarter CREATE station admission custody', () => {
     expect(t.station.client.admit).not.toHaveBeenCalled();
     expect(t.client.admit).not.toHaveBeenCalled();
   });
+});
+
+it('schema2 read observation cannot complete; explicit original recovery retains station marker and dispatch fence', async () => {
+  const t = await setup(true, true),
+    receipt = expiredQuarterReceipt(t.f);
+  const marker = await quarterStationFixture(t.f.admission);
+  t.set({
+    id: t.f.receipt.operationId,
+    draftId: t.f.request.target.draftId,
+    request: t.f.request,
+    context: t.f.context,
+    state: 'DISPATCH_STARTED',
+    admission: t.f.admission,
+    admissionHash: t.f.receipt.admissionRequestSha256,
+    receipt: null,
+    gameId: null,
+    leaseToken: null,
+    stationMembership: marker,
+  });
+  const outcome: QuarterOutcome = {
+    status: 'REJECTED',
+    receipt,
+    registration: { status: 'UNKNOWN', asOf: null },
+    reason: null,
+  };
+  t.client.read.mockResolvedValue(outcome);
+  t.client.admit.mockResolvedValue(outcome);
+  await t.runtime.read(t.actor, t.f.key);
+  expect(t.repo.complete).not.toHaveBeenCalled();
+  expect(t.get()?.state).toBe('DISPATCH_STARTED');
+  const result = await t.runtime.execute(t.actor, t.f.key, t.f.input, true);
+  expect(result.operation.status).toBe('REJECTED');
+  expect(t.get()?.stationMembership).toEqual(marker);
+  expect(t.repo.complete).toHaveBeenCalledOnce();
+  expect(t.repo.begin).not.toHaveBeenCalled();
+  expect(t.client.prepare).not.toHaveBeenCalled();
+  expect(t.repo.project).not.toHaveBeenCalled();
 });
