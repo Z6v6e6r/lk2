@@ -1998,50 +1998,50 @@ var require_result = __commonJS({
         }
       }
       _parseRowAsArray(rowData) {
-        const row = new Array(rowData.length);
+        const row2 = new Array(rowData.length);
         for (let i = 0, len = rowData.length; i < len; i++) {
           const rawValue = rowData[i];
           if (rawValue !== null) {
-            row[i] = this._parsers[i](rawValue);
+            row2[i] = this._parsers[i](rawValue);
           } else {
-            row[i] = null;
+            row2[i] = null;
           }
         }
-        return row;
+        return row2;
       }
       parseRow(rowData) {
-        const row = { ...this._prebuiltEmptyResultObject };
+        const row2 = { ...this._prebuiltEmptyResultObject };
         for (let i = 0, len = rowData.length; i < len; i++) {
           const rawValue = rowData[i];
           const field = this.fields[i].name;
           if (rawValue !== null) {
             const v = this.fields[i].format === "binary" ? Buffer.from(rawValue) : rawValue;
-            row[field] = this._parsers[i](v);
+            row2[field] = this._parsers[i](v);
           } else {
-            row[field] = null;
+            row2[field] = null;
           }
         }
-        return row;
+        return row2;
       }
-      addRow(row) {
-        this.rows.push(row);
+      addRow(row2) {
+        this.rows.push(row2);
       }
       addFields(fieldDescriptions) {
         this.fields = fieldDescriptions;
         if (this.fields.length) {
           this._parsers = new Array(fieldDescriptions.length);
         }
-        const row = /* @__PURE__ */ Object.create(null);
+        const row2 = /* @__PURE__ */ Object.create(null);
         for (let i = 0; i < fieldDescriptions.length; i++) {
           const desc = fieldDescriptions[i];
-          row[desc.name] = null;
+          row2[desc.name] = null;
           if (this._types) {
             this._parsers[i] = this._types.getTypeParser(desc.dataTypeID, desc.format || "text");
           } else {
             this._parsers[i] = types2.getTypeParser(desc.dataTypeID, desc.format || "text");
           }
         }
-        this._prebuiltEmptyResultObject = { ...row };
+        this._prebuiltEmptyResultObject = { ...row2 };
       }
     };
     module.exports = Result2;
@@ -2113,19 +2113,19 @@ var require_query = __commonJS({
         this._accumulateRows = this.callback || !this.listeners("row").length;
       }
       handleDataRow(msg) {
-        let row;
+        let row2;
         if (this._canceledDueToError) {
           return;
         }
         try {
-          row = this._result.parseRow(msg.fields);
+          row2 = this._result.parseRow(msg.fields);
         } catch (err) {
           this._canceledDueToError = err;
           return;
         }
-        this.emit("row", row, this._result);
+        this.emit("row", row2, this._result);
         if (this._accumulateRows) {
-          this._result.addRow(row);
+          this._result.addRow(row2);
         }
       }
       handleCommandComplete(msg, connection) {
@@ -4866,13 +4866,13 @@ var require_query2 = __commonJS({
         if (self._emitRowEvents) {
           if (results.length > 1) {
             rows.forEach((rowOfRows, i) => {
-              rowOfRows.forEach((row) => {
-                self.emit("row", row, results[i]);
+              rowOfRows.forEach((row2) => {
+                self.emit("row", row2, results[i]);
               });
             });
           } else {
-            rows.forEach(function(row) {
-              self.emit("row", row, results);
+            rows.forEach(function(row2) {
+              self.emit("row", row2, results);
             });
           }
         }
@@ -28455,6 +28455,100 @@ var stationMessageReceiptSchema = external_exports.discriminatedUnion("outcome",
   }).strict()
 ]);
 
+// ../../packages/communities/src/station-stream.ts
+init_esm_shims();
+init_zod();
+var stationStreamUuid = external_exports.string().uuid().refine((value) => value === value.toLowerCase());
+var stationStreamSequence = external_exports.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1);
+var stationStreamPositionShape = {
+  streamId: stationStreamUuid,
+  membershipEpoch: stationStreamSequence
+};
+var stationStreamStateShape = {
+  ...stationStreamPositionShape,
+  baselineSequence: stationStreamSequence,
+  readThroughSequence: stationStreamSequence,
+  publishedThroughSequence: stationStreamSequence,
+  unreadCount: stationStreamSequence
+};
+function stationStreamStateValid(value) {
+  return value.baselineSequence <= value.readThroughSequence && value.readThroughSequence <= value.publishedThroughSequence && value.unreadCount <= value.publishedThroughSequence - value.readThroughSequence;
+}
+var cursor = external_exports.string().min(16).max(1024).regex(/^[A-Za-z0-9_-]+$/).nullable();
+var row = {
+  id: stationStreamUuid,
+  body: external_exports.string().min(1).max(8e3),
+  sentAt: external_exports.string().datetime(),
+  author: external_exports.object({ displayName: external_exports.string().min(1).max(120) }).strict(),
+  isViewer: external_exports.boolean()
+};
+var shared = {
+  historyVersion: external_exports.literal(3),
+  ...stationStreamStateShape,
+  nextCursor: cursor,
+  catchUpCursor: cursor,
+  olderCursor: cursor,
+  archiveCursor: cursor,
+  canRequestStationMessage: external_exports.boolean()
+};
+var stationStreamPageSchema = external_exports.discriminatedUnion("mode", [
+  external_exports.object({
+    ...shared,
+    mode: external_exports.literal("STREAM"),
+    afterSequence: stationStreamSequence,
+    throughSequence: stationStreamSequence,
+    items: external_exports.array(external_exports.object({ ...row, sequence: stationStreamSequence.min(1) }).strict()).max(50)
+  }).strict(),
+  external_exports.object({
+    ...shared,
+    mode: external_exports.literal("ARCHIVE"),
+    items: external_exports.array(external_exports.object({ ...row, sequence: external_exports.null() }).strict()).max(50)
+  }).strict()
+]).refine(stationStreamStateValid);
+var stationReadRequestSchema = external_exports.object({
+  requestId: stationStreamUuid,
+  ...stationStreamPositionShape,
+  throughSequence: stationStreamSequence
+}).strict();
+var stationReadUnknownCodes = [
+  "READ_REQUEST_INVALID",
+  "READ_REQUEST_CONFLICT",
+  "READ_ACCESS_DENIED",
+  "READ_STREAM_UNAVAILABLE",
+  "READ_RECEIPT_UNPROVEN"
+];
+var receipt2 = {
+  contractVersion: external_exports.literal(1),
+  contract: external_exports.literal("station-read"),
+  requestId: stationStreamUuid
+};
+var stationReadReceiptSchema = external_exports.discriminatedUnion("outcome", [
+  external_exports.object({
+    ...receipt2,
+    outcome: external_exports.literal("CONFIRMED"),
+    ...stationStreamPositionShape,
+    throughSequence: stationStreamSequence,
+    readThroughSequence: stationStreamSequence
+  }).strict().refine((value) => value.readThroughSequence >= value.throughSequence),
+  external_exports.object({ ...receipt2, outcome: external_exports.literal("UNKNOWN"), code: external_exports.enum(stationReadUnknownCodes) }).strict()
+]);
+var summaryItem = external_exports.discriminatedUnion("availability", [
+  external_exports.object({
+    communityId: stationStreamUuid,
+    availability: external_exports.literal("AVAILABLE"),
+    ...stationStreamStateShape
+  }).strict().refine(stationStreamStateValid),
+  external_exports.object({ communityId: stationStreamUuid, availability: external_exports.literal("UNADOPTED") }).strict(),
+  external_exports.object({ communityId: stationStreamUuid, availability: external_exports.literal("NOT_STATION") }).strict()
+]);
+var stationStreamSummariesSchema = external_exports.object({
+  contractVersion: external_exports.literal(1),
+  contract: external_exports.literal("station-stream-summaries"),
+  items: external_exports.array(summaryItem).min(1).max(50)
+}).strict().refine(
+  (value) => new Set(value.items.map((item) => item.communityId)).size === value.items.length
+);
+
 // ../../packages/communities/src/index.ts
 var uuid16 = external_exports.string().uuid();
 var dateTime8 = external_exports.string().datetime({ offset: true });
@@ -31238,16 +31332,16 @@ function verifyExisting(input2) {
     const verification = verifyArtifact(input2.artifact);
     const text = input2.receipt.toString("utf8");
     if (!Buffer.from(text, "utf8").equals(input2.receipt)) fail10("OUTPUT_CONFLICT");
-    const receipt2 = parseCommunitiesStagingRoleSplitTrustedInventoryReceipt(text);
+    const receipt3 = parseCommunitiesStagingRoleSplitTrustedInventoryReceipt(text);
     const expected = receiptFor({
       authorization: input2.authorization,
       authorizationSha256: input2.authorizationSha256,
       artifactSha256: verification.artifactSha256,
       manifestSha256: verification.manifestSha256
     });
-    if (canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(receipt2) !== canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(expected))
+    if (canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(receipt3) !== canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(expected))
       fail10("OUTPUT_CONFLICT");
-    return receipt2;
+    return receipt3;
   } catch (error62) {
     if (error62 instanceof CommunitiesStagingRoleSplitTrustedInventoryHostError) throw error62;
     fail10("OUTPUT_CONFLICT");
@@ -31299,14 +31393,14 @@ async function runCommunitiesStagingRoleSplitTrustedInventory(input2) {
     expectedProducerSha256: input2.authorization.producerExecutableSha256
   });
   const verification = verifyArtifact(outcome.stdout);
-  const receipt2 = receiptFor({
+  const receipt3 = receiptFor({
     authorization: input2.authorization,
     authorizationSha256,
     artifactSha256: verification.artifactSha256,
     manifestSha256: verification.manifestSha256
   });
   const receiptBytes = Buffer.from(
-    canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(receipt2),
+    canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(receipt3),
     "utf8"
   );
   try {

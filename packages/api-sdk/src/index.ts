@@ -1,3 +1,16 @@
+import {
+  parseStationReadReceipt,
+  parseStationStreamPage,
+  parseStationStreamSummaries,
+  validateStationReadRequest,
+} from './station-stream.js';
+import type {
+  StationStreamPage,
+  StationStreamSummaries,
+  StationReadRequest,
+  StationReadReceipt,
+} from './station-stream.js';
+export * from './station-stream.js';
 import { parseStationMessageReceipt } from './station-message.js';
 export { parseStationMessageReceipt } from './station-message.js';
 export type StationMessageRequest = components['schemas']['StationMessageRequest'];
@@ -2508,6 +2521,105 @@ export class PadlHubApiClient {
       communityId,
       '/chat',
       input,
+    );
+  }
+
+  public async listStationStreamSummaries(
+    communityIds: readonly string[],
+  ): Promise<StationStreamSummaries> {
+    if (
+      communityIds.length < 1 ||
+      communityIds.length > 50 ||
+      new Set(communityIds).size !== communityIds.length ||
+      communityIds.some(
+        (id) =>
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id),
+      )
+    )
+      throw new Error('STATION_STREAM_REQUEST_INVALID');
+    const query = new URLSearchParams({ communityIds: communityIds.join(',') });
+    return parseStationStreamSummaries(
+      await this.request<unknown>(`/community-views/station-stream-summaries?${query}`, {
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        signal: AbortSignal.timeout(15_000),
+      }),
+      communityIds,
+    );
+  }
+  public async getStationCommunityStream(
+    communityId: string,
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<StationStreamPage> {
+    const limit = input.limit ?? 50;
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        communityId,
+      ) ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 50 ||
+      (input.cursor !== undefined && !/^[A-Za-z0-9_-]{16,1024}$/.test(input.cursor))
+    )
+      throw new Error('STATION_STREAM_REQUEST_INVALID');
+    const query = new URLSearchParams({
+      limit: String(limit),
+      ...(input.cursor ? { cursor: input.cursor } : {}),
+    });
+    return parseStationStreamPage(
+      await this.request<unknown>(`/community-views/${communityId}/station-stream?${query}`, {
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        signal: AbortSignal.timeout(15_000),
+      }),
+      limit,
+      input.cursor === undefined,
+    );
+  }
+  public async requestStationCommunityRead(
+    communityId: string,
+    input: StationReadRequest,
+  ): Promise<StationReadReceipt> {
+    validateStationReadRequest({
+      requestId: communityId,
+      streamId: communityId,
+      membershipEpoch: 0,
+      throughSequence: 0,
+    });
+    const original = validateStationReadRequest(input);
+    const value = await this.request<unknown>(
+      `/community-views/${encodeURIComponent(communityId)}/read-requests`,
+      {
+        method: 'POST',
+        idempotencyKey: original.requestId,
+        body: jsonRequestBody(original),
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    return parseStationReadReceipt(value, original.requestId, original);
+  }
+  public async getStationCommunityReadRequest(
+    communityId: string,
+    requestId: string,
+  ): Promise<StationReadReceipt> {
+    validateStationReadRequest({
+      requestId,
+      streamId: communityId,
+      membershipEpoch: 0,
+      throughSequence: 0,
+    });
+    return parseStationReadReceipt(
+      await this.request<unknown>(
+        `/community-views/${encodeURIComponent(communityId)}/read-requests/${requestId}`,
+        {
+          cache: 'no-store',
+          retryOnUnauthorized: false,
+          signal: AbortSignal.timeout(15_000),
+        },
+      ),
+      requestId,
     );
   }
 

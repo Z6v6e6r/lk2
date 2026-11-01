@@ -2631,6 +2631,14 @@ paths:
         '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
         '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
         '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/station-stream-summaries:
+    $ref: ./station-stream.yaml#/paths/~1{tenantKey}~1community-views~1station-stream-summaries
+  /{tenantKey}/community-views/{communityId}/station-stream:
+    $ref: ./station-stream.yaml#/paths/~1{tenantKey}~1community-views~1{communityId}~1station-stream
+  /{tenantKey}/community-views/{communityId}/read-requests:
+    $ref: ./station-stream.yaml#/paths/~1{tenantKey}~1community-views~1{communityId}~1read-requests
+  /{tenantKey}/community-views/{communityId}/read-requests/{requestId}:
+    $ref: ./station-stream.yaml#/paths/~1{tenantKey}~1community-views~1{communityId}~1read-requests~1{requestId}
   /{tenantKey}/community-views/{communityId}/message-requests:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -8192,6 +8200,16 @@ components:
       properties:
         requestId: { type: string, format: uuid }
         text: { type: string, minLength: 1, maxLength: 8000 }
+    StationStreamPage:
+      $ref: ./station-stream.yaml#/components/schemas/StationStreamPage
+    StationStreamSummary:
+      $ref: ./station-stream.yaml#/components/schemas/StationStreamSummary
+    StationStreamSummaries:
+      $ref: ./station-stream.yaml#/components/schemas/StationStreamSummaries
+    StationReadRequest:
+      $ref: ./station-stream.yaml#/components/schemas/StationReadRequest
+    StationReadReceipt:
+      $ref: ./station-stream.yaml#/components/schemas/StationReadReceipt
     StationMessageReceipt:
       oneOf:
         - type: object

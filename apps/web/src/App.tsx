@@ -766,19 +766,17 @@ export function App({
    */
   const communityDirectoryAvailable =
     state.session !== null &&
-    (clientPlatform !== 'android' || state.busy !== 'logout') &&
+    state.busy !== 'logout' &&
     state.session.context.runtimeCapabilities?.communityDirectory !== false;
   const communityChatReadAvailable =
     state.session !== null && state.session.context.runtimeCapabilities?.communityReadChat === true;
   const communityChatsSource = useMemo(() => {
     const principal = gateway.stationMessagePrincipal?.();
-    const current = () =>
-      clientPlatform !== 'android' ||
-      Boolean(principal && gateway.stationMessagePrincipal?.() === principal);
+    const current = () => Boolean(principal && gateway.stationMessagePrincipal?.() === principal);
     const read = async <T,>(load: () => Promise<T>): Promise<T> => {
-      if (!current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      if (clientPlatform === 'android' && !current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
       const result = await load();
-      if (!current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      if (clientPlatform === 'android' && !current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
       return result;
     };
     return communityDirectoryAvailable
@@ -793,6 +791,25 @@ export function App({
                   : {}),
                 sendMessage: gateway.sendStationCommunityMessage,
                 getMessageRequest: gateway.getStationCommunityMessageRequest,
+              }
+            : {}),
+          ...(clientPlatform === 'web' &&
+          communityChatReadAvailable &&
+          gateway.listStationStreamSummaries &&
+          gateway.getStationCommunityStream &&
+          gateway.requestStationCommunityRead &&
+          gateway.getStationCommunityReadRequest &&
+          principal
+            ? {
+                stream: {
+                  scope: JSON.stringify([tenantKey, state.session?.context.user.id]),
+                  principal,
+                  isCurrent: current,
+                  summaries: gateway.listStationStreamSummaries,
+                  page: gateway.getStationCommunityStream,
+                  read: gateway.requestStationCommunityRead,
+                  status: gateway.getStationCommunityReadRequest,
+                },
               }
             : {}),
           loadCommunities: (cursor?: string) => read(() => gateway.listMyCommunities(cursor, 50)),

@@ -1,3 +1,9 @@
+import type {
+  StationStreamPage,
+  StationStreamSummaries,
+  StationReadRequest,
+  StationReadReceipt,
+} from '@phub/api-sdk';
 import type { StationMessageReceipt, StationMessageRequest } from '@phub/api-sdk';
 export type { StationMessageReceipt, StationMessageRequest } from '@phub/api-sdk';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
@@ -650,6 +656,16 @@ export interface AuthGateway {
     communityId: string,
     cursor?: string,
   ) => Promise<CommunityReadExperienceFeedPage>;
+  readonly listStationStreamSummaries?: (ids: readonly string[]) => Promise<StationStreamSummaries>;
+  readonly getStationCommunityStream?: (id: string, cursor?: string) => Promise<StationStreamPage>;
+  readonly requestStationCommunityRead?: (
+    id: string,
+    input: StationReadRequest,
+  ) => Promise<StationReadReceipt>;
+  readonly getStationCommunityReadRequest?: (
+    id: string,
+    requestId: string,
+  ) => Promise<StationReadReceipt>;
   readonly stationMessagePrincipal?: () => string | null;
   readonly sendStationCommunityMessage?: (
     communityId: string,
@@ -2611,6 +2627,37 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
     },
 
+    async listStationStreamSummaries(ids) {
+      if (nativeClient) throw new Error('STATION_STREAM_UNAVAILABLE');
+      const principal = stationMessagePrincipal();
+      const result = await client.listStationStreamSummaries(ids);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    },
+    async getStationCommunityStream(id, cursor) {
+      if (nativeClient) throw new Error('STATION_STREAM_UNAVAILABLE');
+      const principal = stationMessagePrincipal();
+      const result = await client.getStationCommunityStream(id, {
+        limit: 50,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    },
+    async requestStationCommunityRead(id, input) {
+      if (nativeClient) throw new Error('STATION_STREAM_UNAVAILABLE');
+      const principal = stationMessagePrincipal();
+      const result = await client.requestStationCommunityRead(id, input);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    },
+    async getStationCommunityReadRequest(id, requestId) {
+      if (nativeClient) throw new Error('STATION_STREAM_UNAVAILABLE');
+      const principal = stationMessagePrincipal();
+      const result = await client.getStationCommunityReadRequest(id, requestId);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    },
     stationMessagePrincipal: () => quarterCreatePrincipal(),
     async sendStationCommunityMessage(communityId, input) {
       const principal = stationMessagePrincipal();

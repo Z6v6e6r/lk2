@@ -1,3 +1,5 @@
+import { registerStationStreamRoutes } from './communities/station-stream-routes.js';
+import type { StationStreamOwner } from './communities/station-stream-owner-client.js';
 import { registerStationMessageRoutes } from './communities/station-message-routes.js';
 import type { StationMessageOwner } from './communities/station-message-owner-client.js';
 import { registerQuarterCreateRoutes } from './games/game-quarter-create-routes.js';
@@ -263,6 +265,7 @@ export interface BuildAppOptions {
   readonly runtimeContourAttestation?: RuntimeContourAttestation;
   readonly communityDirectory?: CommunityDirectoryService;
   readonly stationMessageOwner?: StationMessageOwner;
+  readonly stationStreamOwner?: StationStreamOwner;
   readonly communityReadExperienceService?: CommunityReadExperienceService;
   readonly communityCreateService?: CommunityCreateService;
   readonly communityMembershipPinService?: CommunityMembershipPinService;
@@ -1098,6 +1101,10 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerStationMessageRoutes(app as unknown as FastifyInstance, {
     ...(options.stationMessageOwner ? { owner: options.stationMessageOwner } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerStationStreamRoutes(app as unknown as FastifyInstance, {
+    ...(options.stationStreamOwner ? { owner: options.stationStreamOwner } : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
   registerCommunityExperienceRoutes(app as unknown as FastifyInstance, {
