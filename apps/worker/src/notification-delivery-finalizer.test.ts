@@ -407,3 +407,14 @@ describe('ordinary-only advisory deferral', () => {
     expect(update.values).toHaveLength(5);
   });
 });
+
+describe('station intent unfinished state floor', () => {
+  it('counts station pending/sending siblings as unfinished instead of historical in-app success', async () => {
+    const { resolveNotificationIntentState } = await import('./notification-delivery-finalizer.js');
+    for (const state of ['STATION_PENDING', 'STATION_SENDING'])
+      expect(resolveNotificationIntentState(['DELIVERED', state])).toEqual({
+        state: 'PROCESSING',
+        completed: false,
+      });
+  });
+});
