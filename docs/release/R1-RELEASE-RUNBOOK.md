@@ -1,5 +1,19 @@
 # LK2 R1 — release preparation и controlled handoff
 
+Station consumer prerequisite LK#279952031f7 требует distinct `/message-requests` POST/GET и exact `station-message.v1`, проверенного Bearer actor и текущего ACL. Source/CI прошли; реальную установку и отсутствие внешнего route shadow необходимо проверять отдельно. Клиент не должен пробовать старый `/messages` как fallback. GET не запускает recovery; статус CONFIRMED означает только наблюдённые message/event, без delivery/read guarantee.
+
+## Quarter CREATE candidate custody
+
+LK#280bfacff70 receiver разрешает новый точный kind и прошёл full/Mongo CI. Его установка должна предшествовать отдельной активации producer; старый receiver отвергает новые kinds. Перед producer activation нужны его собственные CI/review, согласованные API/worker, отсутствие старых in-flight writers/queue consumers и сохранение admission/claim/lifetime state. Существующий GAME/TRAINING payload не переименовывать в CREATE.
+
+LK2#532 `90b2ba2b` зависит от paired CUP#67/LK#277 owner contract и schema4 adoption. Перед любым отдельным activation decision нужны успешная physical CI, совместимый importer/read mapping и точные original owner receipts; частный CONFIRMED с projection PENDING не является публичной игрой. Сохранить journal0110, original-key/ordinary-create fences и исходные admission/receipt. Default-off selector и production prohibition не менять в source loop. Native/device, CREATE station enrollment, reserve-only reconciliation и реальные provider/retention checks остаются обязательными отдельными доказательствами. Ни публикация, ни миграция, ни installation этим документом не разрешены.
+
+## Дополнение кандидата: station-message owner — 2026-11-01
+
+LK#278 `0de4cf4b` и CUP#68 `16fa3e5c` имеют зелёный SOURCE/CI, но не входят в активированный release. При подготовке конкретного пакета сохранить их родителей #276/#63 и совместимость административных записей с private message outbox. Worker package включает `stationMessageOwner.mjs` и `stationMembershipLifetime.mjs`; упаковка проверена локально и в CI.
+
+Перед отдельно разрешённой установкой подтвердить завершение старых выполняющихся graph-запросов, текущие ACL/epoch writers, отсутствие очистки исходных candidate/receipt/outbox и Mongo read/write concern/failover. Новых секретов, индексов, TTL или services этот пакет не создаёт. Все STATION sends в новом graph идут через owner; это обязательная часть установки, а не переключение нового runtime-флага. Никакая установка данным отчётом не разрешена.
+
 ## iOS tournament source checkpoint — 2026-11-01
 
 iOS#53199f5d942 has native compilation/tests and unsigned simulator build evidence from41254366026; fullCI41254366038 SUCCESS (7670passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP). Before release, integrate its exact shared Session/Plugin/IOSCabinet changes with DIRECT/TRAINING once, then validate real Keychain logout/process death, WKWebView storage/Web Locks/randomUUID and original-operation recovery on devices. This does not authorize signing, store publication or runtime activation.

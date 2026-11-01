@@ -1,5 +1,19 @@
 # LK2 R1 — rollback и recovery readiness
 
+Для versioned station contract LK#279 выключение consumer не удаляет исходные request keys, кандидаты, outbox или receipts. Сохранить read-only original status и canonical recovery; недоступный новый endpoint, UNKNOWN/403/404 или отсутствие candidate не разрешают другой ключ либо fallback на старую отправку. Новый контракт не добавляет схемы и не требует data rollback.
+
+## Quarter CREATE dormant rollback
+
+Новый station receiver LK#280 хранит `GAME_CREATE_ORGANIZER` в claim/lastApplied; старый GAME без поля kind сохраняет своё значение. До rollback receiver отдельно остановить/drain новый producer. Не удалять claims/admissions, не стирать kind и не переинтерпретировать CREATE как JOIN. Дедупликация receiver действует внутри confirmation-kind namespace; producer обязан сохранять исходную booking generation.
+
+Для LK2#532 логически согласованная dormant-конфигурация — `enabled=false` вместе с `transport=ADVISORY`: один disabled flag при QUARTER_OWNER отвергается валидатором. Это описание, не выполненное изменение конфигурации. Сохранить0110, исходные ключи/body, old-writer command fences, admission/receipt и неопределённые операции. Не откатывать на writer, который игнорирует чужой command type, и не восстанавливать CREATE по времени/корту или новому ключу. Read-only recovery и текущие ошибки не доказывают отсутствие provider dispatch. Доступность игры определяется существующим canonical importer; удаление journal/fences и денежная компенсация без attributable proof запрещены.
+
+## Ограничение отката station-message пакета — 2026-11-01
+
+Для LK#278/CUP#68 нельзя удалять принятые outbox intents, скрытые candidates или исходные receipts и нельзя возвращать raw STATION writer поверх уже принятого состояния. Сохранить совместимый recovery worker, private fields и административную защиту от удаления непустого outbox. Принятие до LEFT/BAN остаётся действительным; повтор старого сообщения не получает права новой эпохи.
+
+Новый запрос старого клиента без ключа получает отдельный server UUID: дедупликация последующего целого HTTP-повтора для такого клиента не доказана. При неоднозначном ACK legacy-барьера эффект не выпускается; это не обещание долговечности старого протокола. Конкретный runtime rollback, retention/backup и восстановление требуют отдельного плана и разрешения; source/CI proof не является репетицией production rollback.
+
 ## iOS tournament source checkpoint — 2026-11-01
 
 iOS#531 retains original tournament custody and blocks commands synchronously during logout cleanup in the current process. Do not describe that fence as durable before native Keychain logout intent is written; process death during cleanup retains baseline session restoration, but no automatic tournament mutation. Keep original keys/journals through client downgrade. No device rollback or process-death rehearsal is claimed.

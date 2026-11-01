@@ -1,5 +1,21 @@
 # LK2 R1 — приоритетные блокеры
 
+LK#279 `952031f7`: original-message status contract теперь VERIFIED SOURCE/CI (full41259421753, Mongo41259421752,24/24cases включая4physical). B07 остаётся PARTIAL: LK2 authenticated consumer, stable message IDs/history cursor, unread/reconnect, остальные обязательные контексты и native/device acceptance ещё не завершены. Старый send endpoint не является fallback при недоступности versioned contract.
+
+## Актуальный B03 после LK2 CREATE consumer — 2026-11-01
+
+LK#280 `bfacff70` закрыл отсутствующий receiver kind для CREATE: full41260232033/Mongo41260232040 SUCCESS,34/34cases включая9physical. Не закрыты paired LK2 producer, pre-dispatch admission/epoch custody, atomic receipt/outbox и delivery исходного факта. Запись в сообщество нельзя выводить из JOIN proof или получать новый epoch для старого CREATE receipt.
+
+B03 **PARTIAL**: [#532](https://github.com/Z6v6e6r/lk2/pull/532) `90b2ba2b` содержит reviewed Web/API consumer, private journal0110, исходный recovery и проверку canonical import. FullCI41259758605 и iOS41259758618 SUCCESS после двух test-only исправлений фикстуры:7711passed/126skipped,quarterPG12/12,closedPG4/4,required27physical+8guards zeroSKIP и пять Docker builds. Consumer source больше не отсутствует. Открыты native CREATE, отдельный CREATE station producer, reserve-only expiry/reconciliation и реальные provider/importer/graph/retention acceptance. Отсутствие receipt, HTTP404 или неоднозначный ответ не разрешают новый ключ либо повторный provider CREATE.
+
+## Актуальный остаток B07 — 2026-11-01
+
+Серверный обработчик сообщений станции больше не MISSING: LK#278 `0de4cf4b` и CUP#68 `16fa3e5c` прошли независимое review и полный CI. LK: 16 проверок сообщений, включая три физических MongoDB-сценария; CUP: две физические проверки актуального сервиса; пропусков нет. Исходный запрос переживает потерю ответа, выход/бан после принятия и изменение сообщества. Смена типа/бан до принятия блокирует старый путь отправки.
+
+**B07 PARTIAL, release NO-GO:** остаются LK2 consumer, стабильный курсор/непрочитанные/reconnect, турнирный и остальные обязательные контексты, native/device, retention и runtime acceptance. Исторические формулировки ниже об отсутствующем серверном station-message owner заменены этой контрольной точкой; это не закрытие всего B07.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## iOS tournament source checkpoint — 2026-11-01
 
 B06 now has reviewed iOS SOURCE#53199f5d942 and successful nativeCI41254366026 (six new tournament tests and unsigned build); fullCI41254366038 SUCCESS (7670passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP). iOS tournament source is no longer missing, but physical-device/session process-death acceptance remains open. Android packaging still awaits the approved#526 integration. No native paid/provider tournament or full CREATE/chat acceptance is supplied.
@@ -7,8 +23,6 @@ B06 now has reviewed iOS SOURCE#53199f5d942 and successful nativeCI41254366026 (
 ## Paired quarter CREATE source checkpoint — 2026-11-01
 
 B03 has reviewed SOURCE candidates CUP#67 `802ed017` and LK#277 `59d3880c`; authenticated intake and original CREATE custody are no longer absent. LK physical Mongo41254002352 and41254342435 passed; corrected full41254342434 SUCCESS. Current LKhead59d3880c is test-only current-hash correction. CUPhead802ed017 fixes only a duplicated synthetic publication key after41253980880; corrected fullCI41254507939 SUCCESS including physical v3 replay. Remaining blockers: matched LK2 consumer and canonical import convergence, CREATE station producer, actual provider/retention/graph acceptance, and a valid reconciliation contract for expired PRECREATE_RESERVED. Existing release reasons PROVIDER_REJECTED/BOOKING_CANCELLED do not cover reserve-only expiry; no guessed compensation or new-key retry is permitted. A provider success with no original attributable ID remains UNKNOWN.
-
-Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
 
 ## Android tournament checkpoint — 2026-11-01
 
@@ -36,7 +50,7 @@ Further SOURCE audit: LK has no approved clientRefHash handoff; CUP computes it 
 
 Residual station blockers: TRAINING consumer physical PostgreSQL acceptance, coordinated cross-repo activation/signing, original outbox retention/DLQ recovery, legacy/unadopted and remaining native consumers. Cancellation retains membership; new registration returns after LEFT; admin removal/ban never auto-returns. B03 CREATE, monetary B04, tournament owner/consumer B05, native B06, delivery/signing/runtime B08–B11 remain open. No P0 is closed solely by green CI.
 
-## Текущие P0 остатки
+## Исторические P0 остатки до новых quarter/chat пакетов
 
 - **B03 BLOCKED:** LK#2733678c039 fixed-quarter nonbinding preparation source/CI green. Не найдена authoritative dictionary artifact→publication→CREATE producer цепочка; нужны concrete dictionary proof и immutable привязка одной organizer booking к доле1/4, затем trusted actor/draft target/preflight/reserve/original-create receipt. Допустим минимальный вариант quarter-price target + existing FREE_ENTITLEMENT; новый generic discount mode не обязателен. Whole-price fraction нельзя повторно применять к разделённой цене; daily-limit fallback не должен менять1/4 contract. Existing v1/LK1 reserve/replay сохраняются.
 - **B04 PARTIAL:** #521 terminal no-dispatch recovery реализован; currente1d781 CI41234847565/native41234847625 SUCCESS:7361passed/126skipped и SELF PG9/9 после test-only count fix. Денежные CURRENCY/DEPOSIT cancellation commands уже есть в LK1; не хватает attributable game settlement/credit proof и безопасного LK2 consumer, organizer/native/provider acceptance.

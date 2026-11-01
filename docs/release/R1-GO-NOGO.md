@@ -1,5 +1,19 @@
 # LK2 R1 — GO / NO-GO
 
+## Текущий CREATE checkpoint — 2026-11-01
+
+LK#280bfacff70 также GREEN SOURCE/CI:34station cases включая9physical. Native quarter companion и paired LK2 station producer начаты поверх#532; это работа в процессе, а не закрытые release gates. Общий **NO-GO** не меняется.
+
+**NO-GO.** LK2#532 `90b2ba2b` закрывает отсутствие reviewed Web/API quarter CREATE source. Итоговый fullCI41259758605 SUCCESS:7711passed/126skipped,quarterPG12/12,required27physical+8guards zeroSKIP; iOS41259758618 SUCCESS — регрессия, не native quarter acceptance. До production readiness остаются native CREATE, CREATE station enrollment, денежный settlement, все обязательные chat journeys, provider/device/signing/store и совместимый release/restore/rollback evidence. LK#279952031f7 добавляет reviewed versioned station send/read-only status: MongoCI41259421752 SUCCESS,24/24message tests включая4physical zeroSKIP; full41259421753 SUCCESS. Все эти новые изменения — Draft PR, без merge или live activation.
+
+## Текущее решение после station-message CI — 2026-11-01
+
+**NO-GO сохраняется.** LK#278 `0de4cf4b` и CUP#68 `16fa3e5c` закрывают отсутствие серверного station-message owner на уровне SOURCE/CI. LK full41257193838/Mongo41257193822 и CUP41257209136 успешны; новые физические проверки выполнены без пропусков. Это Draft PR, без merge/установки.
+
+Следующие обязательные границы: завершить отдельные CREATE station producer и native consumer поверх проверенного LK2#532; подтвердить денежный settlement; завершить LK2 chat consumer и четыре контекста; принять реальные устройства/provider/signing/store; подготовить совместимый immutable release и fresh restore/rollback evidence. Точные локальные интеграции #525/#528 всё ещё ожидают разрешения. Новых merge, публикаций, workflow dispatch, миграций или live-изменений не было.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## iOS tournament source checkpoint — 2026-11-01
 
 **NO-GO remains.** iOS#53199f5d942 now has reviewed SOURCE and nativeCI41254366026 SUCCESS (six new tournament tests, unsigned build); fullCI41254366038 SUCCESS (7670passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP). This closes the missing bounded iOS tournament source claim, not physical-device/provider/store acceptance. CREATE consumer/import projection, monetary settlement, community-message owner and release activation gates remain open.
@@ -7,8 +21,6 @@
 ## Paired quarter CREATE source checkpoint — 2026-11-01
 
 **NO-GO remains.** Actor-bound quarter intake and original CREATE owner now have reviewed Draft PRs CUP#67 `802ed017` and LK#277 `59d3880c`, with LOCAL evidence and outgoing scans; LK physical Mongo passed and LK fullCI41254342434 passed; CUP fullCI41254507939 SUCCESS including physical v3 replay. Android#530 fullCI41252711408 is now SUCCESS (7651passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP), as is its automatic iOS lane. LK2 CREATE consumer/projection, native device acceptance, monetary settlement, community message ownership, device/provider/store and runtime delivery gates remain open. Exact pending local integration approvals have not been executed. No new main merge or live action occurred.
-
-Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
 
 ## Android tournament checkpoint — 2026-11-01
 
@@ -48,24 +60,24 @@ CUP#66 `5eb4fe04` now has reviewed LOCAL source for schema4 instance adoption an
 
 ## Остатки по gate
 
-| Gate                                   | Статус        | Что остаётся                                                                                                                                      |
-| -------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth/profile                           | PARTIAL       | Physical-device session/privacy/real credential acceptance                                                                                        |
-| Subscriptions/JOIN                     | PARTIAL       | Compatible installed owner/consumer, provider/native acceptance и production guards B01/B02                                                       |
-| CREATE                                 | BLOCKED       | Server-owned service/price/original-create receipt B03; quarter-court choice не заменяет contract                                                 |
-| LEAVE/CANCEL                           | PARTIAL       | SELF refusal recovery#521 CIgreen; native/provider visit return; денежные LK1 commands существуют, но LK2 settlement/organizer loop не принят B04 |
-| Training/tournament                    | PARTIAL       | Training iOS-native/managed/paid/LEAVE/provider; tournament admission/gender/capacity/generation-safe consumer B05                                |
-| Four chat contexts/station communities | BLOCKED       | Station mapping/auto-membership/send и tournament membership, native parity B07                                                                   |
-| Push/campaigns                         | PARTIAL       | Ordinary APNs source merged через#511; physical provider/device, opt-out/quiet-hour/retry acceptance B08                                          |
-| Required E2E                           | PARTIAL       | 27game PG/broker physical cases passed в#522; полный device/provider matrix B10 остаётся                                                          |
-| Signed mobile/stores                   | BLOCKED       | Signing custody, reproducible signed artifacts, physical install/upgrade, store prerequisites B09                                                 |
-| Production package/restore/rollback    | UNKNOWN       | Exact immutable package/target, fresh backup/restore/rollback and runtime acceptance B11                                                          |
-| High dependency fix                    | VERIFIED      | #508 source/mainCI; финальный package audit и moderate triage сохраняются B12                                                                     |
-| Activation authority                   | NOT REQUESTED | Полный приемлемый release package ещё не подготовлен                                                                                              |
+| Gate                                   | Статус        | Что остаётся                                                                                                                                                                            |
+| -------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth/profile                           | PARTIAL       | Physical-device session/privacy/real credential acceptance                                                                                                                              |
+| Subscriptions/JOIN                     | PARTIAL       | Compatible installed owner/consumer, provider/native acceptance и production guards B01/B02                                                                                             |
+| CREATE                                 | PARTIAL       | LK#277/CUP#67 SOURCE/CI green; LK2#53290b2ba2b SOURCE/CI verified (quarterPG12/12); native CREATE, station enrollment, reserve-only reconciliation and importer/provider acceptance B03 |
+| LEAVE/CANCEL                           | PARTIAL       | SELF refusal recovery#521 CIgreen; native/provider visit return; денежные LK1 commands существуют, но LK2 settlement/organizer loop не принят B04                                       |
+| Training/tournament                    | PARTIAL       | Training Web/API source and LOCAL_ONLY tournament Web/Android/iOS SOURCE/CI green; managed/paid/provider/LEAVE and physical-device acceptance B05                                       |
+| Four chat contexts/station communities | PARTIAL       | LK#278/CUP#68 station message SOURCE/CI green; LK2 consumer, stable cursor/unread/reconnect, remaining contexts and native/device acceptance B07                                        |
+| Push/campaigns                         | PARTIAL       | Ordinary APNs source merged через#511; physical provider/device, opt-out/quiet-hour/retry acceptance B08                                                                                |
+| Required E2E                           | PARTIAL       | 27game PG/broker physical cases passed в#522; полный device/provider matrix B10 остаётся                                                                                                |
+| Signed mobile/stores                   | BLOCKED       | Signing custody, reproducible signed artifacts, physical install/upgrade, store prerequisites B09                                                                                       |
+| Production package/restore/rollback    | UNKNOWN       | Exact immutable package/target, fresh backup/restore/rollback and runtime acceptance B11                                                                                                |
+| High dependency fix                    | VERIFIED      | #508 source/mainCI; финальный package audit и moderate triage сохраняются B12                                                                                                           |
+| Activation authority                   | NOT REQUESTED | Полный приемлемый release package ещё не подготовлен                                                                                                                                    |
 
 ## Dependency-aware следующий шаг
 
-Exact#511 flag cycle завершён; #522 required physicalCI green. #521SELF recovery current-headCI green; завершить Android training companion. Развивать trusted CREATE owner после nonbinding#273, tournament admission и station original-admission/generation fence без generic refactoring и dual-write. Training/provider/native lanes не зависят от CREATE. Порядок взаимозависимых heads и migrations — в [DEPENDENCIES](R1-DEPENDENCIES.md).
+LK2#532 завершил полный CI и12физических PostgreSQL-сценариев. Продолжаются независимые native companion и LK2 station producer; совместимая интеграция возможна только для точных проверенных heads с отдельным разрешением. LK#278/CUP#68 и versioned contract LK#279952031f7 готовы на уровне SOURCE/CI к следующему отдельному LK2 chat consumer. Native CREATE и CREATE station producer требуют уже принятого исходного receipt/operation contract. Денежный settlement и device/provider/store acceptance сохраняют отдельные зависимости. Ожидающие точные merge-разрешения не заменяются этой последовательностью; порядок versions/migrations — в [DEPENDENCIES](R1-DEPENDENCIES.md).
 
 ## Условия GO
 

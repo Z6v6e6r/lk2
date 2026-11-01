@@ -1,5 +1,25 @@
 # LK2 R1 — зависимости и критический путь
 
+Актуальная station chat source chain: LK#276 + CUP#63 → LK#278 + CUP#68 → **LK#279952031f7 (versioned send/read-only original status, оба CI SUCCESS)** → LK2 authenticated public mapping/consumer/custody → stable pagination/unread/reconnect → Web/native/device acceptance. Новый endpoint устраняет риск старого графа, который мог бы проигнорировать версионный заголовок на прежнем send path; 404 нового endpoint остаётся UNKNOWN.
+
+## Актуальный CREATE critical path — 2026-11-01
+
+Station extension: LK#276 → **LK#280bfacff70 (full/Mongo CI SUCCESS)** → LK2 quarter station producer поверх#532 → coordinated receiver/API/worker installation и drain старых consumers → runtime membership acceptance. Producer должен сохранять исходный capsule до station admission, блокировать booking dispatch при неопределённом admission и атомарно выпускать confirmation после исходного organizer receipt. Nullable pre-adoption rows не получают новый epoch задним числом. Native companion выполняется параллельно без backend/file overlap.
+
+CUP#65→#66→#67 + LK#277 → LK2#532 (`90b2ba2b`, SOURCE/CI verified; full41259758605 SUCCESS) → два ограниченных шага: native quarter consumer и CREATE-specific station enrollment → согласованная integration/immutable release preparation → отдельные provider/device/runtime gates. #532 основан на #529; #530/#531 не являются его предками. Native companion можно реализовать поверх #532 с пятью конкретными authenticated routes, не копируя или объединяя pending branches. Общие native entry points требуют объявленного порядка последующей интеграции; автоматическая unsigned Android lane по-прежнему зависит от разрешённой интеграции #526. Source work не обходит ожидающие разрешения локальные merge #525/#528.
+
+## Актуальная цепочка сообщений станции — 2026-11-01
+
+- LK#275 → LK#276 `62e32f7b` → LK#278 `0de4cf4b`.
+- CUP#63 `1abc9150` → CUP#68 `16fa3e5c`.
+- LK#278 и CUP#68 требуют согласованной установки: новый обработчик сообщений и административные записи сохраняют один outbox. Оба source/CI green; их merge/установка не выполнены.
+- Следующий независимый SOURCE этап: LK2 read/send/status consumer со стабильными идентификаторами, исходным ключом, reconnect и непрочитанными; затем native parity и device/runtime acceptance.
+- До любой активации: завершить старые выполняющиеся запросы, подтвердить сохранность receipt/outbox и Mongo durability. Отключение флага не разрешает возврат к старому STATION writer.
+
+Точные ожидающие локальные интеграции #525/#528 остаются отдельными разрешениями; эти новые PR их не обходят.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## iOS tournament source checkpoint — 2026-11-01
 
 iOS#53199f5d942 depends on Android#5304406a3b2/API compatibility and Web#5293041f0d9/CUP#64. NativeCI41254366026 passed; fullCI41254366038 SUCCESS (7670passed/126skipped, tournamentPG7/7, required27physical+8guards zeroSKIP). DIRECT/TRAINING native branches are not ancestors and must be integrated once by the authorized integration owner; no silent copy or merge bypass occurred. Real Keychain/process-death and WKWebView capability checks remain separate device gates.
@@ -7,8 +27,6 @@ iOS#53199f5d942 depends on Android#5304406a3b2/API compatibility and Web#5293041
 ## Paired quarter CREATE source checkpoint — 2026-11-01
 
 Quarter source chain now reaches CUP#65 publication/target → CUP#66 instance adoption → CUP#67 actor-bound v3 intake + LK#277 original CREATE owner. The paired latter source is reviewed and pushed; LK physical Mongo41254002352 and41254342435 passed; corrected full41254342434 SUCCESS. Current LKhead59d3880c is test-only current-hash correction. CUPhead802ed017 fixes only a duplicated synthetic publication key after41253980880; corrected fullCI41254507939 SUCCESS including physical v3 replay. Next: LK2 original draft/operation consumer and canonical importer convergence → explicit CREATE station admission/confirmation → Web/native and provider/device acceptance. Existing JOIN station loader cannot be reused by calling a CREATE receipt JOIN. Canonical LK_LEGACY_SNAPSHOT import ownership must converge with the provider receipt before a public game is claimed.
-
-Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
 
 ## Android tournament checkpoint — 2026-11-01
 

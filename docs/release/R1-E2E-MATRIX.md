@@ -1,5 +1,27 @@
 # LK2 R1 — E2E и acceptance matrix
 
+LK#279952031f7: full41259421753/Mongo41259421752 SUCCESS, message24/24zeroSKIP. Четвёртый physical case доказывает: отсутствие/event-incomplete остаётся UNKNOWN без write/repair; отдельный recovery worker восстанавливает исходный receipt; BAN между event read и финальным ACL скрывает body. Предыдущие три physical concurrency/lost-ACK/LEFT/BAN/retention cases также прошли. Это CI MongoDB, не production durability или клиентская доставка.
+
+## Quarter CREATE consumer — текущая проверка
+
+LK#280bfacff70 receiver: Mongo41260232040/job124711798057 —34/34station cases,9physical zeroSKIP; full41260232033 SUCCESS. Новые два физических случая: независимые клиенты/first-wins generation/повтор после LEFT под новым operation; потеря claim/community ACK и concurrent leave/admin block. Это проверка receiver с подписанным synthetic fact, не доказательство готового LK2 CREATE producer.
+
+LK2#532 `90b2ba2b`: LOCAL проверены строгий paired owner contract, сохранение исходных key/body, ambiguous recovery без нового CREATE, synchronous logout/queued-lock/late-ACK fence, подтверждённая canonical projection и UI390/1280. Двенадцать физических PostgreSQL-сценариев охватывают concurrent preparation, old-writer fence/refusal race, lease/dispatch ownership, expiry, rollback журнала/outbox, importer convergence и FORCE RLS. В первом CI они не стартовали из-за ошибки setup; во втором10/12PASS, два actual-importer cases обнаружили неверный namespace синтетического player association. На итоговом test-only head90b2ba2b fullCI41259758605 SUCCESS:12/12quarterPG,7711passed/126skipped,closedPG4/4,required27physical+8guards zeroSKIP. Оба actual-importer порядка выполнены успешно. Native iOS41259758618 — успешная регрессия существующего клиента, не native quarter journey.
+
+## Новое доказательство CI: сообщения станции — 2026-11-01
+
+| Сценарий                                                                                                                       | Доказательство                                | Результат                   |
+| ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | --------------------------- |
+| Конкурентный повтор одного ключа и потеря ответа: одно сообщение/событие                                                       | LK#278, Mongo run41257193822, job124702764245 | CI PASS, физический MongoDB |
+| LEFT/BAN до атомарного принятия: кандидат не становится читаемым                                                               | Тот же run/job                                | CI PASS, физический MongoDB |
+| Принятое сообщение переживает потерю ответа, выход и архивирование                                                             | Тот же run/job                                | CI PASS, физический MongoDB |
+| Удаление/обновление через актуальный CUP service сохраняет принятый intent; смена типа/BAN проверяются против старого preimage | CUP#68, run41257209136, job124702811591       | CI PASS, физический MongoDB |
+| Реальная подстановка auth-guard, запрет подмены автора, повтор после редактирования, bounded worker recovery                   | LK run41257193822: полный message suite16/16  | CI PASS, без пропусков      |
+
+Это серверная CI-матрица. LK2/native UI, installed graph, reconnect/unread и device/provider delivery не проверены этим набором.
+
+Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
+
 ## iOS tournament source checkpoint — 2026-11-01
 
 iOS#53199f5d942: LOCAL96regression/final22overlap covers actual IOSSession/SDK with synthetic native replies, original UNKNOWN/cold restore/manual retry/LEAVE, late ACK/logout and unavailable browser capabilities. Rendered390/1280 inspected. NativeCI41254366026:37tests total, one explicit macOS skip for real iOS Keychain integration, zero failures; six new Swift tournament cases passed and unsigned simulator build succeeded. FullCI41254366038 SUCCESS:7670passed/126skipped, tournamentPG7/7, closed-migrationPG4/4, required27physical+8guards zeroSKIP and all five Docker/static/dependency/deployment gates. Local Swift package attempt failed on relocated PCM cache; CI supplies compiler evidence, not physical-device acceptance.
@@ -7,8 +29,6 @@ iOS#53199f5d942: LOCAL96regression/final22overlap covers actual IOSSession/SDK w
 ## Paired quarter CREATE source checkpoint — 2026-11-01
 
 CUP#67/LK#277 paired source uses identical fixture SHA2567d69645b0ce2aea081e723462b97d201560df19e4e2c2a120cd0801e49cb14b0. LOCAL LK234total:229PASS/5SKIP (four CI-only Mongo and one existing LIVE_ROUTER_FLOW_FIXTURE); CUP23 actor cases plus actual producer/intake/resolver/preflight/reserve contract, legacy/quarter/trusted/runtime/lifecycle suites and typechecks passed. No local physical DB execution. LK MongoCI41254002352 passed56/56 including four independent-client LK CAS/nonce/original-ID/reclaim cases. CUP fullCI41254507939 passed the actual v3 repository/reserve/lost-ACK case with zero skips; the first unique-index failure was not runtime acceptance. These HTTP/provider facts are synthetic. No CREATE Web/native/provider/runtime acceptance is inferred.
-
-Ниже сохранены предыдущие контрольные точки; текущие статусы — в разделах выше.
 
 ## Android tournament checkpoint — 2026-11-01
 
