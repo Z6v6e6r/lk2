@@ -18,7 +18,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 function setup() {
   let live = true;
@@ -239,4 +241,163 @@ it('actual send never dispatches without durable local metadata when storage quo
   } finally {
     write.mockRestore();
   }
+});
+
+async function tick(milliseconds: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+  });
+}
+async function pollingView() {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const x = setup();
+  const view = render(
+    <TournamentChatPage tournamentId={tournamentId} principal={principal} gateway={x.gateway} />,
+  );
+  await act(async () => {});
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(1);
+  return { ...x, view };
+}
+it('updates an idle visible chat with GET only and stops after unmount', async () => {
+  const x = await pollingView();
+  x.gateway.getTournamentChatHistory.mockResolvedValueOnce({
+    contractVersion: 'tournament-chat.v1',
+    tournamentId,
+    streamId: id(4),
+    throughSequence: 1,
+    messages: [
+      {
+        messageId: id(5),
+        authorUserId: id(6),
+        sequence: 1,
+        text: 'new incoming message',
+        acceptedAt: '2026-11-01T00:00:00.000Z',
+      },
+    ],
+    hasMore: false,
+    nextCursor: null,
+  });
+  await tick(10_000);
+  expect(screen.getByText('new incoming message')).toBeInTheDocument();
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(2);
+  expect(x.gateway.sendTournamentChatMessage).not.toHaveBeenCalled();
+  expect(x.gateway.getTournamentChatRequest).not.toHaveBeenCalled();
+  x.view.unmount();
+  await tick(120_000);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(2);
+});
+it('pauses hidden/offline polling and stops after principal retirement', async () => {
+  const x = await pollingView();
+  const visible = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  await tick(30_000);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(1);
+  visible.mockReturnValue('visible');
+  const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+  await tick(20_000);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(1);
+  online.mockReturnValue(true);
+  await tick(10_000);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(2);
+  x.retire();
+  await tick(120_000);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(2);
+});
+it('does not overlap slow refresh or queue focus/online/visibility storms', async () => {
+  const x = await pollingView();
+  let finish!: () => void;
+  x.gateway.getTournamentChatHistory.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () =>
+          resolve({
+            contractVersion: 'tournament-chat.v1',
+            tournamentId,
+            streamId: null,
+            throughSequence: 0,
+            messages: [],
+            hasMore: false,
+            nextCursor: null,
+          });
+      }),
+  );
+  await tick(10_000);
+  for (let i = 0; i < 20; i++) {
+    fireEvent.focus(window);
+    fireEvent.online(window);
+    fireEvent(document, new Event('visibilitychange'));
+  }
+  await tick(60_000);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    finish();
+  });
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(2);
+  await tick(10_000);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(3);
+});
+it('backs off rate limits and network failures without reconnect bypass', async () => {
+  const x = await pollingView();
+  x.gateway.getTournamentChatHistory.mockRejectedValueOnce({ status: 429 });
+  await tick(10_000);
+  for (let i = 0; i < 10; i++) fireEvent.focus(window);
+  await tick(59_999);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(2);
+  await tick(1);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(3);
+  x.gateway.getTournamentChatHistory.mockRejectedValueOnce(new Error('timeout'));
+  await tick(10_000);
+  await tick(19_999);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(4);
+  await tick(1);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(5);
+});
+it('stops automatic retries after ACL denial and requires explicit refresh', async () => {
+  const x = await pollingView();
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'private draft' } });
+  x.gateway.getTournamentChatHistory.mockRejectedValueOnce({ status: 403 });
+  await tick(10_000);
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  await tick(120_000);
+  fireEvent.focus(window);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+  });
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(3);
+  expect(screen.getByRole('textbox')).toHaveValue('');
+});
+it('discards late automatic history after logout', async () => {
+  const x = await pollingView();
+  let finish!: () => void;
+  x.gateway.getTournamentChatHistory.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () =>
+          resolve({
+            contractVersion: 'tournament-chat.v1',
+            tournamentId,
+            streamId: id(4),
+            throughSequence: 1,
+            messages: [
+              {
+                messageId: id(5),
+                authorUserId: id(6),
+                sequence: 1,
+                text: 'late private body',
+                acceptedAt: '2026-11-01T00:00:00.000Z',
+              },
+            ],
+            hasMore: false,
+            nextCursor: null,
+          });
+      }),
+  );
+  await tick(10_000);
+  x.retire();
+  await act(async () => {
+    finish();
+  });
+  expect(screen.queryByText('late private body')).not.toBeInTheDocument();
+  await tick(120_000);
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(2);
 });

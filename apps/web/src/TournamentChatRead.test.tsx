@@ -23,6 +23,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 function setup(total = 3) {
@@ -200,3 +201,75 @@ it('witness change across history read clears old authorized state instead of ma
   expect(screen.getByRole('button', { name: 'Отметить прочитанным' })).toBeDisabled();
   expect(f.gateway.advanceTournamentChatRead).not.toHaveBeenCalled();
 });
+
+it('periodic GET never acknowledges unread messages or retries a READ POST', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const x = setup();
+  render(<TournamentChatPage tournamentId={tid} principal={principal} gateway={x.gateway} />);
+  await act(async () => {});
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(x.gateway.getTournamentChatHistory).toHaveBeenCalledTimes(4);
+  expect(x.gateway.advanceTournamentChatRead).not.toHaveBeenCalled();
+  expect(x.gateway.sendTournamentChatMessage).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Отметить прочитанным' })).toBeEnabled();
+});
+it.each([
+  ['before', { status: 429 }, 60_000],
+  ['after', { status: 429 }, 60_000],
+  ['before', new Error('position timeout'), 20_000],
+  ['after', { status: 503 }, 20_000],
+] as const)(
+  'backs off %s-position failure while retaining history',
+  async (stage, error, delay) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const x = setup();
+    x.mount();
+    await act(async () => {});
+    x.gateway.getTournamentChatReadPosition.mockClear();
+    if (stage === 'after')
+      x.gateway.getTournamentChatReadPosition.mockResolvedValueOnce({ ...x.position });
+    x.gateway.getTournamentChatReadPosition.mockRejectedValueOnce(error);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    const count = stage === 'before' ? 1 : 2;
+    expect(x.gateway.getTournamentChatReadPosition).toHaveBeenCalledTimes(count);
+    expect(screen.getByText('private 3')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Отметить прочитанным' })).toBeDisabled();
+    fireEvent.focus(window);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+    });
+    expect(x.gateway.getTournamentChatReadPosition).toHaveBeenCalledTimes(count);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(x.gateway.getTournamentChatReadPosition).toHaveBeenCalledTimes(count + 2);
+    expect(x.gateway.advanceTournamentChatRead).not.toHaveBeenCalled();
+  },
+);
+it.each([{ status: 503 }, new Error('history timeout')])(
+  'preserves position429 cooldown when history also fails: %o',
+  async (error) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const x = setup();
+    x.mount();
+    await act(async () => {});
+    x.gateway.getTournamentChatReadPosition.mockClear();
+    x.gateway.getTournamentChatReadPosition.mockRejectedValueOnce({ status: 429 });
+    x.gateway.getTournamentChatHistory.mockRejectedValueOnce(error);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_999);
+    });
+    expect(x.gateway.getTournamentChatReadPosition).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(x.gateway.getTournamentChatReadPosition).toHaveBeenCalledTimes(3);
+  },
+);

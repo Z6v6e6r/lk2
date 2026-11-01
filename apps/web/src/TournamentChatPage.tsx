@@ -73,6 +73,7 @@ export function TournamentChatPage({
     lifetime.current.gateway = gateway;
   }, [gateway, lifetime]);
   const refreshQueued = useRef(false);
+  const poll = useRef({ delay: 10_000, notBefore: 0, blocked: false });
   const current = () =>
     lifetime.current.active &&
     lifetime.current.original !== null &&
@@ -126,7 +127,9 @@ export function TournamentChatPage({
     readPositionRef.current = null;
     setReadPosition(null);
   }
-  async function loadPosition(): Promise<TournamentChatReadPosition | null> {
+  async function loadPosition(
+    unavailable: (error: unknown) => void,
+  ): Promise<TournamentChatReadPosition | null> {
     if (!gateway.getTournamentChatReadPosition) return null;
     try {
       return parseTournamentChatReadPosition(
@@ -137,6 +140,7 @@ export function TournamentChatPage({
       const status =
         typeof error === 'object' && error !== null && 'status' in error ? Number(error.status) : 0;
       if ([401, 403, 404].includes(status)) throw error;
+      unavailable(error);
       return null; // Existing history remains usable when owner read adoption is unavailable.
     }
   }
@@ -154,6 +158,7 @@ export function TournamentChatPage({
     if ([401, 403, 404].includes(status)) {
       lifetime.current.epoch++;
       lifetime.current.accessEpoch++;
+      poll.current.blocked = true;
       setDenied(true);
       clearReadPosition();
       setThread(null);
@@ -165,29 +170,59 @@ export function TournamentChatPage({
       error instanceof Error &&
       ['TOURNAMENT_CHAT_HISTORY_GAP', 'TOURNAMENT_CHAT_STREAM_CHANGED'].includes(error.message)
     ) {
+      poll.current.blocked = true;
       setGap(true);
       clearReadPosition();
       setNotice('Не удалось загрузить все новые сообщения. Откройте историю заново.');
     } else setNotice('Не удалось подтвердить состояние чата. Проверьте статус сообщения.');
   }
-  async function refresh(reset = false) {
+  function deferPolling(error: unknown, earlierError?: unknown) {
+    // A later history failure must not shorten an earlier position rate-limit cooldown.
+    // ApiClientError currently exposes status, not HTTP Retry-After headers.
+    const rateLimited = [error, earlierError].some(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        'status' in item &&
+        Number(item.status) === 429,
+    );
+    poll.current.delay = rateLimited ? 60_000 : Math.min(60_000, poll.current.delay * 2);
+    poll.current.notBefore = Date.now() + poll.current.delay;
+  }
+  async function refresh(reset = false, automatic = false) {
     if (!current()) return;
+    if (
+      automatic &&
+      (document.visibilityState === 'hidden' ||
+        navigator.onLine === false ||
+        poll.current.blocked ||
+        Date.now() < poll.current.notBefore)
+    )
+      return;
     if (historyBusy.current) {
-      refreshQueued.current = true;
+      if (!automatic) refreshQueued.current = true;
       return;
     }
     historyBusy.current = true;
-    setLoading(true);
+    if (!automatic) setLoading(true);
     const id = ++lifetime.current.epoch;
+    let positionError: unknown;
     try {
-      const beforePosition = await loadPosition();
+      let positionFailed = false;
+      const unavailable = (error: unknown) => {
+        positionFailed = true;
+        positionError = error;
+      };
+      const beforePosition = await loadPosition(unavailable);
+      if (!current() || id !== lifetime.current.epoch) return;
       const next = await refreshTournamentThread(
         tournamentId,
         reset ? null : threadRef.current,
         gateway.getTournamentChatHistory,
         () => current() && id === lifetime.current.epoch,
       );
-      const afterPosition = await loadPosition();
+      if (!current() || id !== lifetime.current.epoch) return;
+      const afterPosition = positionFailed ? null : await loadPosition(unavailable);
       if (!current() || id !== lifetime.current.epoch) return;
       const previous = readPositionRef.current;
       if (
@@ -216,8 +251,15 @@ export function TournamentChatPage({
       setThread(next);
       setDenied(false);
       setGap(false);
+      poll.current.blocked = false;
+      if (positionFailed) deferPolling(positionError);
+      else poll.current = { delay: 10_000, notBefore: Date.now() + 10_000, blocked: false };
     } catch (error) {
-      if (id === lifetime.current.epoch) failure(error);
+      if (current() && id === lifetime.current.epoch) {
+        deferPolling(error, positionError);
+        refreshQueued.current = false;
+        failure(error);
+      }
     } finally {
       historyBusy.current = false;
       if (current()) {
@@ -269,13 +311,27 @@ export function TournamentChatPage({
         void restoreReads();
       }
     });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const schedule = () => {
+      if (stopped || !current()) return;
+      timer = setTimeout(
+        () => {
+          void refresh(false, true).finally(schedule);
+        },
+        Math.max(10_000, poll.current.notBefore - Date.now()),
+      );
+    };
+    schedule();
     const reconnect = () => {
-      if (document.visibilityState !== 'hidden') void refresh();
+      void refresh(false, true);
     };
     window.addEventListener('focus', reconnect);
     window.addEventListener('online', reconnect);
     document.addEventListener('visibilitychange', reconnect);
     return () => {
+      stopped = true;
+      clearTimeout(timer);
       mounted.active = false;
       mounted.epoch++;
       window.removeEventListener('focus', reconnect);
