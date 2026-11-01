@@ -277,3 +277,63 @@ describe('private station owner protocol', () => {
     ).toThrow();
   });
 });
+
+it('explicit CREATE signed wire matches reviewed LK receiver bytes without changing GAME/TRAINING', () => {
+  const createRequest = {
+    ...request,
+    activity: { kind: 'GAME_CREATE' as const, id: request.activity.id },
+  };
+  // Independently calculated with LK #280 stationMembershipLifetime.mjs smHash.
+  expect(stationHash('station-membership-body:v1', createRequest)).toBe(
+    'sha256:e73b5545728cfe3930c38b7ef8ac05b1eb4df4acb35e92ee60d93a111fa84348',
+  );
+  const jwt = signer.issue({
+      mode: 'admission',
+      actor,
+      request: createRequest,
+      sessionId: uuid(6),
+      correlationId,
+    }),
+    parts = jwt.split('.');
+  expect(
+    verify(
+      'RSA-SHA256',
+      Buffer.from(parts.slice(0, 2).join('.')),
+      key.publicKey,
+      Buffer.from(parts[2]!, 'base64url'),
+    ),
+  ).toBe(true);
+  const claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString()) as unknown;
+  expect(claims).toMatchObject({
+    scope: 'communities.station-membership.admit',
+    body_sha256: stationHash('station-membership-body:v1', createRequest),
+    sid: uuid(6),
+    fresh_operation: true,
+  });
+  const body = {
+    contractVersion: 1 as const,
+    operationId: request.operationId,
+    admissionId: response().admission.admissionId,
+    admissionBindingSha256: response().admission.bindingSha256,
+    confirmation: {
+      kind: 'GAME_CREATE_ORGANIZER' as const,
+      generationId: uuid(8),
+      activityId: request.activity.id,
+    },
+  };
+  const token = signer.issue({
+    mode: 'confirmation',
+    actor,
+    correlationId,
+    caller: 'lk2-worker',
+    request: body,
+  });
+  const factClaims = JSON.parse(
+    Buffer.from(token.split('.')[1]!, 'base64url').toString(),
+  ) as unknown;
+  expect(factClaims).toMatchObject({
+    persisted_fact: true,
+    body_sha256: stationHash('station-membership-body:v1', body),
+  });
+  expect(factClaims).not.toHaveProperty('sid');
+});

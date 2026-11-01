@@ -244,7 +244,7 @@ describe('closed migration custody validators', () => {
         filename,
         checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
       }));
-    expect(currentPackage).toHaveLength(frozenLedger.length + 14);
+    expect(currentPackage).toHaveLength(frozenLedger.length + 15);
     expect(
       currentPackage
         .filter((row) => !frozenLedger.some((approved) => approved.filename === row.filename))
@@ -262,6 +262,7 @@ describe('closed migration custody validators', () => {
       '0108_training_station_membership.sql',
       '0109_tournament_local_operations.sql',
       '0110_game_quarter_create_attempts.sql',
+      '0111_quarter_create_station_membership.sql',
       '0112_station_message_notifications.sql',
       '0113_tournament_read_generation_lookup.sql',
     ]); // gitleaks:allow - public migration filenames, not credentials

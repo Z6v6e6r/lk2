@@ -7,6 +7,7 @@ import {
   qcAdmissionHash,
   parseQuarterAdmission,
   type QuarterReceipt,
+  type QuarterExpiredRejection,
 } from '@phub/domain/quarter-create';
 export async function quarterFixture(
   input: {
@@ -91,6 +92,32 @@ export async function quarterFixture(
       courtId: request.target.courtId,
       startsAt: request.target.startsAt,
       subscriptionId: request.subscriptionId,
+    },
+  };
+}
+
+export function expiredQuarterReceipt(
+  f: Awaited<ReturnType<typeof quarterFixture>>,
+): QuarterExpiredRejection {
+  return {
+    schemaVersion: 2,
+    outcome: 'REJECTED',
+    operationId: f.receipt.operationId,
+    admissionRequestSha256: f.receipt.admissionRequestSha256,
+    actor: f.receipt.actor,
+    target: f.receipt.target,
+    reason: 'PRECREATE_EXPIRED_NOT_DISPATCHED',
+    abortId: '11111111-1111-4111-8111-000000000080',
+    capsuleExpiresAt: f.admission.preparation.expiresAt,
+    abortedAt: f.admission.preparation.expiresAt,
+    rejectedAt: f.admission.preparation.expiresAt,
+    entitlement: {
+      subscriptionInstanceId: f.receipt.entitlement.subscriptionInstanceId,
+      usageOperationId: f.receipt.entitlement.usageOperationId,
+      operationState: 'FAILED',
+      compensationState: 'APPLIED',
+      releaseReason: 'PRECREATE_EXPIRED_NOT_DISPATCHED',
+      providerBookingId: null,
     },
   };
 }

@@ -321,7 +321,7 @@ export interface QuarterReceipt {
   };
   confirmedAt: string;
 }
-export interface QuarterRejection {
+export interface QuarterProviderRejection {
   schemaVersion: 1;
   outcome: 'REJECTED';
   operationId: string;
@@ -341,20 +341,45 @@ export interface QuarterRejection {
     providerBookingId: null;
   };
 }
+export interface QuarterExpiredRejection {
+  schemaVersion: 2;
+  outcome: 'REJECTED';
+  operationId: string;
+  admissionRequestSha256: string;
+  actor: { tenantId: string; userId: string };
+  target: QuarterTarget;
+  reason: 'PRECREATE_EXPIRED_NOT_DISPATCHED';
+  abortId: string;
+  capsuleExpiresAt: string;
+  abortedAt: string;
+  rejectedAt: string;
+  entitlement: {
+    subscriptionInstanceId: string;
+    usageOperationId: string;
+    operationState: 'FAILED';
+    compensationState: 'APPLIED';
+    releaseReason: 'PRECREATE_EXPIRED_NOT_DISPATCHED';
+    providerBookingId: null;
+  };
+}
+export type QuarterRejection = QuarterProviderRejection | QuarterExpiredRejection;
 export async function parseQuarterReceipt(
   v: unknown,
   q: QuarterAdmission,
   rejected = false,
 ): Promise<QuarterReceipt | QuarterRejection> {
+  const expired = rejected && qcObject(v).schemaVersion === 2;
   const r = qcExact(
     v,
-    rejected
-      ? 'schemaVersion,outcome,operationId,admissionRequestSha256,actor,target,reason,providerStatusCode,providerRejectedAt,rejectedAt,entitlement'
-      : 'schemaVersion,operationId,admissionRequestSha256,actor,target,providerExerciseId,providerBookingId,entitlement,confirmedAt',
+    expired
+      ? 'schemaVersion,outcome,operationId,admissionRequestSha256,actor,target,reason,abortId,capsuleExpiresAt,abortedAt,rejectedAt,entitlement'
+      : rejected
+        ? 'schemaVersion,outcome,operationId,admissionRequestSha256,actor,target,reason,providerStatusCode,providerRejectedAt,rejectedAt,entitlement'
+        : 'schemaVersion,operationId,admissionRequestSha256,actor,target,providerExerciseId,providerBookingId,entitlement,confirmedAt',
   );
   const a = qcExact(r.actor, 'tenantId,userId');
   if (
-    r.schemaVersion !== 1 ||
+    r.schemaVersion !== (expired ? 2 : 1) ||
     r.operationId !== q.preparation.operationId ||
     r.admissionRequestSha256 !== (await qcAdmissionHash(q)) ||
     a.tenantId !== q.preparation.actor.tenantId ||
@@ -369,17 +394,26 @@ export async function parseQuarterReceipt(
     );
     if (
       r.outcome !== 'REJECTED' ||
-      r.reason !== 'PROVIDER_REJECTED' ||
-      typeof r.providerStatusCode !== 'number' ||
-      ![400, 401, 403, 404, 405, 410, 415, 422].includes(r.providerStatusCode) ||
-      !qcIso(r.providerRejectedAt) ||
+      r.reason !== (expired ? 'PRECREATE_EXPIRED_NOT_DISPATCHED' : 'PROVIDER_REJECTED') ||
+      !(expired
+        ? qcUuid(r.abortId) &&
+          qcIso(r.capsuleExpiresAt) &&
+          qcIso(r.abortedAt) &&
+          r.capsuleExpiresAt === q.preparation.expiresAt &&
+          Date.parse(r.capsuleExpiresAt) <= Date.parse(r.abortedAt) &&
+          qcIso(r.rejectedAt) &&
+          Date.parse(r.abortedAt) <= Date.parse(r.rejectedAt)
+        : typeof r.providerStatusCode === 'number' &&
+          [400, 401, 403, 404, 405, 410, 415, 422].includes(r.providerStatusCode) &&
+          qcIso(r.providerRejectedAt) &&
+          qcIso(r.rejectedAt) &&
+          Date.parse(r.providerRejectedAt) <= Date.parse(r.rejectedAt)) ||
       !qcIso(r.rejectedAt) ||
-      Date.parse(r.providerRejectedAt) > Date.parse(r.rejectedAt) ||
       Date.parse(r.rejectedAt) > Date.now() ||
       ![e.subscriptionInstanceId, e.usageOperationId].every(qcId) ||
       e.operationState !== 'FAILED' ||
       e.compensationState !== 'APPLIED' ||
-      e.releaseReason !== 'PROVIDER_REJECTED' ||
+      e.releaseReason !== r.reason ||
       e.providerBookingId !== null
     )
       qcBad();

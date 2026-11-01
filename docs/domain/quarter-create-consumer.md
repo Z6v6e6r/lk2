@@ -66,3 +66,29 @@ LOCAL synthetic bridge/JVM/UI results do not prove real device, provider, signin
 acceptance. Automatic iOS CI must compile Swift and build the unsigned simulator app. Android
 unsigned packaging remains dependent on separately approved #526 integration; this ancestry's
 release workflow is dispatch/tag-only and must not be dispatched as a verification workaround.
+
+## Expired unused owner reservation receipt
+
+The private owner parser also accepts strict rejection receipt schema 2 for
+`PRECREATE_EXPIRED_NOT_DISPATCHED`. It binds the original operation/admission hash,
+actor, target and exact original capsule expiry; requires UUID abort ID,
+expiry ≤ abortedAt ≤ rejectedAt ≤ now, and the exact CUP FAILED/APPLIED reason
+with null booking. Provider status/rejection fields and unknown fields are forbidden.
+Schema 1 success/provider rejection remain unchanged. The fixture
+`packages/domain/src/fixtures/quarter-create-expired-v2.json` is identical to LK/CUP.
+
+Only the existing explicit command/recovery path persists this receipt. GET may
+observe it but never completes the local command or mutates roster. The existing
+journal preserves dispatch_started and terminal station OWNER_ADMISSION (both
+ADMITTED and NO_ENROLLMENT), emits no organizer-confirmed/enrollment event and
+returns the existing REJECTED UX. Original key/body stay immutable; a new operation
+requires explicit user choice. Migrations 0110/0111 already accept this shape;
+no schema or public/native/UI change is needed.
+
+Rollback retains journal and markers; old parsers fail closed on schema 2. Adoption
+requires compatible CUP release, LK abort owner and LK2 parser, with separate
+runtime authorization. LOCAL tests cover strict parser/HTTP/runtime negatives.
+The existing CI-only PostgreSQL suite adds actual JSONB journal/CAS replay through
+HTTP parser and runtime (identity/provider response and clock remain synthetic),
+read-without-complete, lost completion ACK and both station outcomes. No live
+provider, database, staging or production evidence is claimed.

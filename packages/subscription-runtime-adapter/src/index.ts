@@ -729,3 +729,5 @@ export * from './training-registration.js';
 export * from './training-station-membership.js';
 
 export { QuarterCreateOwnerClient, QuarterPreparationRefused } from './quarter-create.js';
+
+export * from './quarter-create-station-membership.js';

@@ -15,6 +15,11 @@ import type {
 } from '@phub/database/quarter-create';
 import {
   QuarterPreparationRefused,
+  quarterStationActor,
+  quarterStationRequest,
+  parseStationAdmissionResponse,
+  type StationMembershipClient,
+  type StationMembershipSigner,
   type QuarterCreateOwnerClient,
 } from '@phub/subscription-runtime-adapter';
 import type { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
@@ -23,6 +28,12 @@ export function createQuarterCreateRuntime(options: {
   repository: QuarterCreateRepository;
   issuer?: Pick<SubscriptionRuntimeActorDelegationIssuer, 'issueQuarterCreate'>;
   client?: Pick<QuarterCreateOwnerClient, 'prepare' | 'admit' | 'read'>;
+  stationMembership?:
+    | {
+        signer: Pick<StationMembershipSigner, 'issue'>;
+        client: Pick<StationMembershipClient, 'admit'>;
+      }
+    | undefined;
   token?: (actor: QuarterActor) => Promise<{ token: string; expiresAt: string }>;
 }) {
   const repo = options.repository;
@@ -115,7 +126,11 @@ export function createQuarterCreateRuntime(options: {
       registration: current?.registration ?? { status: 'UNKNOWN', asOf: null },
       reason:
         current?.reason ??
-        (a.state === 'DISPATCH_STARTED' ? 'GAME_QUARTER_CREATE_RECONCILIATION_REQUIRED' : null),
+        (a.state === 'DISPATCH_STARTED'
+          ? 'GAME_QUARTER_CREATE_RECONCILIATION_REQUIRED'
+          : a.state === 'PREPARING' && a.stationMembership
+            ? 'GAME_QUARTER_CREATE_STATION_ADMISSION_PENDING'
+            : null),
     };
   }
   return {
@@ -171,21 +186,70 @@ export function createQuarterCreateRuntime(options: {
           throw new QuarterCreateError('GAME_START_TIME_PASSED', 409);
         a = await repo.begin(s, q, context, actor.correlationId);
       }
+      if (a.state === 'PREPARING' && a.stationMembership?.outcome === 'INTENT')
+        a = (await repo.expireStationIntent(s, actor.correlationId)) ?? a;
       if (a.state === 'PREPARING') {
         const fresh = await repo.context(actor, q);
         if (!fresh || !qcEqual(fresh, a.context))
           throw new QuarterCreateError('GAME_QUARTER_CREATE_CONTEXT_CHANGED', 409);
+        // An adopted attempt cannot downgrade when transport/config is rolled back.
+        if (a.stationMembership && !options.stationMembership) return view(s, a);
         const lease = await repo.claimPreparation(s);
         if (!lease) return view(s, a);
+        let preparing = false;
         try {
-          const admission = await options.client!.prepare(
-            a.request,
-            await envelope(actor, s, a, 'prepare'),
-          );
-          a = (await repo.prepared(s, lease, admission, actor.correlationId)) ?? a;
+          const auth = await envelope(actor, s, a, 'prepare');
+          let admission;
+          if (a.stationMembership?.outcome === 'INTENT') admission = a.stationMembership.admission;
+          else {
+            preparing = true;
+            admission = await options.client!.prepare(a.request, auth);
+            preparing = false;
+          }
+          if (a.stationMembership) {
+            // Persist before station POST. An ambiguous CAS ACK holds; the next request reads it.
+            const saved = await repo.pinStationPreparation(s, lease, admission);
+            if (!saved) return view(s, (await repo.read(s)) ?? a);
+            a = saved;
+            const pinned = a.stationMembership;
+            if (pinned?.outcome !== 'INTENT') return view(s, a);
+            a = (await repo.expireStationIntent(s, actor.correlationId)) ?? a;
+            if (a.state !== 'PREPARING') return view(s, a);
+            // Fresh session identity is restrictive only; original authority/epoch never changes.
+            await envelope(actor, s, a, 'prepare');
+            const stationActor = quarterStationActor(pinned.admission),
+              request = await quarterStationRequest(pinned.admission);
+            const delegation = options.stationMembership!.signer.issue({
+              mode: 'admission',
+              actor: stationActor,
+              request,
+              sessionId: actor.sessionId,
+              correlationId: actor.correlationId,
+            });
+            const response = parseStationAdmissionResponse(
+              await options.stationMembership!.client.admit(request, stationActor, {
+                delegation,
+                correlationId: actor.correlationId,
+              }),
+              stationActor,
+              request,
+            );
+            a =
+              (await repo.prepared(s, lease, pinned.admission, actor.correlationId, {
+                ...pinned,
+                outcome: 'OWNER_ADMISSION',
+                actor: stationActor,
+                request,
+                response,
+              })) ?? a;
+            if (a.state === 'PREPARING')
+              a = (await repo.expireStationIntent(s, actor.correlationId)) ?? a;
+          } else a = (await repo.prepared(s, lease, admission, actor.correlationId)) ?? a;
         } catch (error) {
-          if (error instanceof QuarterPreparationRefused)
+          if (preparing && error instanceof QuarterPreparationRefused)
             a = (await repo.refusePreparation(s, lease, actor.correlationId)) ?? a;
+          // Release only our lease, never the original capsule, attempt, key or owner epoch.
+          if (a.stationMembership) a = (await repo.releasePreparation(s, lease)) ?? a;
           return view(s, a);
         }
       }

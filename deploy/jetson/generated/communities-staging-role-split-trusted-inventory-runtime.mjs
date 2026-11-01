@@ -26681,6 +26681,16 @@ var init_quarter_create2 = __esm({
   }
 });
 
+// ../../packages/subscription-runtime-adapter/src/quarter-create-station-membership.ts
+var init_quarter_create_station_membership = __esm({
+  "../../packages/subscription-runtime-adapter/src/quarter-create-station-membership.ts"() {
+    "use strict";
+    init_esm_shims();
+    init_quarter_create();
+    init_station_membership();
+  }
+});
+
 // ../../packages/subscription-runtime-adapter/src/index.ts
 var init_src3 = __esm({
   "../../packages/subscription-runtime-adapter/src/index.ts"() {
@@ -26696,6 +26706,7 @@ var init_src3 = __esm({
     init_training_registration2();
     init_training_station_membership();
     init_quarter_create2();
+    init_quarter_create_station_membership();
   }
 });
 

@@ -73,7 +73,7 @@ export interface StationAdmissionRequest {
   contractVersion: 1;
   operationId: string;
   requestSha256: string;
-  activity: { kind: 'GAME' | 'TRAINING'; id: string };
+  activity: { kind: 'GAME' | 'TRAINING' | 'GAME_CREATE'; id: string };
   stationId: string;
 }
 export interface StationConfirmationRequest {
@@ -82,7 +82,7 @@ export interface StationConfirmationRequest {
   admissionId: string;
   admissionBindingSha256: string;
   confirmation: {
-    kind: 'GAME_PARTICIPATION' | 'TRAINING_REGISTRATION';
+    kind: 'GAME_PARTICIPATION' | 'TRAINING_REGISTRATION' | 'GAME_CREATE_ORGANIZER';
     generationId: string;
     activityId: string;
   };
@@ -99,7 +99,9 @@ export function parseStationRequest(
       !digest(x.requestSha256) ||
       !id(x.stationId) ||
       !keys(x.activity, ['kind', 'id']) ||
-      (x.activity.kind !== 'GAME' && x.activity.kind !== 'TRAINING') ||
+      (x.activity.kind !== 'GAME' &&
+        x.activity.kind !== 'TRAINING' &&
+        x.activity.kind !== 'GAME_CREATE') ||
       !stationUuid(x.activity.id)
     )
       throw new StationMembershipError();
@@ -115,7 +117,8 @@ export function parseStationRequest(
     !digest(x.admissionBindingSha256) ||
     !keys(x.confirmation, ['kind', 'generationId', 'activityId']) ||
     (x.confirmation.kind !== 'GAME_PARTICIPATION' &&
-      x.confirmation.kind !== 'TRAINING_REGISTRATION') ||
+      x.confirmation.kind !== 'TRAINING_REGISTRATION' &&
+      x.confirmation.kind !== 'GAME_CREATE_ORGANIZER') ||
     !stationUuid(x.confirmation.generationId) ||
     !stationUuid(x.confirmation.activityId)
   )
@@ -170,7 +173,8 @@ export function parseStationAdmissionResponse(
     ]) ||
     a.admissionId !== stationAdmissionId(actor.tenantId, request.operationId) ||
     !digest(a.bindingSha256) ||
-    !admissionReasons.includes(String(a.reason)) ||
+    typeof a.reason !== 'string' ||
+    !admissionReasons.includes(a.reason) ||
     a.outcome !== (a.reason === 'ELIGIBLE' ? 'ADMITTED' : 'NO_ENROLLMENT') ||
     !(a.communityId === null || id(a.communityId)) ||
     !(

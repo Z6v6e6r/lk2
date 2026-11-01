@@ -1,14 +1,23 @@
+import { QuarterCreateOwnerClient } from '../../subscription-runtime-adapter/src/quarter-create.js';
+import { createQuarterCreateRuntime } from '../../../apps/api/src/games/game-quarter-create-runtime.js';
+import { quarterStationFixture } from '../../subscription-runtime-adapter/src/quarter-create-station.test-fixture.js';
 import { Pool } from 'pg';
 import { randomUUID, createHash } from 'node:crypto';
-import { beforeAll, afterAll, describe, it, expect } from 'vitest';
-import { createQuarterCreateRepository } from './game-quarter-create-repository.js';
+import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest';
+import {
+  createQuarterCreateRepository,
+  createQuarterStationFactRepository,
+} from './game-quarter-create-repository.js';
 import { createGameRepository, type CreateStoredGameInput } from './game-repository.js';
 import {
   createLegacyGameImportRepository,
   type LegacyGameImportSnapshot,
 } from './legacy-game-import-repository.js';
 import { withTenantTransaction } from './connection.js';
-import { quarterFixture } from '../../subscription-runtime-adapter/src/quarter-create.test-fixture.js';
+import {
+  quarterFixture,
+  expiredQuarterReceipt,
+} from '../../subscription-runtime-adapter/src/quarter-create.test-fixture.js';
 function ci() {
   if (process.env.GITHUB_ACTIONS !== 'true' || process.env.APP_ENV !== 'ci') return undefined;
   if (!process.env.DATABASE_URL) throw new Error('QUARTER_CI_DATABASE_REQUIRED');
@@ -402,4 +411,327 @@ const url = ci();
     expect(await b.read({ ...f.scope, userId: randomUUID() })).toBeNull();
     expect(await b.read({ ...f.scope, keySha256: 'sha256:' + 'a'.repeat(64) })).toBeNull();
   });
+  async function adopted(f: Awaited<ReturnType<typeof fixture>>, blocked = false) {
+    const r = createQuarterCreateRepository(one, { stationMembershipEnabled: true });
+    await r.begin(f.scope, f.input, f.context, 'synthetic-station-begin');
+    const token = (await r.claimPreparation(f.scope))!;
+    await r.pinStationPreparation(f.scope, token, f.admission);
+    const marker = await quarterStationFixture(f.admission, blocked);
+    await r.prepared(f.scope, token, f.admission, 'synthetic-station-prepared', marker);
+    return r;
+  }
+  it('adopted marker fences old prepared/dispatch/completion; atomic confirmed fact survives response loss', async () => {
+    const f = await fixture(),
+      r = createQuarterCreateRepository(one, { stationMembershipEnabled: true });
+    expect(await r.ready()).toBe(true);
+    await r.begin(f.scope, f.input, f.context, 'synthetic-adopt');
+    const token = (await r.claimPreparation(f.scope))!;
+    await expect(b.prepared(f.scope, token, f.admission, 'synthetic-old')).rejects.toThrow();
+    expect(await b.claimDispatch(f.scope, 'synthetic-old')).toBeNull();
+    await r.pinStationPreparation(f.scope, token, f.admission);
+    await expect(
+      withTenantTransaction(two, tenantId, (c) =>
+        c.query(
+          `update games.quarter_create_attempts set state='PREPARED',admission=$3::jsonb,admission_hash=$4,expires_at=$5,lease_token=null,lease_until=null where tenant_id=$1 and id=$2`,
+          [
+            tenantId,
+            f.receipt.operationId,
+            JSON.stringify(f.admission),
+            f.receipt.admissionRequestSha256,
+            f.admission.preparation.expiresAt,
+          ],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+    await r.prepared(
+      f.scope,
+      token,
+      f.admission,
+      'synthetic-settle',
+      await quarterStationFixture(f.admission),
+    );
+    const claim = (await r.claimDispatch(f.scope, 'synthetic-dispatch'))!;
+    await expect(
+      withTenantTransaction(two, tenantId, (c) =>
+        c.query(
+          `update games.quarter_create_attempts set state='CONFIRMED',receipt=$3::jsonb,lease_token=null,lease_until=null where tenant_id=$1 and id=$2`,
+          [tenantId, f.receipt.operationId, JSON.stringify(f.receipt)],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+    await r.complete(f.scope, claim.token, f.receipt, false, 'synthetic-complete');
+    const readback = await b.read(f.scope);
+    expect(readback?.stationMembership?.outcome).toBe('CONFIRMED_FACT');
+    await b.complete(f.scope, claim.token, f.receipt, false, 'synthetic-lost-ack');
+    const events = await withTenantTransaction(two, tenantId, (c) =>
+      c.query<{ id: string; payload: { generationId: string } }>(
+        "select id,payload from audit.outbox_events where tenant_id=$1 and aggregate_id=$2 and event_type='game.quarter-create.organizer-confirmed.v1'",
+        [tenantId, f.receipt.operationId],
+      ),
+    );
+    expect(events.rows).toHaveLength(1);
+    expect(JSON.stringify(events.rows)).not.toContain('synthetic-exercise');
+    const e = events.rows[0]!,
+      input = {
+        tenantId,
+        eventId: e.id,
+        operationId: f.receipt.operationId,
+        draftId: f.request.target.draftId,
+        userId: actorId,
+        generationId: e.payload.generationId,
+      };
+    const loader = createQuarterStationFactRepository(two),
+      fact = await loader.loadQuarterConfirmedFact(input);
+    expect(fact.request.confirmation.kind).toBe('GAME_CREATE_ORGANIZER');
+    expect(fact.request.confirmation.activityId).toBe(f.request.target.draftId);
+    for (const altered of [
+      { ...input, tenantId: foreign },
+      { ...input, userId: randomUUID() },
+      { ...input, generationId: randomUUID() },
+      { ...input, draftId: randomUUID() },
+    ])
+      await expect(loader.loadQuarterConfirmedFact(altered)).rejects.toThrow();
+  });
+  it('independent preparation claims serialize; handled failure releases only original lease, stale ACK cannot settle', async () => {
+    const f = await fixture(),
+      r = createQuarterCreateRepository(one, { stationMembershipEnabled: true });
+    await r.begin(f.scope, f.input, f.context, 'synthetic-begin');
+    const claims = await Promise.all([r.claimPreparation(f.scope), b.claimPreparation(f.scope)]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    const old = claims.find(Boolean)!;
+    await r.pinStationPreparation(f.scope, old, f.admission);
+    await b.releasePreparation(f.scope, old);
+    const next = (await b.claimPreparation(f.scope))!;
+    expect(next).not.toBe(old);
+    await r.releasePreparation(f.scope, old);
+    expect((await b.read(f.scope))?.leaseToken).toBe(next);
+    await r.prepared(
+      f.scope,
+      old,
+      f.admission,
+      'synthetic-stale',
+      await quarterStationFixture(f.admission),
+    );
+    expect((await b.read(f.scope))?.state).toBe('PREPARING');
+    await b.prepared(
+      f.scope,
+      next,
+      f.admission,
+      'synthetic-current',
+      await quarterStationFixture(f.admission),
+    );
+    expect((await r.read(f.scope))?.state).toBe('PREPARED');
+  });
+  it('expired original INTENT races late admission ACK without new capsule or dispatch', async () => {
+    const f = await fixture(true),
+      r = createQuarterCreateRepository(one, { stationMembershipEnabled: true });
+    await r.begin(f.scope, f.input, f.context, 'synthetic-begin');
+    const token = (await r.claimPreparation(f.scope))!;
+    await r.pinStationPreparation(f.scope, token, f.admission);
+    await Promise.all([
+      r.expireStationIntent(f.scope, 'synthetic-expire'),
+      b.prepared(
+        f.scope,
+        token,
+        f.admission,
+        'synthetic-late',
+        await quarterStationFixture(f.admission),
+      ),
+    ]);
+    const a = await r.read(f.scope);
+    expect(a?.state).toBe('EXPIRED_NOT_DISPATCHED');
+    expect(a?.admission).toEqual(f.admission);
+    expect(a?.stationMembership?.outcome).toBe('INTENT');
+    expect(await b.claimDispatch(f.scope, 'synthetic-never')).toBeNull();
+  });
+  it('explicit NO_ENROLLMENT confirms original operation with no enrollment event; null history never adopts', async () => {
+    const f = await fixture(),
+      r = await adopted(f, true),
+      claim = (await r.claimDispatch(f.scope, 'synthetic-dispatch'))!;
+    await r.complete(f.scope, claim.token, f.receipt, false, 'synthetic-blocked');
+    expect((await b.read(f.scope))?.stationMembership?.outcome).toBe('CONFIRMED_FACT');
+    const events = await withTenantTransaction(two, tenantId, (c) =>
+      c.query(
+        "select id from audit.outbox_events where tenant_id=$1 and aggregate_id=$2 and event_type='game.quarter-create.organizer-confirmed.v1'",
+        [tenantId, f.receipt.operationId],
+      ),
+    );
+    expect(events.rowCount).toBe(0);
+    const old = await fixture();
+    await a.begin(old.scope, old.input, old.context, 'synthetic-legacy');
+    await r.begin(old.scope, old.input, old.context, 'synthetic-no-adopt');
+    const token = (await a.claimPreparation(old.scope))!;
+    expect(await r.pinStationPreparation(old.scope, token, old.admission)).toBeNull();
+    expect((await r.read(old.scope))?.stationMembership).toBeNull();
+  });
+  it('corrupt stored hash fails closed on reload and outbox insertion failure rolls back completion', async () => {
+    const f = await fixture(),
+      r = await adopted(f),
+      claim = (await r.claimDispatch(f.scope, 'synthetic-dispatch'))!;
+    await admin.query(`revoke insert on audit.outbox_events from ${role}`);
+    try {
+      await expect(
+        r.complete(f.scope, claim.token, f.receipt, false, 'synthetic-rollback'),
+      ).rejects.toThrow();
+      expect((await b.read(f.scope))?.state).toBe('DISPATCH_STARTED');
+      expect((await b.read(f.scope))?.receipt).toBeNull();
+    } finally {
+      await admin.query(`grant insert on audit.outbox_events to ${role}`);
+    }
+    await r.complete(f.scope, claim.token, f.receipt, false, 'synthetic-retry');
+    await withTenantTransaction(admin, tenantId, (c) =>
+      c.query(
+        `update games.quarter_create_attempts set station_membership=jsonb_set(station_membership,'{receiptSha256}',to_jsonb($3::text)) where tenant_id=$1 and id=$2`,
+        [tenantId, f.receipt.operationId, 'sha256:' + 'b'.repeat(64)],
+      ),
+    );
+    await expect(b.read(f.scope)).rejects.toThrow();
+  });
+  it('adopted pre-prepare refusal and compensated owner rejection retain terminal marker without enrollment', async () => {
+    const f = await fixture(),
+      r = createQuarterCreateRepository(one, { stationMembershipEnabled: true });
+    await r.begin(f.scope, f.input, f.context, 'synthetic-before-prepare');
+    const lease = (await r.claimPreparation(f.scope))!;
+    await r.refusePreparation(f.scope, lease, 'synthetic-refused');
+    expect((await b.read(f.scope))?.stationMembership?.outcome).toBe('PENDING_ADMISSION');
+    expect((await b.read(f.scope))?.state).toBe('REFUSED_NOT_DISPATCHED');
+    const g = await fixture();
+    await adopted(g);
+    const claim = (await r.claimDispatch(g.scope, 'synthetic-dispatch'))!;
+    await r.complete(
+      g.scope,
+      claim.token,
+      {
+        schemaVersion: 1,
+        outcome: 'REJECTED',
+        operationId: g.receipt.operationId,
+        admissionRequestSha256: g.receipt.admissionRequestSha256,
+        actor: g.receipt.actor,
+        target: g.receipt.target,
+        reason: 'PROVIDER_REJECTED',
+        providerStatusCode: 422,
+        providerRejectedAt: g.receipt.confirmedAt,
+        rejectedAt: g.receipt.confirmedAt,
+        entitlement: {
+          subscriptionInstanceId: g.receipt.entitlement.subscriptionInstanceId,
+          usageOperationId: g.receipt.entitlement.usageOperationId,
+          operationState: 'FAILED',
+          compensationState: 'APPLIED',
+          releaseReason: 'PROVIDER_REJECTED',
+          providerBookingId: null,
+        },
+      },
+      true,
+      'synthetic-compensated',
+    );
+    expect((await b.read(g.scope))?.state).toBe('REJECTED');
+    expect((await b.read(g.scope))?.stationMembership?.outcome).toBe('OWNER_ADMISSION');
+    const events = await withTenantTransaction(two, tenantId, (c) =>
+      c.query(
+        "select id from audit.outbox_events where tenant_id=$1 and aggregate_id=any($2::uuid[]) and event_type='game.quarter-create.organizer-confirmed.v1'",
+        [tenantId, [f.receipt.operationId, g.receipt.operationId]],
+      ),
+    );
+    expect(events.rowCount).toBe(0);
+  });
+  it.each([false, true])(
+    'schema2 HTTP→runtime→physical JSONB preserves station outcome (blocked=%s), GET is read-only and lost completion ACK replays',
+    async (blocked) => {
+      const f = await fixture(),
+        r = await adopted(f, blocked);
+      await r.claimDispatch(f.scope, 'synthetic-initial-dispatch');
+      await withTenantTransaction(one, tenantId, (c) =>
+        c.query(
+          "update games.quarter_create_attempts set lease_until=clock_timestamp()-interval '1 second' where tenant_id=$1 and id=$2",
+          [tenantId, f.receipt.operationId],
+        ),
+      );
+      const before = await b.read(f.scope),
+        receipt = expiredQuarterReceipt(f);
+      // Only owner/identity transport and passage of time are synthetic; journal/CAS/RLS/JSONB are actual PG.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(Date.parse(receipt.rejectedAt) + 1000));
+      try {
+        const http = vi.fn(
+          async () =>
+            await Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  contractVersion: 1,
+                  operationId: receipt.operationId,
+                  operation: { status: 'REJECTED', receipt },
+                  registration: { status: 'UNKNOWN', asOf: null },
+                }),
+              ),
+            ),
+        );
+        const client = new QuarterCreateOwnerClient({
+          baseUrl: 'https://padlhub.su/',
+          environment: 'production',
+          timeoutMs: 1000,
+          fetchImplementation: http,
+        });
+        let lost = true;
+        const complete = vi.fn(async (...args: Parameters<typeof r.complete>) => {
+          const result = await r.complete(...args);
+          if (lost) {
+            lost = false;
+            throw new Error('synthetic-local-commit-ACK-lost');
+          }
+          return result;
+        });
+        const runtime = createQuarterCreateRuntime({
+          enabled: true,
+          repository: {
+            ...r,
+            complete,
+            identity: () =>
+              Promise.resolve({
+                providerClientId: f.context.providerClientId,
+                providerMappingId: f.context.providerMappingId,
+                providerClientSubscriptionId: f.context.providerClientSubscriptionId,
+              }),
+          },
+          client,
+          issuer: { issueQuarterCreate: () => Promise.resolve('synthetic-verified-delegation') },
+          token: () =>
+            Promise.resolve({
+              token: 'synthetic-actor-token',
+              expiresAt: new Date(Date.now() + 60000).toISOString(),
+            }),
+        });
+        const actor = {
+          tenantKey: 'public-tenant',
+          tenantId,
+          userId: actorId,
+          sessionId: randomUUID(),
+          correlationId: 'synthetic-expiry',
+        };
+        await runtime.read(actor, f.key);
+        expect(complete).not.toHaveBeenCalled();
+        expect(await b.read(f.scope)).toEqual(before);
+        await runtime.execute(actor, f.key, f.input, true);
+        const stored = await b.read(f.scope);
+        expect(stored?.state).toBe('REJECTED');
+        expect(stored?.receipt).toEqual(receipt);
+        expect(stored?.stationMembership).toEqual(before?.stationMembership);
+        expect(stored?.stationMembership?.outcome).toBe('OWNER_ADMISSION');
+        const again = await runtime.execute(actor, f.key, f.input, true);
+        expect(again.operation.status).toBe('REJECTED');
+        expect(complete).toHaveBeenCalledOnce();
+        expect(await b.read(f.scope)).toEqual(stored);
+        const rows = await withTenantTransaction(two, tenantId, (c) =>
+          c.query<{ dispatch_started_at: Date | null; events: number }>(
+            "select dispatch_started_at,(select count(*)::int from audit.outbox_events where tenant_id=$1 and aggregate_id=$2 and event_type='game.quarter-create.organizer-confirmed.v1') events from games.quarter_create_attempts where tenant_id=$1 and id=$2",
+            [tenantId, f.receipt.operationId],
+          ),
+        );
+        expect(rows.rows[0]!.dispatch_started_at).not.toBeNull();
+        expect(rows.rows[0]!.events).toBe(0);
+        expect(http.mock.calls).toHaveLength(3); // status, explicit recovery admission, terminal read; no preparation.
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
