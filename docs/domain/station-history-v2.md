@@ -51,7 +51,8 @@ refresh, and late replies cannot repopulate a deselected/unmounted/principal-cha
 thread or its cache. Current ACL denials clear displayed and cached messages. No POST,
 read-marker write or automatic retry of an unresolved send is triggered. Own unresolved
 sends retain original-request GET recovery. This candidate does not promise
-complete reconnect delivery, unread counters, native process-death recovery or realtime.
+complete reconnect delivery, unread counters or realtime. Native metadata recovery is
+described below; it is not background delivery.
 
 Rollback disables the reader or restores the prior compatible source. Retain all
 message/receipt/outbox records and custody. Do not reinterpret UNKNOWN as a new send,
@@ -62,3 +63,21 @@ Paired synthetic wire fixture: `apps/api/src/communities/fixtures/station-histor
 SHA256 `50e02af00ef28ad2163f6d7909bd748c3741bbac251da3c4f7581ddce4f0440a`.
 The actual LK historyRequest/historyPage helper emits these bytes; the actual LK2 parser
 accepts all three mixed equal-time UUID rows and verifies the exact continuation boundary.
+
+## Native consumer custody
+
+Android reuses the existing community thread; iOS provides a community-only entry with
+current `communities/mine` and authenticated station history/status. Only a fresh
+`canRequestStationMessage=true` page enables sending. Native localStorage retains just
+original request UUID and normalized-text fingerprint under tenant/user/community scope;
+Web keeps its existing sessionStorage default. Reload/process restart initiates status GET,
+never an automatic POST. While native custody is pending, explicit Send also reads original
+status only, including an edited draft; a pending request appearing during hashing blocks a
+new command. Web explicit-send behavior is unchanged. A missing or ambiguous receipt retains metadata. Confirmed ACKs
+are hash-bound before clearing it and remain visible across an older pending head response.
+
+Native session epoch checks surround asynchronous hashing, storage and bridge responses.
+Logout removes displayed history while retaining unresolved metadata. ACL-denied reads
+clear private rows; they never authorize a replacement send. This is a foreground recovery
+consumer, not durable plaintext storage or a new delivery guarantee. See the mobile README
+for transport bounds, installation order and separate device acceptance.

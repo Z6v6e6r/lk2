@@ -650,6 +650,7 @@ export interface AuthGateway {
     communityId: string,
     cursor?: string,
   ) => Promise<CommunityReadExperienceFeedPage>;
+  readonly stationMessagePrincipal?: () => string | null;
   readonly sendStationCommunityMessage?: (
     communityId: string,
     input: StationMessageRequest,
@@ -1050,7 +1051,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     return current;
   }
   function stationMessagePrincipal(): string {
-    if (nativeClient || tournamentLogoutStarted || !currentUserId || !currentTenantId)
+    if (quarterClosed || tournamentLogoutStarted || !currentUserId || !currentTenantId)
       throw new Error('AUTH_PRINCIPAL_CHANGED');
     return `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`;
   }
@@ -2610,6 +2611,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
     },
 
+    stationMessagePrincipal: () => quarterCreatePrincipal(),
     async sendStationCommunityMessage(communityId, input) {
       const principal = stationMessagePrincipal();
       const receipt = await client.sendStationCommunityMessage(communityId, input);

@@ -1,3 +1,5 @@
+import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
+import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
 import { QuarterCreatePanel } from './QuarterCreatePanel.js';
 import { GameCard } from './GameCard.js';
 import { normalizePhoneE164 } from '@phub/auth';
@@ -764,40 +766,52 @@ export function App({
    */
   const communityDirectoryAvailable =
     state.session !== null &&
+    (clientPlatform !== 'android' || state.busy !== 'logout') &&
     state.session.context.runtimeCapabilities?.communityDirectory !== false;
   const communityChatReadAvailable =
     state.session !== null && state.session.context.runtimeCapabilities?.communityReadChat === true;
-  const communityChatsSource = useMemo(
-    () =>
-      communityDirectoryAvailable
-        ? {
-            ...(clientPlatform === 'web' &&
-            gateway.sendStationCommunityMessage &&
-            gateway.getStationCommunityMessageRequest
-              ? {
-                  custodyScope: JSON.stringify([tenantKey, state.session?.context.user.id]),
-                  sendMessage: gateway.sendStationCommunityMessage,
-                  getMessageRequest: gateway.getStationCommunityMessageRequest,
-                }
-              : {}),
-            loadCommunities: (cursor?: string) => gateway.listMyCommunities(cursor, 50),
-            ...(communityChatReadAvailable
-              ? {
-                  loadMessages: (communityId: string, cursor?: string) =>
-                    gateway.listCommunityReadExperienceChat(communityId, cursor),
-                }
-              : {}),
-          }
-        : null,
-    [
-      gateway,
-      communityDirectoryAvailable,
-      communityChatReadAvailable,
-      clientPlatform,
-      tenantKey,
-      state.session?.context.user.id,
-    ],
-  );
+  const communityChatsSource = useMemo(() => {
+    const principal = gateway.stationMessagePrincipal?.();
+    const current = () =>
+      clientPlatform !== 'android' ||
+      Boolean(principal && gateway.stationMessagePrincipal?.() === principal);
+    const read = async <T,>(load: () => Promise<T>): Promise<T> => {
+      if (!current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      const result = await load();
+      if (!current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    };
+    return communityDirectoryAvailable
+      ? {
+          ...((clientPlatform === 'web' || clientPlatform === 'android') &&
+          gateway.sendStationCommunityMessage &&
+          gateway.getStationCommunityMessageRequest
+            ? {
+                custodyScope: JSON.stringify([tenantKey, state.session?.context.user.id]),
+                ...(clientPlatform === 'android'
+                  ? { custodyStorage: 'native-local' as const, isCurrent: current }
+                  : {}),
+                sendMessage: gateway.sendStationCommunityMessage,
+                getMessageRequest: gateway.getStationCommunityMessageRequest,
+              }
+            : {}),
+          loadCommunities: (cursor?: string) => read(() => gateway.listMyCommunities(cursor, 50)),
+          ...(communityChatReadAvailable
+            ? {
+                loadMessages: (communityId: string, cursor?: string) =>
+                  read(() => gateway.listCommunityReadExperienceChat(communityId, cursor)),
+              }
+            : {}),
+        }
+      : null;
+  }, [
+    gateway,
+    communityDirectoryAvailable,
+    communityChatReadAvailable,
+    clientPlatform,
+    tenantKey,
+    state.session?.context.user.id,
+  ]);
   const [communityInviteToken] = useState(() =>
     typeof window === 'undefined'
       ? null
@@ -1946,6 +1960,22 @@ export function App({
   }
 
   function handleLogout(): void {
+    if (clientPlatform === 'android') {
+      gateway.closeQuarterCreate?.();
+      try {
+        const userId = state.session?.context.user.id;
+        if (userId) {
+          const scope = JSON.stringify([tenantKey, userId]);
+          const prefix = threadPageCacheKey('community-thread', scope, '');
+          for (const key of Object.keys(window.sessionStorage)) {
+            if (key.startsWith(prefix) || key === communityChatsCacheKey(userId))
+              window.sessionStorage.removeItem(key);
+          }
+        }
+      } catch {
+        /* A denied cache cannot authorize a new message; durable metadata is untouched. */
+      }
+    }
     communityRealtimeTransport?.stop();
     dispatch({ type: 'logout-started' });
     const serviceWorkerUrl =

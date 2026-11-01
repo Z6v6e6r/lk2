@@ -1,3 +1,4 @@
+import { stationRequest } from './native-station-message-request.js';
 import { gameCancelRequest } from './native-game-cancel-request.js';
 import { quarterRequest } from './native-quarter-request.js';
 import { registerPlugin } from '@capacitor/core';
@@ -184,6 +185,7 @@ export function createNativeApiFetch(
       throw rejected();
     const method = init?.method ?? 'GET';
     gameCancelRequest(value, init, config);
+    stationRequest(value, init, config);
     if (url.pathname.startsWith(`/user/api/v1/${config.tenantKey}/game-create-operations`))
       quarterRequest(value, init, config);
     const relay = isBinaryRelay(url.pathname, method);

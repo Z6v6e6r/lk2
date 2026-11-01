@@ -10,6 +10,7 @@ const user = '11111111-1111-4111-8111-111111111111';
 const community = '22222222-2222-4222-8222-222222222222';
 beforeEach(() => {
   sessionStorage.clear();
+  localStorage.clear();
   window.history.replaceState({}, '', '/chats');
   vi.stubGlobal('crypto', webcrypto);
 });
@@ -19,7 +20,7 @@ afterEach(() => {
   window.history.replaceState({}, '', '/');
 });
 it.each(['android', 'web'] as const)(
-  'actual App %s preserves reads but exposes station commands only on Web',
+  'actual App %s uses its scoped station custody and real handlers',
   async (platform) => {
     const gateway = createBrowserAuthGateway({
       baseUrl: 'https://api.example.test',
@@ -60,6 +61,7 @@ it.each(['android', 'web'] as const)(
         },
       ],
     });
+    vi.spyOn(gateway, 'stationMessagePrincipal').mockReturnValue('original-principal');
     const history = vi.spyOn(gateway, 'listCommunityReadExperienceChat').mockResolvedValue({
       canRequestStationMessage: true,
       items: [
@@ -97,29 +99,23 @@ it.each(['android', 'web'] as const)(
     const pending = await new StationMessageCustody(
       JSON.stringify(['test', user]),
       community,
-      sessionStorage,
+      platform === 'android' ? localStorage : sessionStorage,
     ).original('original pending');
     render(<App gateway={gateway} tenantKey="test" clientPlatform={platform} />);
     fireEvent.click(await screen.findByRole('button', { name: /Сообщества/ }, { timeout: 5000 }));
     fireEvent.click(await screen.findByRole('button', { name: /Station club/ }));
     await screen.findByText('station history');
     expect(history).toHaveBeenCalledWith(community, undefined);
+    await waitFor(() => expect(status).toHaveBeenCalledWith(community, pending.requestId));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение сообществу' }), {
+      target: { value: 'Web message' },
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Отправить' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
     if (platform === 'android') {
-      expect(
-        screen.queryByRole('textbox', { name: 'Сообщение сообществу' }),
-      ).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Проверить статус' })).not.toBeInTheDocument();
-      expect(screen.getByText('Чат сообщества доступен только для чтения.')).toBeInTheDocument();
+      await waitFor(() => expect(status).toHaveBeenCalledTimes(2));
+      expect(status).toHaveBeenLastCalledWith(community, pending.requestId);
       expect(send).not.toHaveBeenCalled();
-      expect(status).not.toHaveBeenCalled();
-    } else {
-      await waitFor(() => expect(status).toHaveBeenCalledWith(community, pending.requestId));
-      fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение сообществу' }), {
-        target: { value: 'Web message' },
-      });
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Отправить' })).toBeEnabled());
-      fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
-      await waitFor(() => expect(send).toHaveBeenCalledOnce());
-    }
+    } else await waitFor(() => expect(send).toHaveBeenCalledOnce());
   },
 );

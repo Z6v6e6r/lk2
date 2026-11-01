@@ -1,3 +1,4 @@
+import { IOSStationChats } from './IOSStationChats.js';
 import { IOSGameCancel } from './IOSGameCancel.js';
 import '../native-quarter-create.css';
 import { QuarterCreatePanel } from '../../../web/src/QuarterCreatePanel.js';
@@ -481,6 +482,7 @@ export function IOSCabinet({
   };
   let content: ReactNode;
   if (path === '/') content = <Home data={data} auth={auth} onLogout={logout} />;
+  else if (path === '/chats') content = <IOSStationChats session={session} />;
   else if (path === '/games/new')
     content = (
       <QuarterCreatePanel
@@ -545,7 +547,8 @@ export function IOSCabinet({
     );
   return (
     <div className="ios-cabinet">
-      <nav className="native-quarter-navigation" aria-label="Создание игры">
+      <nav className="native-quarter-navigation" aria-label="Разделы приложения">
+        <a href="/chats">Чаты сообществ</a>
         <a href="/games/new?quarterCreate=1">Игра по подписке</a>
       </nav>
       {logoutError ? <p role="alert">{logoutError}</p> : null}

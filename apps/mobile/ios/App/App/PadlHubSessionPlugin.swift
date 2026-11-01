@@ -59,6 +59,16 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       call.reject("Native request is unavailable", SessionFailure.request.rawValue)
       return
     }
+    var stationMessage: StationMessageRequest?
+    if operation == .stationMessage {
+      guard Set(call.options.keys).isSubset(of:Set(["operation","resource","resourceId","requestId","query","headers","body"])),
+        let resource=call.getString("resource"), let id=call.getString("resourceId"),
+        let query=call.getObject("query") as? [String:String],
+        call.options["requestId"] == nil || call.options["requestId"] is String,
+        call.options["body"] == nil || call.options["body"] is String
+      else {call.reject("Native request is unavailable",SessionFailure.request.rawValue);return}
+      stationMessage=StationMessageRequest(resource:resource,communityID:id,requestID:call.getString("requestId"),query:query)
+    }
     var gameCancel: GameCancelRequest?
     if operation == .gameCancel {
       guard Set(call.options.keys).isSubset(of: Set(["operation","resourceId","headers","body"])),
@@ -88,7 +98,7 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
     let notification = operation == .notification ? NotificationCommand(resource:call.getString("resource") ?? "",id:call.getString("resourceId")) : nil
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel)
+      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage)
     Task {
       do {
         let response = try await transport.request(request)

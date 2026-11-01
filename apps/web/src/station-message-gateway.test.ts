@@ -56,3 +56,56 @@ it('gateway rejects late old-session receipt after logout, without automatic new
     'AUTH_PRINCIPAL_CHANGED',
   );
 });
+it.each([204, 503])(
+  'Android original epoch fences a late station ACK during pending logout %i',
+  async (status) => {
+    let finish!: (r: Response) => void;
+    let revoke!: (r: Response) => void;
+    const transport = vi.fn<typeof fetch>(async (raw, init) => {
+      await Promise.resolve();
+      const url = raw instanceof Request ? raw.url : raw.toString();
+      if (url.endsWith('/auth/session/refresh')) return Response.json(session);
+      if (url.endsWith('/auth/session') && init?.method === 'DELETE')
+        return await new Promise<Response>((r) => {
+          revoke = r;
+        });
+      if (url.includes('/message-requests'))
+        return await new Promise<Response>((r) => {
+          finish = r;
+        });
+      return new Response(null, { status: 404 });
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.example.test',
+      tenantKey: 'test',
+      appVersion: 'test',
+      platform: 'android',
+      nativeSessionTransport: true,
+      fetchImplementation: transport,
+    });
+    await gateway.restoreSession();
+    const original = gateway.stationMessagePrincipal!();
+    expect(original).not.toBeNull();
+    const pending = gateway.sendStationCommunityMessage!(id, { requestId: id, text: 'hello' });
+    const rejection = expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    const closing = gateway.logout().catch(() => undefined);
+    expect(gateway.stationMessagePrincipal!()).toBeNull();
+    await expect(
+      gateway.sendStationCommunityMessage!(id, { requestId: id, text: 'hello' }),
+    ).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+    await expect(gateway.getStationCommunityMessageRequest!(id, id)).rejects.toThrow(
+      'AUTH_PRINCIPAL_CHANGED',
+    );
+    finish(Response.json(receipt));
+    await rejection;
+    await vi.waitFor(() => expect(revoke).toBeTypeOf('function'));
+    revoke(new Response(null, { status }));
+    await closing;
+    expect(
+      transport.mock.calls.filter(([raw]) =>
+        (raw instanceof Request ? raw.url : raw.toString()).includes('/message-requests'),
+      ),
+    ).toHaveLength(1);
+  },
+);
