@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "scripts": {
-    "build": "tsup src/index.ts src/contact-reader.ts src/local-password-login-repository.ts src/support-ticket-repository.ts src/local-password-reset-repository.ts src/notification-scenario-repository.ts src/managed-self-leave-repository.ts src/training-registration-repository.ts src/game-quarter-create-repository.ts src/station-message-notifications.ts src/tournament-notification-recipient.ts --format esm --dts --sourcemap --clean"
+    "build": "tsup src/index.ts src/contact-reader.ts src/local-password-login-repository.ts src/support-ticket-repository.ts src/local-password-reset-repository.ts src/notification-scenario-repository.ts src/managed-self-leave-repository.ts src/training-registration-repository.ts src/game-quarter-create-repository.ts src/station-message-notifications.ts src/tournament-notification-recipient.ts src/tournament-message-notifications.ts --format esm --dts --sourcemap --clean"
   },
   "dependencies": {
     "@phub/communities": "0.1.0",
@@ -62,6 +62,10 @@
     "./station-message-notifications": {
       "types": "./src/station-message-notifications.ts",
       "import": "./dist/station-message-notifications.js"
+    },
+    "./tournament-message-notifications": {
+      "types": "./src/tournament-message-notifications.ts",
+      "import": "./dist/tournament-message-notifications.js"
     }
   }
 }

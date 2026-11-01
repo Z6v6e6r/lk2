@@ -627,8 +627,19 @@ export const STATION_MESSAGE_NOTIFICATION = {
   deepLink: '/notifications',
 } as const;
 
+export const TOURNAMENT_MESSAGE_NOTIFICATION = {
+  eventType: 'tournaments.chat.message.published.v1',
+  templateKey: 'tournament.message.v1',
+  ruleKey: 'tournament.message.default.v1',
+  version: 1,
+  category: 'MESSAGING',
+  title: 'Новое сообщение',
+  body: 'В чате турнира есть новое сообщение.',
+  deepLink: '/notifications',
+} as const;
+
 export interface PushDeliveryRequest {
-  /** Station-only deadline gate, evaluated at actual transport submission after asynchronous preparation. */
+  /** Deadline gate for station/tournament contexts at actual transport submission. Legacy field name retained for compatibility. */
   readonly stationCanSubmit?: () => boolean;
   readonly tenantId: string;
   readonly deliveryId: string;

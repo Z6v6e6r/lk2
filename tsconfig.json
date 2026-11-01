@@ -62,6 +62,9 @@
       ],
       "@phub/database/station-message-notifications": [
         "packages/database/src/station-message-notifications.ts"
+      ],
+      "@phub/database/tournament-message-notifications": [
+        "packages/database/src/tournament-message-notifications.ts"
       ]
     },
     "types": ["node", "vitest/globals"]

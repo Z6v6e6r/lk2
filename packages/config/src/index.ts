@@ -587,6 +587,9 @@ const environmentSchema = z.object({
   WEB_PUSH_ENDPOINTS_PER_USER_MAX: z.coerce.number().int().min(1).max(20).default(5),
   WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
   WEB_PUSH_CIRCUIT_RESET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
+  // Owner: Engagement/R1. Activate only with enrolled sources, query purpose, 0114 and provider/device acceptance.
+  // Review/remove after the R1 controlled rollout; never auto-enroll sources.
+  TOURNAMENT_CHAT_NOTIFICATION_DELIVERY_ENABLED: booleanFromEnvironment,
   STATION_NOTIFICATIONS_ENABLED: booleanFromEnvironment,
   STATION_NOTIFICATION_OWNER_ORIGIN: z.string().url().optional(),
   STATION_NOTIFICATION_TENANT_ID: z.string().uuid().optional(),

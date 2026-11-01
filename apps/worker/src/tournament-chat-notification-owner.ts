@@ -433,6 +433,10 @@ export class TournamentNotificationOwnerClient {
     original: TournamentFeedFact,
     candidate: TournamentFeedRecipient,
   ): Promise<TournamentFeedEligibility> {
+    return (await this.eligibilityWithIdentity(original, candidate)).observation;
+  }
+  /** Keep exactly the mapping used for this owner proof; never combine a second identity snapshot. */
+  async eligibilityWithIdentity(original: TournamentFeedFact, candidate: TournamentFeedRecipient) {
     const f = fact(original),
       r = recipient(candidate);
     // Local identity failures never trip a shared owner-dependency breaker.
@@ -468,7 +472,7 @@ export class TournamentNotificationOwnerClient {
       providerClientId: identity.providerClientId,
       observedAt: identity.observedAt,
     };
-    return this.call(
+    const observation = await this.call<TournamentFeedEligibility>(
       'eligibility',
       { version: 1, fact: f, recipient: r, identity: attestation },
       (raw) => {
@@ -510,6 +514,15 @@ export class TournamentNotificationOwnerClient {
         };
       },
     );
+    return {
+      observation,
+      identity: { ...identity },
+      fresh: () =>
+        this.now() >= identity.observedAt &&
+        this.now() >= observation.observedAt &&
+        this.now() < observation.validUntil &&
+        this.now() - identity.observedAt < 5000,
+    };
   }
   /** Concrete page adapter: DENY for an organizer never terminalizes another participant candidate. */
   async resolveRecipientPage(f: TournamentFeedFact, limit = 50, before: string | null = null) {

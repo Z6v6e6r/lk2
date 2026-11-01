@@ -44,7 +44,7 @@ const recipient = {
   capturedReadThroughSequence: 0,
 };
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-function fixture() {
+function fixture(clock = () => now) {
   const transport = vi.fn<typeof fetch>(),
     resolve = vi.fn(async () => identity);
   const owner = new TournamentNotificationOwnerClient({
@@ -57,7 +57,7 @@ function fixture() {
     privateKey,
     resolve,
     fetchImplementation: transport,
-    now: () => now,
+    now: clock,
   });
   return { owner, transport, resolve };
 }
@@ -92,6 +92,20 @@ const eligible: TournamentFeedEligibility = {
 const response = (value: unknown) => new Response(JSON.stringify(value));
 const input = { ...binding, afterSequence: 0, throughSequence: null, limit: 50 };
 describe('dedicated readonly tournament notification client', () => {
+  it('retains exactly the resolved mapping in the proof and expires without resolving again', async () => {
+    let clock = now;
+    const f = fixture(() => clock);
+    f.transport.mockResolvedValue(response(eligible));
+    const proof = await f.owner.eligibilityWithIdentity(fact, recipient);
+    expect(f.resolve).toHaveBeenCalledTimes(1);
+    expect(proof.identity).toEqual(identity);
+    expect(proof.fresh()).toBe(true);
+    clock = now + 5000;
+    expect(proof.fresh()).toBe(false);
+    clock = now - 1;
+    expect(proof.fresh()).toBe(false);
+    expect(f.resolve).toHaveBeenCalledTimes(1);
+  });
   it('signs exact operation/body/namespace/correlation with its own purpose and short expiry', async () => {
     const f = fixture();
     f.transport.mockResolvedValue(response(publications));

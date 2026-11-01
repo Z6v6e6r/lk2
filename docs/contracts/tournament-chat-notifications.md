@@ -1,8 +1,9 @@
 # Private tournament notification queries
 
 This disabled-by-default adapter reads CUP publication metadata and current recipient
-eligibility. It does not import notifications, write an outbox, send messages, install
-keys, adopt streams, or recover owner state. The worker is not wired to a scheduler.
+eligibility. The separately gated durable consumer is described in
+[tournament notification delivery](../domain/tournament-notification-delivery.md).
+Neither component installs keys, adopts streams automatically, or recovers owner state.
 
 The three POST queries under `/internal/tournaments/chat-notifications/v1` are
 `publications`, `recipients`, and `eligibility`. The private contract version is
@@ -34,12 +35,13 @@ The background credential has a dedicated typ/audience/subject/scope and binds t
 method, path, body hash, tenant, owner namespace and correlation UUID. Maximum token
 lifetime is 30 seconds; identity and final eligibility share a five-second budget.
 The client uses a two-second timeout, no retries, bounded response bytes, and a
-three-failure/15-second dependency circuit. Source observations cannot make a later
-provider delivery atomic; a sender would need its own separately reviewed design.
+three-failure/15-second dependency circuit. Source observations cannot make provider delivery atomic with CUP state; the concrete
+sender retains an immutable context, rechecks current eligibility and bounds its socket
+submission by the same proof expiry.
 
 Configuration owner: tournament notification bridge. Activation requires reviewed
 key installation and explicit scope/target authority; no such activation is included
-here. Review or remove the disabled adapter before introducing a durable sender.
+here. Review the disabled configuration before any source enrollment or delivery activation.
 `TOURNAMENT_CHAT_NOTIFICATION_ENABLED` alone defaults to false. Dedicated issuer,
 key ID, key-file and tenant/owner configuration must all be supplied when enabled.
 
@@ -48,9 +50,9 @@ proof. They do not establish STAGING, PROVIDER or PRODUCTION evidence.
 
 Deduplication in `resolveRecipientPage` is page-local. Membership may change after a
 recipient query, so observations from separate pages can allow different contexts
-for the same canonical user. A future importer must deduplicate globally by message
-and canonical user while retaining the immutable chosen context; it must never
-rebind that context. Partial/error/restarted traversals must not advance a durable
-watermark. It must obtain current-context proof immediately before final dispatch.
+for the same canonical user. The durable importer deduplicates globally by message
+and canonical user while retaining the immutable chosen context without rebinding.
+Partial/error/restarted traversals cannot advance its completed fanout watermark.
+The sender obtains current-context proof immediately before final dispatch.
 Observations can expire by the time a page returns and provide no delivery or
 cancellation guarantee.

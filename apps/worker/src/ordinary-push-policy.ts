@@ -15,6 +15,7 @@ type Job = Pick<
   | 'providerAccountId'
   | 'attemptNo'
   | 'station'
+  | 'tournament'
 >;
 export type OrdinaryPushDecision =
   | { outcome: 'SEND'; endpoint: NonNullable<ClaimedNotificationDelivery['dispatchedEndpoint']> }
@@ -60,6 +61,8 @@ export async function checkOrdinaryPushPolicy(options: {
   job: Job;
   provider: 'FCM' | 'WEB_PUSH' | 'APNS';
   credentialRef?: string;
+  tournamentFresh?: () => boolean;
+  tournamentValidate?: (client: PoolClient) => Promise<void>;
   stationFresh?: () => boolean;
   stationValidate?: (client: PoolClient) => Promise<void>;
   appId: string;
@@ -83,10 +86,15 @@ export async function checkOrdinaryPushPolicy(options: {
         if (lock.rows[0]?.acquired !== true) return { outcome: 'BUSY' };
       }
     }
-    const station = job.station;
+    if (job.station && job.tournament) return { outcome: 'STALE' };
+    const station = job.station ?? job.tournament;
+    const kind = job.tournament ? 'tournament' : 'station';
+    const sending = job.tournament ? 'TOURNAMENT_SENDING' : 'STATION_SENDING';
+    const fresh = job.tournament ? options.tournamentFresh : options.stationFresh;
+    const validate = job.tournament ? options.tournamentValidate : options.stationValidate;
     const delivery = await client.query(
       `select id from notifications.deliveries where tenant_id=$1 and id=$2 and intent_id=$3
-         and endpoint_id=$4 and state='${station ? 'STATION_SENDING' : 'SENDING'}' and attempt_count=$5 and channel='PUSH' ${station ? 'and station_notification_context_id=$6 and station_claim_generation=$7 and station_dispatch_started_at is null' : ''} for update`,
+         and endpoint_id=$4 and state='${station ? sending : 'SENDING'}' and attempt_count=$5 and channel='PUSH' ${station ? `and ${kind}_notification_context_id=$6 and ${kind}_claim_generation=$7 and ${kind}_dispatch_started_at is null` : ''} for update`,
       [
         job.tenantId,
         job.deliveryId,
@@ -103,9 +111,9 @@ export async function checkOrdinaryPushPolicy(options: {
     );
     if (endpoint.rowCount !== 1) return { outcome: 'STALE' };
     if (station) {
-      if (!options.stationValidate) return { outcome: 'STALE' };
-      await options.stationValidate(client);
-      if (!options.stationFresh?.()) return { outcome: 'STALE' };
+      if (!validate) return { outcome: 'STALE' };
+      await validate(client);
+      if (!fresh?.()) return { outcome: 'STALE' };
     }
     // Separate statement AFTER lock waits: READ COMMITTED sees policies committed while waiting.
     // Preferences are a decision-time snapshot, not a lock held across the provider call.
@@ -220,9 +228,9 @@ export async function checkOrdinaryPushPolicy(options: {
       return { outcome: 'SUPPRESSED' };
     }
     if (station) {
-      if (!options.stationFresh?.()) return { outcome: 'STALE' };
+      if (!fresh?.()) return { outcome: 'STALE' };
       const marked = await client.query(
-        `update notifications.deliveries set station_dispatch_started_at=clock_timestamp() where tenant_id=$1 and id=$2 and station_claim_generation=$3 and station_notification_context_id=$4 and state='STATION_SENDING' and station_dispatch_started_at is null and lease_expires_at>clock_timestamp() returning id`,
+        `update notifications.deliveries set ${kind}_dispatch_started_at=clock_timestamp() where tenant_id=$1 and id=$2 and ${kind}_claim_generation=$3 and ${kind}_notification_context_id=$4 and state='${sending}' and ${kind}_dispatch_started_at is null and lease_expires_at>clock_timestamp() returning id`,
         [job.tenantId, job.deliveryId, station.generation, station.contextId],
       );
       if (marked.rowCount !== 1) return { outcome: 'STALE' };
