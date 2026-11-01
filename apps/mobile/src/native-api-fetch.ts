@@ -1,3 +1,4 @@
+import { gameCancelRequest } from './native-game-cancel-request.js';
 import { quarterRequest } from './native-quarter-request.js';
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError } from '@phub/api-sdk';
@@ -182,6 +183,7 @@ export function createNativeApiFetch(
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();
     const method = init?.method ?? 'GET';
+    gameCancelRequest(value, init, config);
     if (url.pathname.startsWith(`/user/api/v1/${config.tenantKey}/game-create-operations`))
       quarterRequest(value, init, config);
     const relay = isBinaryRelay(url.pathname, method);

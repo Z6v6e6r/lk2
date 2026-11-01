@@ -601,6 +601,7 @@ export interface AuthGateway {
   readonly createQuarterGame?: PadlHubApiClient['createQuarterGame'];
   readonly getQuarterCreateOperation?: PadlHubApiClient['getQuarterCreateOperation'];
   readonly reconcileQuarterCreateOperation?: PadlHubApiClient['reconcileQuarterCreateOperation'];
+  readonly gameCancelPrincipal?: () => string | null;
   readonly cancelGame: (gameId: string, input: CancelGameRequest) => Promise<GameCommandResult>;
   readonly joinGame: (
     gameId: string,
@@ -976,7 +977,22 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     ...(options.onSessionExpired ? { onSessionExpired: options.onSessionExpired } : {}),
     appVersion: options.appVersion,
     ...(options.appBuild ? { appBuild: options.appBuild } : {}),
-    ...(options.fetchImplementation ? { fetchImplementation: options.fetchImplementation } : {}),
+    fetchImplementation: (async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const cancel =
+        (init?.method ?? 'GET') === 'POST' &&
+        url.startsWith(
+          `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${options.tenantKey}/games/`,
+        ) &&
+        url.endsWith('/cancel');
+      const cancelId = cancel ? url.slice(url.lastIndexOf('/games/') + 7, -'/cancel'.length) : null;
+      const principal = cancelId === null ? undefined : cancellationPrincipals.get(cancelId);
+      if (cancel && principal === undefined) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      if (principal !== undefined) requireQuarterPrincipal(principal);
+      const result = await (options.fetchImplementation ?? globalThis.fetch)(input, init);
+      if (principal !== undefined) requireQuarterPrincipal(principal);
+      return result;
+    }) as typeof fetch,
   };
   const client = new PadlHubApiClient(clientOptions);
   const nativeClient = clientOptions.platform === 'android';
@@ -1015,6 +1031,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let currentTenantId: string | undefined;
   const subjectLinkStartKeys = new Map<string, string>();
   const subjectLinkVerifyKeys = new Map<string, string>();
+  const cancellationPrincipals = new Map<string, string>();
   let principalGeneration = 0;
   let tournamentLogoutStarted = false;
   let quarterClosed = false;
@@ -2415,8 +2432,19 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.createPaidGame(input, idempotencyKey);
     },
 
-    cancelGame(gameId, input) {
-      return client.cancelGame(gameId, input);
+    gameCancelPrincipal: quarterCreatePrincipal,
+    async cancelGame(gameId, input) {
+      const original = requireQuarterPrincipal();
+      const id = encodeURIComponent(gameId);
+      if (cancellationPrincipals.has(id)) throw new Error('GAME_CANCEL_IN_PROGRESS');
+      cancellationPrincipals.set(id, original);
+      try {
+        const result = await client.cancelGame(gameId, input);
+        requireQuarterPrincipal(original);
+        return result;
+      } finally {
+        cancellationPrincipals.delete(id);
+      }
     },
 
     joinGame(gameId, expectedRevision, invitationId) {

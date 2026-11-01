@@ -975,6 +975,94 @@ describePostgres('FREE/LOCAL game lifecycle through HTTP and PostgreSQL', () => 
     });
   });
 
+  it('advertises local CANCEL only from the same tenant and canonical projection revision', async () => {
+    const created = await createGame('native-cancel-capability');
+    const id = created.operation.gameId;
+    const eventId = await withTenantTransaction(pool, tenantId, async (client) => {
+      const r = await client.query<{ id: string }>(
+        `select id from audit.outbox_events where tenant_id=$1 and aggregate_id=$2 and event_type='game.created.v1' order by occurred_at limit 1`,
+        [tenantId, id],
+      );
+      return r.rows[0]!.id;
+    });
+    expect(await management.projectCardEvent({ tenantId, gameId: id, eventId })).toBe('applied');
+    const original = await withTenantTransaction(pool, tenantId, async (client) => {
+      const r = await client.query<{ revision: string; starts_at: Date }>(
+        `select revision::text,starts_at from games.games where tenant_id=$1 and id=$2`,
+        [tenantId, id],
+      );
+      return r.rows[0]!;
+    });
+    const check = async (allowed: boolean) => {
+      const detail = await management.getCardProjection(tenantId, id);
+      const list = await management.listViewerCardProjections({
+        tenantId,
+        viewerUserId: ownerId,
+        scope: 'UPCOMING',
+        limit: 100,
+      });
+      const batch = await management.getCardProjections!(tenantId, [id]);
+      for (const value of [detail, list.items.find((x) => x.gameId === id), batch.get(id)]) {
+        expect(value?.gameId).toBe(id); // No INNER JOIN row hiding on stale/paid aggregates.
+        expect(value?.localCancellationOrganizerUserId).toBe(allowed ? ownerId : null);
+      }
+      const response = await app.inject({
+        method: 'GET',
+        url: `/user/api/v1/${tenantKey}/games/${id}`,
+        headers: { authorization: `Bearer ${await token(ownerId)}` },
+      });
+      expect(response.statusCode).toBe(200);
+      const actions = response.json<{ game: { allowedActions: string[] } }>().game.allowedActions;
+      expect(actions.includes('CANCEL')).toBe(allowed);
+      expect(response.body).not.toContain('localCancellationOrganizerUserId');
+    };
+    await check(true);
+    const foreignTenant = randomUUID();
+    expect(await management.getCardProjection(foreignTenant, id)).toBeUndefined();
+    expect((await management.getCardProjections!(foreignTenant, [id])).size).toBe(0);
+    expect(
+      (
+        await management.listViewerCardProjections({
+          tenantId: foreignTenant,
+          viewerUserId: ownerId,
+          scope: 'UPCOMING',
+          limit: 100,
+        })
+      ).items,
+    ).toEqual([]);
+    for (const scenario of [
+      'SPLIT',
+      'ORGANIZER_PAYS',
+      'SUBSCRIPTION',
+      'stale',
+      'foreign',
+      'started',
+      'cancelled',
+    ]) {
+      await withTenantTransaction(pool, tenantId, async (client) => {
+        await client.query(
+          `update games.games set payment_mode=$3,revision=$4,organizer_user_id=$5,lifecycle_state=$6,starts_at=$7 where tenant_id=$1 and id=$2`,
+          [
+            tenantId,
+            id,
+            ['SPLIT', 'ORGANIZER_PAYS', 'SUBSCRIPTION'].includes(scenario)
+              ? scenario
+              : 'NO_PAYMENT',
+            Number(original.revision) + (scenario === 'stale' ? 1 : 0),
+            scenario === 'foreign' ? playerAId : ownerId,
+            scenario === 'cancelled' ? 'CANCELLED' : 'SCHEDULED',
+            scenario === 'started' ? new Date(Date.now() - 60000) : original.starts_at,
+          ],
+        );
+        await client.query(
+          `update games.card_projections set base_payload=jsonb_set(base_payload,'{priceSummary}','{"amountMinor":0,"currency":"RUB"}'::jsonb) where tenant_id=$1 and game_id=$2`,
+          [tenantId, id],
+        );
+      });
+      await check(false);
+    }
+  });
+
   it('leaves and cancels with idempotent terminal state and owner-only authorization', async () => {
     const game = await createGame('leave-cancel', 4);
     const playerToken = await token(playerAId);

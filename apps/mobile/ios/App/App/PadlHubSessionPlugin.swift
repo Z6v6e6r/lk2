@@ -59,6 +59,13 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       call.reject("Native request is unavailable", SessionFailure.request.rawValue)
       return
     }
+    var gameCancel: GameCancelRequest?
+    if operation == .gameCancel {
+      guard Set(call.options.keys).isSubset(of: Set(["operation","resourceId","headers","body"])),
+        let id = call.getString("resourceId"), call.options["body"] is String
+      else {call.reject("Native request is unavailable",SessionFailure.request.rawValue);return}
+      gameCancel = GameCancelRequest(gameID:id)
+    }
     var quarter: QuarterCreateRequest?
     if operation == .quarterCreate {
       let allowed = Set(["operation","resource","resourceId","headers","body"])
@@ -81,7 +88,7 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
     let notification = operation == .notification ? NotificationCommand(resource:call.getString("resource") ?? "",id:call.getString("resourceId")) : nil
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter)
+      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel)
     Task {
       do {
         let response = try await transport.request(request)

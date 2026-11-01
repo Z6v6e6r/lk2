@@ -28,6 +28,7 @@ export const suites = [
       'serializes waitlist promotion versus cancel and makes post-cancel promotion a no-op',
       'proves both serialized promotion-before-cancel and cancel-before-promotion orders',
       'rejects cancellation after start and from a finished terminal state',
+      'advertises local CANCEL only from the same tenant and canonical projection revision',
       'leaves and cancels with idempotent terminal state and owner-only authorization',
     ],
     guards: [

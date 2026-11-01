@@ -77,6 +77,18 @@ function enrichGameCardProfiles(
   };
 }
 
+/** Server-issued action availability, never inferred from price or participant payment state. */
+function withLocalCancellation(
+  card: GameCardView,
+  projection: StoredGameCardProjection,
+  viewerUserId: string,
+): GameCardView {
+  return projection.localCancellationOrganizerUserId === viewerUserId &&
+    card.viewerRelation === 'ORGANIZER'
+    ? card
+    : { ...card, allowedActions: card.allowedActions.filter((action) => action !== 'CANCEL') };
+}
+
 export interface PublicGameFilters {
   readonly stationId?: string;
   readonly startsFrom?: string;
@@ -362,11 +374,15 @@ export async function listViewerGameCards(input: {
       (p) => !isRestrictedGameTestCourt(input.tenantId, p.basePayload.court?.id) || testAccess,
     )
     .map((projection) =>
-      projectGameCard(enrichGameCardProfiles(projection, input.tenantId, profileData), {
-        surface,
-        now: input.now,
-        viewerUserId: input.viewerUserId,
-      }),
+      withLocalCancellation(
+        projectGameCard(enrichGameCardProfiles(projection, input.tenantId, profileData), {
+          surface,
+          now: input.now,
+          viewerUserId: input.viewerUserId,
+        }),
+        projection,
+        input.viewerUserId,
+      ),
     )
     .filter((card) => card.viewerRelation !== 'NONE' && card.viewerRelation !== 'ANONYMOUS');
   const conversations = await gameConversationsByGameId({
@@ -427,11 +443,15 @@ export async function getViewerGameCard(input: {
         ? 'INVITE'
         : 'DISCOVER'
       : 'MY_UPCOMING';
-  const card = projectGameCard(payload, {
-    surface,
-    now: input.now,
-    viewerUserId: input.viewerUserId,
-  });
+  const card = withLocalCancellation(
+    projectGameCard(payload, {
+      surface,
+      now: input.now,
+      viewerUserId: input.viewerUserId,
+    }),
+    projection,
+    input.viewerUserId,
+  );
   const conversations = await gameConversationsByGameId({
     ...(input.conversationReader ? { reader: input.conversationReader } : {}),
     tenantId: input.tenantId,

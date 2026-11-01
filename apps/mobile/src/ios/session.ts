@@ -1,3 +1,4 @@
+import { gameCancelRequest } from '../native-game-cancel-request.js';
 import { quarterRequest } from '../native-quarter-request.js';
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
@@ -20,7 +21,8 @@ interface NativeRequest {
     | 'context'
     | 'read'
     | 'notification'
-    | 'quarterCreate';
+    | 'quarterCreate'
+    | 'gameCancel';
   readonly challengeId?: string;
   readonly resource?: string;
   readonly resourceId?: string;
@@ -42,10 +44,17 @@ function rejectedRequest(): ApiClientError {
   return new ApiClientError('Native request rejected', 400, 'NATIVE_REQUEST_REJECTED', 'native');
 }
 
-export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugin): typeof fetch {
+export function createIOSFetch(
+  config: IOSConfiguration,
+  plugin: IOSSessionPlugin,
+  canDispatchGameCancellation?: (gameId: string) => boolean,
+): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
+  let cancellationClosed = false;
+  let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
+    const cancel = gameCancelRequest(value, init, config);
     const quarter = quarterRequest(value, init, config);
     const read =
       !quarter && (init?.method ?? 'GET') === 'GET' ? cabinetReadRequest(value, config) : null;
@@ -57,7 +66,8 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (quarter) operation = 'quarterCreate';
+    if (cancel) operation = 'gameCancel';
+    else if (quarter) operation = 'quarterCreate';
     else if (read) operation = 'read';
     else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
     else if (path === '/auth/session/refresh' && method === 'POST') operation = 'refresh';
@@ -84,6 +94,13 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
       operation = 'verify';
       challengeId = match[1];
     }
+    if (operation === 'logout') {
+      cancellationClosed = true;
+      cancellationEpoch++;
+    }
+    const originalCancellationEpoch = cancellationEpoch;
+    if (cancel && (cancellationClosed || canDispatchGameCancellation?.(cancel.resourceId) !== true))
+      throw new DOMException('Session changed', 'AbortError');
     if (init?.body != null && typeof init.body !== 'string') throw rejectedRequest();
     if (read && init?.body != null) throw rejectedRequest();
     if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
@@ -93,10 +110,24 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
         ...(read ?? {}),
         ...(notification ?? {}),
         ...(quarter ?? {}),
+        ...(cancel ?? {}),
         ...(challengeId ? { challengeId } : {}),
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (
+        cancel &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchGameCancellation?.(cancel.resourceId) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
+      if (
+        operation === 'verify' &&
+        result.status === 200 &&
+        originalCancellationEpoch === cancellationEpoch
+      )
+        cancellationClosed = false;
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
       const headers = Object.fromEntries(
         Object.entries(result.headers).filter(([name]) =>
@@ -141,6 +172,7 @@ export class IOSSession {
   private quarterClosed = false;
   private quarterEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
+  private readonly cancellations = new Map<string, string>();
 
   public constructor(
     public readonly configuration: IOSConfiguration,
@@ -185,6 +217,25 @@ export class IOSSession {
     if (p !== this.quarterCreatePrincipal())
       throw new DOMException('Session changed', 'AbortError');
     return v;
+  }
+  public gameCancelPrincipal(): string | null {
+    return this.quarterCreatePrincipal();
+  }
+  public canDispatchGameCancellation(gameId: string): boolean {
+    const original = this.cancellations.get(gameId);
+    return original !== undefined && original === this.gameCancelPrincipal();
+  }
+  public async cancelGame(gameId: string): ReturnType<PadlHubApiClient['cancelGame']> {
+    const original = this.gameCancelPrincipal();
+    if (!original || this.cancellations.has(gameId)) throw rejectedRequest();
+    this.cancellations.set(gameId, original);
+    try {
+      return await this.quarterCall((api) =>
+        api.cancelGame(gameId, { reasonCode: 'ORGANIZER_REQUEST' }),
+      );
+    } finally {
+      this.cancellations.delete(gameId);
+    }
   }
   public restore(): Promise<void> {
     if (this.restoration) return this.restoration;
@@ -308,16 +359,20 @@ export function getIOSSession(): Promise<IOSSession> {
   startup ??= (async () => {
     const plugin = registerPlugin<IOSSessionPlugin>('PadlHubSession');
     const configuration = await plugin.configuration();
-    const api = new PadlHubApiClient({
+    const api: PadlHubApiClient = new PadlHubApiClient({
       baseUrl: configuration.apiBaseUrl,
       tenantKey: configuration.tenantKey,
       platform: 'ios',
       sessionMode: 'cookie',
       appVersion: configuration.appVersion,
       appBuild: configuration.appBuild,
-      fetchImplementation: createIOSFetch(configuration, plugin),
+      fetchImplementation: createIOSFetch(
+        configuration,
+        plugin,
+        (id) => session?.canDispatchGameCancellation(id) === true,
+      ),
     });
-    const session = new IOSSession(configuration, api);
+    const session: IOSSession = new IOSSession(configuration, api);
     await session.restore();
     return session;
   })();

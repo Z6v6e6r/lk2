@@ -82,6 +82,7 @@ final class AndroidSessionPolicy {
         if (!validQuery(relativePath, method, relativePath.startsWith("/games") ? uri.getRawQuery() : uri.getQuery())) throw rejected();
         String gameUuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
         boolean quarter = relativePath.startsWith("/game-create-operations");
+        boolean gameCancel = "POST".equals(method) && relativePath.matches("/games/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/cancel");
         boolean gameJoin = "POST".equals(method) && relativePath.matches("/games/" + gameUuid + "/join");
         // Canonical receipt reconciliation (merged main #455): GET-only recovery advanced the
         // operation; this POST asks the owner for the trusted receipt on the same idempotency key.
@@ -102,7 +103,7 @@ final class AndroidSessionPolicy {
             boolean notificationWrite = "PUT".equals(method) && (cleanPath.equals(userRoot + "/notifications/read-cursor")
                 || cleanPath.equals(userRoot + "/notifications/preferences"));
             if (!("GET".equals(method) && allowedRead(relativePath))
-                && !quarter && !notificationWrite && !gameJoin && !gameReconcile && !allowedMessagingWrite(relativePath, method)) throw rejected();
+                && !gameCancel && !quarter && !notificationWrite && !gameJoin && !gameReconcile && !allowedMessagingWrite(relativePath, method)) throw rejected();
             operation = Operation.API;
         }
         boolean auth = operation != Operation.API && operation != Operation.PUBLIC;
@@ -122,6 +123,10 @@ final class AndroidSessionPolicy {
         if (operation == Operation.API && !headers.getOrDefault("authorization", "").matches("Bearer [A-Za-z0-9._-]{8,8192}")) throw rejected();
         if (!"GET".equals(method) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9._:-]{16,128}")) throw rejected();
         if ((gameJoin || gameReconcile || gameRecovery) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}")) throw rejected();
+        if (gameCancel && (uri.getRawQuery() != null || textBody == null || textBody.length() > 256
+            || !textBody.matches("\\s*\\{\\s*\"reasonCode\"\\s*:\\s*\"ORGANIZER_REQUEST\"\\s*\\}\\s*")
+            || (headers.containsKey("content-type") && !"application/json".equals(headers.get("content-type")))
+            || !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}"))) throw rejected();
         if (quarter) AndroidQuarterCreateRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody);
         String intent = operation == Operation.REFRESH ? "refresh" : operation == Operation.LOGOUT ? "logout" : null;
         if (!java.util.Objects.equals(intent, headers.get("x-session-intent"))) throw rejected();

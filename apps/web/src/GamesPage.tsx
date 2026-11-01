@@ -1,3 +1,4 @@
+import { cancelGameAndRead } from './game-cancel-readback.js';
 import { GameSelfLeaveAttempts } from './game-self-leave-attempt.js';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
@@ -1775,7 +1776,98 @@ function GamesPageContent({
     void handleAction('JOIN', game);
   }
 
+  const cancelInFlight = useRef(false);
+  const cancellationPage = useRef({ gateway, gameId });
+  cancellationPage.current = { gateway, gameId };
+  const [pendingCancellation, setPendingCancellation] = useState<{
+    gameId: string;
+    principal: string;
+    gateway: AuthGateway;
+    pageGameId: string | undefined;
+  } | null>(null);
+  const cancellationCurrent = (attempt: NonNullable<typeof pendingCancellation>): boolean =>
+    joinPageActive.current &&
+    cancellationPage.current.gateway === attempt.gateway &&
+    cancellationPage.current.gameId === attempt.pageGameId &&
+    attempt.gateway.gameCancelPrincipal?.() === attempt.principal;
+
+  async function refreshPendingCancellation(): Promise<void> {
+    const attempt = pendingCancellation;
+    if (!attempt || cancelInFlight.current || !cancellationCurrent(attempt)) return;
+    cancelInFlight.current = true;
+    setBusyGameId(attempt.gameId);
+    try {
+      if (!cancellationCurrent(attempt)) return;
+      const observed = await attempt.gateway.getGame(attempt.gameId);
+      if (!cancellationCurrent(attempt) || observed.id !== attempt.gameId) return;
+      setDetail((previous) => (previous?.id === observed.id ? observed : previous));
+      setGames((previous) => previous.map((item) => (item.id === observed.id ? observed : item)));
+      if (observed.displayState === 'CANCELLED') {
+        setPendingCancellation(null);
+        setNotice('Игра отменена. Статус и состав обновлены.');
+      }
+    } catch {
+      // An unavailable read retains the original pending observation; it never reissues CANCEL.
+    } finally {
+      cancelInFlight.current = false;
+      if (cancellationCurrent(attempt)) setBusyGameId(null);
+    }
+  }
+  const cancellationRecoveryControl =
+    pendingCancellation && cancellationCurrent(pendingCancellation) ? (
+      <button
+        type="button"
+        disabled={busyGameId !== null}
+        onClick={() => void refreshPendingCancellation()}
+      >
+        Обновить статус отмены
+      </button>
+    ) : null;
   async function handleAction(action: GameCardAction, game: GameCardModel): Promise<void> {
+    if (action === 'CANCEL') {
+      const principal = gateway.gameCancelPrincipal?.();
+      if (
+        !principal ||
+        cancelInFlight.current ||
+        !game.allowedActions.some((action: string) => action === 'CANCEL') ||
+        game.viewerRelation !== 'ORGANIZER'
+      )
+        return;
+      if (!window.confirm('Отменить игру для всех участников?')) return;
+      const attempt = { gameId: game.id, principal, gateway, pageGameId: gameId };
+      const current = () => cancellationCurrent(attempt);
+      if (!current()) return;
+      cancelInFlight.current = true;
+      setBusyGameId(game.id);
+      setError(null);
+      try {
+        const observed = await cancelGameAndRead({
+          gameId: game.id,
+          cancel: gateway.cancelGame,
+          read: gateway.getGame,
+          isCurrent: current,
+        });
+        if (!current()) return;
+        if (observed) {
+          setDetail((previous) => (previous?.id === observed.id ? observed : previous));
+          setGames((previous) =>
+            previous.map((item) => (item.id === observed.id ? observed : item)),
+          );
+        }
+        setPendingCancellation(observed?.displayState === 'CANCELLED' ? null : attempt);
+        setNotice(
+          observed?.displayState === 'CANCELLED'
+            ? 'Игра отменена. Статус и состав обновлены.'
+            : 'Отмена пока не подтверждена. Обновите статус игры позже.',
+        );
+      } catch {
+        // Principal/unmount changes discard both the ACK and the readback.
+      } finally {
+        cancelInFlight.current = false;
+        if (current()) setBusyGameId(null);
+      }
+      return;
+    }
     if (
       ['SUBMIT_RESULT', 'CONFIRM_RESULT', 'DISPUTE_RESULT', 'VIEW_RESULT', 'OPEN_DISPUTE'].includes(
         action,
@@ -1845,7 +1937,6 @@ function GamesPageContent({
         return;
       }
     }
-    if (action === 'CANCEL' && !window.confirm('Отменить игру для всех участников?')) return;
     if (action === 'JOIN' && detail?.id === game.id && gameJoinRequiresPaidFlow(game)) {
       if (!canPaidJoin) {
         setJoinFlowFor(game.id, {
@@ -1872,11 +1963,9 @@ function GamesPageContent({
             ? await gateway.joinGameWaitlist(game.id, game.id === gameId ? invitationId : undefined)
             : action === 'LEAVE_WAITLIST'
               ? await gateway.leaveGameWaitlist(game.id)
-              : action === 'CANCEL'
-                ? await gateway.cancelGame(game.id, { reasonCode: 'ORGANIZER_REQUEST' })
-                : leaveAttempts
-                  ? await leaveAttempts.submit(game.id)
-                  : await gateway.leaveGame(game.id);
+              : leaveAttempts
+                ? await leaveAttempts.submit(game.id)
+                : await gateway.leaveGame(game.id);
       if (!joinPageActive.current) return;
       let result = submitted;
       for (
@@ -1961,9 +2050,7 @@ function GamesPageContent({
             ? 'Вы в игре. Состав и доступные действия обновлены.'
             : action === 'JOIN_WAITLIST'
               ? 'Вы добавлены в лист ожидания.'
-              : action === 'CANCEL'
-                ? 'Игра отменена. Статус и состав обновлены.'
-                : 'Участие обновлено.',
+              : 'Участие обновлено.',
         );
       }
       if (!gameId && (action === 'JOIN' || action === 'JOIN_WAITLIST')) {
@@ -2352,6 +2439,7 @@ function GamesPageContent({
           </div>
         ) : null}
         {leaveRecoveryControls}
+        {cancellationRecoveryControl}
         {notice ? (
           <p className="games-message" role="status">
             {notice}
@@ -2761,6 +2849,7 @@ function GamesPageContent({
         </button>
       ) : null}
       {leaveRecoveryControls}
+      {cancellationRecoveryControl}
       {notice ? (
         <p className="games-message" role="status">
           {notice}
