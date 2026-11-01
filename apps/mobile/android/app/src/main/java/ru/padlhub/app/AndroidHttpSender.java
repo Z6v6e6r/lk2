@@ -98,7 +98,7 @@ final class AndroidHttpSender implements AndroidSessionEngine.Sender {
     }
 
     static int responseLimit(Request request) {
-        if (AndroidStationStreamRequest.history(request)) return 3 * 1024 * 1024;
+        if (AndroidStationStreamRequest.history(request) || AndroidTournamentChatRequest.history(request)) return 3 * 1024 * 1024;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
         String relative = request.path;
         if (relative.matches(".*/conversations/" + uuid + "/media/" + uuid + "/content")) return 15 * 1024 * 1024;

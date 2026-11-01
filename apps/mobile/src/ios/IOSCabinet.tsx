@@ -1,3 +1,5 @@
+import { TournamentChatPage } from '../../../web/src/TournamentChatPage.js';
+import { createIOSTournamentChatGateway } from './tournament-chat-gateway.js';
 import { IOSStationChats } from './IOSStationChats.js';
 import { IOSGameCancel } from './IOSGameCancel.js';
 import '../native-quarter-create.css';
@@ -434,6 +436,7 @@ export function IOSCabinet({
   readonly auth: AuthenticatedSession;
 }): React.JSX.Element {
   const route = useCabinetRoute();
+  const tournamentChatGateway = useMemo(() => createIOSTournamentChatGateway(session), [session]);
   const quarterGateway = useMemo(() => createIOSQuarterGateway(session), [session]);
   const data = useMemo(() => createCabinetData(session, auth.user.id), [session, auth.user.id]);
   const [push, setPush] = useState(initialAndroidPushState);
@@ -464,6 +467,10 @@ export function IOSCabinet({
     };
   }, [controller]);
   const path = route.split('?')[0]!;
+  const tournamentChat =
+    /^\/tournaments\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/chat$/.exec(
+      route,
+    );
   const detail =
     /^\/(locations|games)\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i.exec(
       path,
@@ -482,6 +489,15 @@ export function IOSCabinet({
   };
   let content: ReactNode;
   if (path === '/') content = <Home data={data} auth={auth} onLogout={logout} />;
+  else if (tournamentChat)
+    content = (
+      <TournamentChatPage
+        key={`${auth.context.tenantId}:${auth.context.userId}:${tournamentChat[1]}`}
+        tournamentId={tournamentChat[1]!}
+        principal={{ tenantId: auth.context.tenantId, userId: auth.context.userId }}
+        gateway={tournamentChatGateway}
+      />
+    );
   else if (path === '/chats') content = <IOSStationChats session={session} />;
   else if (path === '/games/new')
     content = (

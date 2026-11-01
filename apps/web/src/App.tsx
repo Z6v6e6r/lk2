@@ -971,6 +971,7 @@ export function App({
     'chats',
     'locations',
     'location',
+    'tournament-chat',
   ]);
   const protectedRoute: ProtectedRoute =
     clientPlatform === 'android' && !nativeSections.has(requestedRoute.kind)
@@ -3074,7 +3075,6 @@ export function App({
     }
     if (protectedRoute.kind === 'tournament-chat') {
       if (
-        clientPlatform !== 'web' ||
         !gateway.tournamentChatPrincipal ||
         !gateway.tournamentChatPrincipal() ||
         !gateway.sendTournamentChatMessage ||

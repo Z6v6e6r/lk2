@@ -19,45 +19,52 @@ const session = {
     permissions: [],
   },
 };
-it('actual gateway refuses late tournament ACK after logout and no automatic retry', async () => {
-  let finish!: (r: Response) => void;
-  const transport = vi.fn<typeof fetch>((raw) => {
-    const url = raw instanceof Request ? raw.url : raw.toString();
-    if (url.includes('/chat/message-requests'))
-      return new Promise((r) => {
-        finish = r;
-      });
-    if (url.endsWith('/auth/logout')) return Promise.resolve(new Response(null, { status: 204 }));
-    return Promise.resolve(Response.json(session));
-  });
-  const gateway = createBrowserAuthGateway({
-    baseUrl: 'https://api.invalid',
-    tenantKey: 'synthetic',
-    appVersion: 'test',
-    fetchImplementation: transport,
-  });
-  await gateway.restoreSession();
-  expect(gateway.tournamentChatPrincipal!()).not.toBeNull();
-  const pending = gateway.getTournamentChatRequest!(id, id);
-  const assertion = expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
-  await gateway.logout();
-  finish(
-    Response.json({
-      contractVersion: 'tournament-chat.v1',
-      tournamentId: id,
-      requestId: id,
-      status: 'UNKNOWN',
-    }),
-  );
-  await assertion;
-  await expect(gateway.getTournamentChatRequest!(id, id)).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
-  expect(
-    transport.mock.calls.filter((c) =>
-      (c[0] instanceof Request ? c[0].url : c[0].toString()).includes('/chat/'),
-    ),
-  ).toHaveLength(1);
-});
-it('native gateway denies tournament API even if directly invoked', async () => {
+it.each(['web', 'android'] as const)(
+  'actual %s gateway refuses late tournament ACK after logout and no automatic retry',
+  async (platform) => {
+    let finish!: (r: Response) => void;
+    const transport = vi.fn<typeof fetch>((raw) => {
+      const url = raw instanceof Request ? raw.url : raw.toString();
+      if (url.includes('/chat/message-requests'))
+        return new Promise((r) => {
+          finish = r;
+        });
+      if (url.endsWith('/auth/logout')) return Promise.resolve(new Response(null, { status: 204 }));
+      return Promise.resolve(Response.json(session));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.invalid',
+      tenantKey: 'synthetic',
+      appVersion: 'test',
+      platform,
+      nativeSessionTransport: platform === 'android',
+      fetchImplementation: transport,
+    });
+    await gateway.restoreSession();
+    expect(gateway.tournamentChatPrincipal!()).not.toBeNull();
+    const pending = gateway.getTournamentChatRequest!(id, id);
+    const assertion = expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+    await gateway.logout();
+    finish(
+      Response.json({
+        contractVersion: 'tournament-chat.v1',
+        tournamentId: id,
+        requestId: id,
+        status: 'UNKNOWN',
+      }),
+    );
+    await assertion;
+    await expect(gateway.getTournamentChatRequest!(id, id)).rejects.toThrow(
+      'AUTH_PRINCIPAL_CHANGED',
+    );
+    expect(
+      transport.mock.calls.filter((c) =>
+        (c[0] instanceof Request ? c[0].url : c[0].toString()).includes('/chat/'),
+      ),
+    ).toHaveLength(1);
+  },
+);
+it('native gateway denies tournament chat without an authenticated principal', async () => {
   const transport = vi.fn<typeof fetch>();
   const gateway = createBrowserAuthGateway({
     baseUrl: 'https://api.invalid',
@@ -129,47 +136,52 @@ it('READ cannot dispatch after logout begins while hashing and revoke are both p
   }
 });
 
-it('READ still dispatches exactly once for the unchanged actual gateway principal', async () => {
-  vi.stubGlobal('crypto', webcrypto);
-  const transport = vi.fn<typeof fetch>((raw) =>
-    Promise.resolve(
-      Response.json(
-        urlOf(raw).endsWith('/chat/read-requests')
-          ? {
-              contractVersion: 'tournament-chat-read.v1',
-              tournamentId: id,
-              requestId: id,
-              status: 'UNKNOWN',
-            }
-          : session,
+it.each(['web', 'android'] as const)(
+  'READ still dispatches exactly once for the unchanged %s gateway principal',
+  async (platform) => {
+    vi.stubGlobal('crypto', webcrypto);
+    const transport = vi.fn<typeof fetch>((raw) =>
+      Promise.resolve(
+        Response.json(
+          urlOf(raw).endsWith('/chat/read-requests')
+            ? {
+                contractVersion: 'tournament-chat-read.v1',
+                tournamentId: id,
+                requestId: id,
+                status: 'UNKNOWN',
+              }
+            : session,
+        ),
       ),
-    ),
-  );
-  const gateway = createBrowserAuthGateway({
-    baseUrl: 'https://api.invalid',
-    tenantKey: 'synthetic',
-    appVersion: 'test',
-    fetchImplementation: transport,
-  });
-  try {
-    await gateway.restoreSession();
-    const result = await gateway.advanceTournamentChatRead!(id, {
-      requestId: id,
-      streamId: id,
-      witnessHash: 'a'.repeat(64),
-      throughSequence: 1,
-    });
-    expect(result.status).toBe('UNKNOWN');
-    const calls = transport.mock.calls.filter((call) =>
-      urlOf(call[0]).endsWith('/chat/read-requests'),
     );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]![1]?.method).toBe('POST');
-    expect(new Headers(calls[0]![1]?.headers).get('Idempotency-Key')).toBe(id);
-  } finally {
-    vi.unstubAllGlobals();
-  }
-});
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.invalid',
+      tenantKey: 'synthetic',
+      appVersion: 'test',
+      platform,
+      nativeSessionTransport: platform === 'android',
+      fetchImplementation: transport,
+    });
+    try {
+      await gateway.restoreSession();
+      const result = await gateway.advanceTournamentChatRead!(id, {
+        requestId: id,
+        streamId: id,
+        witnessHash: 'a'.repeat(64),
+        throughSequence: 1,
+      });
+      expect(result.status).toBe('UNKNOWN');
+      const calls = transport.mock.calls.filter((call) =>
+        urlOf(call[0]).endsWith('/chat/read-requests'),
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![1]?.method).toBe('POST');
+      expect(new Headers(calls[0]![1]?.headers).get('Idempotency-Key')).toBe(id);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it.each(['revoke-pending', 'reauthenticated-session'] as const)(
   'MESSAGE cannot dispatch after original principal closes during digest (%s)',

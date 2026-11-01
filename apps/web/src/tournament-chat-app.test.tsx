@@ -15,7 +15,7 @@ afterEach(() => {
   window.history.replaceState({}, '', '/');
 });
 it.each(['web', 'android'] as const)(
-  'actual App %s gates the new tournament commands explicitly',
+  'actual App %s opens the exact chat route without an implicit command',
   async (platform) => {
     const gateway = createBrowserAuthGateway({
       baseUrl: 'https://api.invalid',
@@ -45,17 +45,9 @@ it.each(['web', 'android'] as const)(
     const send = vi.spyOn(gateway, 'sendTournamentChatMessage'),
       status = vi.spyOn(gateway, 'getTournamentChatRequest');
     render(<App gateway={gateway} tenantKey="synthetic" clientPlatform={platform} />);
-    if (platform === 'web') {
-      await screen.findByRole('heading', { name: 'Чат турнира' });
-      await screen.findByRole('textbox', { name: 'Сообщение' });
-      expect(history).toHaveBeenCalledOnce();
-    } else {
-      await screen.findByRole('heading', {
-        name: /Раздел появится в следующей версии приложения/i,
-      });
-      expect(screen.queryByRole('textbox', { name: 'Сообщение' })).not.toBeInTheDocument();
-      expect(history).not.toHaveBeenCalled();
-    }
+    await screen.findByRole('heading', { name: 'Чат турнира' });
+    await screen.findByRole('textbox', { name: 'Сообщение' });
+    expect(history).toHaveBeenCalledOnce();
     expect(send).not.toHaveBeenCalled();
     expect(status).not.toHaveBeenCalled();
   },

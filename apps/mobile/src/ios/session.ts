@@ -1,4 +1,8 @@
 import {
+  tournamentChatRequest,
+  type NativeTournamentChatRequest,
+} from '../native-tournament-chat-request.js';
+import {
   stationStreamRequest,
   type NativeStationStreamRequest,
 } from '../native-station-stream-request.js';
@@ -29,7 +33,8 @@ interface NativeRequest {
     | 'quarterCreate'
     | 'gameCancel'
     | 'stationMessage'
-    | 'stationStream';
+    | 'stationStream'
+    | 'tournamentChat';
   readonly requestId?: string;
   readonly challengeId?: string;
   readonly resource?: string;
@@ -57,29 +62,37 @@ export function createIOSFetch(
   plugin: IOSSessionPlugin,
   canDispatchGameCancellation?: (gameId: string) => boolean,
   canDispatchStation?: (request: NativeStationRequest | NativeStationStreamRequest) => boolean,
+  canDispatchTournamentChat?: (request: NativeTournamentChatRequest) => boolean,
 ): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   let cancellationClosed = false;
   let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
+    const tournament = tournamentChatRequest(value, init, config);
     const stream = stationStreamRequest(value, init, config);
     const station = stream ?? stationRequest(value, init, config);
     const cancel = gameCancelRequest(value, init, config);
     const quarter = quarterRequest(value, init, config);
     const read =
-      !station && !quarter && (init?.method ?? 'GET') === 'GET'
+      !station && !tournament && !quarter && (init?.method ?? 'GET') === 'GET'
         ? cabinetReadRequest(value, config)
         : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
-    if (!station && !read && (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)))
+    if (
+      !station &&
+      !tournament &&
+      !read &&
+      (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value))
+    )
       throw rejectedRequest();
     const path = value.slice(root.length);
     const method = init?.method ?? 'GET';
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (station) operation = stream ? 'stationStream' : 'stationMessage';
+    if (tournament) operation = 'tournamentChat';
+    else if (station) operation = stream ? 'stationStream' : 'stationMessage';
     else if (cancel) operation = 'gameCancel';
     else if (quarter) operation = 'quarterCreate';
     else if (read) operation = 'read';
@@ -115,6 +128,8 @@ export function createIOSFetch(
     const originalCancellationEpoch = cancellationEpoch;
     if (cancel && (cancellationClosed || canDispatchGameCancellation?.(cancel.resourceId) !== true))
       throw new DOMException('Session changed', 'AbortError');
+    if (tournament && (cancellationClosed || canDispatchTournamentChat?.(tournament) !== true))
+      throw new DOMException('Session changed', 'AbortError');
     if (station && (cancellationClosed || canDispatchStation?.(station) !== true))
       throw new DOMException('Session changed', 'AbortError');
     if (init?.body != null && typeof init.body !== 'string') throw rejectedRequest();
@@ -128,10 +143,24 @@ export function createIOSFetch(
         ...(quarter ?? {}),
         ...(cancel ?? {}),
         ...(station ?? {}),
+        ...(tournament ?? {}),
         ...(challengeId ? { challengeId } : {}),
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (
+        tournament &&
+        new TextEncoder().encode(result.body).length >
+          (tournament.resource === 'history' ? 3 : 1) * 1024 * 1024
+      )
+        throw rejectedRequest();
+      if (
+        tournament &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchTournamentChat?.(tournament) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
       if (
         station &&
         (cancellationClosed ||
@@ -198,6 +227,7 @@ export class IOSSession {
   private readonly reads = new Set<Promise<unknown>>();
   private readonly cancellations = new Map<string, string>();
   private readonly stationRequests = new Map<string, string>();
+  private readonly tournamentChatRequests = new Map<string, string>();
 
   public constructor(
     public readonly configuration: IOSConfiguration,
@@ -262,6 +292,81 @@ export class IOSSession {
     } finally {
       this.cancellations.delete(gameId);
     }
+  }
+  public tournamentChatPrincipal(): string | null {
+    return this.quarterCreatePrincipal();
+  }
+  private tournamentChatKey(request: NativeTournamentChatRequest): string {
+    return JSON.stringify([
+      request.resource,
+      request.resourceId,
+      request.requestId,
+      request.query.limit,
+      request.query.cursor,
+    ]);
+  }
+  public canDispatchTournamentChat(request: NativeTournamentChatRequest): boolean {
+    const original = this.tournamentChatRequests.get(this.tournamentChatKey(request));
+    return original !== undefined && original === this.tournamentChatPrincipal();
+  }
+  private async tournamentChatCall<T>(
+    request: NativeTournamentChatRequest,
+    load: (api: PadlHubApiClient) => Promise<T>,
+  ): Promise<T> {
+    const principal = this.tournamentChatPrincipal(),
+      key = this.tournamentChatKey(request);
+    if (!principal || this.tournamentChatRequests.has(key)) throw rejectedRequest();
+    this.tournamentChatRequests.set(key, principal);
+    try {
+      return await this.quarterCall(load);
+    } finally {
+      this.tournamentChatRequests.delete(key);
+    }
+  }
+  public tournamentChatHistory(id: string, limit = 50, cursor?: string) {
+    return this.tournamentChatCall(
+      {
+        resource: 'history',
+        resourceId: id,
+        query: { limit: String(limit), ...(cursor ? { cursor } : {}) },
+      },
+      (api) => api.getTournamentChatHistory(id, limit, cursor),
+    );
+  }
+  public sendTournamentChatMessage(
+    id: string,
+    input: Parameters<PadlHubApiClient['sendTournamentChatMessage']>[1],
+  ) {
+    return this.tournamentChatCall(
+      { resource: 'send', resourceId: id, requestId: input.requestId, query: {} },
+      (api) => api.sendTournamentChatMessage(id, input),
+    );
+  }
+  public tournamentChatStatus(id: string, requestId: string) {
+    return this.tournamentChatCall(
+      { resource: 'status', resourceId: id, requestId, query: {} },
+      (api) => api.getTournamentChatRequest(id, requestId),
+    );
+  }
+  public tournamentChatReadPosition(id: string) {
+    return this.tournamentChatCall({ resource: 'position', resourceId: id, query: {} }, (api) =>
+      api.getTournamentChatReadPosition(id),
+    );
+  }
+  public advanceTournamentChatRead(
+    id: string,
+    input: Parameters<PadlHubApiClient['advanceTournamentChatRead']>[1],
+  ) {
+    return this.tournamentChatCall(
+      { resource: 'read', resourceId: id, requestId: input.requestId, query: {} },
+      (api) => api.advanceTournamentChatRead(id, input),
+    );
+  }
+  public tournamentChatReadStatus(id: string, requestId: string) {
+    return this.tournamentChatCall(
+      { resource: 'readStatus', resourceId: id, requestId, query: {} },
+      (api) => api.getTournamentChatReadRequest(id, requestId),
+    );
   }
   public stationMessagePrincipal(): string | null {
     return this.quarterCreatePrincipal();
@@ -481,6 +586,7 @@ export function getIOSSession(): Promise<IOSSession> {
         plugin,
         (id) => session?.canDispatchGameCancellation(id) === true,
         (request) => session?.canDispatchStation(request) === true,
+        (request) => session?.canDispatchTournamentChat(request) === true,
       ),
     });
     const session: IOSSession = new IOSSession(configuration, api);

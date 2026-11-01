@@ -2495,17 +2495,15 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.reconcileManagedLeaveOperation(gameId, key);
     },
     tournamentChatPrincipal() {
-      return !nativeClient ? quarterCreatePrincipal() : null;
+      return quarterCreatePrincipal();
     },
     async getTournamentChatReadPosition(id) {
-      if (nativeClient) return nativeUnavailable();
       const p = requireQuarterPrincipal();
       const result = await client.getTournamentChatReadPosition(id);
       requireQuarterPrincipal(p);
       return result;
     },
     async advanceTournamentChatRead(id, input) {
-      if (nativeClient) return nativeUnavailable();
       const p = requireQuarterPrincipal();
       const result = await client.advanceTournamentChatRead(id, input, () => {
         requireQuarterPrincipal(p);
@@ -2514,14 +2512,12 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return result;
     },
     async getTournamentChatReadRequest(id, requestId) {
-      if (nativeClient) return nativeUnavailable();
       const p = requireQuarterPrincipal();
       const result = await client.getTournamentChatReadRequest(id, requestId);
       requireQuarterPrincipal(p);
       return result;
     },
     async sendTournamentChatMessage(id, input) {
-      if (nativeClient) return nativeUnavailable();
       const p = requireQuarterPrincipal();
       const result = await client.sendTournamentChatMessage(id, input, () => {
         requireQuarterPrincipal(p);
@@ -2530,14 +2526,12 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return result;
     },
     async getTournamentChatRequest(id, requestId) {
-      if (nativeClient) return nativeUnavailable();
       const p = requireQuarterPrincipal();
       const result = await client.getTournamentChatRequest(id, requestId);
       requireQuarterPrincipal(p);
       return result;
     },
     async getTournamentChatHistory(id, limit, cursor) {
-      if (nativeClient) return nativeUnavailable();
       const p = requireQuarterPrincipal();
       const result = await client.getTournamentChatHistory(id, limit, cursor);
       requireQuarterPrincipal(p);
