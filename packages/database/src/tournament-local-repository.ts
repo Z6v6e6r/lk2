@@ -39,7 +39,7 @@ export interface TournamentScope {
   userId: string;
   tournamentId: string;
 }
-interface Row extends QueryResultRow {
+export interface TournamentLocalAttemptRow extends QueryResultRow {
   tenant_id: string;
   id: string;
   actor_user_id: string;
@@ -58,7 +58,9 @@ interface Row extends QueryResultRow {
   original_join_id: string | null;
 }
 export const tournamentOwnerKey = (id: string) => 'lk2-tournament:' + id;
-async function decode(r: Row): Promise<TournamentAttempt> {
+export async function decodeTournamentLocalAttempt(
+  r: TournamentLocalAttemptRow,
+): Promise<TournamentAttempt> {
   const request = parseTournamentLocalInput(r.request),
     command = parseTournamentCommand(r.owner_command);
   if (
@@ -122,12 +124,12 @@ async function row(
   selector: { id?: string; keyHash?: string } = {},
   lock = false,
 ) {
-  const q = await c.query<Row>(
+  const q = await c.query<TournamentLocalAttemptRow>(
     `select * from booking.tournament_local_attempts where tenant_id=$1 and actor_user_id=$2 ${selector.id ? 'and id=$3' : selector.keyHash ? 'and key_sha256=$3' : 'and tournament_id=$3'} order by created_at desc,id desc limit 1 ${lock ? 'for update' : ''}`,
     [s.tenantId, s.userId, selector.id ?? selector.keyHash ?? s.tournamentId],
   );
   if (!q.rows[0]) return null;
-  const a = await decode(q.rows[0]);
+  const a = await decodeTournamentLocalAttempt(q.rows[0]);
   if (a.tournamentId !== s.tournamentId)
     throw new TournamentLocalError('TOURNAMENT_LOCAL_KEY_CONFLICT', 409);
   return a;
@@ -187,11 +189,11 @@ export function createTournamentLocalRepository(pool: Pool) {
       withTenantTransaction(pool, s.tenantId, (c) => row(c, s, selector)),
     registeredJoinCandidate(s: TournamentScope) {
       return withTenantTransaction(pool, s.tenantId, async (c) => {
-        const q = await c.query<Row>(
+        const q = await c.query<TournamentLocalAttemptRow>(
           `select * from booking.tournament_local_attempts where tenant_id=$1 and actor_user_id=$2 and tournament_id=$3 and state='COMPLETED' and owner_command->>'action'='JOIN' and receipt->'operation'->>'outcome'='REGISTERED' order by created_at desc,id desc limit 1`,
           [s.tenantId, s.userId, s.tournamentId],
         );
-        return q.rows[0] ? await decode(q.rows[0]) : null;
+        return q.rows[0] ? await decodeTournamentLocalAttempt(q.rows[0]) : null;
       });
     },
     begin(
@@ -250,7 +252,7 @@ export function createTournamentLocalRepository(pool: Pool) {
           tournamentOwnerKey(id),
           tournamentId,
         );
-        const q = await c.query<Row>(
+        const q = await c.query<TournamentLocalAttemptRow>(
           `insert into booking.tournament_local_attempts(tenant_id,id,actor_user_id,tournament_id,key_sha256,request,request_hash,owner_command,owner_operation_id,provider_tenant_key,provider_client_id,provider_mapping_id,original_join_id,authority_hash,state) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,'READY') returning *`,
           [
             a.tenantId,
@@ -278,7 +280,7 @@ export function createTournamentLocalRepository(pool: Pool) {
             ]),
           ],
         );
-        const x = await decode(q.rows[0]!);
+        const x = await decodeTournamentLocalAttempt(q.rows[0]!);
         await event(c, a, x, 'tournament.local.prepared');
         return x;
       });
@@ -323,12 +325,12 @@ export function createTournamentLocalRepository(pool: Pool) {
             throw new TournamentLocalError('TOURNAMENT_LOCAL_RECEIPT_CONFLICT', 409);
           return x;
         }
-        const q = await c.query<Row>(
+        const q = await c.query<TournamentLocalAttemptRow>(
           `update booking.tournament_local_attempts set state='COMPLETED',receipt=$5::jsonb,receipt_hash=$6,lease_token=null,lease_until=null,updated_at=now() where tenant_id=$1 and actor_user_id=$2 and id=$3 and lease_token=$4 and state='DISPATCHED' returning *`,
           [a.tenantId, a.userId, id, token, JSON.stringify(r), hash],
         );
         if (!q.rows[0]) return await row(c, s, { id });
-        const done = await decode(q.rows[0]);
+        const done = await decodeTournamentLocalAttempt(q.rows[0]);
         await event(c, a, done, 'tournament.local.completed');
         return done;
       });
@@ -346,14 +348,14 @@ export async function verifyTournamentReadGeneration(
 ): Promise<void> {
   await withTenantTransaction(pool, scope.tenantId, async (client) => {
     await client.query('set local statement_timeout = 2000');
-    const rows = await client.query<Row>(
+    const rows = await client.query<TournamentLocalAttemptRow>(
       `select * from booking.tournament_local_attempts where tenant_id=$1 and tournament_id=$2 and owner_operation_id=$3 limit 2`,
       [scope.tenantId, scope.tournamentId, generation],
     );
     const r = rows.rows.length === 1 ? rows.rows[0] : undefined;
     if (!r || r.actor_user_id !== scope.userId)
       throw new TournamentLocalError('TOURNAMENT_LOCAL_STORED_INVALID');
-    const original = await decode(r);
+    const original = await decodeTournamentLocalAttempt(r);
     if (
       original.command.action !== 'JOIN' ||
       original.originalJoinId !== null ||
