@@ -319,7 +319,7 @@ export class StationStreamOwnerClient implements StationStreamOwner {
           const value = await reader.read();
           if (value.done) break;
           bytes += value.value.byteLength;
-          if (bytes > 2_000_000) {
+          if (bytes > (operation === 'history' ? 3 * 1024 * 1024 : 2_000_000)) {
             await reader.cancel();
             throw new StationStreamOwnerError();
           }

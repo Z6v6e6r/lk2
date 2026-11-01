@@ -2689,14 +2689,12 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async listStationStreamSummaries(ids) {
-      if (nativeClient) throw new Error('STATION_STREAM_UNAVAILABLE');
       const principal = stationMessagePrincipal();
       const result = await client.listStationStreamSummaries(ids);
       if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
       return result;
     },
     async getStationCommunityStream(id, cursor) {
-      if (nativeClient) throw new Error('STATION_STREAM_UNAVAILABLE');
       const principal = stationMessagePrincipal();
       const result = await client.getStationCommunityStream(id, {
         limit: 50,
@@ -2706,14 +2704,12 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return result;
     },
     async requestStationCommunityRead(id, input) {
-      if (nativeClient) throw new Error('STATION_STREAM_UNAVAILABLE');
       const principal = stationMessagePrincipal();
       const result = await client.requestStationCommunityRead(id, input);
       if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
       return result;
     },
     async getStationCommunityReadRequest(id, requestId) {
-      if (nativeClient) throw new Error('STATION_STREAM_UNAVAILABLE');
       const principal = stationMessagePrincipal();
       const result = await client.getStationCommunityReadRequest(id, requestId);
       if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');

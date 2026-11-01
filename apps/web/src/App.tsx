@@ -800,7 +800,7 @@ export function App({
                 getMessageRequest: gateway.getStationCommunityMessageRequest,
               }
             : {}),
-          ...(clientPlatform === 'web' &&
+          ...((clientPlatform === 'web' || clientPlatform === 'android') &&
           communityChatReadAvailable &&
           gateway.listStationStreamSummaries &&
           gateway.getStationCommunityStream &&
@@ -809,6 +809,7 @@ export function App({
           principal
             ? {
                 stream: {
+                  ...(clientPlatform === 'android' ? { readStorage: 'native-local' as const } : {}),
                   scope: JSON.stringify([tenantKey, state.session?.context.user.id]),
                   principal,
                   isCurrent: current,

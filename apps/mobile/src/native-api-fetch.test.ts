@@ -324,3 +324,63 @@ it('relays training registration bytes and key once, with no network or 401 retr
   await expect(fetcher(root + path, { method: 'POST', headers, body })).rejects.toThrow();
   expect(native.request).toHaveBeenCalledTimes(2);
 });
+
+it('native station v3 forwards exact four routes without response credentials or mutation retries', async () => {
+  const native = plugin(),
+    transport = createNativeApiFetch(config, native);
+  const id = '11111111-1111-4111-8111-111111111111',
+    key = '22222222-2222-4222-8222-222222222222';
+  const headers = { authorization: 'Bearer synthetic.session' };
+  for (const path of [
+    `station-stream-summaries?communityIds=${id}%2C${key}`,
+    `${id}/station-stream?limit=50&cursor=${'a'.repeat(1024)}`,
+    `${id}/read-requests/${key}`,
+  ])
+    await transport(`${root}/community-views/${path}`, { headers });
+  native.request.mockRejectedValueOnce(new TypeError('offline'));
+  await expect(
+    transport(`${root}/community-views/${id}/read-requests`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json', 'idempotency-key': key },
+      body: JSON.stringify({
+        requestId: key,
+        streamId: id,
+        membershipEpoch: 1,
+        throughSequence: 2,
+      }),
+    }),
+  ).rejects.toThrow();
+  expect(native.request).toHaveBeenCalledTimes(4);
+  expect(native.request.mock.calls.at(-1)?.[0]).toMatchObject({
+    method: 'POST',
+    path: `/user/api/v1/local-padel/community-views/${id}/read-requests`,
+  });
+});
+it('native v3 history alone accepts3MiB while oversized responses and receipts fail before parse', async () => {
+  const native = plugin(),
+    transport = createNativeApiFetch(config, native),
+    id = '11111111-1111-4111-8111-111111111111';
+  const headers = { authorization: 'Bearer synthetic.session' };
+  const body = JSON.stringify({
+    items: Array.from({ length: 50 }, () => ({ body: 'x' + '\u0001'.repeat(7998) + 'y' })),
+  });
+  expect(Buffer.byteLength(body)).toBeGreaterThan(2_000_000);
+  native.request.mockResolvedValue({ ...result(), body: Buffer.from(body).toString('base64') });
+  const response = await transport(`${root}/community-views/${id}/station-stream?limit=50`, {
+    headers,
+  });
+  expect(await response.text()).toBe(body);
+  native.request.mockResolvedValue({
+    ...result(),
+    body: Buffer.alloc(3 * 1024 * 1024 + 1, 32).toString('base64'),
+  });
+  await expect(
+    transport(`${root}/community-views/${id}/station-stream`, { headers }),
+  ).rejects.toThrow();
+  native.request.mockResolvedValue({
+    ...result(),
+    body: Buffer.alloc(1024 * 1024 + 1, 32).toString('base64'),
+  });
+  for (const suffix of ['station-stream-summaries?communityIds=' + id, `${id}/read-requests/${id}`])
+    await expect(transport(`${root}/community-views/${suffix}`, { headers })).rejects.toThrow();
+});

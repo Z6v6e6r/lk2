@@ -16,9 +16,14 @@ const session = {
     permissions: [],
   },
 };
-it.each([204, 503])(
-  'actual gateway fences v3 reads/commands synchronously during pending logout %i',
-  async (status) => {
+it.each([
+  ['web', 204],
+  ['web', 503],
+  ['android', 204],
+  ['android', 503],
+] as const)(
+  'actual gateway fences v3 reads/commands synchronously during pending logout %s/%i',
+  async (platform, status) => {
     let finish!: (r: Response) => void, revoke!: (r: Response) => void;
     const transport = vi.fn<typeof fetch>((raw, init) => {
       const url = raw instanceof Request ? raw.url : raw.toString();
@@ -42,6 +47,8 @@ it.each([204, 503])(
       baseUrl: 'https://api.invalid',
       tenantKey: 'test',
       appVersion: 'test',
+      platform,
+      nativeSessionTransport: platform === 'android',
       fetchImplementation: transport,
     });
     await gateway.restoreSession();
@@ -88,7 +95,7 @@ it.each([204, 503])(
     ).toHaveLength(1);
   },
 );
-it('native gateway does not expose a v3 transport path', async () => {
+it('native gateway denies v3 transport without authenticated principal', async () => {
   const transport = vi.fn<typeof fetch>();
   const gateway = createBrowserAuthGateway({
     baseUrl: 'https://api.invalid',
@@ -98,8 +105,6 @@ it('native gateway does not expose a v3 transport path', async () => {
     nativeSessionTransport: true,
     fetchImplementation: transport,
   });
-  await expect(gateway.listStationStreamSummaries!([id])).rejects.toThrow(
-    'STATION_STREAM_UNAVAILABLE',
-  );
+  await expect(gateway.listStationStreamSummaries!([id])).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
   expect(transport).not.toHaveBeenCalled();
 });

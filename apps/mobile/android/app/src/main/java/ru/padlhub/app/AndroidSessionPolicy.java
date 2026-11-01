@@ -80,7 +80,8 @@ final class AndroidSessionPolicy {
             || cleanPath.contains("%") || cleanPath.contains("..") || cleanPath.contains("//")) throw rejected();
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
         String relativePath = cleanPath.substring(userRoot.length());
-        boolean station = AndroidStationMessageRequest.matches(relativePath);
+        boolean stationStream = AndroidStationStreamRequest.matches(relativePath);
+        boolean station = stationStream || AndroidStationMessageRequest.matches(relativePath);
         if (!station && !validQuery(relativePath, method, (relativePath.startsWith("/games") || relativePath.startsWith("/trainings/")) ? uri.getRawQuery() : uri.getQuery())) throw rejected();
         String gameUuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
         boolean quarter = relativePath.startsWith("/game-create-operations");
@@ -131,7 +132,8 @@ final class AndroidSessionPolicy {
             || !textBody.matches("\\s*\\{\\s*\"reasonCode\"\\s*:\\s*\"ORGANIZER_REQUEST\"\\s*\\}\\s*")
             || (headers.containsKey("content-type") && !"application/json".equals(headers.get("content-type")))
             || !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}"))) throw rejected();
-        if (station) AndroidStationMessageRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
+        if (stationStream) AndroidStationStreamRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
+        else if (station) AndroidStationMessageRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
         if (quarter) AndroidQuarterCreateRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody);
         String intent = operation == Operation.REFRESH ? "refresh" : operation == Operation.LOGOUT ? "logout" : null;
         if (!java.util.Objects.equals(intent, headers.get("x-session-intent"))) throw rejected();
