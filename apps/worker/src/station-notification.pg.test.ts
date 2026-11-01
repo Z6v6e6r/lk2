@@ -1,3 +1,4 @@
+import { provisionStationSource } from '../../../scripts/provision-station-notifications.js';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { describe, it, expect, afterAll, vi } from 'vitest';
@@ -208,6 +209,8 @@ physical('station notifications: existing PostgreSQL CI service, no provider', (
           for (const table of [
             'audit.outbox_events',
             'audit.audit_log',
+            'notifications.ruleset_provision_commands',
+            'identity.user_access_profiles',
             'notifications.delivery_receipts',
             'notifications.delivery_attempts',
             'integration.notification_provider_links',
@@ -1296,5 +1299,86 @@ physical('station notifications: existing PostgreSQL CI service, no provider', (
         c.release();
       }
     }
+  });
+  it('provisions a disabled station source with one attributed audit and no dry-run writes', async () => {
+    const f = await setup();
+    const community = randomUUID(),
+      privateCommunity = 'synthetic-' + randomUUID();
+    await rows(
+      f.tenant,
+      "insert into integration.external_entity_map(tenant_id,external_system,entity_type,internal_id,external_id,sync_status,last_synced_at) values($1,'LK_LEGACY','community',$2,$3,'synced',now())",
+      [community, privateCommunity],
+    );
+    const request = {
+      tenantId: f.tenant,
+      actorId: f.user,
+      idempotencyKey: 'synthetic-station-' + randomUUID(),
+      communityId: community,
+      privateCommunityId: privateCommunity,
+      incarnationHash: 'sha256:' + 'c'.repeat(64),
+      streamId: randomUUID(),
+      replayFloor: 10,
+    };
+    const audit = () =>
+      rows(
+        f.tenant,
+        'select actor_id,resource_id,action,result,correlation_id from audit.audit_log where tenant_id=$1 and correlation_id=$2',
+        [request.idempotencyKey],
+      );
+    await expect(
+      provisionStationSource({ databaseUrl: url, request, apply: true }),
+    ).rejects.toThrow('ADMIN_PERMISSION_REQUIRED');
+    expect((await audit()).rows).toEqual([]);
+    await rows(
+      f.tenant,
+      "insert into identity.user_access_profiles(tenant_id,user_id,roles,permissions) values($1,$2,array['admin'],array['notifications.manage'])",
+      [f.user],
+    );
+    await rows(f.tenant, 'delete from notifications.trigger_rules where tenant_id=$1');
+    await rows(f.tenant, 'delete from notifications.templates where tenant_id=$1');
+    expect(await provisionStationSource({ databaseUrl: url, request, apply: false })).toMatchObject(
+      { dryRun: true, enabled: false, runtimeChanged: false },
+    );
+    expect((await audit()).rows).toEqual([]);
+    expect(
+      (
+        await rows(
+          f.tenant,
+          'select id from notifications.station_message_sources where tenant_id=$1 and community_id=$2',
+          [community],
+        )
+      ).rowCount,
+    ).toBe(0);
+    const first = await provisionStationSource({ databaseUrl: url, request, apply: true });
+    expect(await provisionStationSource({ databaseUrl: url, request, apply: true })).toEqual(first);
+    expect((await audit()).rows).toEqual([
+      {
+        actor_id: f.user,
+        resource_id: (first as { sourceId: string }).sourceId,
+        action: 'STATION_NOTIFICATION_SOURCE_PROVISIONED',
+        result: 'SUCCESS',
+        correlation_id: request.idempotencyKey,
+      },
+    ]);
+    expect(
+      (
+        await rows(
+          f.tenant,
+          'select enabled,after_sequence from notifications.station_message_sources where tenant_id=$1 and community_id=$2',
+          [community],
+        )
+      ).rows,
+    ).toEqual([{ enabled: false, after_sequence: '10' }]);
+    expect(
+      (await rows(f.tenant, 'select active from notifications.trigger_rules where tenant_id=$1'))
+        .rows,
+    ).toEqual([{ active: false }]);
+    await expect(
+      provisionStationSource({
+        databaseUrl: url,
+        request: { ...request, replayFloor: 11 },
+        apply: true,
+      }),
+    ).rejects.toThrow('IDEMPOTENCY_KEY_REUSED');
   });
 });

@@ -118,7 +118,7 @@ export async function provisionStationSource(options: {
         [r.tenantId, r.idempotencyKey, hash, JSON.stringify(result), r.actorId],
       );
       await c.query(
-        `insert into audit.audit_log(tenant_id,actor_user_id,action,resource_type,resource_id,result,correlation_id) values($1,$2,'STATION_NOTIFICATION_SOURCE_PROVISIONED','STATION_NOTIFICATION_SOURCE',$3,'SUCCESS',$4)`,
+        `insert into audit.audit_log(tenant_id,actor_id,action,resource_type,resource_id,result,correlation_id) values($1,$2,'STATION_NOTIFICATION_SOURCE_PROVISIONED','STATION_NOTIFICATION_SOURCE',$3,'SUCCESS',$4)`,
         [r.tenantId, r.actorId, result.sourceId, r.idempotencyKey],
       );
       return result;
