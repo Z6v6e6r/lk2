@@ -632,7 +632,7 @@ function LegacyCreateGamePage({
     <main className="games-page games-page--create">
       {pageHeader}
       {paidCreateIntent ? (
-        <a href="/games/create?quarterCreate=1">Игра по подписке: четверть корта</a>
+        <a href="/games/new?quarterCreate=1">Игра по подписке: четверть корта</a>
       ) : null}
       <form className="game-create-form" onSubmit={(event) => void submit(event)} noValidate>
         {locationsError ? (
