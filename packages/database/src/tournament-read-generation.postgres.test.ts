@@ -176,7 +176,7 @@ const url = ciDatabase();
     );
     await expect(g.verify()).rejects.toThrow();
   });
-  it('disabled canonical identity, mapping transfer and duplicate mapping deny old tuple', async () => {
+  it('disabled identity and mapping transfer deny old tuple; canonical uniqueness rejects duplicates', async () => {
     const f = await fixture();
     await withTenantTransaction(pool, tenantId, (c) =>
       c.query("update identity.users set status='DISABLED' where tenant_id=$1 and id=$2", [
@@ -195,13 +195,18 @@ const url = ciDatabase();
     );
     await expect(g.verify()).rejects.toThrow();
     const h = await fixture();
-    await withTenantTransaction(pool, tenantId, (c) =>
-      c.query(
-        "insert into integration.external_entity_map(tenant_id,id,external_system,entity_type,internal_id,external_id,sync_status,last_synced_at) values($1,$2,'VIVA','viva_profile',$3,$4,'synced',now())",
-        [tenantId, randomUUID(), h.scope.userId, 'synthetic-duplicate'],
+    await expect(
+      withTenantTransaction(pool, tenantId, (c) =>
+        c.query(
+          "insert into integration.external_entity_map(tenant_id,id,external_system,entity_type,internal_id,external_id,sync_status,last_synced_at) values($1,$2,'VIVA','viva_profile',$3,$4,'synced',now())",
+          [tenantId, randomUUID(), h.scope.userId, 'synthetic-duplicate'],
+        ),
       ),
-    );
-    await expect(h.verify()).rejects.toThrow();
+    ).rejects.toMatchObject({
+      code: '23505',
+      constraint: 'external_entity_map_canonical_internal_idx',
+    });
+    await expect(h.verify()).resolves.toBeUndefined();
   });
   it('completed rejection cannot impersonate current original JOIN', async () => {
     const f = await fixture(),
