@@ -726,10 +726,26 @@ physical('tournament notifications: existing PostgreSQL CI service, no provider'
         )
       ).rows[0]?.n,
     ).toBe(1);
+    const audits = () =>
+      rows(
+        f.tenant,
+        'select actor_id,resource_id,action,result,correlation_id from audit.audit_log where tenant_id=$1 and correlation_id=$2',
+        [request.idempotencyKey],
+      );
+    expect((await audits()).rows).toEqual([]);
     const first = await provisionTournamentSource({ databaseUrl: url, request, apply: true });
     expect(await provisionTournamentSource({ databaseUrl: url, request, apply: true })).toEqual(
       first,
     );
+    expect((await audits()).rows).toEqual([
+      {
+        actor_id: request.actorId,
+        resource_id: (first as { sourceId: string }).sourceId,
+        action: 'TOURNAMENT_NOTIFICATION_SOURCE_PROVISIONED',
+        result: 'SUCCESS',
+        correlation_id: request.idempotencyKey,
+      },
+    ]);
     expect(
       (
         await rows(
