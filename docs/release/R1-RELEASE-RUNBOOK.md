@@ -1,6 +1,14 @@
 # LK2 R1 — release preparation и controlled handoff
 
-## Обновление source/CI — 2026-11-01
+## Новые prerequisites — 2026-11-01
+
+545 требует совместимых LK287/CUP73 writers/drain, exact source incarnation/replay floor, immutable mappings и0112. Проверить права реальной worker-role на пять row-lock таблиц из domain contract; CI-superuser их не подтверждает, grants автоматически не расширять. Provisioning остаётся dry-run/default-disabled до отдельной операции.
+
+CUP74/LK2546 требуют согласованных owner/API,0113 lookup index, existing Mongo index readiness/read-marker adoption и хранения original receipts. MESSAGE547 сохраняет original custody; уже отправленный запрос не отзывает. Новые HEAD/CI: [READINESS](R1-READINESS.md).
+
+Обновлённая source batch A только запрошена; native542 — следующий отдельный этап. Merge/main, publication, dispatch, ключи/подпись, realDB/index/adoption и deploy не выполнялись и не разрешаются этим runbook. Успешный source CI не является сигналом включения production config.
+
+## Предыдущая контрольная точка source/CI — 2026-11-01
 
 Native542 и tournament543 устанавливаются только после общей source integration и её полного CI; отдельные Draft heads нельзя считать единой сборкой. Перед sandbox/device smoke включить exact actor-purpose pairing, approved owner indexes и current ACL только по разрешённому операционному плану. До закрытия station/tournament notification bridge и согласованной установки #544 push acceptance по этим событиям не заявлять. Новые local batches A/B ожидают отдельного разрешения; merge/main, publication, workflow dispatch и live writes не выполнялись.
 

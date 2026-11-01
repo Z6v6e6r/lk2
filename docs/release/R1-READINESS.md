@@ -1,6 +1,27 @@
 # LK2 R1 — аудит готовности к production release
 
-## Обновление source/CI — 2026-11-01
+## Актуальная контрольная точка — 2026-11-01 (после возобновления)
+
+**NO-GO для production.** Последний live readback GitHub main: LK2 `a37c05a2b2a28c8d53cb14447d357ad9a96bda1f`, LK `608ebe20689e74749fcd8cea6ab97d35c335f214`, CUP `83b1c17bc4c5edaec65387b25b5695e48337c3cf`; drift относительно предыдущего checkpoint нет. Новые пакеты остаются отдельными Draft PR. Текущий раздел имеет приоритет над историческими статусами ниже.
+
+| Пакет                                                                                   | Точный head                                | Доказательство CI                                                                                                                  | Остаток                                                                   |
+| --------------------------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [LK287](https://github.com/Z6v6e6r/lk/pull/287), station feed                           | `c89e4cb4b7fc7d60995cc86b4c8a57a633763707` | full41288446777 / Mongo41288446774 SUCCESS;26 cases,6 physical без пропусков                                                       | Совместимые writers и installation                                        |
+| [CUP73](https://github.com/Z6v6e6r/ph-admin/pull/73), permanent station type fence      | `20c2167a4f5188fee2745af5df41a6b76357b609` | CI41288365181 SUCCESS;6 physical lifetime cases,3 новые гонки                                                                      | Нет автоматического ремонта старых несогласованных строк                  |
+| [LK2545](https://github.com/Z6v6e6r/lk2/pull/545), station feed→inbox→guarded push      | `a81b774b660764079c5e9b74c41a4f841f263696` | full41293980641 SUCCESS7720PASS/126SKIP; stationPG26, closedPG4, required35physical+8guards без пропусков;5Docker PASS             | Runtime role privileges, source floor/mapping, provider/device acceptance |
+| [CUP74](https://github.com/Z6v6e6r/ph-admin/pull/74), original READ and causal baseline | `8101b3ddc3d7b2c43d1d4575b3720572e8b47af5` | CI41293427225 SUCCESS;9 physical Mongo cases без пропусков                                                                         | Installation/index/adoption                                               |
+| [LK2546](https://github.com/Z6v6e6r/lk2/pull/546), API/Web explicit READ                | `8c01e6ea48b8415b15a6fe636ae50cbbe8ff95f9` | corrected full41294862321 SUCCESS8104PASS/127SKIP; generationPG6, closedPG4, required28physical+8guards без пропусков;5Docker PASS | Native/realtime и общий release source                                    |
+| [LK2547](https://github.com/Z6v6e6r/lk2/pull/547), original-principal MESSAGE fence     | `0869bc3baa49679ffa1702cc8ae5f37e149adab3` | full41294926420 SUCCESS8109PASS/127SKIP; gateway7/SDK6/generationPG6; required28physical+8guards и closedPG4;5Docker PASS          | Уже отправленный запрос не отменяется; сохранять original custody         |
+
+Все перечисленные узкие SOURCE/CI outcomes VERIFIED; полнота R1 остаётся PARTIAL.546 initial CI имел один невозможный duplicate fixture: test-only correction проверяет существующий SQLSTATE23505/exact unique constraint и сохранность исходной привязки после rollback.545 initial CI нашёл ordinary/scenario privilege regression и две fixture-проблемы; исправленный trigger не расширяет grants, корректный head прошёл26 physical cases. Не представлять failed initial runs как green.
+
+iOS:545 run41293980632 —30PASS/1app-hosted KeychainSKIP;546 run41294862471 и547 run41294926440 —44PASS/1KeychainSKIP, unsigned simulator builds. Android545 run41293980622 —16JVM без пропусков, unsigned APK artifact13078351792, ZIP SHA256 `6aa48d983a9327ccbbad405b12325ebefe5d75c45f1a2187c30bd3575004f827`, expires2026-11-15. Metadata проверена; artifact не установлен. Это не signing/device/store acceptance.
+
+Открыты: attributable monetary refund/credit (BLOCKED, Swagger недоступен), training LEAVE/re-registration/compensation, paid/provider tournament paths, общий source integration, native tournament chat, tournament notification importer/dispatch, provider/device и release custody. Owner query/canonical-recipient adapter для tournament сейчас реализуется отдельно; его incomplete source не считается VERIFIED.
+
+После перерыва временные /private/tmp evidence/cache и Git clone CUP отсутствуют. Коммиты/CI сохранились и проверены; незакоммиченный query source сохранён в workspace и перенесён без потери файлов в новый isolated CUP checkout. Локальные receipts восстанавливаются только новыми фактическими проверками; исторические LOCAL результаты не объявляются повторно выполненными.
+
+## Предыдущая контрольная точка source/CI — 2026-11-01
 
 Native station v3 [LK2#542](https://github.com/Z6v6e6r/lk2/pull/542) `c6a03c212e98371be59c25988cd5df1087809da8`: full CI41283587337 и iOS41283587178 SUCCESS. Full8053PASS/127SKIP, closedPG4, required28physical+8guards zeroSKIP, static/security/dependency/deployment и5Docker builds PASS; Swift49PASS/1app-hosted KeychainSKIP, unsigned simulator App build. LOCAL112Vitest/11JVM, actual Android/iOS component390/1280, independent review CLEAR28files. Read custody восстанавливает исходный GET; только v3 history имеет3MiB cap. Android APK/device acceptance этого head отсутствует.
 

@@ -1,6 +1,14 @@
 # LK2 R1 — rollback и recovery readiness
 
-## Обновление source/CI — 2026-11-01
+## Station/read recovery — 2026-11-01
+
+545: retain source/facts/recipients, original membership epoch/context, STATION_PENDING/STATION_SENDING и acknowledged dispatch marker. UNKNOWN после возможной отправки не превращать в resend и не передавать старому ordinary worker. Отключение нового consumer и drain — только по разрешённому operational plan; не удалять custody для «перезапуска».
+
+CUP74/LK2546: сохранить read positions/baselines/receipts/original UUID; не сбрасывать stream/readThrough, не повторять READ POST из reload. MESSAGE547 блокирует ещё не отправленный stale original, но не отзывает уже отправленный запрос: GET original recovery сохраняется.
+
+Фактический runtime rollback/restore не выполнялся. Source отключение совместимо лишь при сохранении новых данных и writer floors; возвращение к старым aggregate-only compensation или type-flip writers восстанавливает известные дефекты. Evidence: [READINESS](R1-READINESS.md).
+
+## Предыдущая контрольная точка source/CI — 2026-11-01
 
 Для542 сохранить metadata-only read/message custody и возможность GET исходного UUID после process restart; downgrade на v2 не подтверждает unread parity. Для543 сохранить original request UUID/hash и CUP receipt/sequence, не повторять POST после UNKNOWN и не заменять историю при bounded catch-up gap. Native tournament entry остаётся закрыт до Stage B.
 

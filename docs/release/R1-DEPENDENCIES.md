@@ -1,6 +1,14 @@
 # LK2 R1 — зависимости и критический путь
 
-## Обновление source/CI — 2026-11-01
+## Актуальный критический путь — 2026-11-01
+
+1. SOURCE/CI: station LK287+CUP73→LK2545 завершён; tournament CUP74→LK2546→MESSAGE547 завершён. Exact heads/runs: [READINESS](R1-READINESS.md).
+2. Подготовлена обновлённая локальная batch A: base547 `0869bc3baa49679ffa1702cc8ae5f37e149adab3` +545 `a81b774b660764079c5e9b74c41a4f841f263696` +536 `63bd45ffc1abe9a192a2164c83b23d47181dbaee` +539 `1de0ef602708a4413f2ea99cd3b21d8b88fd0cbd`. Все fullCI green; новый exact approval запрошен, выполнение не начиналось.117 migration paths, общие blobs одинаковы; это не SQL apply или combined acceptance.
+3. После общего green integration head — отдельная партия с native542, затем native tournament Stage B. Не копировать конфликтующие App/gateway файлы для обхода integration approval. Прежние pending предложения A/B ниже исторические; разрешения525/528 не распространяются на новые heads.
+4. Параллельно CUP74 causal baseline→tournament readonly owner feed + canonical background identity resolver (в работе)→durable tournament importer/outbox/dispatch (ещё не реализованы).
+5. Attributable monetary settlement — отдельная BLOCKED зависимость. Затем полный non-sending E2E и отдельно разрешённые provider/device/signing/release transitions. Ни source integration, ни CI не снимают live gates.
+
+## Предыдущая контрольная точка source/CI — 2026-11-01
 
 Критический путь исходников: (1) ordinary FCM/Web pre-dispatch policy#544 на525, SOURCE/LOCAL/review готовы, CI41285469025 SUCCESS (новыеPG17/17); (2) station owner feed → канонические получатели/current-epoch ACL → durable LK2 import/outbox → dispatch ACL и recovery; (3) аналогичный tournament bridge. Эти SOURCE gaps должны быть закрыты до device/provider acceptance.
 

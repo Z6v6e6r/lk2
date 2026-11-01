@@ -1,6 +1,15 @@
 # LK2 R1 — E2E и acceptance matrix
 
-## Обновление source/CI — 2026-11-01
+## Новые проверенные сценарии — 2026-11-01
+
+- Station545 CI:26 physical PG cases — immutable context, current mapping/epoch, ordinary/scenario restricted-role compatibility, dispatch marker ACK loss/UNKNOWN, safe transport и no-resend после возможной отправки. Синтетические providers; реальные push receipts отсутствуют.
+- Tournament CUP74:9 physical Mongo cases — immutable original READ result, lost ACK/stale cleanup, publication↔JOIN/ASSIGN, leave/revoke, adoption/readiness. LK2546:6 physical PG identity/generation cases; невозможный duplicate теперь проверяет реальное unique constraint.
+- MESSAGE547: gateway7+SDK6 выполняются в fullCI; pending revoke, повторный login с тем же token во время WebCrypto, сохранение исходного UUID/body, отказ раскрыть stale response. Unit totals не складываются с повторными адресными suite.
+- Native CI545/546/547 unsigned; Keychain app-hosted case пропущен явно. Android54516JVM и APK metadata не заменяют physical install/upgrade. Полная native/provider матрица остаётся PARTIAL.
+
+Точные commits/runs и пределы — в [READINESS](R1-READINESS.md). Новые query-adapter tests пока не приняты; прежние LOCAL temp receipts недоступны после перерыва, повторное исполнение заявляется только по новым логам.
+
+## Предыдущая контрольная точка source/CI — 2026-11-01
 
 Q14/Q16 native station v3#542: LOCAL112Vitest/11JVM, renderer390/1280 дляAndroid/iOS и GET-only recovery; CI8053PASS/127SKIP, closedPG4, required28physical8guards zeroSKIP; Swift49PASS/1KeychainSKIP и unsigned simulator build. Exact-head Android APK/physical devices/two-device acceptance отсутствуют.
 

@@ -1,6 +1,12 @@
 # LK2 R1 — GO / NO-GO
 
-## Обновление source/CI — 2026-11-01
+## Решение — 2026-11-01
+
+**NO-GO.**545,546,547 и CUP73/74 прошли соответствующий source/physical CI; это закрывает конкретные станционные уведомления, READ и logout-гонку, но не весь R1. Нет общего интегрированного source, полного native/tournament notification контура, attributable monetary settlement, provider/device/signing/store acceptance и production backup/restore/rollback custody.
+
+Продолжается разрешённая task-branch реализация, CI и отчётность. Новая exact source batch A запрошена отдельно; merge/main, release flags, publication, realDB/provider/secret/signing/deploy/store операции не выполнялись. Details и точные evidence: [READINESS](R1-READINESS.md), [BLOCKERS](R1-BLOCKERS.md), [DEPENDENCIES](R1-DEPENDENCIES.md). Предыдущие формулировки ниже — история до текущих исправлений.
+
+## Предыдущая контрольная точка source/CI — 2026-11-01
 
 **NO-GO.** Native station542 прошёл full/iOS CI; tournament API/Web543 прошёл LOCAL/review и full/iOS CI. Это не единый интегрированный release. Дополнительно подтверждены SOURCE gaps station/tournament → notification outbox/recipient ACL; ordinary FCM/Web dispatch policy исправлен в#544 (review/LOCAL/fullCI SUCCESS,17physicalPG). Денежный settlement BLOCKED при недоступном Swagger. Provider/device/signing/store и production custody не подтверждены. Новые local integration batches A/B не выполнялись и ожидают точного разрешения; main merge и live-переходы не разрешены.
 
