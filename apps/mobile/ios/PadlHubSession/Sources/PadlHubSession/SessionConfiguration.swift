@@ -34,7 +34,7 @@ public struct SessionConfiguration: Sendable {
 }
 
 public enum SessionOperation: String, Sendable {
-  case challenge, verify, refresh, logout, context, read, notification, quarterCreate
+  case challenge, verify, refresh, logout, context, read, notification, quarterCreate, gameCancel
 }
 
 public struct SessionRequest: Sendable {
@@ -44,11 +44,12 @@ public struct SessionRequest: Sendable {
   public let body: String?
   public let read: CabinetRead?
   public let notification: NotificationCommand?
+  public let gameCancel: GameCancelRequest?
   public let quarterCreate: QuarterCreateRequest?
 
   public init(
     operation: SessionOperation, challengeID: String? = nil,
-    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil, quarterCreate: QuarterCreateRequest? = nil
+    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil, quarterCreate: QuarterCreateRequest? = nil, gameCancel: GameCancelRequest? = nil
   ) {
     self.operation = operation
     self.challengeID = challengeID
@@ -57,9 +58,15 @@ public struct SessionRequest: Sendable {
     self.read = read
     self.notification = notification
     self.quarterCreate = quarterCreate
+    self.gameCancel = gameCancel
   }
 
   func urlRequest(configuration: SessionConfiguration) throws -> URLRequest {
+    if operation == .gameCancel {
+      guard let gameCancel, challengeID == nil, read == nil, notification == nil, quarterCreate == nil else {throw SessionFailure.request}
+      return try gameCancel.urlRequest(configuration:configuration,headers:headers,body:body)
+    }
+    guard gameCancel == nil else {throw SessionFailure.request}
     if operation == .quarterCreate {
       guard let quarterCreate, challengeID == nil, read == nil, notification == nil else {throw SessionFailure.request}
       return try quarterCreate.urlRequest(configuration:configuration,headers:headers,body:body)
@@ -68,7 +75,7 @@ public struct SessionRequest: Sendable {
     var path = configuration.authPath
     let method: String
     switch operation {
-    case .quarterCreate: throw SessionFailure.request
+    case .quarterCreate, .gameCancel: throw SessionFailure.request
     case .challenge:
       path += "/challenges"
       method = "POST"

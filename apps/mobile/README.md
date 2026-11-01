@@ -260,3 +260,32 @@ background and cold-start alert receipt, account switch/logout/revocation and op
 Provider acceptance and device receipt are distinct evidence. No unsigned simulator result closes
 either. Archive/export, credential installation, provider sends, TestFlight and store publication
 require their own exact authority; this source workflow performs none of them.
+
+## Local organizer cancellation
+
+The game detail exposes the existing organizer CANCEL only when the authenticated server's
+`allowedActions` includes `CANCEL`. This requires the matching canonical read implementation:
+NO_PAYMENT, original organizer, scheduled future game, and matching aggregate/projection revision
+in one tenant-scoped SQL statement. A missing/stale projection or unknown payment mode removes
+only the action, never the card. Price zero and `NOT_REQUIRED` are not eligibility evidence.
+Deploy the compatible API before distributing these clients; older APIs advertised a broader
+advisory action. The command writer still rechecks the actual aggregate under its existing lock.
+
+Android allows only the existing POST `/games/:uuid/cancel` with the exact organizer reason,
+Bearer and original idempotency key. iOS uses a typed `gameCancel` bridge request; no caller URL
+or provider method is accepted. Both retain the SDK's one network retry with the same key.
+Logout blocks new sends and late responses synchronously. There is no new command journal.
+After an ambiguous acknowledgement, only an authenticated GET displaying `CANCELLED` confirms
+the aggregate outcome; unavailable/old reads remain unconfirmed. Manual status refresh never
+sends a command. A reload does not claim authorship of the previous cancellation.
+
+Paid/subscription/provider cancellation, refund and entitlement compensation remain unsupported
+by this action. Roster/history stays with the existing canonical writer; no forced removal or
+station-membership change is introduced. Rollback to an older API may restore its broader advisory action; the unchanged canonical
+writer still rejects non-NO_PAYMENT or unauthorized cancellation. Native transport alone never
+changes server authorization. No pending training/direct branch is copied.
+
+Verification: focused Vitest including game read/lifecycle fixtures, host JVM policy/engine,
+Swift package tests and rendered synthetic UI are separate from Android/iOS app builds and
+real-device/backend acceptance. The existing lifecycle PostgreSQL fixture is CI-only; no local
+database is provisioned for this packet.

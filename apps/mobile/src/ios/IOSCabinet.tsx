@@ -1,3 +1,4 @@
+import { IOSGameCancel } from './IOSGameCancel.js';
 import '../native-quarter-create.css';
 import { QuarterCreatePanel } from '../../../web/src/QuarterCreatePanel.js';
 import { createIOSQuarterGateway } from './quarter-gateway.js';
@@ -529,10 +530,8 @@ export function IOSCabinet({
       <Load title="Игра" load={() => data.game(detail[2]!)}>
         {(game) => (
           <Page title="Игра" active="games">
-            <GameCard game={game} readOnly />
-            <p className="ios-cabinet-note">
-              Запись, оплата и управление игрой появятся в следующей версии.
-            </p>
+            <IOSGameCancel key={game.id} game={game} session={session} />
+            <p className="ios-cabinet-note">Запись и оплата пока недоступны.</p>
           </Page>
         )}
       </Load>

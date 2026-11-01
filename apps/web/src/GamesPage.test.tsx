@@ -392,62 +392,151 @@ describe('GamesPage discovery', () => {
     expect(getGame).toHaveBeenCalledTimes(2);
   });
 
-  it('lets the organizer cancel a free game and refreshes the persisted status', async () => {
-    const organizerGame: ViewerGameCard = {
-      ...game,
-      surface: 'MY_UPCOMING',
-      startsAt: '2099-07-20T15:00:00.000Z',
-      endsAt: '2099-07-20T16:00:00.000Z',
-      levelRange: game.levelRange ?? null,
-      priceSummary: null,
-      capacity: { ...game.capacity, total: 4 },
-      participants: game.participants.map((participant, index) => ({
-        ...participant,
-        userId: `00000000-0000-4000-8000-00000000000${index}`,
-      })),
-      viewerRelation: 'ORGANIZER',
-      viewerPaymentState: 'NOT_REQUIRED',
-      resultSummary: null,
-      allowedActions: ['OPEN_DETAILS', 'CANCEL'],
-      conversation: null,
-    };
-    const cancelledGame: ViewerGameCard = {
-      ...organizerGame,
-      revision: organizerGame.revision + 1,
-      displayState: 'CANCELLED',
-      allowedActions: ['OPEN_DETAILS'],
-    };
-    const cancelGame = vi.fn<AuthGateway['cancelGame']>().mockResolvedValue({
-      commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
-      operation: {
-        id: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
-        type: 'CANCEL_GAME',
-        status: 'SUCCEEDED',
-        gameId: game.id,
-        aggregateRevision: cancelledGame.revision,
-        createdAt: '2026-08-26T10:00:00.000Z',
-        updatedAt: '2026-08-26T10:00:00.000Z',
-        nextAction: { type: 'NONE' },
-        error: null,
-      },
-      game: cancelledGame,
-      replayed: false,
-    });
-    const getGame = vi.fn().mockResolvedValueOnce(organizerGame).mockResolvedValue(cancelledGame);
-    const api: AuthGateway = { ...gateway(), getGame, cancelGame };
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const user = userEvent.setup();
+  it.each([false, true])(
+    'lets the organizer cancel a free game and refreshes persisted status (lost ACK=%s)',
+    async (lostAck) => {
+      const organizerGame: ViewerGameCard = {
+        ...game,
+        surface: 'MY_UPCOMING',
+        startsAt: '2099-07-20T15:00:00.000Z',
+        endsAt: '2099-07-20T16:00:00.000Z',
+        levelRange: game.levelRange ?? null,
+        priceSummary: null,
+        capacity: { ...game.capacity, total: 4 },
+        participants: game.participants.map((participant, index) => ({
+          ...participant,
+          userId: `00000000-0000-4000-8000-00000000000${index}`,
+        })),
+        viewerRelation: 'ORGANIZER',
+        viewerPaymentState: 'NOT_REQUIRED',
+        resultSummary: null,
+        allowedActions: ['OPEN_DETAILS', 'CANCEL'],
+        conversation: null,
+      };
+      const cancelledGame: ViewerGameCard = {
+        ...organizerGame,
+        revision: organizerGame.revision + 1,
+        displayState: 'CANCELLED',
+        allowedActions: ['OPEN_DETAILS'],
+      };
+      const cancelGame = vi.fn<AuthGateway['cancelGame']>().mockResolvedValue({
+        commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+        operation: {
+          id: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+          type: 'CANCEL_GAME',
+          status: 'SUCCEEDED',
+          gameId: game.id,
+          aggregateRevision: cancelledGame.revision,
+          createdAt: '2026-08-26T10:00:00.000Z',
+          updatedAt: '2026-08-26T10:00:00.000Z',
+          nextAction: { type: 'NONE' },
+          error: null,
+        },
+        game: cancelledGame,
+        replayed: false,
+      });
+      if (lostAck) cancelGame.mockRejectedValue(new TypeError('Synthetic lost ACK'));
+      const getGame = vi.fn().mockResolvedValueOnce(organizerGame).mockResolvedValue(cancelledGame);
+      const api: AuthGateway = {
+        ...gateway(),
+        getGame,
+        cancelGame,
+        gameCancelPrincipal: () => 'synthetic-principal',
+      };
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const user = userEvent.setup();
 
-    render(<GamesPage gateway={api} gameId={organizerGame.id} />);
-    await user.click(await screen.findByRole('button', { name: 'Отменить игру' }));
+      render(<GamesPage gateway={api} gameId={organizerGame.id} />);
+      await user.click(await screen.findByRole('button', { name: 'Отменить игру' }));
 
-    expect(window.confirm).toHaveBeenCalledWith('Отменить игру для всех участников?');
-    expect(cancelGame).toHaveBeenCalledWith(organizerGame.id, {
-      reasonCode: 'ORGANIZER_REQUEST',
-    });
-    expect(await screen.findByText('Игра отменена. Статус и состав обновлены.')).toBeVisible();
-    expect(await screen.findByText('Игра отменена')).toBeVisible();
-  });
+      expect(window.confirm).toHaveBeenCalledWith('Отменить игру для всех участников?');
+      expect(cancelGame).toHaveBeenCalledWith(organizerGame.id, {
+        reasonCode: 'ORGANIZER_REQUEST',
+      });
+      expect(await screen.findByText('Игра отменена. Статус и состав обновлены.')).toBeVisible();
+      expect(await screen.findByText('Игра отменена')).toBeVisible();
+    },
+  );
+
+  it.each(['confirmed', 'scheduled', 'error', 'logout', 'unmount'] as const)(
+    'manually reads a pending cancellation without another command (%s)',
+    async (outcome) => {
+      const organizerGame: ViewerGameCard = {
+        ...game,
+        surface: 'MY_UPCOMING',
+        startsAt: '2099-07-20T15:00:00.000Z',
+        endsAt: '2099-07-20T16:00:00.000Z',
+        levelRange: game.levelRange ?? null,
+        priceSummary: null,
+        capacity: { ...game.capacity, total: 4 },
+        participants: [],
+        viewerRelation: 'ORGANIZER',
+        viewerPaymentState: 'NOT_REQUIRED',
+        resultSummary: null,
+        allowedActions: ['OPEN_DETAILS', 'CANCEL'],
+        conversation: null,
+      };
+      const cancelledGame: ViewerGameCard = {
+        ...organizerGame,
+        revision: organizerGame.revision + 1,
+        displayState: 'CANCELLED',
+        allowedActions: ['OPEN_DETAILS'],
+      };
+      let principal: string | null = 'original-cancellation-principal';
+      let resolveRead!: (value: ViewerGameCard) => void;
+      let rejectRead!: (reason: Error) => void;
+      const readback = new Promise<ViewerGameCard>((resolve, reject) => {
+        resolveRead = resolve;
+        rejectRead = reject;
+      });
+      const getGame = vi
+        .fn<AuthGateway['getGame']>()
+        .mockResolvedValueOnce(organizerGame)
+        .mockResolvedValueOnce(organizerGame)
+        .mockReturnValueOnce(readback);
+      const cancelGame = vi
+        .fn<AuthGateway['cancelGame']>()
+        .mockRejectedValue(new TypeError('Synthetic lost ACK'));
+      const api: AuthGateway = {
+        ...gateway(),
+        getGame,
+        cancelGame,
+        gameCancelPrincipal: () => principal,
+      };
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const user = userEvent.setup();
+      const view = render(<GamesPage gateway={api} gameId={game.id} />);
+      await user.click(await screen.findByRole('button', { name: 'Отменить игру' }));
+      const refresh = await screen.findByRole('button', { name: 'Обновить статус отмены' });
+      expect(getGame).toHaveBeenCalledTimes(2);
+      await user.dblClick(refresh);
+      expect(getGame).toHaveBeenCalledTimes(3);
+      if (outcome === 'logout') principal = null;
+      if (outcome === 'unmount') view.unmount();
+      await act(async () => {
+        if (outcome === 'error') rejectRead(new TypeError('Synthetic offline'));
+        else resolveRead(outcome === 'scheduled' ? organizerGame : cancelledGame);
+        await readback.catch(() => undefined);
+      });
+      expect(cancelGame).toHaveBeenCalledTimes(1);
+      expect(getGame).toHaveBeenCalledTimes(3);
+      if (outcome === 'confirmed') {
+        expect(await screen.findByText('Игра отменена. Статус и состав обновлены.')).toBeVisible();
+        expect(screen.queryByRole('button', { name: 'Обновить статус отмены' })).toBeNull();
+      } else {
+        expect(screen.queryByText('Игра отменена. Статус и состав обновлены.')).toBeNull();
+        if (outcome === 'error' || outcome === 'scheduled') {
+          expect(refresh).toBeEnabled();
+          expect(
+            screen.getByText('Отмена пока не подтверждена. Обновите статус игры позже.'),
+          ).toBeVisible();
+          principal = null;
+          await user.click(refresh);
+          expect(getGame).toHaveBeenCalledTimes(3);
+        }
+      }
+    },
+  );
 
   it('requests the game chat with the canonical detail id and no user-entered identifier', async () => {
     const participantGame: ViewerGameCard = {
