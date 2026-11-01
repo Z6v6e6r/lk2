@@ -125,6 +125,7 @@ import {
   createCommunityOwnershipTransferRuntime,
   createCommunityReadExperienceRuntime,
   createStationMessageRuntime,
+  createStationStreamRuntime,
   createCommunityReadRuntime,
 } from './communities/community-runtime.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
@@ -568,6 +569,12 @@ const giftCertificateArtifactStore = config.GIFT_CERTIFICATE_ISSUANCE_ENABLED
 const communityActorToken = createCommunityActorToken(
   async (actor) => (await authService.issueVivaAccessToken(actor)).accessToken,
 );
+const stationStreamOwner = createStationStreamRuntime({
+  config,
+  pool,
+  token: communityActorToken,
+  logger,
+});
 const stationMessageOwner = createStationMessageRuntime({
   config,
   pool,
@@ -847,6 +854,7 @@ const app = await buildApp({
     token: communityActorToken,
   }),
   ...(stationMessageOwner ? { stationMessageOwner } : {}),
+  ...(stationStreamOwner ? { stationStreamOwner } : {}),
   ...(communityReadExperienceService ? { communityReadExperienceService } : {}),
   ...(communityCreateService ? { communityCreateService } : {}),
   ...(communityMembershipPinService ? { communityMembershipPinService } : {}),

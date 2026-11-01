@@ -1,7 +1,10 @@
+import type { StationStreamSummary } from '@phub/api-sdk';
 import type { CommunityMembershipPage, CommunityReadExperienceChatPage } from '../auth-gateway.js';
 
 /** One destination row of the Сообщества tab: a community the viewer is a member of. */
-export type CommunityRow = CommunityMembershipPage['items'][number];
+export type CommunityRow = CommunityMembershipPage['items'][number] & {
+  readonly stationStream?: StationStreamSummary | { readonly availability: 'UNAVAILABLE' };
+};
 export type CommunityChatMessage = CommunityReadExperienceChatPage['items'][number];
 
 /** The projection has no last-message preview for a community chat, so the row states what it is. */
@@ -71,7 +74,13 @@ export function communityRows(input: {
 }): readonly CommunityRow[] {
   const normalizedQuery = input.query.trim().toLocaleLowerCase('ru-RU');
   return input.communities.filter((community) => {
-    if (input.unreadOnly && community.unreadChatCount <= 0) return false;
+    const count =
+      community.stationStream?.availability === 'AVAILABLE'
+        ? community.stationStream.unreadCount
+        : community.stationStream?.availability === 'UNAVAILABLE'
+          ? null
+          : community.unreadChatCount;
+    if (input.unreadOnly && count !== null && count <= 0) return false;
     if (!normalizedQuery) return true;
     return community.title.toLocaleLowerCase('ru-RU').includes(normalizedQuery);
   });

@@ -71,6 +71,11 @@ export type LegacyCommunityToken = (actor: LegacyCommunityActor) => Promise<stri
 export interface CommunityLegacyBridgeRepository {
   getViewerIdentity(tenantId: string, userId: string): Promise<LegacyCommunityViewerIdentity>;
   getCommunityExternalId?(tenantId: string, communityId: string): Promise<string | undefined>;
+  /** Read-only exact mapping for a bounded authenticated batch; never creates aliases. */
+  getCommunityExternalIds?(
+    tenantId: string,
+    communityIds: readonly string[],
+  ): Promise<ReadonlyMap<string, string>>;
   resolveCommunityIds(
     tenantId: string,
     externalIds: readonly string[],
@@ -246,3 +251,4 @@ export * from './community-content-moderation.js';
 export * from './community-realtime-events.js';
 
 export * from './station-message.js';
+export * from './station-stream.js';

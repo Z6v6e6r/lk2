@@ -135,7 +135,13 @@ function CommunityChatRow({
   readonly selected: boolean;
   readonly onOpen: () => void;
 }): React.JSX.Element {
-  const unread = unreadLabel(community.unreadChatCount);
+  const count =
+    community.stationStream?.availability === 'AVAILABLE'
+      ? community.stationStream.unreadCount
+      : community.stationStream?.availability === 'UNAVAILABLE'
+        ? null
+        : community.unreadChatCount;
+  const unread = count === null ? '?' : unreadLabel(count);
   return (
     <li className={styles.listItem}>
       <button
@@ -155,7 +161,11 @@ function CommunityChatRow({
           {unread ? (
             <span
               className={styles.unreadBadge}
-              aria-label={`Непрочитанных сообщений: ${community.unreadChatCount}`}
+              aria-label={
+                count === null
+                  ? 'Число непрочитанных сообщений недоступно'
+                  : `Непрочитанных сообщений: ${count}`
+              }
             >
               {unread}
             </span>

@@ -1,3 +1,4 @@
+import { StationStreamThread, type StationStreamSource } from './chats-ui/StationStreamThread.js';
 import type { StationMessageReceipt, StationMessageRequest } from './auth-gateway.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -84,6 +85,7 @@ export interface StationSupportSource {
  * enabling the read-only chat projection.
  */
 export interface CommunityChatsSource {
+  readonly stream?: StationStreamSource;
   readonly custodyScope?: string;
   readonly custodyStorage?: 'native-local';
   readonly isCurrent?: () => boolean;
@@ -103,6 +105,32 @@ export interface CommunityChatsSource {
     | undefined;
 }
 
+async function loadCommunityDirectory(
+  source: CommunityChatsSource,
+  cursor?: string,
+): Promise<{ items: readonly CommunityRow[]; nextCursor?: string | null }> {
+  if (source.stream && !source.stream.isCurrent()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+  const page = await source.loadCommunities(cursor);
+  if (!source.stream || page.items.length === 0) return page;
+  if (!source.stream.isCurrent()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+  let items: readonly CommunityRow[];
+  try {
+    const summaries = await source.stream.summaries(page.items.map((item) => item.id));
+    if (!source.stream.isCurrent()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+    const map = new Map(summaries.items.map((item) => [item.communityId, item]));
+    items = page.items.map((item) => ({
+      ...item,
+      stationStream: map.get(item.id) ?? { availability: 'UNAVAILABLE' as const },
+    }));
+  } catch {
+    if (!source.stream.isCurrent()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+    items = page.items.map((item) => ({
+      ...item,
+      stationStream: { availability: 'UNAVAILABLE' as const },
+    }));
+  }
+  return { ...page, items };
+}
 export type ChatRouteMode = 'list' | 'new' | 'thread';
 
 export interface ChatUiError {
@@ -305,7 +333,12 @@ function initialCommunityState(
   return {
     ...EMPTY_COMMUNITY_STATE,
     status: 'ready',
-    communities: cached.communities,
+    communities: source?.stream
+      ? cached.communities.map((item) => ({
+          ...item,
+          stationStream: { availability: 'UNAVAILABLE' as const },
+        }))
+      : cached.communities,
     nextCursor: cached.nextCursor,
   };
 }
@@ -970,7 +1003,7 @@ export function ChatsPage({
       listError: null,
       listRetry: null,
     }));
-    void communitySource.loadCommunities().then(
+    void loadCommunityDirectory(communitySource).then(
       (page) => {
         communityListLoadingRef.current = false;
         if (communityListRequestRef.current !== generation) return;
@@ -1053,6 +1086,11 @@ export function ChatsPage({
   useEffect(() => {
     const communityId = communityState.selectedCommunityId;
     if (filter !== 'COMMUNITY' || !communityMessages || !communityId) return;
+    if (
+      communitySource?.stream &&
+      !['UNADOPTED', 'NOT_STATION'].includes(communitySelected?.stationStream?.availability ?? '')
+    )
+      return;
     let active = true;
     let pending = false;
     let stationHistory = false;
@@ -1136,6 +1174,8 @@ export function ChatsPage({
     filter,
     communityMessages,
     communitySource?.custodyScope,
+    communitySource?.stream,
+    communitySelected?.stationStream?.availability,
     communityState.selectedCommunityId,
     communityReloadToken,
     currentUserId,
@@ -1158,7 +1198,7 @@ export function ChatsPage({
         }
         return update(current);
       });
-    void communitySource.loadCommunities(cursor).then(
+    void loadCommunityDirectory(communitySource, cursor).then(
       (page) =>
         settle((current) => {
           const communities = appendCommunityPage(current.communities, page.items);
@@ -1270,10 +1310,9 @@ export function ChatsPage({
    * refresh button. The row is `aria-current` anyway, so the tap is a no-op.
    */
   function selectCommunity(communityId: string): void {
-    const buffered = communityThreadCache.read(
-      communitySource?.custodyScope ?? currentUserId,
-      communityId,
-    );
+    const buffered = communitySource?.stream
+      ? null
+      : communityThreadCache.read(communitySource?.custodyScope ?? currentUserId, communityId);
     setCommunityState((current) =>
       current.selectedCommunityId === communityId
         ? current
@@ -1527,6 +1566,37 @@ export function ChatsPage({
               </p>
             </section>
           )
+        ) : filter === 'COMMUNITY' &&
+          communitySelected &&
+          communitySource?.stream &&
+          communitySelected.stationStream?.availability === 'AVAILABLE' ? (
+          <StationStreamThread
+            key={`${communitySource.stream.principal}:${communitySelected.id}:${communitySelected.stationStream.streamId}:${communitySelected.stationStream.membershipEpoch}`}
+            community={communitySelected}
+            summary={communitySelected.stationStream}
+            source={communitySource.stream}
+            chat={communitySource}
+            onPosition={(position) =>
+              setCommunityState((current) => ({
+                ...current,
+                communities: current.communities.map((item) =>
+                  item.id === position.communityId ? { ...item, stationStream: position } : item,
+                ),
+              }))
+            }
+          />
+        ) : filter === 'COMMUNITY' &&
+          communitySelected &&
+          communitySource?.stream &&
+          !['UNADOPTED', 'NOT_STATION'].includes(
+            communitySelected.stationStream?.availability ?? '',
+          ) ? (
+          <section className={styles.threadPlaceholder} aria-label="Чат сообщества">
+            <p role="status">Не удалось подтвердить доступ к истории и счётчику сообщений.</p>
+            <button type="button" onClick={loadCommunityChats}>
+              Обновить список чатов
+            </button>
+          </section>
         ) : filter === 'COMMUNITY' && communityMessagesEnabled && communitySelected ? (
           <CommunityThread
             community={communitySelected}

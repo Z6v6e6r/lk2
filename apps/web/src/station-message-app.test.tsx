@@ -62,6 +62,11 @@ it.each(['android', 'web'] as const)(
       ],
     });
     vi.spyOn(gateway, 'stationMessagePrincipal').mockReturnValue('original-principal');
+    vi.spyOn(gateway, 'listStationStreamSummaries').mockResolvedValue({
+      contractVersion: 1,
+      contract: 'station-stream-summaries',
+      items: [{ communityId: community, availability: 'UNADOPTED' }],
+    });
     const history = vi.spyOn(gateway, 'listCommunityReadExperienceChat').mockResolvedValue({
       canRequestStationMessage: true,
       items: [

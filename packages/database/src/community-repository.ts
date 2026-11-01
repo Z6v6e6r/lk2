@@ -135,6 +135,38 @@ export function createCommunityLegacyBridgeRepository(
       });
     },
 
+    getCommunityExternalIds(tenantId, communityIds) {
+      const canonicalUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+      if (
+        !canonicalUuid.test(tenantId) ||
+        communityIds.length < 1 ||
+        communityIds.length > 50 ||
+        new Set(communityIds).size !== communityIds.length ||
+        communityIds.some((id) => !canonicalUuid.test(id))
+      )
+        return Promise.reject(new Error('COMMUNITY_MAPPING_INVALID'));
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const rows = (
+          await client.query<CommunityMappingRow>(
+            `select external_id, internal_id from integration.external_entity_map
+            where tenant_id = $1 and internal_id = any($2::uuid[])
+              and external_system = 'LK_LEGACY' and entity_type = 'community'
+            order by internal_id, id limit 51`,
+            [tenantId, communityIds],
+          )
+        ).rows;
+        if (
+          rows.length !== communityIds.length ||
+          new Set(rows.map((row) => row.internal_id)).size !== rows.length ||
+          new Set(rows.map((row) => row.external_id)).size !== rows.length ||
+          rows.some((row) => !communityIds.includes(row.internal_id))
+        )
+          return new Map<string, string>();
+        return new Map(rows.map((row) => [row.internal_id, row.external_id]));
+      });
+    },
+
     resolveCommunityIds(tenantId, externalIds) {
       const uniqueExternalIds = [...new Set(externalIds.map((id) => id.trim()).filter(Boolean))];
       if (uniqueExternalIds.length === 0) return Promise.resolve(new Map());
