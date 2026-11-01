@@ -24,6 +24,33 @@ function poolWithQueries(
 }
 
 describe('community repositories', () => {
+  it.each([0, 1, 2])(
+    'requires exactly one existing tenant/public community mapping (%i rows)',
+    async (count) => {
+      const { pool, query } = poolWithQueries((sql, values) => {
+        expect(sql).toContain("external_system = 'LK_LEGACY'");
+        expect(sql).toContain("entity_type = 'community'");
+        expect(sql).toContain('tenant_id = $1');
+        expect(sql).toContain('internal_id = $2::uuid');
+        expect(sql).toContain('limit 2');
+        expect(values).toEqual([tenantId, userId]);
+        return {
+          rows: Array.from({ length: count }, (_, index) => ({
+            external_id: `private-${index}`,
+            internal_id: userId,
+          })),
+        };
+      });
+      expect(
+        await createCommunityLegacyBridgeRepository(pool).getCommunityExternalId?.(
+          tenantId,
+          userId,
+        ),
+      ).toBe(count === 1 ? 'private-0' : undefined);
+      expect(query.mock.calls.some(([sql]) => /insert|update|delete/i.test(sql))).toBe(false);
+    },
+  );
+
   it('resolves legacy viewer identity only inside a tenant transaction', async () => {
     const { pool, query, release } = poolWithQueries((text, values) => {
       if (text.includes('from identity.users')) {

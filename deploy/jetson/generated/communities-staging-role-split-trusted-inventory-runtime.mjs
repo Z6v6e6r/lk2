@@ -27623,6 +27623,7 @@ var communityReadExperienceFeedItemSchema = external_exports.object({
   commentsCount: external_exports.number().int().nonnegative().optional()
 }).strict();
 var communityReadExperienceChatMessageSchema = external_exports.object({
+  id: uuid3.optional(),
   body: external_exports.string().min(1).max(8e3),
   sentAt: dateTime,
   author: authorSchema,
@@ -28398,6 +28399,61 @@ var listInputSchema = external_exports.object({
   limit: external_exports.number().int().min(1).max(100),
   correlationId: external_exports.string().min(1).max(128)
 }).strict();
+
+// ../../packages/communities/src/station-message.ts
+init_esm_shims();
+init_zod();
+var stationMessageUnknownCodes = [
+  "MESSAGE_CONTRACT_REQUIRED",
+  "COMMUNITY_AUTH_REQUIRED",
+  "MESSAGE_REQUEST_INVALID",
+  "MESSAGE_STATUS_WRITE_FORBIDDEN",
+  "MESSAGE_STORE_UNAVAILABLE",
+  "COMMUNITY_MESSAGE_ACCESS_UNAVAILABLE",
+  "MESSAGE_RECEIPT_UNPROVEN",
+  "MESSAGE_STATUS_STATE_INVALID",
+  "MESSAGE_CUSTODY_UNPROVEN",
+  "MESSAGE_REQUEST_CONFLICT",
+  "MESSAGE_COMMIT_INVALID",
+  "MESSAGE_REQUEST_TERMINAL",
+  "MESSAGE_COMMIT_UNPROVEN",
+  "MESSAGE_ACCEPTANCE_UNPROVEN",
+  "MESSAGE_COMMUNITY_CHANGED",
+  "COMMUNITY_MESSAGE_ACCESS_DENIED",
+  "COMMUNITY_MESSAGE_ACCESS_CHANGED",
+  "MESSAGE_OUTBOX_FULL",
+  "MESSAGE_ACCEPTANCE_CONFLICT",
+  "MESSAGE_EVENT_UNPROVEN",
+  "MESSAGE_STATE_INVALID",
+  "MESSAGE_STEP_LIMIT"
+];
+var stationMessageRequestSchema = external_exports.object({
+  requestId: external_exports.string().uuid(),
+  text: external_exports.string().max(8e3).refine((text) => text.trim().length > 0)
+}).strict();
+var receipt = {
+  contractVersion: external_exports.literal(1),
+  contract: external_exports.literal("station-message"),
+  requestId: external_exports.string().uuid()
+};
+var stationMessageReceiptSchema = external_exports.discriminatedUnion("outcome", [
+  external_exports.object({
+    ...receipt,
+    outcome: external_exports.literal("CONFIRMED"),
+    message: external_exports.object({
+      id: external_exports.string().uuid(),
+      body: external_exports.string().min(1).max(8e3),
+      sentAt: external_exports.string().datetime({ offset: true }),
+      author: external_exports.object({ displayName: external_exports.string().min(1).max(120) }).strict(),
+      isViewer: external_exports.literal(true)
+    }).strict()
+  }).strict(),
+  external_exports.object({
+    ...receipt,
+    outcome: external_exports.literal("UNKNOWN"),
+    code: external_exports.enum(stationMessageUnknownCodes)
+  }).strict()
+]);
 
 // ../../packages/communities/src/index.ts
 var uuid16 = external_exports.string().uuid();
@@ -31182,16 +31238,16 @@ function verifyExisting(input2) {
     const verification = verifyArtifact(input2.artifact);
     const text = input2.receipt.toString("utf8");
     if (!Buffer.from(text, "utf8").equals(input2.receipt)) fail10("OUTPUT_CONFLICT");
-    const receipt = parseCommunitiesStagingRoleSplitTrustedInventoryReceipt(text);
+    const receipt2 = parseCommunitiesStagingRoleSplitTrustedInventoryReceipt(text);
     const expected = receiptFor({
       authorization: input2.authorization,
       authorizationSha256: input2.authorizationSha256,
       artifactSha256: verification.artifactSha256,
       manifestSha256: verification.manifestSha256
     });
-    if (canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(receipt) !== canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(expected))
+    if (canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(receipt2) !== canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(expected))
       fail10("OUTPUT_CONFLICT");
-    return receipt;
+    return receipt2;
   } catch (error62) {
     if (error62 instanceof CommunitiesStagingRoleSplitTrustedInventoryHostError) throw error62;
     fail10("OUTPUT_CONFLICT");
@@ -31243,14 +31299,14 @@ async function runCommunitiesStagingRoleSplitTrustedInventory(input2) {
     expectedProducerSha256: input2.authorization.producerExecutableSha256
   });
   const verification = verifyArtifact(outcome.stdout);
-  const receipt = receiptFor({
+  const receipt2 = receiptFor({
     authorization: input2.authorization,
     authorizationSha256,
     artifactSha256: verification.artifactSha256,
     manifestSha256: verification.manifestSha256
   });
   const receiptBytes = Buffer.from(
-    canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(receipt),
+    canonicalCommunitiesStagingRoleSplitTrustedInventoryReceipt(receipt2),
     "utf8"
   );
   try {

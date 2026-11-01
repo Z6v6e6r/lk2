@@ -18,13 +18,19 @@ const rating = z
     tab: z.enum(['overall', 'games', 'tournaments', 'dynamics']).default('overall'),
   })
   .strict();
-function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
+function principal(
+  request: FastifyRequest,
+): { tenantId: string; userId: string; sessionId?: string } | undefined {
   const current = request as FastifyRequest & {
     tenantId?: string;
-    padlHubClaims?: { sub?: string };
+    padlHubClaims?: { sub?: string; sid?: string };
   };
   return current.tenantId && current.padlHubClaims?.sub
-    ? { tenantId: current.tenantId, userId: current.padlHubClaims.sub }
+    ? {
+        tenantId: current.tenantId,
+        userId: current.padlHubClaims.sub,
+        ...(current.padlHubClaims.sid ? { sessionId: current.padlHubClaims.sid } : {}),
+      }
     : undefined;
 }
 export function registerCommunityExperienceRoutes(
@@ -75,6 +81,8 @@ export function registerCommunityExperienceRoutes(
         try {
           const shared = {
             tenantId: current.tenantId,
+            tenantKey: parsedParams.data.tenantKey,
+            ...(current.sessionId ? { sessionId: current.sessionId } : {}),
             viewerUserId: current.userId,
             communityId: parsedParams.data.communityId,
             correlationId: request.id,

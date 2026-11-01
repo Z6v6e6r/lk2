@@ -760,3 +760,76 @@ voice/video calls, bot marketplace, reactions/threads и federation между t
 Первый управляемый срез, совместимость доставки и границы доступных источников описаны в
 [контракте сценариев](notification-scenarios.md). Исполнитель по умолчанию выключен; наличие
 исходников не подтверждает активацию или доставку в рабочей среде.
+
+## Web STATION text requests (LK station-message.v1)
+
+This bounded consumer uses the LK-owned community message acceptance/outbox contract from LK #279.
+It does not create PostgreSQL community messages, use the Pg membership owner, or add realtime,
+unread, read receipts, native UI, pagination or historical backfill. The existing timestamp history
+cursor remains unchanged; UUIDs distinguish canonical messages, but do not repair timestamp ties in
+older-page retrieval. Non-UUID legacy messages retain their existing display-key compatibility.
+
+### Transport and identity
+
+- Public POST `/user/api/v1/:tenantKey/community-views/:communityId/message-requests` accepts only
+  `{requestId: UUID, text: string}` (nonblank, at most 8000 characters), with `Idempotency-Key`
+  exactly equal to the original UUID. GET `.../message-requests/:requestId` has no body/query and
+  performs only status restoration. Both require the normal authenticated tenant/session handlers.
+- Server resolves exactly one existing `LK_LEGACY/community` external mapping for the tenant/public
+  UUID (0 or multiple mappings deny before remote access). Commands never create or repair mappings.
+- Only `AuthService.issueVivaAccessToken` for verified `tenantKey/tenantId/sub/sid` supplies the
+  user-scoped Bearer. Browser PadlHub JWTs, caller phones/member IDs and service tokens are never
+  forwarded to LK. Legacy directory/history also issue this delegation and isolate in-flight/cache
+  keys by session. A failed delegation cannot return an anonymous/cross-principal fallback.
+  A community-only in-flight issuer shares only the same tenant/user/sid, at most 128 outstanding
+  entries with a 10-second caller deadline. It removes matching promises on settlement; no completed
+  token cache or automatic issuance retry. The existing AuthService/provider retains its own
+  timeout, active-session save and refresh-lock authority; a caller deadline cannot undo an
+  already-running refresh. Other sessions never share issuance.
+- The owner client calls only LK's distinct `/lk/communities/:id/message-requests` POST/GET routes,
+  with `X-PadlHub-Community-Message-Contract: station-message.v1`. No old `/messages` send fallback,
+  automatic retry or fresh identity credential for background services is introduced. Browser SDK
+  disables automatic 401 refresh/replay for these two operations; after reauthentication the user
+  can check the original status. Native gateway calls remain unavailable.
+- Runtime requires legacy community mode, existing chat-read enablement, Viva OAuth and the actor
+  token callback. Local-canonical mode has no LK message owner. `canRequestStationMessage` is an
+  eligible-STATION read hint, **not proof that LK #279 is installed or available**. The owner makes
+  the final type/current-membership decision. Any activation needs reviewed coherent LK/CUP owner
+  installation and its prerequisites; this source change installs nothing.
+
+### Custody and uncertainty
+
+The strict response is `{contractVersion:1, contract:'station-message', requestId, outcome}` plus
+`message` for CONFIRMED or a bounded fixed `code` for UNKNOWN. CONFIRMED includes only public message
+UUID, original trimmed body, timestamp, public author name and `isViewer:true`. The consumer rejects
+wrong versions, keys, body mismatch, unexpected fields and malformed IDs. Durable acceptance is not
+message delivery or a read acknowledgement. Correlation-aware API audit logs contain operation,
+outcome and public community/request UUIDs, never tokens, message bodies or provider identifiers.
+
+Same-tab session storage retains at most 16 unresolved `{requestId, fingerprint}` records per
+actor/community. The fingerprint is SHA-256 of trimmed text; plaintext drafts/bodies are not newly
+persisted. Storage must acknowledge the original metadata before POST. Full/malformed/unavailable
+custody fails closed; no expiry or eviction silently creates a replacement key. Editing a draft
+preserves old unresolved records, and manually returning to the same text reuses its original key.
+A CONFIRMED receipt removes only that key. Existing history cache retention remains unchanged.
+
+Mount/reload restores keys with GET only. It never creates a candidate, replays POST, generates a
+replacement key, or treats UNKNOWN, missing routes, 403/404, timeout or malformed responses as proof
+of no dispatch. After reload the draft is empty; retyping text and explicitly sending can retry the
+same original key. Closing the tab, clearing storage, using a second tab/device and browser storage
+loss are outside this recovery promise. No server-side list-by-actor or cross-tab coordination is
+added. An indefinitely UNKNOWN request can occupy capacity until the owner supplies a receipt.
+
+A current access denial hides/clears the displayed/cached thread body but retains minimal original
+request metadata. Late old-session responses and unmounted composers cannot publish a receipt into
+a new account. An older in-flight history read cannot erase a newly confirmed message. Pending
+metadata is never rendered as a confirmed history item.
+
+### Evidence and boundaries
+
+Focused synthetic owner/route/SDK, mapping, session, custody and actual Web-handler tests cover
+wrong actor/session, ambiguous mapping, wrong receipt/version/body, no fallback/replay, bounded
+custody, edited intents, reload GET, late ACK/logout and denied-cache removal. LOCAL rendered checks
+use only synthetic CommunityThread/auth-gateway transport at narrow/wide sizes. Full automatic CI
+and independent R3 review remain separate evidence; no provider/live database, deployment, owner
+installation or end-to-end live delivery is asserted.

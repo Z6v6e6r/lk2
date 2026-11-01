@@ -7,13 +7,9 @@ export type CommunityChatMessage = CommunityReadExperienceChatPage['items'][numb
 /** The projection has no last-message preview for a community chat, so the row states what it is. */
 export const COMMUNITY_CHAT_PREVIEW = 'Чат сообщества';
 
-/**
- * A community chat message carries no identifier of its own: the provider addresses the history by
- * the send instant, and the projection exposes that instant together with the author and the body.
- * Two identical messages sent within the same second therefore share a key. That is the honest
- * limit of this read contract, and it is preferable to showing the same history page twice.
- */
+/** Canonical UUIDs distinguish identical messages; old rows retain their timestamp compatibility. */
 export function communityMessageKey(message: CommunityChatMessage): string {
+  if (message.id) return message.id;
   return `${message.sentAt}|${message.author.displayName}|${message.body}`;
 }
 

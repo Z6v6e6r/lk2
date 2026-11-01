@@ -1,3 +1,4 @@
+import type { StationMessageReceipt, StationMessageRequest } from './auth-gateway.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
@@ -83,6 +84,15 @@ export interface StationSupportSource {
  * enabling the read-only chat projection.
  */
 export interface CommunityChatsSource {
+  readonly custodyScope?: string;
+  readonly sendMessage?: (
+    communityId: string,
+    request: StationMessageRequest,
+  ) => Promise<StationMessageReceipt>;
+  readonly getMessageRequest?: (
+    communityId: string,
+    requestId: string,
+  ) => Promise<StationMessageReceipt>;
   /** One page of the member directory; `cursor` walks to the next page. */
   readonly loadCommunities: (cursor?: string) => Promise<CommunityMembershipPage>;
   /** One chat page, newest first, with `nextCursor` pointing at the older messages. */
@@ -238,6 +248,7 @@ const EMPTY_STATION_STATE: StationSupportState = {
 };
 
 interface CommunityChatsState {
+  readonly canRequestStationMessage?: boolean;
   readonly status: 'idle' | 'ready';
   readonly communities: readonly CommunityRow[];
   readonly nextCursor: string | null;
@@ -1045,10 +1056,15 @@ export function ChatsPage({
       (page) => {
         if (communityRequestRef.current !== generation) return;
         const messages = communityThreadPage(page);
-        communityThreadCache.write(currentUserId, communityId, messages);
+        communityThreadCache.write(
+          communitySource?.custodyScope ?? currentUserId,
+          communityId,
+          messages,
+        );
         setCommunityState((current) => ({
           ...current,
           messages,
+          canRequestStationMessage: page.canRequestStationMessage === true,
           messagesCommunityId: communityId,
           olderCursor: page.nextCursor ?? null,
           loadingEarlier: false,
@@ -1058,9 +1074,15 @@ export function ChatsPage({
       },
       (error: unknown) => {
         if (communityRequestRef.current !== generation) return;
+        const denied = ['AUTH', 'FORBIDDEN', 'NOT_FOUND'].includes(
+          communityChatsError(error, 'thread').kind,
+        );
+        if (denied)
+          communityThreadCache.clear(communitySource?.custodyScope ?? currentUserId, communityId);
         setCommunityState((current) => ({
           ...current,
-          messages: current.messagesCommunityId === communityId ? current.messages : [],
+          canRequestStationMessage: false,
+          messages: !denied && current.messagesCommunityId === communityId ? current.messages : [],
           messagesCommunityId: communityId,
           olderCursor: null,
           loadingEarlier: false,
@@ -1072,6 +1094,7 @@ export function ChatsPage({
   }, [
     filter,
     communityMessages,
+    communitySource?.custodyScope,
     communityState.selectedCommunityId,
     communityReloadToken,
     currentUserId,
@@ -1149,7 +1172,11 @@ export function ChatsPage({
           }
           const merged = mergeCommunityThreadPage(current.messages, page);
           if (merged.added > 0)
-            communityThreadCache.write(currentUserId, communityId, merged.messages);
+            communityThreadCache.write(
+              communitySource?.custodyScope ?? currentUserId,
+              communityId,
+              merged.messages,
+            );
           return {
             ...current,
             loadingEarlier: false,
@@ -1159,11 +1186,20 @@ export function ChatsPage({
         });
       },
       (error: unknown) => {
+        if (communityRequestRef.current !== generation) return;
+        const denied = ['AUTH', 'FORBIDDEN', 'NOT_FOUND'].includes(
+          communityChatsError(error, 'thread').kind,
+        );
+        if (denied)
+          communityThreadCache.clear(communitySource?.custodyScope ?? currentUserId, communityId);
         setCommunityState((current) =>
           current.selectedCommunityId === communityId
             ? {
                 ...current,
                 loadingEarlier: false,
+                ...(denied
+                  ? { messages: [], canRequestStationMessage: false, olderCursor: null }
+                  : {}),
                 threadError: communityChatsError(error, 'thread'),
               }
             : current,
@@ -1178,13 +1214,17 @@ export function ChatsPage({
    * refresh button. The row is `aria-current` anyway, so the tap is a no-op.
    */
   function selectCommunity(communityId: string): void {
-    const buffered = communityThreadCache.read(currentUserId, communityId);
+    const buffered = communityThreadCache.read(
+      communitySource?.custodyScope ?? currentUserId,
+      communityId,
+    );
     setCommunityState((current) =>
       current.selectedCommunityId === communityId
         ? current
         : {
             ...current,
             selectedCommunityId: communityId,
+            canRequestStationMessage: false,
             // The buffered page paints immediately; its id match keeps the pane from showing the
             // loading state while the fresh page is on its way.
             messagesCommunityId: buffered ? communityId : null,
@@ -1434,6 +1474,64 @@ export function ChatsPage({
         ) : filter === 'COMMUNITY' && communityMessagesEnabled && communitySelected ? (
           <CommunityThread
             community={communitySelected}
+            composer={
+              communitySource?.custodyScope &&
+              communitySource.sendMessage &&
+              communitySource.getMessageRequest
+                ? {
+                    scope: communitySource.custodyScope,
+                    communityId: communitySelected.id,
+                    eligible:
+                      communityState.messagesCommunityId === communitySelected.id &&
+                      communityState.canRequestStationMessage === true &&
+                      !communityState.threadError,
+                    send: communitySource.sendMessage,
+                    status: communitySource.getMessageRequest,
+                    onConfirmed: (message) => {
+                      // Invalidate earlier reads: they cannot replace the confirmed receipt with stale history.
+                      communityRequestRef.current += 1;
+                      setCommunityState((current) => {
+                        if (current.selectedCommunityId !== communitySelected.id) return current;
+                        const messages = mergeCommunityThreadPage(
+                          current.messagesCommunityId === communitySelected.id
+                            ? current.messages
+                            : [],
+                          { items: [message] },
+                        ).messages;
+                        communityThreadCache.write(
+                          communitySource?.custodyScope ?? currentUserId,
+                          communitySelected.id,
+                          messages,
+                        );
+                        return {
+                          ...current,
+                          messages,
+                          messagesCommunityId: communitySelected.id,
+                          threadRefreshing: false,
+                          threadError: null,
+                        };
+                      });
+                    },
+                    onAccessDenied: () => {
+                      communityRequestRef.current += 1;
+                      communityThreadCache.clear(
+                        communitySource?.custodyScope ?? currentUserId,
+                        communitySelected.id,
+                      );
+                      setCommunityState((current) => ({
+                        ...current,
+                        messages: [],
+                        canRequestStationMessage: false,
+                        threadRefreshing: false,
+                        threadError: {
+                          kind: 'FORBIDDEN',
+                          message: 'Чат сообщества недоступен. Исходный запрос сохранён.',
+                        },
+                      }));
+                    },
+                  }
+                : undefined
+            }
             messages={communityState.messages}
             busy={communityThreadBusy}
             error={communityState.threadError}
