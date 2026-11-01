@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
+import { webcrypto } from 'node:crypto';
 import type * as CapacitorCore from '@capacitor/core';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -297,4 +298,104 @@ describe('native quarter CREATE through the actual cabinet and session', () => {
     ).not.toBeInTheDocument();
     localStorage.clear();
   });
+});
+
+it('tournament A pending custody cannot leak into tournament B after native route change', async () => {
+  const a = '11111111-1111-4111-8111-111111111111',
+    b = '22222222-2222-4222-8222-222222222222';
+  vi.stubGlobal('crypto', webcrypto);
+  localStorage.clear();
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: (_name: string, _options: unknown, callback: () => Promise<unknown>) => callback(),
+    },
+  });
+  const request = vi.fn<IOSSessionPlugin['request']>((input) => {
+    if (input.operation !== 'tournamentChat') return Promise.resolve(fixtureReply(input));
+    const tournamentId = input.resourceId;
+    if (input.resource === 'history')
+      return Promise.resolve(
+        nativeResult({
+          contractVersion: 'tournament-chat.v1',
+          tournamentId,
+          streamId: null,
+          throughSequence: 0,
+          messages: [],
+          hasMore: false,
+          nextCursor: null,
+        }),
+      );
+    if (input.resource === 'position')
+      return Promise.resolve(
+        nativeResult({
+          contractVersion: 'tournament-chat-read.v1',
+          tournamentId,
+          streamId: null,
+          witnessHash: null,
+          baselineSequence: 0,
+          readThroughSequence: 0,
+          publishedSequence: 0,
+        }),
+      );
+    return Promise.resolve(
+      nativeResult({
+        contractVersion: 'tournament-chat.v1',
+        tournamentId,
+        requestId: input.requestId,
+        status: 'UNKNOWN',
+      }),
+    );
+  });
+  const session = syntheticSession(request);
+  await session.restore();
+  render(<IOSAuthApp session={session} />);
+  await screen.findByRole('main', { name: 'Главная' });
+  const navigate = async (id: string) => {
+    await act(async () => {
+      window.history.pushState(null, '', `/tournaments/${id}/chat`);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      await Promise.resolve();
+    });
+  };
+  await navigate(a);
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Сообщение' }), {
+    target: { value: 'original A' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+  await screen.findByText('Не удалось подтвердить отправку. Проверьте статус сообщения.');
+  await navigate(b);
+  await waitFor(() =>
+    expect(
+      request.mock.calls.some(
+        ([v]) => v.operation === 'tournamentChat' && v.resource === 'history' && v.resourceId === b,
+      ),
+    ).toBe(true),
+  );
+  expect(screen.getByRole('button', { name: 'Проверить статус' })).toBeDisabled();
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Сообщение' }), {
+    target: { value: 'independent B' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+  await waitFor(() =>
+    expect(
+      request.mock.calls.filter(([v]) => v.operation === 'tournamentChat' && v.resource === 'send'),
+    ).toHaveLength(2),
+  );
+  const sends = request.mock.calls
+    .filter(([v]) => v.operation === 'tournamentChat' && v.resource === 'send')
+    .map(([v]) => v);
+  expect(sends.map((v) => v.resourceId)).toEqual([a, b]);
+  expect(sends[0]?.requestId).not.toBe(sends[1]?.requestId);
+  await navigate(a);
+  await waitFor(() =>
+    expect(
+      request.mock.calls.some(
+        ([v]) =>
+          v.resource === 'status' && v.resourceId === a && v.requestId === sends[0]?.requestId,
+      ),
+    ).toBe(true),
+  );
+  expect(request.mock.calls.filter(([v]) => v.resource === 'send')).toHaveLength(2);
+  localStorage.clear();
 });

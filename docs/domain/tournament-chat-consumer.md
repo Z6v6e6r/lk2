@@ -1,4 +1,4 @@
-# Tournament chat consumer: Stage A
+# Tournament chat consumer: Web and native transport
 
 Source-only API and Web adoption of CUP `tournament-chat.v1`, against CUP #71
 `cb413d41c59e0dd14b400884ea71c154fb4520dc`. CUP is the sole message/roster owner.
@@ -101,8 +101,22 @@ It is skipped locally; no DB/container was provisioned. Existing database unique
 physical ambiguous mappings; tests assert both constraints without weakening them, while
 unit cases exercise defensive forward/reverse count refusals.
 
-Web is the only enabled client in this packet. Both App navigation and gateway reject native
-commands. Android/iOS adoption remains mandatory Stage B after the independently owned native
-station packet and this Web packet are coherently integrated. Explicit Web READ and owner read positions are implemented; native chat and push-based
-realtime remain separate gaps. Bounded automatic HTTP catch-up is not a realtime delivery SLA. No workflow, dependency, migration, shared runtime configuration,
-installed credential, provider, production database or deployment was changed by this task.
+Stage B adds the same six chat operations to Android and iOS authenticated transport:
+history, message command/status, read position and explicit read command/status. Native code
+independently validates the fixed configured origin/tenant, UUID paths, bounded cursor, exact
+command envelope, Unicode text and Idempotency-Key. Only history receives the 3 MiB response
+budget; other operations retain 1 MiB native transport caps and stricter SDK parsing.
+
+The iOS gateway binds dispatch to the original authenticated principal before asynchronous
+hashing and checks it before/after the bridge. Android uses the existing authenticated gateway
+and session engine. Neither platform automatically retries a command after ambiguous failure.
+Native views reuse the original metadata custody and explicit GET recovery. The iOS component
+is keyed by tenant, user and tournament, so moving A -> B cannot reuse A's pending state.
+
+This source packet exposes the exact authenticated `/tournaments/:uuid/chat` route. Native
+tournament catalogue/registration/discovery, OS universal links, notification routing and
+cold-start route restoration remain separate work. Authentication still resets the iOS route;
+no pending link may cross accounts. Push allowlists and provider configuration are unchanged.
+Native source tests and unsigned CI builds do not prove device rendering, APNs/FCM delivery,
+signed builds, store readiness or production acceptance. Local XCTest/JDK availability and
+rendered preview evidence must be reported separately from TypeScript component tests.

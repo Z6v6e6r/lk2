@@ -90,6 +90,7 @@ export function syntheticSession(
         plugin,
         (id) => session?.canDispatchGameCancellation(id) === true,
         (request) => session?.canDispatchStation(request) === true,
+        (request) => session?.canDispatchTournamentChat(request) === true,
       ),
     }),
   );
