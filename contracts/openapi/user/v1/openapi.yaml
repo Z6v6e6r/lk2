@@ -6042,6 +6042,15 @@ paths:
   /{tenantKey}/trainings/{trainingId}/registration-operation:
     $ref: ./training-registrations.yaml#/paths/~1{tenantKey}~1trainings~1{trainingId}~1registration-operation
 
+  /{tenantKey}/tournaments/{tournamentId}/chat/message-requests:
+    $ref: ./tournament-chat.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1chat~1message-requests
+
+  /{tenantKey}/tournaments/{tournamentId}/chat/message-requests/{requestId}:
+    $ref: ./tournament-chat.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1chat~1message-requests~1{requestId}
+
+  /{tenantKey}/tournaments/{tournamentId}/chat/messages:
+    $ref: ./tournament-chat.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1chat~1messages
+
 components:
   schemas:
     QuarterCreateInput:

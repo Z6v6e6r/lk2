@@ -266,6 +266,19 @@ const environmentSchema = z.object({
   LEGACY_GAMES_ROSTER_SYNC_ENABLED: booleanFromEnvironment,
   LEGACY_GAME_COMMAND_BRIDGE_ENABLED: booleanFromEnvironment,
   TOURNAMENT_LOCAL_COMMANDS_ENABLED: booleanFromEnvironment,
+  TOURNAMENT_CHAT_ENABLED: booleanFromEnvironment,
+  TOURNAMENT_CHAT_OWNER_BASE_URL: z.string().url().optional(),
+  TOURNAMENT_CHAT_TENANT_ID: z.string().uuid().optional(),
+  TOURNAMENT_CHAT_TENANT_KEY: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]{0,62}$/)
+    .optional(),
+  TOURNAMENT_CHAT_ACTOR_ISSUER: z.string().min(1).max(200).optional(),
+  TOURNAMENT_CHAT_ACTOR_KEY_ID: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,64}$/)
+    .optional(),
+  TOURNAMENT_CHAT_ACTOR_PRIVATE_KEY_FILE: z.string().min(1).optional(),
   LEGACY_GAME_COMMAND_BRIDGE_TOKEN: z.string().min(32).optional(),
   LEGACY_GAME_IDENTITY_VERIFY_URL: z.string().url().optional(),
   LEGACY_GAME_IDENTITY_VERIFY_TOKEN: z.string().min(32).optional(),
@@ -987,6 +1000,18 @@ export function loadConfig(
       );
     }
   }
+  if (
+    parsed.data.TOURNAMENT_CHAT_ENABLED &&
+    (!parsed.data.TOURNAMENT_CHAT_OWNER_BASE_URL ||
+      !parsed.data.TOURNAMENT_CHAT_TENANT_ID ||
+      !parsed.data.TOURNAMENT_CHAT_TENANT_KEY ||
+      !parsed.data.TOURNAMENT_CHAT_ACTOR_ISSUER ||
+      !parsed.data.TOURNAMENT_CHAT_ACTOR_KEY_ID ||
+      !parsed.data.TOURNAMENT_CHAT_ACTOR_PRIVATE_KEY_FILE)
+  )
+    throw new Error(
+      'TOURNAMENT_CHAT_ENABLED requires dedicated owner and actor signing configuration',
+    );
   if (
     parsed.data.TOURNAMENT_LOCAL_COMMANDS_ENABLED &&
     (!parsed.data.LEGACY_GAME_IDENTITY_VERIFY_URL ||

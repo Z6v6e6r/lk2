@@ -1,0 +1,168 @@
+paths:
+  /{tenantKey}/tournaments/{tournamentId}/chat/message-requests:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TournamentId'
+    post:
+      tags: [tournaments]
+      operationId: sendTournamentChatMessage
+      summary: Send one original text request to the canonical tournament owner
+      description: Current LOCAL_ONLY participant or explicitly assigned organizer only. Exact original key and text; no automatic retry or legacy fallback. CONFIRMED proves durable publication, not delivery or read.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Must equal body requestId.
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TournamentChatRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Receipt' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/tournaments/{tournamentId}/chat/message-requests/{requestId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TournamentId'
+      - name: requestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [tournaments]
+      operationId: getTournamentChatRequest
+      summary: Read the original request without creating or retrying it
+      description: Current ACL required. UNKNOWN, refusal, timeout and absence never prove no acceptance. Cache-Control no-store. Retain original custody.
+      responses:
+        '200': { $ref: '#/components/responses/Receipt' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/tournaments/{tournamentId}/chat/messages:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TournamentId'
+    get:
+      tags: [tournaments]
+      operationId: getTournamentChatHistory
+      summary: Read bounded published tournament history under current ACL
+      description: Fixed-frontier cursor binds stream and current authority. No realtime, delivery, unread or read acknowledgement guarantee. Cache-Control no-store.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+        - name: cursor
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 1800, pattern: '^[A-Za-z0-9_-]+$' }
+      responses:
+        '200':
+          description: Current authorized published snapshot page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TournamentChatPage' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+components:
+  parameters:
+    TournamentId:
+      name: tournamentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Receipt:
+      description: Exact original receipt, or unresolved status without body/message identity
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TournamentChatReceipt' }
+    Conflict:
+      description: Original request or pagination authority changed; retain original custody
+      content:
+        application/json:
+          schema: { $ref: ../../common/components.yaml#/components/schemas/ApiError }
+  schemas:
+    TournamentChatRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, text]
+      properties:
+        requestId: { type: string, format: uuid }
+        text:
+          type: string
+          minLength: 1
+          maxLength: 8000
+          description: Exact untrimmed text, not whitespace-only; valid UTF-8, max32000 encoded bytes, no NUL.
+    TournamentChatReceipt:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [contractVersion, tournamentId, requestId, status]
+          properties:
+            contractVersion: { type: string, const: tournament-chat.v1 }
+            tournamentId: { type: string, format: uuid }
+            requestId: { type: string, format: uuid }
+            status: { type: string, const: UNKNOWN }
+        - type: object
+          additionalProperties: false
+          required:
+            [
+              contractVersion,
+              tournamentId,
+              requestId,
+              status,
+              requestHash,
+              streamId,
+              messageId,
+              sequence,
+            ]
+          properties:
+            contractVersion: { type: string, const: tournament-chat.v1 }
+            tournamentId: { type: string, format: uuid }
+            requestId: { type: string, format: uuid }
+            status: { type: string, const: CONFIRMED }
+            requestHash: { type: string, pattern: '^[a-f0-9]{64}$' }
+            streamId: { type: string, format: uuid }
+            messageId: { type: string, format: uuid }
+            sequence: { type: integer, minimum: 1, maximum: 9007199254740990 }
+    TournamentChatPage:
+      type: object
+      additionalProperties: false
+      required:
+        [contractVersion, tournamentId, streamId, throughSequence, messages, hasMore, nextCursor]
+      properties:
+        contractVersion: { type: string, const: tournament-chat.v1 }
+        tournamentId: { type: string, format: uuid }
+        streamId: { type: [string, 'null'], format: uuid }
+        throughSequence: { type: integer, minimum: 0, maximum: 9007199254740990 }
+        messages:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [messageId, authorUserId, text, sequence, acceptedAt]
+            properties:
+              messageId: { type: string, format: uuid }
+              authorUserId: { type: string, format: uuid }
+              text: { type: string, minLength: 1, maxLength: 8000 }
+              sequence: { type: integer, minimum: 1, maximum: 9007199254740990 }
+              acceptedAt: { type: string, format: date-time }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'], maxLength: 1800 }

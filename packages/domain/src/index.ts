@@ -980,3 +980,5 @@ export async function assertManagedSelfLeaveAuthority(a: ManagedSelfLeaveAuthori
 }
 
 export * from './tournament-local.js';
+
+export * from './tournament-chat.js';

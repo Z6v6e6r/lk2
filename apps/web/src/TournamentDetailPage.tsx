@@ -74,8 +74,10 @@ function TournamentView({
   rosterLoading,
   rosterError,
   registration,
+  chatAvailable,
 }: {
   readonly registration?: React.ReactNode;
+  readonly chatAvailable?: boolean;
   readonly tournament: PublicTournamentSummary;
   readonly roster: TournamentParticipantRoster | null;
   readonly rosterLoading: boolean;
@@ -101,6 +103,11 @@ function TournamentView({
         </button>
       </header>
 
+      {chatAvailable && (
+        <a className="tournament-detail__chat-link" href={`/tournaments/${tournament.id}/chat`}>
+          Чат турнира
+        </a>
+      )}
       <section className="tournament-detail__hero">
         <span
           className="tournament-detail__ball tournament-detail__ball--left"
@@ -270,10 +277,12 @@ export function TournamentDetailPage({
   gateway,
   tournamentId,
   principal,
+  chatAvailable = false,
 }: {
   readonly gateway: AuthGateway;
   readonly tournamentId: string | null;
   readonly principal?: { tenantId: string; userId: string };
+  readonly chatAvailable?: boolean;
 }): React.JSX.Element {
   const [tournament, setTournament] = useState<PublicTournamentSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -326,6 +335,7 @@ export function TournamentDetailPage({
       <TournamentView
         tournament={tournament}
         roster={roster}
+        chatAvailable={chatAvailable}
         rosterLoading={Boolean(gateway.getTournamentParticipants) && !roster && !rosterError}
         rosterError={rosterError}
         registration={
