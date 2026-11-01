@@ -118,7 +118,7 @@ export function createCommunityLegacyBridgeRepository(
 
     getCommunityExternalId(tenantId, communityId) {
       return withTenantTransaction(pool, tenantId, async (client) => {
-        const row = (
+        const rows = (
           await client.query<CommunityMappingRow>(
             `select external_id, internal_id
                from integration.external_entity_map
@@ -127,11 +127,11 @@ export function createCommunityLegacyBridgeRepository(
                 and external_system = 'LK_LEGACY'
                 and entity_type = 'community'
               order by last_synced_at desc nulls last, id
-              limit 1`,
+              limit 2`,
             [tenantId, communityId],
           )
-        ).rows[0];
-        return row?.external_id;
+        ).rows;
+        return rows.length === 1 ? rows[0]?.external_id : undefined;
       });
     },
 

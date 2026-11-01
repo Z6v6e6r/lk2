@@ -1,3 +1,5 @@
+import type { StationMessageReceipt, StationMessageRequest } from '@phub/api-sdk';
+export type { StationMessageReceipt, StationMessageRequest } from '@phub/api-sdk';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type {
   AuthenticatedSession as ApiAuthenticatedSession,
@@ -647,6 +649,14 @@ export interface AuthGateway {
     communityId: string,
     cursor?: string,
   ) => Promise<CommunityReadExperienceFeedPage>;
+  readonly sendStationCommunityMessage?: (
+    communityId: string,
+    input: StationMessageRequest,
+  ) => Promise<StationMessageReceipt>;
+  readonly getStationCommunityMessageRequest?: (
+    communityId: string,
+    requestId: string,
+  ) => Promise<StationMessageReceipt>;
   readonly listCommunityReadExperienceChat: (
     communityId: string,
     cursor?: string,
@@ -1021,6 +1031,11 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     if (!current || (original !== undefined && original !== current))
       throw new Error('AUTH_PRINCIPAL_CHANGED');
     return current;
+  }
+  function stationMessagePrincipal(): string {
+    if (nativeClient || tournamentLogoutStarted || !currentUserId || !currentTenantId)
+      throw new Error('AUTH_PRINCIPAL_CHANGED');
+    return `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`;
   }
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
@@ -2567,6 +2582,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
     },
 
+    async sendStationCommunityMessage(communityId, input) {
+      const principal = stationMessagePrincipal();
+      const receipt = await client.sendStationCommunityMessage(communityId, input);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return receipt;
+    },
+    async getStationCommunityMessageRequest(communityId, requestId) {
+      const principal = stationMessagePrincipal();
+      const receipt = await client.getStationCommunityMessageRequest(communityId, requestId);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return receipt;
+    },
     listCommunityReadExperienceChat(communityId, cursor) {
       return client.listCommunityReadExperienceChat(communityId, {
         limit: 50,

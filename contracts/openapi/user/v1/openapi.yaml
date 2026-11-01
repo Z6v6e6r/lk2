@@ -2631,6 +2631,66 @@ paths:
         '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
         '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
         '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/{communityId}/message-requests:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: Idempotency-Key
+        in: header
+        required: true
+        description: Must equal the original requestId in the body.
+        schema: { type: string, format: uuid }
+    post:
+      tags: [communities]
+      operationId: sendStationCommunityMessage
+      summary: Submit original STATION text intent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StationMessageRequest' }
+      responses:
+        '200':
+          description: Durable receipt or UNKNOWN. Neither proves delivery/read; errors never prove no dispatch.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StationMessageReceipt' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/{communityId}/message-requests/{requestId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: requestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [communities]
+      operationId: getStationCommunityMessageRequest
+      summary: Read original STATION message status without dispatch
+      responses:
+        '200':
+          description: Durable receipt or UNKNOWN. Neither proves delivery/read; errors never prove no dispatch.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StationMessageReceipt' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
   /{tenantKey}/community-views/{communityId}/rating:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -8125,11 +8185,74 @@ components:
           maxItems: 20
           items: { $ref: '#/components/schemas/CommunityReadExperienceFeedItem' }
         nextCursor: { type: string, minLength: 16, maxLength: 512 }
+    StationMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, text]
+      properties:
+        requestId: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 8000 }
+    StationMessageReceipt:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [contractVersion, contract, requestId, outcome, message]
+          properties:
+            contractVersion: { type: integer, enum: [1] }
+            contract: { type: string, enum: [station-message] }
+            requestId: { type: string, format: uuid }
+            outcome: { type: string, enum: [CONFIRMED] }
+            message:
+              type: object
+              additionalProperties: false
+              required: [id, body, sentAt, author, isViewer]
+              properties:
+                id: { type: string, format: uuid }
+                body: { type: string, minLength: 1, maxLength: 8000 }
+                sentAt: { type: string, format: date-time }
+                author: { $ref: '#/components/schemas/CommunityReadExperienceAuthor' }
+                isViewer: { type: boolean, enum: [true] }
+        - type: object
+          additionalProperties: false
+          required: [contractVersion, contract, requestId, outcome, code]
+          properties:
+            contractVersion: { type: integer, enum: [1] }
+            contract: { type: string, enum: [station-message] }
+            requestId: { type: string, format: uuid }
+            outcome: { type: string, enum: [UNKNOWN] }
+            code:
+              type: string
+              enum:
+                [
+                  MESSAGE_CONTRACT_REQUIRED,
+                  COMMUNITY_AUTH_REQUIRED,
+                  MESSAGE_REQUEST_INVALID,
+                  MESSAGE_STATUS_WRITE_FORBIDDEN,
+                  MESSAGE_STORE_UNAVAILABLE,
+                  COMMUNITY_MESSAGE_ACCESS_UNAVAILABLE,
+                  MESSAGE_RECEIPT_UNPROVEN,
+                  MESSAGE_STATUS_STATE_INVALID,
+                  MESSAGE_CUSTODY_UNPROVEN,
+                  MESSAGE_REQUEST_CONFLICT,
+                  MESSAGE_COMMIT_INVALID,
+                  MESSAGE_REQUEST_TERMINAL,
+                  MESSAGE_COMMIT_UNPROVEN,
+                  MESSAGE_ACCEPTANCE_UNPROVEN,
+                  MESSAGE_COMMUNITY_CHANGED,
+                  COMMUNITY_MESSAGE_ACCESS_DENIED,
+                  COMMUNITY_MESSAGE_ACCESS_CHANGED,
+                  MESSAGE_OUTBOX_FULL,
+                  MESSAGE_ACCEPTANCE_CONFLICT,
+                  MESSAGE_EVENT_UNPROVEN,
+                  MESSAGE_STATE_INVALID,
+                  MESSAGE_STEP_LIMIT,
+                ]
     CommunityReadExperienceChatMessage:
       type: object
       additionalProperties: false
       required: [body, sentAt, author, isViewer]
       properties:
+        id: { type: string, format: uuid }
         body: { type: string, minLength: 1, maxLength: 8000 }
         sentAt: { type: string, format: date-time }
         author: { $ref: '#/components/schemas/CommunityReadExperienceAuthor' }
@@ -8139,6 +8262,9 @@ components:
       additionalProperties: false
       required: [items]
       properties:
+        canRequestStationMessage:
+          type: boolean
+          description: Eligible for the canonical STATION request route; not proof the owner is installed or available.
         items:
           type: array
           maxItems: 50

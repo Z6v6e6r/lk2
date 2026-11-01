@@ -59,6 +59,15 @@ export interface LegacyCommunityViewerIdentity {
   readonly clientId?: string;
 }
 
+export interface LegacyCommunityActor {
+  readonly tenantKey: string;
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly sessionId: string;
+  readonly correlationId: string;
+}
+export type LegacyCommunityToken = (actor: LegacyCommunityActor) => Promise<string>;
+
 export interface CommunityLegacyBridgeRepository {
   getViewerIdentity(tenantId: string, userId: string): Promise<LegacyCommunityViewerIdentity>;
   getCommunityExternalId?(tenantId: string, communityId: string): Promise<string | undefined>;
@@ -76,6 +85,8 @@ export interface CommunityDirectoryRepository {
   listMemberships(input: {
     readonly tenantId: string;
     readonly userId: string;
+    readonly tenantKey?: string;
+    readonly sessionId?: string;
     readonly correlationId: string;
     readonly limit: number;
     readonly after?: CommunityDirectoryPosition;
@@ -86,6 +97,8 @@ export interface CommunityDirectoryService {
   listMemberships(input: {
     readonly tenantId: string;
     readonly userId: string;
+    readonly tenantKey?: string;
+    readonly sessionId?: string;
     readonly correlationId: string;
     readonly limit: number;
     readonly cursor?: string;
@@ -166,6 +179,8 @@ export function createCommunityDirectoryService(
       const page = await repository.listMemberships({
         tenantId: input.tenantId,
         userId: input.userId,
+        ...(input.tenantKey ? { tenantKey: input.tenantKey } : {}),
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         correlationId: input.correlationId,
         limit: input.limit,
         ...(cursor ? { after: cursor } : {}),
@@ -229,3 +244,5 @@ export * from './community-content.js';
 export * from './community-media.js';
 export * from './community-content-moderation.js';
 export * from './community-realtime-events.js';
+
+export * from './station-message.js';

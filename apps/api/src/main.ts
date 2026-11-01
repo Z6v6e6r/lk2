@@ -1,3 +1,4 @@
+import { createCommunityActorToken } from './communities/community-actor-token.js';
 import { createQuarterCreateRepository } from '@phub/database/quarter-create';
 import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createQuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
@@ -123,6 +124,7 @@ import {
   createCommunityMembershipPinRuntime,
   createCommunityOwnershipTransferRuntime,
   createCommunityReadExperienceRuntime,
+  createStationMessageRuntime,
   createCommunityReadRuntime,
 } from './communities/community-runtime.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
@@ -563,7 +565,16 @@ const giftCertificateArtifactStore = config.GIFT_CERTIFICATE_ISSUANCE_ENABLED
       timeoutMs: config.GIFT_CERTIFICATE_ARTIFACT_STORAGE_TIMEOUT_MS,
     })
   : undefined;
+const communityActorToken = createCommunityActorToken(
+  async (actor) => (await authService.issueVivaAccessToken(actor)).accessToken,
+);
+const stationMessageOwner = createStationMessageRuntime({
+  config,
+  pool,
+  token: communityActorToken,
+});
 const communityReadExperienceService = createCommunityReadExperienceRuntime({
+  token: communityActorToken,
   config,
   pool,
   logger,
@@ -829,7 +840,13 @@ const app = await buildApp({
         subscriptionRuntimeQuoteClient: subscriptionRuntimeWarnBoundary.quoteClient,
       }
     : {}),
-  communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
+  communityDirectory: createCommunityDirectoryRuntime({
+    config,
+    pool,
+    logger,
+    token: communityActorToken,
+  }),
+  ...(stationMessageOwner ? { stationMessageOwner } : {}),
   ...(communityReadExperienceService ? { communityReadExperienceService } : {}),
   ...(communityCreateService ? { communityCreateService } : {}),
   ...(communityMembershipPinService ? { communityMembershipPinService } : {}),

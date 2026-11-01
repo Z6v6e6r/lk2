@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import type { LegacyCommunityToken } from '@phub/communities';
 import type {
   CommunityLegacyBridgeRepository,
   CommunityReadExperienceRepository,
@@ -20,6 +22,8 @@ export class LegacyCommunityExperienceError extends Error {
 }
 type RecordValue = Record<string, unknown>;
 interface AuthorizedCommunityAccess {
+  readonly bearer?: string;
+  readonly scope: string;
   readonly externalId: string;
   readonly identity: { readonly phoneE164?: string; readonly clientId?: string };
   readonly summary: RecordValue;
@@ -126,6 +130,8 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
       readonly circuitFailureThreshold: number;
       readonly circuitResetMs: number;
       readonly bridge: CommunityLegacyBridgeRepository;
+      readonly token?: LegacyCommunityToken;
+      readonly stationMessageRequests?: boolean;
       readonly fetchImplementation?: typeof fetch;
       readonly onMetric?: (metric: {
         operation: string;
@@ -175,7 +181,11 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
   public async getFeed(input: Parameters<CommunityReadExperienceRepository['getFeed']>[0]) {
     const access = await this.authorized(input);
     return this.page(
-      await this.getJson(this.path(access, 'feed', input.limit, input.cursor), input.correlationId),
+      await this.getJson(
+        this.path(access, 'feed', input.limit, input.cursor),
+        input.correlationId,
+        access,
+      ),
       'posts',
       input.limit,
       input.cursor,
@@ -200,28 +210,39 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
   }
   public async getChat(input: Parameters<CommunityReadExperienceRepository['getChat']>[0]) {
     const access = await this.authorized(input);
-    return this.page(
-      await this.getJson(
-        this.path(access, 'messages', input.limit, input.cursor),
-        input.correlationId,
+    return {
+      ...this.page(
+        await this.getJson(
+          this.path(access, 'messages', input.limit, input.cursor),
+          input.correlationId,
+          access,
+        ),
+        'messages',
+        input.limit,
+        input.cursor,
+        (row) => ({
+          ...(z
+            .string()
+            .uuid()
+            .safeParse(row.id ?? row.uuid).success
+            ? { id: String(row.id ?? row.uuid) }
+            : {}),
+          body: requiredText(row.body ?? row.text),
+          sentAt: requiredDate(row.sentAt ?? row.createdAt),
+          author: {
+            displayName: requiredText(
+              record(row.author) ? (row.author.displayName ?? row.author.name) : row.authorName,
+              120,
+            ),
+          },
+          isViewer: record(row.author)
+            ? identityMatches(row.author, access.identity)
+            : identityMatches(row, access.identity),
+        }),
       ),
-      'messages',
-      input.limit,
-      input.cursor,
-      (row) => ({
-        body: requiredText(row.body ?? row.text),
-        sentAt: requiredDate(row.sentAt ?? row.createdAt),
-        author: {
-          displayName: requiredText(
-            record(row.author) ? (row.author.displayName ?? row.author.name) : row.authorName,
-            120,
-          ),
-        },
-        isViewer: record(row.author)
-          ? identityMatches(row.author, access.identity)
-          : identityMatches(row, access.identity),
-      }),
-    );
+      canRequestStationMessage:
+        this.options.stationMessageRequests === true && access.summary.communityType === 'STATION',
+    };
   }
   public async getRating(input: Parameters<CommunityReadExperienceRepository['getRating']>[0]) {
     const access = await this.authorized(input);
@@ -229,14 +250,22 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
     const suffix = `period=${input.period}&tab=${transportTab}&calculationVersion=community-rating-v1.3.0`;
     let body: unknown;
     try {
-      body = await this.getJson(this.path(access, `rating?${suffix}`, 100), input.correlationId);
+      body = await this.getJson(
+        this.path(access, `rating?${suffix}`, 100),
+        input.correlationId,
+        access,
+      );
     } catch (error) {
       if (
         !(error instanceof LegacyCommunityExperienceError) ||
         error.code !== 'COMMUNITY_EXPERIENCE_NOT_FOUND'
       )
         throw error;
-      body = await this.getJson(this.path(access, `ranking?${suffix}`, 100), input.correlationId);
+      body = await this.getJson(
+        this.path(access, `ranking?${suffix}`, 100),
+        input.correlationId,
+        access,
+      );
     }
     const sourceRows = record(body)
       ? Array.isArray(body.rows)
@@ -279,8 +308,10 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
     viewerUserId: string;
     communityId: string;
     correlationId: string;
+    tenantKey?: string;
+    sessionId?: string;
   }): Promise<AuthorizedCommunityAccess> {
-    const key = `${input.tenantId}:${input.viewerUserId}:${input.communityId}`;
+    const key = `${input.tenantId}:${input.viewerUserId}:${input.sessionId ?? ''}:${input.communityId}`;
     const existing = this.authorizationInFlight.get(key);
     if (existing) return existing;
     const pending = this.resolveAuthorization(input).finally(() => {
@@ -294,7 +325,27 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
     viewerUserId: string;
     communityId: string;
     correlationId: string;
+    tenantKey?: string;
+    sessionId?: string;
   }): Promise<AuthorizedCommunityAccess> {
+    let bearer: string | undefined;
+    if (this.options.token) {
+      if (!input.tenantKey || !input.sessionId)
+        throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_FORBIDDEN');
+      try {
+        bearer = await this.options.token({
+          tenantKey: input.tenantKey,
+          tenantId: input.tenantId,
+          userId: input.viewerUserId,
+          sessionId: input.sessionId,
+          correlationId: input.correlationId,
+        });
+      } catch {
+        throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_FORBIDDEN');
+      }
+      if (!bearer) throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_FORBIDDEN');
+    }
+    const scope = `${input.tenantId}:${input.viewerUserId}:${input.sessionId ?? ''}`;
     const externalId = await this.options.bridge.getCommunityExternalId?.(
       input.tenantId,
       input.communityId,
@@ -306,10 +357,13 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
     );
     if (!identity.clientId && !identity.phoneE164)
       throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_FORBIDDEN');
-    const summary = await this.getJson(this.summaryPath(identity), input.correlationId);
+    const summary = await this.getJson(this.summaryPath(identity), input.correlationId, {
+      scope,
+      ...(bearer ? { bearer } : {}),
+    });
     const community = this.summaryActiveCommunity(summary, externalId, identity);
     if (!community) throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_FORBIDDEN');
-    return { externalId, identity, summary: community };
+    return { externalId, identity, summary: community, scope, ...(bearer ? { bearer } : {}) };
   }
   private summaryPath(identity: { phoneE164?: string; clientId?: string }) {
     const query = new URLSearchParams({ view: 'summary' });
@@ -356,16 +410,21 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
     const separator = suffix.includes('?') ? '&' : '?';
     return `/lk/communities/${encodeURIComponent(access.externalId)}${suffix ? `/${suffix}` : ''}${separator}${query}`;
   }
-  private getJson(path: string, correlationId: string): Promise<unknown> {
-    const existing = this.readsInFlight.get(path);
+  private getJson(
+    path: string,
+    correlationId: string,
+    access: { scope: string; bearer?: string },
+  ): Promise<unknown> {
+    const key = `${access.scope}:${path}`;
+    const existing = this.readsInFlight.get(key);
     if (existing) return existing;
-    const pending = this.fetchJson(path, correlationId).finally(() => {
-      if (this.readsInFlight.get(path) === pending) this.readsInFlight.delete(path);
+    const pending = this.fetchJson(path, correlationId, access.bearer).finally(() => {
+      if (this.readsInFlight.get(key) === pending) this.readsInFlight.delete(key);
     });
-    this.readsInFlight.set(path, pending);
+    this.readsInFlight.set(key, pending);
     return pending;
   }
-  private async fetchJson(path: string, correlationId: string): Promise<unknown> {
+  private async fetchJson(path: string, correlationId: string, bearer?: string): Promise<unknown> {
     const operation = path.includes('/messages')
       ? 'chat'
       : path.includes('/rating') || path.includes('/ranking')
@@ -397,9 +456,17 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
           method: 'GET',
           signal: controller.signal,
           redirect: 'error',
-          headers: { Accept: 'application/json', 'X-Correlation-ID': correlationId },
+          headers: {
+            Accept: 'application/json',
+            'X-Correlation-ID': correlationId,
+            ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+          },
         });
         status = response.status;
+        if (response.status === 401 || response.status === 403) {
+          await response.body?.cancel();
+          throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_FORBIDDEN');
+        }
         if (response.status === 404)
           throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_NOT_FOUND');
         if (!response.ok)
@@ -444,7 +511,11 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
         clearTimeout(timer);
       }
     }
-    if (lastError?.code === 'COMMUNITY_EXPERIENCE_NOT_FOUND') throw lastError;
+    if (
+      lastError?.code === 'COMMUNITY_EXPERIENCE_NOT_FOUND' ||
+      lastError?.code === 'COMMUNITY_EXPERIENCE_FORBIDDEN'
+    )
+      throw lastError;
     const failures = (state?.failures ?? 0) + 1;
     this.circuit.set(operation, {
       failures,

@@ -5,6 +5,7 @@ import {
   type CommunityDirectoryRepository,
   type CommunityDirectoryRepositoryPage,
   type LegacyCommunityViewerIdentity,
+  type LegacyCommunityToken,
 } from './index.js';
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -83,6 +84,7 @@ interface LegacyCommunityReadRepositoryOptions {
   readonly cacheTtlMs: number;
   readonly staleTtlMs: number;
   readonly bridge: CommunityLegacyBridgeRepository;
+  readonly token?: LegacyCommunityToken;
   readonly fetchImplementation?: typeof fetch;
   readonly onMetric?: (metric: LegacyCommunityMetric) => void;
 }
@@ -263,6 +265,9 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
   public async listMemberships(input: {
     readonly tenantId: string;
     readonly userId: string;
+    readonly tenantKey?: string;
+    readonly sessionId?: string;
+    readonly bearer?: string;
     readonly correlationId: string;
     readonly limit: number;
     readonly after?: {
@@ -271,7 +276,24 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
       readonly id: string;
     };
   }): Promise<CommunityDirectoryRepositoryPage> {
-    const items = await this.getMemberships(input);
+    let bearer: string | undefined;
+    if (this.options.token) {
+      if (!input.tenantKey || !input.sessionId)
+        throw new LegacyCommunityReadError('COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE');
+      try {
+        bearer = await this.options.token({
+          tenantKey: input.tenantKey,
+          tenantId: input.tenantId,
+          userId: input.userId,
+          sessionId: input.sessionId,
+          correlationId: input.correlationId,
+        });
+      } catch {
+        throw new LegacyCommunityReadError('COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE');
+      }
+      if (!bearer) throw new LegacyCommunityReadError('COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE');
+    }
+    const items = await this.getMemberships({ ...input, ...(bearer ? { bearer } : {}) });
     return paginateCommunityDirectoryItems(items, input.limit, input.after);
   }
 
@@ -286,9 +308,12 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
   private getMemberships(input: {
     readonly tenantId: string;
     readonly userId: string;
+    readonly tenantKey?: string;
+    readonly sessionId?: string;
+    readonly bearer?: string;
     readonly correlationId: string;
   }): Promise<readonly CommunityDirectoryItem[]> {
-    const cacheKey = `${input.tenantId}:${input.userId}`;
+    const cacheKey = `${input.tenantId}:${input.userId}:${input.sessionId ?? ''}`;
     const cached = this.cache.get(cacheKey);
     const now = Date.now();
     if (cached) {
@@ -349,7 +374,14 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
   private revalidateMemberships(
     cacheKey: string,
     expected: CacheEntry,
-    input: { readonly tenantId: string; readonly userId: string; readonly correlationId: string },
+    input: {
+      readonly tenantId: string;
+      readonly userId: string;
+      readonly correlationId: string;
+      readonly tenantKey?: string;
+      readonly sessionId?: string;
+      readonly bearer?: string;
+    },
   ): void {
     if (this.revalidating.has(cacheKey)) return;
     this.revalidating.add(cacheKey);
@@ -377,6 +409,9 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
   private async loadMemberships(input: {
     readonly tenantId: string;
     readonly userId: string;
+    readonly tenantKey?: string;
+    readonly sessionId?: string;
+    readonly bearer?: string;
     readonly correlationId: string;
   }): Promise<readonly CommunityDirectoryItem[]> {
     if (this.circuitOpenUntil > Date.now()) {
@@ -387,7 +422,7 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
       throw new LegacyCommunityReadError('COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE');
     }
 
-    const payload = await this.fetchSummary(identity, input.correlationId);
+    const payload = await this.fetchSummary(identity, input.correlationId, input.bearer);
     const candidates = extractCandidates(payload, identity, this.options.baseUrl);
     const ids = await this.options.bridge.resolveCommunityIds(
       input.tenantId,
@@ -422,6 +457,7 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
   private async fetchSummary(
     identity: LegacyCommunityViewerIdentity,
     correlationId: string,
+    bearer?: string,
   ): Promise<unknown> {
     const url = new URL('/lk/communities', this.options.baseUrl);
     url.searchParams.set('view', 'summary');
@@ -439,13 +475,19 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
       try {
         const response = await this.fetchImplementation(url, {
           method: 'GET',
+          redirect: 'error',
           headers: {
             Accept: 'application/json',
             'X-Correlation-ID': correlationId,
+            ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
           },
           signal: controller.signal,
         });
         status = response.status;
+        if (response.status === 401 || response.status === 403 || response.status === 404) {
+          await response.body?.cancel();
+          throw new LegacyCommunityReadError('COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE');
+        }
         if (!response.ok) {
           throw new LegacyCommunityReadError('COMMUNITY_LEGACY_UNAVAILABLE');
         }
@@ -498,6 +540,7 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
       }
     }
 
+    if (lastError.code === 'COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE') throw lastError;
     this.consecutiveFailures += 1;
     if (this.consecutiveFailures >= this.options.circuitFailureThreshold) {
       this.circuitOpenUntil = Date.now() + this.options.circuitResetMs;

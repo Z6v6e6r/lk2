@@ -1,3 +1,7 @@
+import { parseStationMessageReceipt } from './station-message.js';
+export { parseStationMessageReceipt } from './station-message.js';
+export type StationMessageRequest = components['schemas']['StationMessageRequest'];
+export type StationMessageReceipt = components['schemas']['StationMessageReceipt'];
 import type { QuarterCreateInput, QuarterCreateResult } from '@phub/api-contracts';
 import type {
   TournamentLocalInput,
@@ -2505,6 +2509,35 @@ export class PadlHubApiClient {
       '/chat',
       input,
     );
+  }
+
+  public async sendStationCommunityMessage(
+    communityId: string,
+    input: StationMessageRequest,
+  ): Promise<StationMessageReceipt> {
+    const value = await this.request<unknown>(
+      `/community-views/${encodeURIComponent(communityId)}/message-requests`,
+      {
+        method: 'POST',
+        idempotencyKey: input.requestId,
+        body: jsonRequestBody(input),
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    return parseStationMessageReceipt(value, input.requestId, input.text);
+  }
+
+  public async getStationCommunityMessageRequest(
+    communityId: string,
+    requestId: string,
+  ): Promise<StationMessageReceipt> {
+    const value = await this.request<unknown>(
+      `/community-views/${encodeURIComponent(communityId)}/message-requests/${encodeURIComponent(requestId)}`,
+      { cache: 'no-store', retryOnUnauthorized: false, signal: AbortSignal.timeout(15_000) },
+    );
+    return parseStationMessageReceipt(value, requestId);
   }
 
   public getCommunityReadExperienceRating(

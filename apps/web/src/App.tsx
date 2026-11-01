@@ -771,6 +771,15 @@ export function App({
     () =>
       communityDirectoryAvailable
         ? {
+            ...(clientPlatform === 'web' &&
+            gateway.sendStationCommunityMessage &&
+            gateway.getStationCommunityMessageRequest
+              ? {
+                  custodyScope: JSON.stringify([tenantKey, state.session?.context.user.id]),
+                  sendMessage: gateway.sendStationCommunityMessage,
+                  getMessageRequest: gateway.getStationCommunityMessageRequest,
+                }
+              : {}),
             loadCommunities: (cursor?: string) => gateway.listMyCommunities(cursor, 50),
             ...(communityChatReadAvailable
               ? {
@@ -780,7 +789,14 @@ export function App({
               : {}),
           }
         : null,
-    [gateway, communityDirectoryAvailable, communityChatReadAvailable],
+    [
+      gateway,
+      communityDirectoryAvailable,
+      communityChatReadAvailable,
+      clientPlatform,
+      tenantKey,
+      state.session?.context.user.id,
+    ],
   );
   const [communityInviteToken] = useState(() =>
     typeof window === 'undefined'
