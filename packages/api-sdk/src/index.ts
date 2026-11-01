@@ -1,4 +1,12 @@
 import {
+  TournamentChatError,
+  parseTournamentChatReadRequest,
+  parseTournamentChatReadPosition,
+  parseTournamentChatReadReceipt,
+  tournamentChatReadHash,
+  type TournamentChatReadPosition,
+  type TournamentChatReadRequest,
+  type TournamentChatReadReceipt,
   parseTournamentChatRequest,
   parseTournamentChatReceipt,
   parseTournamentChatPage,
@@ -1411,6 +1419,49 @@ export class PadlHubApiClient {
     );
   }
 
+  public async getTournamentChatReadPosition(
+    tournamentId: string,
+  ): Promise<TournamentChatReadPosition> {
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/read-position`,
+      { cache: 'no-store', retryOnUnauthorized: false },
+    );
+    return parseTournamentChatReadPosition(value, tournamentId);
+  }
+  public async advanceTournamentChatRead(
+    tournamentId: string,
+    input: TournamentChatReadRequest,
+    assertCurrent?: () => void,
+  ): Promise<TournamentChatReadReceipt> {
+    const token = this.getAccessToken();
+    if (!token) throw new TournamentChatError('TOURNAMENT_CHAT_FORBIDDEN', 403);
+    const request = parseTournamentChatReadRequest(input);
+    const hash = await tournamentChatReadHash(tournamentId, request);
+    if (this.getAccessToken() !== token)
+      throw new TournamentChatError('TOURNAMENT_CHAT_FORBIDDEN', 403);
+    assertCurrent?.();
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/read-requests`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+        idempotencyKey: request.requestId,
+        retryOnUnauthorized: false,
+      },
+    );
+    assertCurrent?.();
+    return parseTournamentChatReadReceipt(value, tournamentId, request.requestId, hash);
+  }
+  public async getTournamentChatReadRequest(
+    tournamentId: string,
+    requestId: string,
+  ): Promise<TournamentChatReadReceipt> {
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/read-requests/${encodeURIComponent(requestId)}`,
+      { cache: 'no-store', retryOnUnauthorized: false },
+    );
+    return parseTournamentChatReadReceipt(value, tournamentId, requestId);
+  }
   public async sendTournamentChatMessage(
     tournamentId: string,
     input: TournamentChatRequest,

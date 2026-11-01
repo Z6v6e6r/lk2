@@ -54,3 +54,27 @@ export async function refreshTournamentThread(
   }
   throw new Error('TOURNAMENT_CHAT_HISTORY_GAP');
 }
+
+/** A latest page alone cannot acknowledge a missing unread prefix. */
+export function tournamentReadableThrough(
+  thread: TournamentThread | null,
+  position: { streamId: string; readThroughSequence: number; publishedSequence: number } | null,
+): number | null {
+  if (
+    !thread ||
+    !position ||
+    thread.streamId !== position.streamId ||
+    thread.headSequence > position.publishedSequence ||
+    thread.headSequence <= position.readThroughSequence
+  )
+    return null;
+  let expected = thread.headSequence;
+  const ids = new Set<string>();
+  for (const m of thread.messages) {
+    if (m.sequence !== expected || ids.has(m.messageId)) return null;
+    ids.add(m.messageId);
+    if (m.sequence === position.readThroughSequence + 1) return thread.headSequence;
+    expected--;
+  }
+  return null;
+}

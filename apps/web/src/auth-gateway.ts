@@ -626,6 +626,9 @@ export interface AuthGateway {
   readonly leaveGame: PadlHubApiClient['leaveGame'];
   readonly reconcileManagedLeaveOperation?: PadlHubApiClient['reconcileManagedLeaveOperation'];
   readonly tournamentPrincipal?: () => string | null;
+  readonly getTournamentChatReadPosition?: PadlHubApiClient['getTournamentChatReadPosition'];
+  readonly advanceTournamentChatRead?: PadlHubApiClient['advanceTournamentChatRead'];
+  readonly getTournamentChatReadRequest?: PadlHubApiClient['getTournamentChatReadRequest'];
   readonly tournamentChatPrincipal?: () => string | null;
   readonly sendTournamentChatMessage?: PadlHubApiClient['sendTournamentChatMessage'];
   readonly getTournamentChatRequest?: PadlHubApiClient['getTournamentChatRequest'];
@@ -2488,6 +2491,29 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
     tournamentChatPrincipal() {
       return !nativeClient ? quarterCreatePrincipal() : null;
+    },
+    async getTournamentChatReadPosition(id) {
+      if (nativeClient) return nativeUnavailable();
+      const p = requireQuarterPrincipal();
+      const result = await client.getTournamentChatReadPosition(id);
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    async advanceTournamentChatRead(id, input) {
+      if (nativeClient) return nativeUnavailable();
+      const p = requireQuarterPrincipal();
+      const result = await client.advanceTournamentChatRead(id, input, () => {
+        requireQuarterPrincipal(p);
+      });
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    async getTournamentChatReadRequest(id, requestId) {
+      if (nativeClient) return nativeUnavailable();
+      const p = requireQuarterPrincipal();
+      const result = await client.getTournamentChatReadRequest(id, requestId);
+      requireQuarterPrincipal(p);
+      return result;
     },
     async sendTournamentChatMessage(id, input) {
       if (nativeClient) return nativeUnavailable();

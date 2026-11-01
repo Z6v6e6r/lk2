@@ -10,6 +10,27 @@ const tournamentId = id(1),
 async function fixture(auth = true, enabled = true) {
   const app = Fastify({ genReqId: () => id(9) });
   const owner = {
+    position: vi.fn(async () => ({
+      contractVersion: 'tournament-chat-read.v1' as const,
+      tournamentId,
+      streamId: id(6),
+      witnessHash: 'a'.repeat(64),
+      baselineSequence: 0,
+      readThroughSequence: 0,
+      publishedSequence: 1,
+    })),
+    advanceRead: vi.fn(async () => ({
+      contractVersion: 'tournament-chat-read.v1' as const,
+      tournamentId,
+      requestId,
+      status: 'UNKNOWN' as const,
+    })),
+    readStatus: vi.fn(async () => ({
+      contractVersion: 'tournament-chat-read.v1' as const,
+      tournamentId,
+      requestId,
+      status: 'UNKNOWN' as const,
+    })),
     send: vi.fn(async () => ({
       contractVersion: 'tournament-chat.v1' as const,
       tournamentId,
@@ -135,4 +156,42 @@ describe('public tournament chat boundary', () => {
       await app.close();
     }
   });
+});
+
+it('explicit read command enforces exact key while position and original restore stay read-only', async () => {
+  const { app, owner } = await fixture();
+  try {
+    expect((await app.inject(base + '/read-position')).statusCode).toBe(200);
+    expect((await app.inject(base + '/read-requests/' + requestId)).statusCode).toBe(200);
+    expect(owner.advanceRead).not.toHaveBeenCalled();
+    expect(owner.send).not.toHaveBeenCalled();
+    const input = { requestId, streamId: id(6), witnessHash: 'a'.repeat(64), throughSequence: 1 };
+    expect(
+      (await app.inject({ method: 'POST', url: base + '/read-requests', payload: input }))
+        .statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: base + '/read-requests',
+          headers: { 'idempotency-key': requestId },
+          payload: { ...input, actorUserId: id(9) },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: base + '/read-requests',
+          headers: { 'idempotency-key': requestId },
+          payload: input,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(owner.advanceRead).toHaveBeenCalledTimes(1);
+  } finally {
+    await app.close();
+  }
 });
