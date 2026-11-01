@@ -1,3 +1,9 @@
+import {
+  parseTrainingStationMarker,
+  verifyTrainingStationMarker,
+  type TrainingStationMarker,
+  type StationConfirmationRequest,
+} from '@phub/subscription-runtime-adapter';
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { withTenantTransaction } from './connection.js';
@@ -30,6 +36,7 @@ export interface TrainingPublicRequest {
 }
 export interface TrainingAttempt {
   id: string;
+  stationMembership?: TrainingStationMarker | null;
   state: TrainingAttemptState;
   request: TrainingPublicRequest;
   authority: TrainingAuthority | null;
@@ -41,6 +48,7 @@ export interface TrainingAttempt {
   updatedAt: string;
 }
 interface Row extends QueryResultRow {
+  station_membership?: unknown;
   id: string;
   tenant_id: string;
   actor_user_id: string;
@@ -110,7 +118,28 @@ async function decode(r: Row): Promise<TrainingAttempt> {
       r.dispatch_started_at !== null)
   )
     throw new TrainingRegistrationError('TRAINING_REGISTRATION_STORED_EVIDENCE_INVALID');
+  const stationMembership =
+    r.station_membership == null ? null : await parseTrainingStationMarker(r.station_membership);
+  if (stationMembership?.outcome === 'INTENT') {
+    const pinned = stationMembership.authority,
+      p = pinned.request.preparation;
+    if (
+      p.operationId !== r.id ||
+      p.actor.tenantId !== r.tenant_id ||
+      p.actor.userId !== r.actor_user_id ||
+      p.target.id !== request.trainingId ||
+      p.target.dateHint !== request.dateHint ||
+      p.subscription.id !== request.subscriptionId ||
+      pinned.keySha256 !== r.key_sha256
+    )
+      throw new TrainingRegistrationError('TRAINING_REGISTRATION_STORED_EVIDENCE_INVALID');
+  }
+  if (stationMembership?.outcome === 'OWNER_ADMISSION') {
+    if (!a) throw new TrainingRegistrationError('TRAINING_REGISTRATION_STORED_EVIDENCE_INVALID');
+    await verifyTrainingStationMarker(stationMembership, a);
+  }
   return {
+    stationMembership,
     id: r.id,
     state: r.state,
     request,
@@ -184,15 +213,22 @@ export interface TrainingRegistrationRepository {
     scope: TrainingScope,
     request: TrainingPublicRequest,
     correlationId: string,
+    adoptStation?: boolean,
   ): Promise<TrainingAttempt>;
   claimPreparation(
     scope: TrainingScope,
   ): Promise<{ attempt: TrainingAttempt; token: string | null } | null>;
+  pinStationPreparation(
+    scope: TrainingScope,
+    token: string,
+    authority: TrainingAuthority,
+  ): Promise<TrainingAttempt | null>;
   settlePreparation(
     scope: TrainingScope,
     token: string,
     authority: TrainingAuthority | null,
     correlationId: string,
+    stationMembership?: TrainingStationMarker,
   ): Promise<TrainingAttempt | null>;
   claim(
     scope: TrainingScope,
@@ -206,12 +242,17 @@ export interface TrainingRegistrationRepository {
     correlationId: string,
   ): Promise<TrainingAttempt | null>;
 }
-export function createTrainingRegistrationRepository(pool: Pool): TrainingRegistrationRepository {
+export function createTrainingRegistrationRepository(
+  pool: Pool,
+  options: { stationMembershipEnabled?: boolean } = {},
+): TrainingRegistrationRepository {
   return {
     async ready() {
       try {
         const r = await pool.query<{ ready: boolean }>(
-          "select to_regclass('booking.training_registration_attempts') is not null as ready",
+          options.stationMembershipEnabled
+            ? "select exists(select 1 from information_schema.columns where table_schema='booking' and table_name='training_registration_attempts' and column_name='station_membership') as ready"
+            : "select to_regclass('booking.training_registration_attempts') is not null as ready",
         );
         return r.rows[0]?.ready === true;
       } catch {
@@ -241,14 +282,14 @@ export function createTrainingRegistrationRepository(pool: Pool): TrainingRegist
     read(scope) {
       return withTenantTransaction(pool, scope.tenantId, (c) => read(c, scope));
     },
-    begin(scope, request, correlationId) {
+    begin(scope, request, correlationId, adoptStation = false) {
       return withTenantTransaction(pool, scope.tenantId, async (c) => {
         const id = await trainingOperationId(scope.tenantId, scope.userId, scope.keySha256),
           hash = await trainingPublicRequestHash(request);
         if (request.trainingId !== scope.trainingId)
           throw new TrainingRegistrationError('TRAINING_REGISTRATION_KEY_CONFLICT', 409);
         const inserted = await c.query(
-          `insert into booking.training_registration_attempts(tenant_id,id,actor_user_id,training_id,subscription_id,date_hint,key_sha256,public_request_hash) values($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing returning id`,
+          `insert into booking.training_registration_attempts(tenant_id,id,actor_user_id,training_id,subscription_id,date_hint,key_sha256,public_request_hash${adoptStation ? ',station_membership' : ''}) values($1,$2,$3,$4,$5,$6,$7,$8${adoptStation ? ',$9::jsonb' : ''}) on conflict do nothing returning id`,
           [
             scope.tenantId,
             id,
@@ -258,6 +299,7 @@ export function createTrainingRegistrationRepository(pool: Pool): TrainingRegist
             request.dateHint,
             scope.keySha256,
             hash,
+            ...(adoptStation ? [JSON.stringify({ version: 1, outcome: 'PENDING_ADMISSION' })] : []),
           ],
         );
         const a = await read(c, scope);
@@ -283,10 +325,47 @@ export function createTrainingRegistrationRepository(pool: Pool): TrainingRegist
         return { attempt: a, token };
       });
     },
-    settlePreparation(scope, token, raw, correlationId) {
+    pinStationPreparation(scope, token, raw) {
       return withTenantTransaction(pool, scope.tenantId, async (c) => {
         const a = await read(c, scope, true);
-        if (!a) return null;
+        if (!a || a.state !== 'PREPARING' || a.leaseToken !== token || !a.stationMembership)
+          return null;
+        const authority = await parseTrainingAuthority(raw),
+          p = authority.request.preparation;
+        if (
+          p.operationId !== a.id ||
+          p.actor.tenantId !== scope.tenantId ||
+          p.actor.userId !== scope.userId ||
+          p.target.id !== a.request.trainingId ||
+          p.target.dateHint !== a.request.dateHint ||
+          p.subscription.id !== a.request.subscriptionId ||
+          authority.keySha256 !== scope.keySha256
+        )
+          throw new TrainingRegistrationError('TRAINING_REGISTRATION_EVIDENCE_INVALID');
+        if (a.stationMembership.outcome === 'INTENT') {
+          await verifyTrainingStationMarker(a.stationMembership, authority);
+          return a;
+        }
+        if (a.stationMembership.outcome !== 'PENDING_ADMISSION') return null;
+        const r = await c.query(
+          `update booking.training_registration_attempts set station_membership=$5::jsonb,updated_at=clock_timestamp()
+          where tenant_id=$1 and id=$2 and actor_user_id=$3 and state='PREPARING' and authority is null and dispatch_started_at is null
+          and lease_token=$4 and lease_until>clock_timestamp() and station_membership='{"version":1,"outcome":"PENDING_ADMISSION"}'::jsonb returning id`,
+          [
+            scope.tenantId,
+            a.id,
+            scope.userId,
+            token,
+            JSON.stringify({ version: 1, outcome: 'INTENT', authority }),
+          ],
+        );
+        return r.rowCount === 1 ? read(c, scope) : null;
+      });
+    },
+    settlePreparation(scope, token, raw, correlationId, rawMarker) {
+      return withTenantTransaction(pool, scope.tenantId, async (c) => {
+        const a = await read(c, scope, true);
+        if (!a || a.state !== 'PREPARING' || a.leaseToken !== token) return null;
         const authority = raw === null ? null : await parseTrainingAuthority(raw);
         if (authority) {
           const p = authority.request.preparation;
@@ -301,8 +380,28 @@ export function createTrainingRegistrationRepository(pool: Pool): TrainingRegist
           )
             throw new TrainingRegistrationError('TRAINING_REGISTRATION_EVIDENCE_INVALID');
         }
+        let marker: TrainingStationMarker | null = null;
+        if (a.stationMembership) {
+          marker = await parseTrainingStationMarker(
+            rawMarker ?? { version: 1, outcome: 'NO_ENROLLMENT', reason: 'DISABLED' },
+          );
+          if (!['NO_ENROLLMENT', 'OWNER_ADMISSION'].includes(marker.outcome))
+            throw new TrainingRegistrationError('TRAINING_REGISTRATION_EVIDENCE_INVALID');
+          if (a.stationMembership.outcome === 'INTENT') {
+            if (!authority)
+              throw new TrainingRegistrationError('TRAINING_REGISTRATION_EVIDENCE_INVALID');
+            await verifyTrainingStationMarker(a.stationMembership, authority);
+          } else if (marker.outcome === 'OWNER_ADMISSION')
+            throw new TrainingRegistrationError('TRAINING_REGISTRATION_EVIDENCE_INVALID');
+          if (marker.outcome === 'OWNER_ADMISSION') {
+            if (!authority)
+              throw new TrainingRegistrationError('TRAINING_REGISTRATION_EVIDENCE_INVALID');
+            await verifyTrainingStationMarker(marker, authority);
+          }
+        } else if (rawMarker)
+          throw new TrainingRegistrationError('TRAINING_REGISTRATION_EVIDENCE_INVALID');
         const r = await c.query(
-          `update booking.training_registration_attempts set state=$5,authority=$6::jsonb,authority_sha256=$7,preparation_expires_at=$8,lease_token=null,lease_until=null,completed_at=case when $5='REJECTED_NOT_DISPATCHED' then clock_timestamp() else null end,updated_at=clock_timestamp() where tenant_id=$1 and id=$2 and actor_user_id=$3 and state='PREPARING' and dispatch_started_at is null and authority is null and lease_token=$4 and lease_until>clock_timestamp() returning id`,
+          `update booking.training_registration_attempts set ${marker ? 'station_membership=$9::jsonb,' : ''}state=$5,authority=$6::jsonb,authority_sha256=$7,preparation_expires_at=$8,lease_token=null,lease_until=null,completed_at=case when $5='REJECTED_NOT_DISPATCHED' then clock_timestamp() else null end,updated_at=clock_timestamp() where tenant_id=$1 and id=$2 and actor_user_id=$3 and state='PREPARING' and dispatch_started_at is null and authority is null and lease_token=$4 and lease_until>clock_timestamp() ${marker ? 'and station_membership=$10::jsonb' : ''} returning id`,
           [
             scope.tenantId,
             a.id,
@@ -312,6 +411,7 @@ export function createTrainingRegistrationRepository(pool: Pool): TrainingRegist
             authority ? JSON.stringify(authority) : null,
             authority ? await trainingHash(JSON.stringify(authority)) : null,
             authority?.request.preparation.expiresAt ?? null,
+            ...(marker ? [JSON.stringify(marker), JSON.stringify(a.stationMembership)] : []),
           ],
         );
         if (r.rowCount !== 1) return null;
@@ -383,6 +483,59 @@ export function createTrainingRegistrationRepository(pool: Pool): TrainingRegist
         const done = (await read(c, scope))!;
         await event(c, scope, done, correlationId, 'training.registration.confirmed.v1');
         return done;
+      });
+    },
+  };
+}
+
+/** Exact persisted training completion, not a live roster or latest provider observation. */
+export function createTrainingStationFactRepository(pool: Pool) {
+  return {
+    async loadTrainingConfirmedFact(input: {
+      tenantId: string;
+      eventId: string;
+      trainingId: string;
+      userId: string;
+      operationId: string;
+    }) {
+      return withTenantTransaction(pool, input.tenantId, async (c) => {
+        await c.query("set local statement_timeout='3000ms'");
+        const rows = await c.query<Row & { correlation_id: string }>(
+          `select a.*,o.correlation_id from audit.outbox_events o
+          join booking.training_registration_attempts a on a.tenant_id=o.tenant_id and a.training_id=o.aggregate_id
+            and a.id=$5 and a.actor_user_id=$4
+          where o.tenant_id=$1 and o.id=$2 and o.aggregate_id=$3 and o.event_type='training.registration.confirmed.v1'
+            and o.payload->>'operationId'=$5::text and o.payload->>'trainingId'=$3::text
+            and o.payload->>'userId'=$4::text and o.payload->>'status'='CONFIRMED'`,
+          [input.tenantId, input.eventId, input.trainingId, input.userId, input.operationId],
+        );
+        if (rows.rows.length !== 1) return null;
+        const row = rows.rows[0]!,
+          a = await decode(row),
+          marker = a.stationMembership;
+        if (
+          a.state !== 'CONFIRMED' ||
+          !a.receipt ||
+          !a.authority ||
+          marker?.outcome !== 'OWNER_ADMISSION' ||
+          marker.response.admission.outcome !== 'ADMITTED'
+        )
+          return null;
+        return {
+          actor: marker.actor,
+          correlationId: row.correlation_id,
+          request: {
+            contractVersion: 1,
+            operationId: a.id,
+            admissionId: marker.response.admission.admissionId,
+            admissionBindingSha256: marker.response.admission.bindingSha256,
+            confirmation: {
+              kind: 'TRAINING_REGISTRATION',
+              generationId: a.receipt.receiptId,
+              activityId: a.request.trainingId,
+            },
+          } satisfies StationConfirmationRequest,
+        };
       });
     },
   };

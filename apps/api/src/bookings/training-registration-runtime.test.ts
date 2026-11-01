@@ -14,7 +14,11 @@ import type {
   TrainingAttempt,
   TrainingRegistrationRepository,
 } from '@phub/database/training-registration';
-import { TrainingPreparationRefused } from '@phub/subscription-runtime-adapter';
+import {
+  stationAdmissionId,
+  type TrainingStationMarker,
+  TrainingPreparationRefused,
+} from '@phub/subscription-runtime-adapter';
 import { createTrainingRegistrationRuntime } from './training-registration-runtime.js';
 const actor = {
   tenantId: f.ids.tenantId,
@@ -30,7 +34,7 @@ const input = {
   idempotencyKey: f.ids.idempotencyKey,
 };
 afterEach(() => vi.useRealTimers());
-async function setup() {
+async function setup(stationEnabled = false) {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2035-04-01T10:00:20.000Z'));
   const authority = await trainingAuthorityFixture(),
@@ -51,11 +55,14 @@ async function setup() {
       async (
         s: { tenantId: string; userId: string; keySha256: string },
         request: TrainingAttempt['request'],
+        _correlationId: string,
+        adoptStation = false,
       ) => {
         sequence.push('persist');
         row ??= {
           id: await trainingOperationId(s.tenantId, s.userId, s.keySha256),
           state: 'PREPARING',
+          stationMembership: adoptStation ? { version: 1, outcome: 'PENDING_ADMISSION' } : null,
           request,
           authority: null,
           authoritySha256: null,
@@ -78,23 +85,46 @@ async function setup() {
       sequence.push('prepare-claim');
       return { attempt: row, token: row.leaseToken };
     }),
-    settlePreparation: vi.fn(async (_s: unknown, token: string, a: TrainingAuthority | null) => {
-      if (
-        !row ||
-        row.state !== 'PREPARING' ||
-        row.leaseToken !== token ||
-        !row.leaseUntil ||
-        Date.parse(row.leaseUntil) <= Date.now()
-      )
-        return null;
-      row.authority = a;
-      row.authoritySha256 = a ? await trainingHash(JSON.stringify(a)) : null;
-      row.state = a ? 'PREPARED' : 'REJECTED_NOT_DISPATCHED';
-      row.leaseToken = null;
-      row.leaseUntil = null;
-      sequence.push(a ? 'prepared' : 'refused');
-      return row;
-    }),
+    pinStationPreparation: vi.fn(
+      async (_s: unknown, token: string, authority: TrainingAuthority) => {
+        await Promise.resolve();
+        if (
+          !row ||
+          row.leaseToken !== token ||
+          row.stationMembership?.outcome !== 'PENDING_ADMISSION'
+        )
+          return null;
+        row.stationMembership = { version: 1, outcome: 'INTENT', authority };
+        sequence.push('station-pin');
+        return row;
+      },
+    ),
+    settlePreparation: vi.fn(
+      async (
+        _s: unknown,
+        token: string,
+        a: TrainingAuthority | null,
+        _correlationId: string,
+        marker?: TrainingStationMarker,
+      ) => {
+        if (
+          !row ||
+          row.state !== 'PREPARING' ||
+          row.leaseToken !== token ||
+          !row.leaseUntil ||
+          Date.parse(row.leaseUntil) <= Date.now()
+        )
+          return null;
+        row.authority = a;
+        if (marker) row.stationMembership = marker;
+        row.authoritySha256 = a ? await trainingHash(JSON.stringify(a)) : null;
+        row.state = a ? 'PREPARED' : 'REJECTED_NOT_DISPATCHED';
+        row.leaseToken = null;
+        row.leaseUntil = null;
+        sequence.push(a ? 'prepared' : 'refused');
+        return row;
+      },
+    ),
     claim: vi.fn(async () => {
       await Promise.resolve();
       if (!row) return null;
@@ -148,14 +178,41 @@ async function setup() {
         expiresAt: new Date(Date.now() + 300000).toISOString(),
       }),
     );
+  const station = {
+    signer: { issue: vi.fn(() => 'synthetic.station.delegation') },
+    client: {
+      admit: vi.fn(async () => {
+        await Promise.resolve();
+        sequence.push('station-admit');
+        return {
+          contractVersion: 1 as const,
+          operationId: authority.request.preparation.operationId,
+          replayed: false,
+          admission: {
+            outcome: 'ADMITTED' as const,
+            admissionId: stationAdmissionId(
+              actor.tenantId,
+              authority.request.preparation.operationId,
+            ),
+            communityId: 'fixture-station',
+            membershipEpoch: 0,
+            reason: 'ELIGIBLE',
+            bindingSha256: 'sha256:' + 'a'.repeat(64),
+          },
+        };
+      }),
+    },
+  };
   const runtime = createTrainingRegistrationRuntime({
     enabled: true,
+    stationMembership: stationEnabled ? station : undefined,
     repository,
     client,
     issuer,
     token,
   });
   return {
+    station,
     runtime,
     repository,
     client,
@@ -363,4 +420,118 @@ it('stale refusal cannot replace newer valid capsule and dispatch', async () => 
   expect((await first).operation.status).toBe('CONFIRMED');
   expect(h.row()?.authority?.request.preparation).toEqual(fresh.request.preparation);
   expect(h.client.admit).toHaveBeenCalledTimes(1);
+});
+
+it('station admission pins the verified training capsule before POST and settles before provider booking', async () => {
+  const t = await setup(true);
+  expect((await t.runtime.execute(actor, input)).operation.status).toBe('CONFIRMED');
+  expect(t.sequence).toEqual([
+    'persist',
+    'prepare-claim',
+    'station-pin',
+    'station-admit',
+    'prepared',
+    'claim',
+    'admit',
+    'complete',
+  ]);
+  expect(t.row()?.stationMembership?.outcome).toBe('OWNER_ADMISSION');
+  expect(t.station.client.admit).toHaveBeenCalledOnce();
+  await t.runtime.execute(actor, input);
+  expect(t.station.client.admit).toHaveBeenCalledOnce();
+});
+it('station timeout is terminal no-enrollment and never prevents confirmed training booking', async () => {
+  const t = await setup(true);
+  t.station.client.admit.mockRejectedValueOnce(new Error('synthetic ACK loss'));
+  expect((await t.runtime.execute(actor, input)).operation.status).toBe('CONFIRMED');
+  expect(t.row()?.stationMembership).toEqual({
+    version: 1,
+    outcome: 'NO_ENROLLMENT',
+    reason: 'OWNER_UNAVAILABLE',
+  });
+  await t.runtime.execute(actor, input);
+  expect(t.station.client.admit).toHaveBeenCalledOnce();
+});
+it('lost pin ACK reuses the original intent and never prepares a replacement capsule', async () => {
+  const t = await setup(true),
+    pin = t.repository.pinStationPreparation.getMockImplementation()!;
+  t.repository.pinStationPreparation.mockImplementationOnce(async (...args) => {
+    await pin(...args);
+    throw new Error('lost pin ACK');
+  });
+  expect((await t.runtime.execute(actor, input)).operation.status).toBe('PENDING');
+  expect(t.row()?.stationMembership?.outcome).toBe('INTENT');
+  expect(t.station.client.admit).not.toHaveBeenCalled();
+  // Reclaim lease before the original capsule expiry: simulate crash recovery lease release.
+  t.row()!.leaseUntil = new Date(Date.now() - 1).toISOString();
+  expect((await t.runtime.execute(actor, input)).operation.status).toBe('CONFIRMED');
+  expect(t.client.prepare).toHaveBeenCalledOnce();
+  expect(t.row()?.authority).toEqual(t.authority);
+});
+it('intent recovery refuses changed provider mapping before any new preparation or station POST', async () => {
+  const t = await setup(true),
+    pin = t.repository.pinStationPreparation.getMockImplementation()!;
+  t.repository.pinStationPreparation.mockImplementationOnce(async (...args) => {
+    await pin(...args);
+    throw new Error('lost ACK');
+  });
+  await t.runtime.execute(actor, input);
+  t.row()!.leaseUntil = new Date(Date.now() - 1).toISOString();
+  t.repository.context.mockResolvedValue({
+    ...(await t.repository.context()),
+    providerMappingId: crypto.randomUUID(),
+  });
+  await t.runtime.execute(actor, input);
+  expect(t.client.prepare).toHaveBeenCalledOnce();
+  expect(t.station.client.admit).not.toHaveBeenCalled();
+  expect(t.client.admit).not.toHaveBeenCalled();
+});
+it('expired intent is never re-prepared or enrolled and follows the original expiry path', async () => {
+  const t = await setup(true),
+    pin = t.repository.pinStationPreparation.getMockImplementation()!;
+  t.repository.pinStationPreparation.mockImplementationOnce(async (...args) => {
+    await pin(...args);
+    throw new Error('lost ACK');
+  });
+  await t.runtime.execute(actor, input);
+  vi.advanceTimersByTime(121000);
+  expect((await t.runtime.execute(actor, input)).operation.status).toBe('EXPIRED_NOT_DISPATCHED');
+  expect(t.client.prepare).toHaveBeenCalledOnce();
+  expect(t.station.client.admit).not.toHaveBeenCalled();
+  expect(t.client.admit).not.toHaveBeenCalled();
+});
+it('pre-adoption PREPARING row remains unadopted when producer is later enabled', async () => {
+  const t = await setup(true);
+  await t.repository.begin(
+    {
+      tenantId: actor.tenantId,
+      userId: actor.userId,
+      keySha256: await trainingHash(input.idempotencyKey),
+    },
+    input,
+    actor.correlationId,
+    false,
+  );
+  await t.runtime.execute(actor, input);
+  expect(t.row()?.stationMembership).toBeNull();
+  expect(t.repository.pinStationPreparation).not.toHaveBeenCalled();
+  expect(t.station.client.admit).not.toHaveBeenCalled();
+});
+
+it('claim-time INTENT identity is rechecked when another lease pins after the initial read', async () => {
+  const t = await setup(true),
+    claim = t.repository.claimPreparation.getMockImplementation()!;
+  t.repository.claimPreparation.mockImplementationOnce(async () => {
+    const claimed = await claim();
+    if (!claimed) throw new Error('fixture');
+    const authority = structuredClone(t.authority);
+    authority.request.preparation.actor.providerMappingId = crypto.randomUUID();
+    claimed.attempt.stationMembership = { version: 1, outcome: 'INTENT', authority };
+    return claimed;
+  });
+  await t.runtime.execute(actor, input);
+  expect(t.station.client.admit).not.toHaveBeenCalled();
+  expect(t.client.prepare).not.toHaveBeenCalled();
+  expect(t.client.admit).not.toHaveBeenCalled();
+  expect(t.repository.settlePreparation).not.toHaveBeenCalled();
 });

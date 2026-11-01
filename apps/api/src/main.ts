@@ -1,3 +1,4 @@
+import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
 import { createTrainingRegistrationRepository } from '@phub/database/training-registration';
 import { TrainingRegistrationOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createTrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
@@ -603,7 +604,10 @@ const communityMediaRuntime = communityMediaObjectStore
   : undefined;
 // Independent concrete TRAINING gate: never activates or widens WARN quote/game paths.
 const trainingRegistration = (() => {
-  const repository = createTrainingRegistrationRepository(pool);
+  const repository = createTrainingRegistrationRepository(pool, {
+    stationMembershipEnabled:
+      config.TRAINING_REGISTRATION_ENABLED && config.LK_STATION_MEMBERSHIP_LIFETIME_ENABLED,
+  });
   if (!config.TRAINING_REGISTRATION_ENABLED)
     return createTrainingRegistrationRuntime({ enabled: false, repository });
   const keys = JSON.parse(config.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!) as Record<
@@ -631,6 +635,10 @@ const trainingRegistration = (() => {
       const issued = await authService.issueVivaAccessToken(actor);
       return { token: issued.accessToken, expiresAt: issued.expiresAt };
     },
+    stationMembership:
+      createStationMembershipTransport(config, (outcome) =>
+        logger.info({ outcome }, 'training station membership boundary'),
+      ) ?? undefined,
     metric: (outcome) => logger.info({ outcome }, 'training registration boundary'),
   });
 })();

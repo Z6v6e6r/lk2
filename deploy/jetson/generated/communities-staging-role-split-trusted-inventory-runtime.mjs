@@ -26636,6 +26636,16 @@ var init_training_registration2 = __esm({
   }
 });
 
+// ../../packages/subscription-runtime-adapter/src/training-station-membership.ts
+var init_training_station_membership = __esm({
+  "../../packages/subscription-runtime-adapter/src/training-station-membership.ts"() {
+    "use strict";
+    init_esm_shims();
+    init_training_registration();
+    init_station_membership();
+  }
+});
+
 // ../../packages/subscription-runtime-adapter/src/index.ts
 var init_src3 = __esm({
   "../../packages/subscription-runtime-adapter/src/index.ts"() {
@@ -26649,6 +26659,7 @@ var init_src3 = __esm({
     init_managed_join();
     init_managed_self_leave();
     init_training_registration2();
+    init_training_station_membership();
   }
 });
 
