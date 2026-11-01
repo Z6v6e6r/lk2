@@ -12,6 +12,8 @@ Production backup freshness, exact retained artifacts и rehearsed operational r
 
 Messaging principal fence: при смене principal/token поздний ответ отвергается, автоматического write replay после401 нет. Original idempotency key сохраняется для явного повтора в допустимой сессии; UI fence не отменяет уже принятую сервером команду. При integration сохранить этот порядок вместе с native epoch/generation fences.
 
+Browser-cookie SDK555 сохраняет generation и tenant/user до/после refresh, auth и чтения ответа. Локальный logout немедленно закрывает credentials даже offline, но не доказывает revoke серверной cookie. CUP556 использует тот же контур; явный повтор команды после восстановления сессии требует проверки исходного результата/ключа. Native iOS/Android порядок revocation/read-drain сохранён.
+
 ## Station/read recovery — 2026-11-01
 
 545: retain source/facts/recipients, original membership epoch/context, STATION_PENDING/STATION_SENDING и acknowledged dispatch marker. UNKNOWN после возможной отправки не превращать в resend и не передавать старому ordinary worker. Отключение нового consumer и drain — только по разрешённому operational plan; не удалять custody для «перезапуска».

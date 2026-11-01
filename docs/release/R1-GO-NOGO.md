@@ -6,9 +6,11 @@
 
 Следующие обязательные gates: full/native CI → согласованный единый source → attributable refund/DEPOSIT settlement → owner/API/worker/runtime/provider/device acceptance → signed immutable artifacts, backup/restore/rollback → отдельные main/publication/deploy/store approvals. Отсутствующее денежное доказательство не заменяется CANCEL/PAID и не закрывается зелёным CI.
 
-Выполнены только разрешённые локальные integration merges, source commits, task-branch pushes и Draft PR. Main/flags/publication/realDB/provider/keys/signing/deploy/stores не изменялись. Вопросы разрешения пока не открыты; безопасная реализация и проверка продолжаются. Последующие разделы — исторические checkpoint.
+Выполнены только разрешённые локальные integration merges, source commits, task-branch pushes и Draft PR. Main/flags/publication/realDB/provider/keys/signing/deploy/stores не изменялись. Следующие source merges и live-переходы требуют конкретного разрешения; безопасная реализация и проверка продолжаются. Последующие разделы — исторические checkpoint.
 
-Messaging fence555: head `29ab1a1e1dc2a4e083f021eb91e5396d1bb232ad`, full41346201488/native CI pending; LOCAL286PASS, static/build и независимое security/reliability review CLEAR. До green это не замороженный integration input.
+Messaging fence555: head `4dc4aec187366dc26fe9a926a018ade6df864f35`, full41347687992 SUCCESS8611PASS/127SKIP, native CI SUCCESS; LOCAL1919PASS/2SKIP, static/build и независимое security/reliability review CLEAR. Следующий source input — его потомок556 с исправленным CUP replay.
+
+CUP custody [#556](https://github.com/Z6v6e6r/lk2/pull/556) `479a200c8413775154e1fe84622c9ffe880a7e13`: custom admin401 replay мог перенести команду A в сессию B, несмотря на корректную серверную проверку прав. Исправление переиспользует SDK admin transport; nonGET/HEAD не повторяются автоматически, поздние success/error bodies отсекаются. RED18 и отдельно RED2 подтверждены; LOCAL1945PASS/2SKIP в169client suites, static/5types/build/review/scans PASS. VERIFIED SOURCE/CI: full41348481699 SUCCESS8637PASS/127SKIP; closedPG4, required36physical+8guards zeroSKIP, static/security/5Docker PASS. Android41348481741 SUCCESS41JVM/0SKIP; iOS41348481855 SUCCESS54PASS/1KeychainSKIP; unsigned builds. Server ACL/schema/config не менялись.
 
 ## Решение — 2026-11-01
 

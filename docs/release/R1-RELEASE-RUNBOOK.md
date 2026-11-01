@@ -10,9 +10,11 @@ Tournament552 требует согласованных CUP publications/recipie
 
 Native554 exact chat route не означает catalogue discovery, OS universal link или push route. Сохранить iOS reset маршрута при смене аккаунта. Проверить на устройстве session/logout/hash, metadata persistence/Web Locks, background/foreground и cold UNKNOWN recovery. Signed artifacts/store activation требуют отдельного пакета и разрешения. Текущая работа ни одной live transition не выполнила.
 
-Дополнение source reuse: #518 `f3102c2a9f78cf734d201b078ccb5700205438a4` содержит513/516 и готовые iOS DIRECT/GAME, создание DIRECT и5 native acceptance cases; remote head, full41229015245/iOS41229015147 SUCCESS перепроверены. Эта ветка также отсутствует в554. Следующая партия включает конечный messaging fence +531 +518; без переписывания существующих native journeys. Game-card chat navigation подключается только через существующую canonical команду.
+Дополнение source reuse: #518 `f3102c2a9f78cf734d201b078ccb5700205438a4` содержит513/516 и готовые iOS DIRECT/GAME, создание DIRECT и5 native acceptance cases; remote head, full41229015245/iOS41229015147 SUCCESS перепроверены. Эта ветка также отсутствует в554. Следующая партия включает556 (содержит555/554) +531 +518; без переписывания существующих native journeys. Game-card chat navigation подключается только через существующую canonical команду.
 
-Messaging fence555: head `29ab1a1e1dc2a4e083f021eb91e5396d1bb232ad`, full41346201488/native CI pending; LOCAL286PASS, static/build и независимое security/reliability review CLEAR. До green это не замороженный integration input.
+Messaging fence555: head `4dc4aec187366dc26fe9a926a018ade6df864f35`, full41347687992 SUCCESS8611PASS/127SKIP, native CI SUCCESS; LOCAL1919PASS/2SKIP, static/build и независимое security/reliability review CLEAR. Следующий source input — его потомок556 с исправленным CUP replay.
+
+Исходник556 `479a200c` включает555 и отдельное исправление CUP custom replay; full41348481699 SUCCESS8637PASS/127SKIP, оба native CI SUCCESS. Три-head batch556+531+518 должен сохранить разные входы DIRECT/GAME и station directory, конкретные transport recognizers, тестовый iOS host без real HTTP/Keychain fallback и Release-with-test-flag отрицательную проверку. После green понадобится отдельная партия общий native source +552 +553; обе партии требуют своих exact-head approvals.
 
 ## Новые prerequisites — 2026-11-01
 
