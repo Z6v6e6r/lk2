@@ -100,8 +100,12 @@ describe('actual station message composer handlers', () => {
       resolve(confirmed(vi.mocked(p.send).mock.calls[0]![1].requestId, 'first'));
       return Promise.resolve();
     });
+    // Confirmation also awaits WebCrypto validation of the original body hash.
+    // Flushing a microtask does not wait for that native asynchronous operation.
+    await waitFor(() => expect(p.onConfirmed).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Отправить' })).toBeEnabled());
     expect(screen.getByRole('textbox')).toHaveValue('newer draft');
-    expect(p.onConfirmed).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/Ожидают подтверждения:/)).not.toBeInTheDocument();
   });
   it.each([403, 404, 503])(
     'status %i retains original custody and never retries POST',
@@ -167,6 +171,9 @@ it('GET receipt with correct UUID but wrong original body cannot erase metadata 
   );
   render(<StationMessageComposer {...p} />);
   await waitFor(() => expect(p.status).toHaveBeenCalledOnce());
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Проверить статус' })).toBeEnabled(),
+  );
   expect(p.onConfirmed).not.toHaveBeenCalled();
   expect(screen.getByText(/Ожидают подтверждения: 1/)).toBeInTheDocument();
 });
