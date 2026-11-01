@@ -279,6 +279,17 @@ const environmentSchema = z.object({
     .regex(/^[A-Za-z0-9_-]{1,64}$/)
     .optional(),
   TOURNAMENT_CHAT_ACTOR_PRIVATE_KEY_FILE: z.string().min(1).optional(),
+  // Dedicated readonly CUP profile lookup; never reuses subscription or client credentials.
+  TOURNAMENT_ORGANIZER_LOOKUP_ENABLED: booleanFromEnvironment,
+  TOURNAMENT_ORGANIZER_LOOKUP_PUBLIC_KEYS_FILE: z.string().min(1).optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_ISSUER: z.string().min(1).max(200).optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_AUDIENCE: z.string().min(1).max(200).optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_SUBJECT: z.string().min(1).max(200).optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_TENANT_ID: z.string().uuid().optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_TENANT_KEY: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]{0,62}$/)
+    .optional(),
   LEGACY_GAME_COMMAND_BRIDGE_TOKEN: z.string().min(32).optional(),
   LEGACY_GAME_IDENTITY_VERIFY_URL: z.string().url().optional(),
   LEGACY_GAME_IDENTITY_VERIFY_TOKEN: z.string().min(32).optional(),
