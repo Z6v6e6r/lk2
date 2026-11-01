@@ -1,3 +1,7 @@
+import {
+  registerOrganizerProfileLookup,
+  type OrganizerLookupOptions,
+} from './tournaments/organizer-profile-lookup.js';
 import { registerStationMessageRoutes } from './communities/station-message-routes.js';
 import type { StationMessageOwner } from './communities/station-message-owner-client.js';
 import { registerQuarterCreateRoutes } from './games/game-quarter-create-routes.js';
@@ -335,6 +339,7 @@ export interface BuildAppOptions {
   readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
   readonly playerLevelRepository?: PlayerLevelRepository;
   readonly cupPlayerLevelProjectionRepository?: CupPlayerLevelProjectionRepository;
+  readonly organizerProfileLookup?: OrganizerLookupOptions;
   readonly participationCommandRepository?: ParticipationCommandRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
@@ -1178,6 +1183,7 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     commandHandlers: [resolvePublicTenant, requireIdempotencyKey],
   });
+  registerOrganizerProfileLookup(app as unknown as FastifyInstance, options.organizerProfileLookup);
   registerCupPlayerLevelProjectionRoutes(app as unknown as FastifyInstance, {
     enabled: options.config.CUP_PLAYER_LEVEL_PROJECTION_ENABLED,
     ...(options.config.CUP_PLAYER_LEVEL_PROJECTION_TOKEN

@@ -1,3 +1,4 @@
+import { createOrganizerProfileLookup } from './tournaments/organizer-profile-lookup-runtime.js';
 import { createCommunityActorToken } from './communities/community-actor-token.js';
 import { createQuarterCreateRepository } from '@phub/database/quarter-create';
 import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
@@ -817,6 +818,7 @@ const gameQuarterCreate = (() => {
     },
   });
 })();
+const organizerProfileLookup = createOrganizerProfileLookup(config, pool, redis);
 const app = await buildApp({
   ...(gameQuarterCreate ? { gameQuarterCreate } : {}),
   config,
@@ -905,6 +907,7 @@ const app = await buildApp({
   levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),
   playerLevelRepository: createPlayerLevelRepository(pool),
   cupPlayerLevelProjectionRepository: createCupPlayerLevelProjectionRepository(pool),
+  ...(organizerProfileLookup ? { organizerProfileLookup } : {}),
   participationCommandRepository,
   locationMediaRepository: createLocationMediaRepository(pool),
   giftCertificateCatalogRepository: createGiftCertificateCatalogRepository(pool),
