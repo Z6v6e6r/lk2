@@ -74,7 +74,16 @@ Current access denial hides cached history and draft but retains minimal metadat
 Clearing browser site data loses local recovery metadata; no server-side listing or durable
 multi-device custody is introduced in Stage A.
 
-Fresh reads on focus/online/visibility and explicit refresh page one fixed owner snapshot,
+A visible, online Web chat refreshes through the existing HTTP read protocol every ten seconds
+at most, after the previous request completes. Hidden/offline/unmounted/retired views do not
+poll; event storms cannot queue automatic refreshes behind an active request. Network failures
+back off from 20 to 60 seconds; status429 waits 60 seconds. The current SDK error contract does
+not expose Retry-After, so no header-specific timing guarantee is made. Focus/online/visibility
+respect the same cooldown. Explicit refresh remains available. ACL denial or a continuity gap
+stops automatic requests until an explicit successful refresh/restart. Polling never creates
+MESSAGE or READ commands; read acknowledgment remains an explicit action.
+
+These scheduled reads, focus/online/visibility and explicit refresh page one fixed owner snapshot,
 then at most four pages (200 messages) until the exact prior head UUID/sequence is reached.
 Successful catch-up preserves already loaded older rows and their original pagination cursor.
 If the anchor is not reached, stream changes, or a sequence is malformed, old history is not
@@ -94,6 +103,6 @@ unit cases exercise defensive forward/reverse count refusals.
 
 Web is the only enabled client in this packet. Both App navigation and gateway reject native
 commands. Android/iOS adoption remains mandatory Stage B after the independently owned native
-station packet and this Web packet are coherently integrated. There is no native/read/unread/
-realtime completion claim. No workflow, dependency, migration, shared runtime configuration,
+station packet and this Web packet are coherently integrated. Explicit Web READ and owner read positions are implemented; native chat and push-based
+realtime remain separate gaps. Bounded automatic HTTP catch-up is not a realtime delivery SLA. No workflow, dependency, migration, shared runtime configuration,
 installed credential, provider, production database or deployment was changed by this task.
