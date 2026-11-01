@@ -23,7 +23,7 @@ export interface ClaimedNotificationDelivery {
   readonly attemptNo: number;
   readonly startedAt: string;
   readonly scenarioDelivery?: boolean;
-  /** Fence late ordinary APNs invalidation against token rotation and account transfer. */
+  /** Fence late ordinary push invalidation against token rotation and account transfer. */
   readonly dispatchedEndpoint?: {
     readonly ciphertext: Buffer;
     readonly encryptionKeyId: string;
@@ -38,7 +38,10 @@ export async function deferNotificationDeliveryWithoutAttempt(options: {
   readonly job: ClaimedNotificationDelivery;
   readonly retryAfterMs: number;
   readonly errorCode: string;
+  /** Only pre-provider ordinary gate contention; atomically refuses scenario/stale claims. */
+  readonly ordinaryOnly?: boolean;
 }): Promise<'retry' | 'stale'> {
+  if (options.ordinaryOnly && options.job.scenarioDelivery) return 'stale';
   const retryAfterMs = Math.max(1_000, Math.min(Math.trunc(options.retryAfterMs), 3_600_000));
   return withTenantTransaction(options.pool, options.job.tenantId, async (client) => {
     // No provider call has occurred. Preserve the baseline claim-generation fence:
@@ -52,13 +55,23 @@ export async function deferNotificationDeliveryWithoutAttempt(options: {
               lease_expires_at = null,
               updated_at = now(),
               last_error_code = $5
-        where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3`,
+        where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3
+          ${
+            options.ordinaryOnly
+              ? `and intent_id=$6 and endpoint_id=$7 and lease_expires_at>clock_timestamp()
+            and scenario_available_at is null and scenario_v2_available_at is null
+            and scenario_dispatch_started_at is null
+            and exists(select 1 from notifications.intents i where i.tenant_id=$1 and i.id=$6
+              and not (i.render_data ? 'scenarioRunId'))`
+              : ''
+          }`,
       [
         options.job.tenantId,
         options.job.deliveryId,
         options.job.attemptNo,
         retryAfterMs,
         options.errorCode,
+        ...(options.ordinaryOnly ? [options.job.intentId, options.job.endpointId] : []),
       ],
     );
     return updated.rowCount === 1 ? 'retry' : 'stale';
