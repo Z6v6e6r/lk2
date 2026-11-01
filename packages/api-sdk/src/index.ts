@@ -3025,6 +3025,7 @@ export class PadlHubApiClient {
       `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}/bytes`,
       {
         method: 'PUT',
+        retryOnUnauthorized: false,
         idempotencyKey,
         headers: { 'Content-Type': 'application/octet-stream' },
         body: bytes,

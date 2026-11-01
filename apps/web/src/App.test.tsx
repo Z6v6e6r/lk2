@@ -2504,6 +2504,66 @@ describe('PadlHub web authentication', () => {
     await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
   });
 
+  it.each(['success', 'failure'] as const)(
+    'ignores a late direct-create %s after leaving and returning to the route',
+    async (outcome) => {
+      const recipient = '11111111-1111-4111-8111-111111111111',
+        conversation = '22222222-2222-4222-8222-222222222222';
+      const route = `/chats/new?recipientUserId=${recipient}`;
+      window.history.replaceState({}, '', route);
+      let finish!: (v: Awaited<ReturnType<AuthGateway['createDirectConversation']>>) => void,
+        fail!: (e: Error) => void;
+      const createDirectConversation = vi.fn<AuthGateway['createDirectConversation']>(
+        () =>
+          new Promise((resolve, reject) => {
+            finish = resolve;
+            fail = reject;
+          }),
+      );
+      const gateway = createGateway({
+        restoreSession: vi.fn().mockResolvedValue(session),
+        createDirectConversation,
+      });
+      render(<App gateway={gateway} tenantKey="padlhub" />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Начать диалог' }));
+      await waitFor(() => expect(createDirectConversation).toHaveBeenCalledOnce());
+      act(() => {
+        window.history.pushState({}, '', '/profile');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      act(() => {
+        window.history.pushState({}, '', route);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await act(async () => {
+        if (outcome === 'success')
+          finish({
+            outcome: 'ok',
+            conversation: {
+              id: conversation,
+              kind: 'DIRECT',
+              participant: { userId: recipient, displayName: 'Synthetic' },
+              unreadCount: 0,
+              updatedAt: '2026-11-01T00:00:00.000Z',
+            },
+            created: false,
+            replayed: false,
+          });
+        else fail(new Error('late synthetic failure'));
+        await Promise.resolve();
+      });
+      expect(window.location.pathname + window.location.search).toBe(route);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(createDirectConversation).toHaveBeenCalledOnce();
+      expect(screen.getByRole('button', { name: 'Начать диалог' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Начать диалог' }));
+      expect(createDirectConversation).toHaveBeenCalledTimes(2);
+      expect(createDirectConversation.mock.calls[1]).toEqual(
+        createDirectConversation.mock.calls[0],
+      );
+    },
+  );
+
   it('opens the conversation immediately when the profile link asks for it', async () => {
     const recipientUserId = '11111111-1111-4111-8111-111111111111';
     const conversationId = '22222222-2222-4222-8222-222222222222';

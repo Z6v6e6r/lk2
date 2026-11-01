@@ -880,3 +880,9 @@ custody, edited intents, reload GET, late ACK/logout and denied-cache removal. L
 use only synthetic CommunityThread/auth-gateway transport at narrow/wide sizes. Full automatic CI
 and independent R3 review remain separate evidence; no provider/live database, deployment, owner
 installation or end-to-end live delivery is asserted.
+
+### Messaging command session retirement
+
+Web and Android messaging commands bind their bounded network retry to the original tenant, user, session epoch and access token. Logout, account replacement (including reauthentication as the same user), or token replacement retires that attempt: late acknowledgements and failures cannot trigger a new command under the replacement session. A command receiving 401 is surfaced without automatic refresh/replay; an independent read may still refresh its own session. Retries within the unchanged principal retain the original body and idempotency key. Native media upload follows the same rule.
+
+Direct-conversation creation also binds its UI completion to the original navigation epoch and route. Leaving and returning, unmounting or starting logout prevents a late completion from navigating or changing the current view. This does not cancel or compensate a server-side command that may already have completed; it must be reconciled under its original identity.
