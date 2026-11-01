@@ -14,3 +14,8 @@ deploy/jetson/communities-role-split-v3-anchor-rehearsal-subject.json
 deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs
 deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-trusted-inventory-gate.mjs
 scripts/fixtures/timeweb-release-manifest.v1.json
+
+packages/subscription-runtime-adapter/src/fixtures/training-registration-v1-contract.json
+
+# Shared LK/CUP owner fixture must retain its verified bytes.
+packages/domain/src/fixtures/quarter-create-owner-v1.json

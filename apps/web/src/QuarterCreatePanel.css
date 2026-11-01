@@ -1,0 +1,25 @@
+.quarter-create-page .games-page-header {
+  padding: 16px 20px 0;
+}
+.quarter-create-page h1 {
+  margin: 16px 0 8px;
+  font-size: 26px;
+}
+.quarter-create-page .game-create-form > p {
+  margin: 0;
+  line-height: 1.45;
+}
+.quarter-create-status {
+  padding: 16px;
+  border: 1px solid #d9d3e8;
+  border-radius: 12px;
+  background: #fff;
+  line-height: 1.45;
+}
+.quarter-create-status p:first-child {
+  margin-top: 0;
+  font-weight: 700;
+}
+.quarter-create-status p:last-child {
+  margin-bottom: 0;
+}

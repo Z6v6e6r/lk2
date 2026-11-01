@@ -1,3 +1,7 @@
+import { stationStreamRequest } from './native-station-stream-request.js';
+import { stationRequest } from './native-station-message-request.js';
+import { gameCancelRequest } from './native-game-cancel-request.js';
+import { quarterRequest } from './native-quarter-request.js';
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError } from '@phub/api-sdk';
 import type { MobileRuntimeConfig } from './runtime-config.js';
@@ -181,6 +185,11 @@ export function createNativeApiFetch(
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();
     const method = init?.method ?? 'GET';
+    gameCancelRequest(value, init, config);
+    const stream = stationStreamRequest(value, init, config);
+    if (!stream) stationRequest(value, init, config);
+    if (url.pathname.startsWith(`/user/api/v1/${config.tenantKey}/game-create-operations`))
+      quarterRequest(value, init, config);
     const relay = isBinaryRelay(url.pathname, method);
     const body = init?.body;
     if (body != null && typeof body !== 'string' && (!relay || !isBinaryBody(body)))
@@ -295,6 +304,11 @@ export function createNativeApiFetch(
         } else {
           unavailable();
         }
+      }
+      if (stream) {
+        const limit = (stream.resource === 'stream' ? 3 : 1) * 1024 * 1024;
+        if (result.body.length > Math.ceil(limit / 3) * 4 || atob(result.body).length > limit)
+          throw new Error('NATIVE_RESPONSE_REJECTED');
       }
       const safeHeaders = Object.fromEntries(
         Object.entries(result.headers).filter(([name]) =>

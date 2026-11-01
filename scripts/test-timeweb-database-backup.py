@@ -534,8 +534,15 @@ class PureTests(unittest.TestCase):
             self.assertEqual(js,pins)
             for row in rows:
                 self.assertNotIn(row['path'],m.API_WORKER_MIGRATION_CONTROLLER_FILES)
-                data=(Path(__file__).parents[1]/row['path']).read_bytes()
+                current=(Path(__file__).parents[1]/row['path']).read_bytes()
+                # This approval freezes the historical Android fixture, not future product tests.
+                data=(Path(__file__).parent/'fixtures/timeweb-android-chat-test-541fe96a.fixture').read_bytes() if name=='API_WORKER_ANDROID_CHAT_TEST_PATCH' else current
                 self.assertEqual(hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest(),row['newOid'])
+                if name=='API_WORKER_ANDROID_CHAT_TEST_PATCH':
+                    current_oid=hashlib.sha1(b'blob '+str(len(current)).encode()+b'\0'+current).hexdigest()
+                    if current_oid!=row['newOid']:
+                        with self.assertRaisesRegex(m.Stop,'ANDROID_CHAT_TEST_PATCH'):
+                            m.validate_migration_controller_delta(raw([dict(row,newOid=current_oid)]))
 
     def test_inert_rehearsal_pair_is_exact_atomic_and_matches_source_and_javascript(self):
         import hashlib

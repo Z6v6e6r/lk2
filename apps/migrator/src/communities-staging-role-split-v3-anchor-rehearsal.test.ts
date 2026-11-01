@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXTERNAL_PHASE_ANCHOR_VERSION } from './communities-staging-role-split-v3-external-phase-anchor.js';
 import {
@@ -224,7 +224,7 @@ describe('V3 external-anchor subject and crash rehearsal', () => {
     await writeFile(productionPath, productionBytes, { mode: 0o600 });
     await writeFile(rehearsalPath, rehearsalBytes, { mode: 0o600 });
 
-    const { stdout, stderr } = await execFileAsync(
+    const pending = execFileAsync(
       process.execPath,
       [
         ...(builtEntrypoint === undefined ? ['--import', 'tsx'] : []),
@@ -238,6 +238,13 @@ describe('V3 external-anchor subject and crash rehearsal', () => {
       ],
       { cwd: repository, timeout: 30_000, maxBuffer: 64 * 1024 },
     );
+    onTestFinished(async () => {
+      // A test timeout must not leave the task-owned rehearsal subprocess running.
+      if (pending.child.exitCode === null && pending.child.signalCode === null)
+        pending.child.kill('SIGKILL');
+      await pending.catch(() => undefined);
+    });
+    const { stdout, stderr } = await pending;
 
     expect(stderr).toBe('');
     expect(JSON.parse(stdout)).toMatchObject({
@@ -259,7 +266,7 @@ describe('V3 external-anchor subject and crash rehearsal', () => {
     expect(await readFile(join(stateDirectory, 'v3-durable-state.json'), 'utf8')).toContain(
       '"phase":"OWNED"',
     );
-  });
+  }, 35_000);
 
   it('keeps the Linux runner networkless, digest-pinned and non-authorizing', async () => {
     const sourceBytes = await readFile(shellRunner, 'utf8');

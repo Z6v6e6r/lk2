@@ -666,6 +666,11 @@ export async function prepareCreateGameAttempt(
   }
   const fingerprint = await payloadFingerprint(payload);
   return withAttemptLock(principal, lockManager, async () => {
+    if (
+      storage.getItem('phub.quarter-create.v1:' + principal.tenantId + ':' + principal.userId) !==
+      null
+    )
+      throw new CreateGameAttemptError('ATTEMPT_STATE_CHANGED');
     const now = options.now?.() ?? new Date();
     let ledger = readLedger(principal, storage, now);
     const mounted = options.mountedAttempt ?? undefined;

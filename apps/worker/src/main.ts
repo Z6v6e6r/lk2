@@ -1,5 +1,17 @@
+import { createQuarterStationFactRepository } from '../../../packages/database/src/game-quarter-create-repository.js';
+import { createTrainingStationFactRepository } from '../../../packages/database/src/training-registration-repository.js';
+import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
+import { createStationMembershipRepository } from '../../../packages/database/src/station-membership-repository.js';
+import { registerStationMembershipConsumer } from './station-membership-consumer.js';
+import { StationMessageNotificationRepository } from '@phub/database/station-message-notifications';
+import { createStationSigner, stationCredentialSchema } from './station-notification-protocol.js';
+import { StationNotificationClient } from './station-notification-client.js';
+import { runStationImportCycle } from './station-notification-importer.js';
+import { runStationDelivery, type StationTransport } from './station-notification-delivery.js';
+import { readNotificationCredentialFile as readStationCredential } from './notification-provider-credentials.js';
+import { runGameCreateLocationBindingSync } from './game-create-location-binding-sync.js';
 import Redis from 'ioredis';
-import { VivaIdentityProvider } from '@phub/viva-adapter';
+import { VivaIdentityProvider, VivaCreateLocationSource } from '@phub/viva-adapter';
 import { VivaNotificationSource } from '@phub/viva-adapter/notification-lifecycle';
 import { ApnsDeliveryAdapter, ApnsTokenProvider } from './apns-adapter.js';
 import { runApnsDeliveryBatch } from './apns-delivery.js';
@@ -420,6 +432,65 @@ const smtpRuntime = config.SMTP_ENABLED
       onOutcome: (code) => workerMetrics.recordExtendedNotificationOutcome('YANDEX_SMTP', code),
     })
   : undefined;
+const stationOwner = config.STATION_NOTIFICATIONS_ENABLED
+  ? new StationNotificationClient({
+      origin: config.STATION_NOTIFICATION_OWNER_ORIGIN!,
+      sign: createStationSigner({
+        privateKey: stationCredentialSchema.parse(
+          await readStationCredential(config.STATION_NOTIFICATION_PRIVATE_KEY_FILE!),
+        ).privateKey,
+        issuer: config.STATION_NOTIFICATION_ISSUER!,
+        audience: config.STATION_NOTIFICATION_AUDIENCE!,
+        keyId: config.STATION_NOTIFICATION_KEY_ID!,
+        tenantId: config.STATION_NOTIFICATION_TENANT_ID!,
+      }),
+      observe: (phase, outcome, durationMs) =>
+        logger.info({ phase, outcome, durationMs }, 'station notification owner read'),
+    })
+  : undefined;
+const stationRepository = stationOwner ? new StationMessageNotificationRepository(pool) : undefined;
+const stationTransports: StationTransport[] = [
+  ...(webPushRuntime
+    ? [
+        {
+          provider: 'WEB_PUSH' as const,
+          appId: config.WEB_PUSH_APP_ID,
+          environment: config.WEB_PUSH_ENVIRONMENT,
+          adapter: webPushRuntime.adapter,
+          cipher: webPushRuntime.cipher,
+          maxAttempts: config.WEB_PUSH_MAX_ATTEMPTS,
+          retryBaseMs: config.WEB_PUSH_RETRY_BASE_MS,
+        },
+      ]
+    : []),
+  ...(activeFcmRuntime
+    ? [
+        {
+          provider: 'FCM' as const,
+          appId: config.FCM_APP_ID,
+          environment: config.FCM_ENVIRONMENT,
+          adapter: activeFcmRuntime.adapter,
+          cipher: activeFcmRuntime.cipher,
+          maxAttempts: config.FCM_MAX_ATTEMPTS,
+          retryBaseMs: config.FCM_RETRY_BASE_MS,
+        },
+      ]
+    : []),
+  ...(apnsRuntime && extendedCipher
+    ? [
+        {
+          provider: 'APNS' as const,
+          appId: config.APNS_APP_ID,
+          environment: config.APNS_ENVIRONMENT,
+          credentialRef: config.APNS_CREDENTIAL_REF,
+          adapter: apnsRuntime,
+          cipher: extendedCipher,
+          maxAttempts: 5,
+          retryBaseMs: 5000,
+        },
+      ]
+    : []),
+];
 const lifecycleRuntime = config.NOTIFICATION_LIFECYCLE_VIVA_ENABLED
   ? {
       source: new VivaNotificationSource({
@@ -483,6 +554,19 @@ await registerGameMessagingMembershipConsumer({
   repository: messagingRepository,
   logger,
 });
+const stationMembershipTransport = createStationMembershipTransport(config, (outcome) =>
+  logger.info({ outcome }, 'station membership owner transport'),
+);
+if (stationMembershipTransport) {
+  await registerStationMembershipConsumer({
+    channel: consumerChannel,
+    logger,
+    repository: createStationMembershipRepository(pool),
+    trainingRepository: createTrainingStationFactRepository(pool),
+    quarterRepository: createQuarterStationFactRepository(pool),
+    ...stationMembershipTransport,
+  });
+}
 if (config.CUP_RATING_CONSUMER_ENABLED) {
   await registerCupRatingConsumer({
     channel: consumerChannel,
@@ -1631,6 +1715,46 @@ void runCommunityLogoCompatibilityCycle();
 void runPlatformSyncCycle();
 void runHomeBaseCycle();
 void runPromotionSyncCycle();
+const createLocationProvider = config.GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED
+  ? new VivaCreateLocationSource()
+  : undefined;
+async function runCreateLocationBindings(): Promise<void> {
+  if (shuttingDown || !config.GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED) return;
+  const result = await runGameCreateLocationBindingSync({
+    pool,
+    config,
+    ...(createLocationProvider ? { dependencies: { provider: createLocationProvider } } : {}),
+  });
+  logger.info({ result }, 'CREATE location binding cycle');
+  if (!shuttingDown) setTimeout(() => void runCreateLocationBindings(), 60_000).unref();
+}
+async function runStationNotifications(): Promise<void> {
+  if (shuttingDown || !stationOwner || !stationRepository) return;
+  try {
+    const stationOutcomes = await runStationImportCycle(
+      stationRepository,
+      stationOwner,
+      config.STATION_NOTIFICATION_TENANT_ID!,
+      stationTransports,
+    );
+    if (Object.values(stationOutcomes).some((x) => x !== 'IDLE'))
+      logger.info(stationOutcomes, 'station notification durable work');
+    for (const transport of stationTransports)
+      if (!shuttingDown)
+        await runStationDelivery(
+          stationRepository,
+          stationOwner,
+          config.STATION_NOTIFICATION_TENANT_ID!,
+          transport,
+        );
+  } catch {
+    logger.error({ code: 'STATION_NOTIFICATION_CYCLE_FAILED' }, 'station notification cycle held');
+  } finally {
+    if (!shuttingDown) setTimeout(() => void runStationNotifications(), 2000).unref();
+  }
+}
+void runStationNotifications();
+void runCreateLocationBindings();
 void runLegacyGamesRosterSync();
 void runLegacyGameReminderSource();
 void runApnsCycle();

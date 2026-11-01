@@ -3978,3 +3978,150 @@ describe('mixed-version game capability', () => {
     }
   });
 });
+
+describe('local CANCEL synchronous principal fence', () => {
+  it.each([true, false])(
+    'blocks dispatch/retry and late ACK while logout is unresolved; network=%s',
+    async (network) => {
+      let finishLogout!: (r: Response) => void;
+      let finishCancel!: (r: Response) => void;
+      let failCancel!: (e: Error) => void;
+      const logoutPending = new Promise<Response>((r) => {
+        finishLogout = r;
+      });
+      const cancelPending = new Promise<Response>((r, j) => {
+        finishCancel = r;
+        failCancel = j;
+      });
+      const fetchImplementation = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input);
+        if (url.endsWith('/auth/session/refresh'))
+          return Promise.resolve(Response.json(profilePhotoSession()));
+        if (url.endsWith('/auth/session')) return logoutPending;
+        if (url.endsWith('/cancel')) return cancelPending;
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.padlhub.test',
+        tenantKey: 'padlhub',
+        appVersion: 'test',
+        fetchImplementation,
+      });
+      await gateway.restoreSession();
+      const id = '751fe6a8-b0b1-4b2b-873d-a2d785c4e191';
+      const command = gateway.cancelGame(id, { reasonCode: 'ORGANIZER_REQUEST' }).then(
+        () => 'accepted',
+        () => 'discarded',
+      );
+      await vi.waitFor(() =>
+        expect(
+          fetchImplementation.mock.calls.some(([u]) => requestUrl(u).endsWith('/cancel')),
+        ).toBe(true),
+      );
+      const logout = gateway.logout();
+      expect(gateway.gameCancelPrincipal?.()).toBeNull();
+      await expect(gateway.cancelGame(id, { reasonCode: 'ORGANIZER_REQUEST' })).rejects.toThrow(
+        'AUTH_PRINCIPAL_CHANGED',
+      );
+      if (network) failCancel(new TypeError('lost ACK'));
+      else finishCancel(Response.json({ operation: { status: 'SUCCEEDED' } }));
+      expect(await command).toBe('discarded');
+      expect(
+        fetchImplementation.mock.calls.filter(([u]) => requestUrl(u).endsWith('/cancel')),
+      ).toHaveLength(1);
+      finishLogout(new Response(null, { status: 204 }));
+      await logout;
+    },
+  );
+});
+
+describe('CANCEL invocation survives session transitions without acquiring new authority', () => {
+  it.each([false, true])(
+    'never retries an old command after successful relogin (different actor=%s)',
+    async (differentActor) => {
+      let failFirst!: (e: Error) => void;
+      const first = new Promise<Response>((_, reject) => {
+        failFirst = reject;
+      });
+      let commands = 0;
+      const session = profilePhotoSession();
+      const next = differentActor
+        ? {
+            ...session,
+            user: { ...session.user, id: '11111111-1111-4111-8111-111111111111' },
+            context: { ...session.context, userId: '11111111-1111-4111-8111-111111111111' },
+          }
+        : session;
+      const fetchImplementation = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input);
+        if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+        if (url.endsWith('/auth/session'))
+          return Promise.resolve(new Response(null, { status: 204 }));
+        if (url.endsWith('/verify')) return Promise.resolve(Response.json(next));
+        if (url.endsWith('/cancel')) {
+          commands++;
+          return commands === 1 ? first : Promise.resolve(Response.json({}));
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.padlhub.test',
+        tenantKey: 'padlhub',
+        appVersion: 'test',
+        fetchImplementation,
+      });
+      await gateway.restoreSession();
+      const original = gateway.gameCancelPrincipal?.();
+      const command = gateway
+        .cancelGame('751fe6a8-b0b1-4b2b-873d-a2d785c4e191', { reasonCode: 'ORGANIZER_REQUEST' })
+        .then(
+          () => 'accepted',
+          () => 'discarded',
+        );
+      await vi.waitFor(() => expect(commands).toBe(1));
+      await gateway.logout();
+      await gateway.verifyCode({
+        challengeId: '22222222-2222-4222-8222-222222222222',
+        code: '1234',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      });
+      expect(gateway.gameCancelPrincipal?.()).toBeTruthy();
+      expect(gateway.gameCancelPrincipal?.()).not.toBe(original);
+      failFirst(new TypeError('old response lost'));
+      expect(await command).toBe('discarded');
+      expect(commands).toBe(1);
+    },
+  );
+});
+
+it('Android training catalogue stays on the server route and does not open browser provider read jobs', async () => {
+  const session = profilePhotoSession();
+  const calls: string[] = [];
+  const fetchImplementation = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input);
+    calls.push(url);
+    if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+    if (url.includes('/trainings/catalog?'))
+      return Promise.resolve(Response.json({ state: 'READY', items: [], nextCursor: null }));
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+  const gateway = createBrowserAuthGateway({
+    baseUrl: 'https://lk2.padlhub.su',
+    tenantKey: 'local-padel',
+    platform: 'android',
+    nativeSessionTransport: true,
+    appVersion: 'test',
+    fetchImplementation,
+  });
+  await gateway.restoreSession();
+  await gateway.listEventCatalog({
+    surface: 'TRAININGS',
+    localDates: ['2035-04-02'],
+    kinds: ['GROUP_TRAINING'],
+    availability: 'INCLUDE_FULL',
+    limit: 20,
+  });
+  await gateway.continueEventCatalog('11111111-1111-4111-8111-111111111111', 20);
+  expect(calls.filter((url) => url.includes('/trainings/catalog?'))).toHaveLength(2);
+  expect(calls.join(' ')).not.toMatch(/booking-screen-read-jobs|viva|\/user\/api\/v2/);
+});

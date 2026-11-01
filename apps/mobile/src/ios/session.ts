@@ -1,3 +1,10 @@
+import {
+  stationStreamRequest,
+  type NativeStationStreamRequest,
+} from '../native-station-stream-request.js';
+import { stationRequest, type NativeStationRequest } from '../native-station-message-request.js';
+import { gameCancelRequest } from '../native-game-cancel-request.js';
+import { quarterRequest } from '../native-quarter-request.js';
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type { AuthenticatedSession, UserContext } from '@phub/api-sdk';
@@ -12,7 +19,18 @@ export interface IOSConfiguration {
 
 interface NativeRequest {
   readonly operation:
-    'challenge' | 'verify' | 'refresh' | 'logout' | 'context' | 'read' | 'notification';
+    | 'challenge'
+    | 'verify'
+    | 'refresh'
+    | 'logout'
+    | 'context'
+    | 'read'
+    | 'notification'
+    | 'quarterCreate'
+    | 'gameCancel'
+    | 'stationMessage'
+    | 'stationStream';
+  readonly requestId?: string;
   readonly challengeId?: string;
   readonly resource?: string;
   readonly resourceId?: string;
@@ -34,20 +52,37 @@ function rejectedRequest(): ApiClientError {
   return new ApiClientError('Native request rejected', 400, 'NATIVE_REQUEST_REJECTED', 'native');
 }
 
-export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugin): typeof fetch {
+export function createIOSFetch(
+  config: IOSConfiguration,
+  plugin: IOSSessionPlugin,
+  canDispatchGameCancellation?: (gameId: string) => boolean,
+  canDispatchStation?: (request: NativeStationRequest | NativeStationStreamRequest) => boolean,
+): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
+  let cancellationClosed = false;
+  let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
-    const read = (init?.method ?? 'GET') === 'GET' ? cabinetReadRequest(value, config) : null;
+    const stream = stationStreamRequest(value, init, config);
+    const station = stream ?? stationRequest(value, init, config);
+    const cancel = gameCancelRequest(value, init, config);
+    const quarter = quarterRequest(value, init, config);
+    const read =
+      !station && !quarter && (init?.method ?? 'GET') === 'GET'
+        ? cabinetReadRequest(value, config)
+        : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
-    if (!read && (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)))
+    if (!station && !read && (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)))
       throw rejectedRequest();
     const path = value.slice(root.length);
     const method = init?.method ?? 'GET';
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (read) operation = 'read';
+    if (station) operation = stream ? 'stationStream' : 'stationMessage';
+    else if (cancel) operation = 'gameCancel';
+    else if (quarter) operation = 'quarterCreate';
+    else if (read) operation = 'read';
     else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
     else if (path === '/auth/session/refresh' && method === 'POST') operation = 'refresh';
     else if (path === '/auth/session' && method === 'DELETE') operation = 'logout';
@@ -73,6 +108,15 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
       operation = 'verify';
       challengeId = match[1];
     }
+    if (operation === 'logout') {
+      cancellationClosed = true;
+      cancellationEpoch++;
+    }
+    const originalCancellationEpoch = cancellationEpoch;
+    if (cancel && (cancellationClosed || canDispatchGameCancellation?.(cancel.resourceId) !== true))
+      throw new DOMException('Session changed', 'AbortError');
+    if (station && (cancellationClosed || canDispatchStation?.(station) !== true))
+      throw new DOMException('Session changed', 'AbortError');
     if (init?.body != null && typeof init.body !== 'string') throw rejectedRequest();
     if (read && init?.body != null) throw rejectedRequest();
     if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
@@ -81,10 +125,33 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
         operation,
         ...(read ?? {}),
         ...(notification ?? {}),
+        ...(quarter ?? {}),
+        ...(cancel ?? {}),
+        ...(station ?? {}),
         ...(challengeId ? { challengeId } : {}),
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (
+        station &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchStation?.(station) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
+      if (
+        cancel &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchGameCancellation?.(cancel.resourceId) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
+      if (
+        operation === 'verify' &&
+        result.status === 200 &&
+        originalCancellationEpoch === cancellationEpoch
+      )
+        cancellationClosed = false;
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
       const headers = Object.fromEntries(
         Object.entries(result.headers).filter(([name]) =>
@@ -126,7 +193,11 @@ export class IOSSession {
   private busy = false;
   private restoration: Promise<void> | undefined;
   private generation = 0;
+  private quarterClosed = false;
+  private quarterEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
+  private readonly cancellations = new Map<string, string>();
+  private readonly stationRequests = new Map<string, string>();
 
   public constructor(
     public readonly configuration: IOSConfiguration,
@@ -155,6 +226,127 @@ export class IOSSession {
     }
   }
 
+  public closeQuarterCreate(): void {
+    this.quarterClosed = true;
+    this.quarterEpoch++;
+    this.listeners.forEach((listener) => listener());
+  }
+  public quarterCreatePrincipal(): string | null {
+    if (this.quarterClosed || this.state.status !== 'signed-in') return null;
+    const c = this.state.session.context;
+    return `${c.tenantId}:${c.userId}:${this.generation}:${this.quarterEpoch}`;
+  }
+  public async quarterCall<T>(load: (api: PadlHubApiClient) => Promise<T>): Promise<T> {
+    const p = this.quarterCreatePrincipal();
+    if (!p) throw rejectedRequest();
+    const v = await this.read(load);
+    if (p !== this.quarterCreatePrincipal())
+      throw new DOMException('Session changed', 'AbortError');
+    return v;
+  }
+  public gameCancelPrincipal(): string | null {
+    return this.quarterCreatePrincipal();
+  }
+  public canDispatchGameCancellation(gameId: string): boolean {
+    const original = this.cancellations.get(gameId);
+    return original !== undefined && original === this.gameCancelPrincipal();
+  }
+  public async cancelGame(gameId: string): ReturnType<PadlHubApiClient['cancelGame']> {
+    const original = this.gameCancelPrincipal();
+    if (!original || this.cancellations.has(gameId)) throw rejectedRequest();
+    this.cancellations.set(gameId, original);
+    try {
+      return await this.quarterCall((api) =>
+        api.cancelGame(gameId, { reasonCode: 'ORGANIZER_REQUEST' }),
+      );
+    } finally {
+      this.cancellations.delete(gameId);
+    }
+  }
+  public stationMessagePrincipal(): string | null {
+    return this.quarterCreatePrincipal();
+  }
+  private stationKey(
+    request: Pick<
+      NativeStationRequest | NativeStationStreamRequest,
+      'resource' | 'resourceId' | 'requestId'
+    > & { readonly query?: Record<string, string> },
+  ): string {
+    return JSON.stringify([
+      request.resource,
+      request.resourceId,
+      request.requestId,
+      request.resource === 'summaries' ? request.query?.communityIds : undefined,
+    ]);
+  }
+  public canDispatchStation(request: NativeStationRequest | NativeStationStreamRequest): boolean {
+    const original = this.stationRequests.get(this.stationKey(request));
+    return original !== undefined && original === this.stationMessagePrincipal();
+  }
+  private async stationCall<T>(
+    request: Pick<
+      NativeStationRequest | NativeStationStreamRequest,
+      'resource' | 'resourceId' | 'requestId'
+    > & { readonly query?: Record<string, string> },
+    load: (api: PadlHubApiClient) => Promise<T>,
+  ): Promise<T> {
+    const principal = this.stationMessagePrincipal(),
+      key = this.stationKey(request);
+    if (!principal || this.stationRequests.has(key)) throw rejectedRequest();
+    this.stationRequests.set(key, principal);
+    try {
+      return await this.quarterCall(load);
+    } finally {
+      this.stationRequests.delete(key);
+    }
+  }
+  public stationStreamSummaries(ids: readonly string[]) {
+    return this.stationCall(
+      { resource: 'summaries', query: { communityIds: ids.join(',') } },
+      (api) => api.listStationStreamSummaries(ids),
+    );
+  }
+  public stationStream(communityId: string, cursor?: string) {
+    return this.stationCall({ resource: 'stream', resourceId: communityId }, (api) =>
+      api.getStationCommunityStream(communityId, { limit: 50, ...(cursor ? { cursor } : {}) }),
+    );
+  }
+  public stationRead(
+    communityId: string,
+    input: Parameters<PadlHubApiClient['requestStationCommunityRead']>[1],
+  ) {
+    return this.stationCall(
+      { resource: 'read', resourceId: communityId, requestId: input.requestId },
+      (api) => api.requestStationCommunityRead(communityId, input),
+    );
+  }
+  public stationReadStatus(communityId: string, requestId: string) {
+    return this.stationCall({ resource: 'readStatus', resourceId: communityId, requestId }, (api) =>
+      api.getStationCommunityReadRequest(communityId, requestId),
+    );
+  }
+  public stationHistory(communityId: string, cursor?: string) {
+    return this.stationCall({ resource: 'history', resourceId: communityId }, (api) =>
+      api.listCommunityReadExperienceChat(communityId, {
+        limit: 50,
+        ...(cursor ? { cursor } : {}),
+      }),
+    );
+  }
+  public sendStationMessage(
+    communityId: string,
+    input: Parameters<PadlHubApiClient['sendStationCommunityMessage']>[1],
+  ) {
+    return this.stationCall(
+      { resource: 'send', resourceId: communityId, requestId: input.requestId },
+      (api) => api.sendStationCommunityMessage(communityId, input),
+    );
+  }
+  public stationMessageStatus(communityId: string, requestId: string) {
+    return this.stationCall({ resource: 'status', resourceId: communityId, requestId }, (api) =>
+      api.getStationCommunityMessageRequest(communityId, requestId),
+    );
+  }
   public restore(): Promise<void> {
     if (this.restoration) return this.restoration;
     const operation = this.exclusive(async () => {
@@ -185,6 +377,7 @@ export class IOSSession {
   }
 
   public verify(challengeId: string, code: string): Promise<void> {
+    const quarterEpoch = this.quarterEpoch;
     return this.exclusive(async () => {
       if (this.state.status !== 'signed-out' || !/^\d{4}$/.test(code)) throw rejectedRequest();
       await Promise.allSettled([...this.reads]);
@@ -192,11 +385,13 @@ export class IOSSession {
         code,
         acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
       });
+      if (quarterEpoch === this.quarterEpoch) this.quarterClosed = false;
       this.update({ status: 'signed-in', session });
     });
   }
 
   public logout(): Promise<void> {
+    this.closeQuarterCreate();
     return this.exclusive(async () => {
       this.api.clearAccessToken();
       this.update({ status: 'checking' });
@@ -274,16 +469,21 @@ export function getIOSSession(): Promise<IOSSession> {
   startup ??= (async () => {
     const plugin = registerPlugin<IOSSessionPlugin>('PadlHubSession');
     const configuration = await plugin.configuration();
-    const api = new PadlHubApiClient({
+    const api: PadlHubApiClient = new PadlHubApiClient({
       baseUrl: configuration.apiBaseUrl,
       tenantKey: configuration.tenantKey,
       platform: 'ios',
       sessionMode: 'cookie',
       appVersion: configuration.appVersion,
       appBuild: configuration.appBuild,
-      fetchImplementation: createIOSFetch(configuration, plugin),
+      fetchImplementation: createIOSFetch(
+        configuration,
+        plugin,
+        (id) => session?.canDispatchGameCancellation(id) === true,
+        (request) => session?.canDispatchStation(request) === true,
+      ),
     });
-    const session = new IOSSession(configuration, api);
+    const session: IOSSession = new IOSSession(configuration, api);
     await session.restore();
     return session;
   })();

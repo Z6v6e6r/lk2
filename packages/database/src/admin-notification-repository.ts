@@ -845,7 +845,7 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
              count(*) filter (where state = 'FAILED')::integer as failed,
              count(*) filter (where state = 'DEAD')::integer as dead,
              count(*) filter (where state = 'SUPPRESSED')::integer as suppressed,
-             count(*) filter (where state in ('PENDING', 'SENDING'))::integer as pending,
+             count(*) filter (where state in ('PENDING', 'SENDING', 'STATION_PENDING', 'STATION_SENDING'))::integer as pending,
              percentile_cont(0.5) within group (
                order by extract(epoch from (completed_at - created_at))
              ) filter (where completed_at is not null) as median_accept_seconds

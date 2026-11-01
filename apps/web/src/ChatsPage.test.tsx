@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
+import { webcrypto } from 'node:crypto';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -2333,5 +2334,281 @@ describe('ChatsPage communities tab', () => {
     const list = await screen.findByRole('list', { name: 'Чаты сообществ' });
     expect(within(list).getByText('Клуб на Соколе')).toBeVisible();
     expect(loadCommunities).toHaveBeenCalledTimes(2);
+  });
+});
+
+it.each([false, true])(
+  'community history preserves progress on duplicate rows; repeated cursor=%s',
+  async (repeated) => {
+    const firstCursor = 'history-cursor-000000001';
+    const nextCursor = 'history-cursor-000000002';
+    const existing = {
+      id: '11111111-1111-8111-8111-111111111111',
+      body: 'Already visible receipt',
+      sentAt: '2026-11-01T00:00:00.000Z',
+      author: { displayName: 'Synthetic player' },
+      isViewer: false,
+    };
+    const loadMessages = vi
+      .fn()
+      .mockResolvedValueOnce(communityChatPage([existing], firstCursor))
+      .mockResolvedValueOnce(communityChatPage([existing], repeated ? firstCursor : nextCursor))
+      .mockResolvedValueOnce(
+        communityChatPage([
+          {
+            ...existing,
+            id: '22222222-2222-8222-8222-222222222222',
+            body: 'Older retained message',
+            sentAt: '2026-10-31T00:00:00.000Z',
+          },
+        ]),
+      );
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({
+          loadCommunities: vi
+            .fn()
+            .mockResolvedValue({ items: [communitySummary(communityId, 'Synthetic community')] }),
+          loadMessages,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Synthetic community/ }));
+    await screen.findByText('Already visible receipt');
+    fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+    await waitFor(() => expect(loadMessages).toHaveBeenCalledTimes(2));
+    if (repeated) {
+      expect(await screen.findByText('Не удалось загрузить предыдущие сообщения.')).toBeVisible();
+      expect(screen.getAllByText('Already visible receipt')).toHaveLength(1);
+      expect(loadMessages).toHaveBeenLastCalledWith(communityId, firstCursor);
+    } else {
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Показать предыдущие сообщения' })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+      expect(await screen.findByText('Older retained message')).toBeVisible();
+      expect(loadMessages).toHaveBeenLastCalledWith(communityId, nextCursor);
+      expect(screen.getAllByText('Already visible receipt')).toHaveLength(1);
+    }
+  },
+);
+
+describe('station history refresh after reconnect', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const retainedRow = {
+    id: '11111111-1111-8111-8111-111111111111',
+    body: 'Original station page',
+    sentAt: '2026-11-01T00:00:00.000Z',
+    author: { displayName: 'Synthetic player' },
+    isViewer: false,
+  };
+  const freshRow = {
+    ...retainedRow,
+    id: '22222222-2222-8222-8222-222222222222',
+    body: 'Latest station page',
+    sentAt: '2026-11-01T01:00:00.000Z',
+  };
+  const stationPage = (row = retainedRow, cursor = 'station-head-cursor-00001') => ({
+    ...communityChatPage([row], cursor),
+    canRequestStationMessage: true,
+  });
+  function deferredPage() {
+    let resolve!: (page: CommunityReadExperienceChatPage) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<CommunityReadExperienceChatPage>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    return { promise, resolve, reject };
+  }
+  async function open(source: CommunityChatsSource) {
+    const rendered = render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Reconnect station/ }));
+    await screen.findByText(retainedRow.body);
+    return rendered;
+  }
+  function sourceFor(loadMessages: CommunityChatsSource['loadMessages']) {
+    return communitySource({
+      loadCommunities: vi.fn().mockResolvedValue({
+        items: [communitySummary(communityId, 'Reconnect station')],
+      }),
+      loadMessages,
+    });
+  }
+
+  it('coalesces online/focus/visible into one GET and restarts pagination at the fresh head', async () => {
+    const pending = deferredPage();
+    const loadMessages = vi
+      .fn()
+      .mockResolvedValueOnce(stationPage())
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(communityChatPage([]));
+    const sendMessage = vi.fn();
+    await open({ ...sourceFor(loadMessages), sendMessage });
+    fireEvent(window, new Event('online'));
+    fireEvent(window, new Event('focus'));
+    fireEvent(document, new Event('visibilitychange'));
+    expect(loadMessages).toHaveBeenCalledTimes(2);
+    expect(loadMessages).toHaveBeenLastCalledWith(communityId);
+    fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+    expect(loadMessages).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      pending.resolve(stationPage(freshRow, 'fresh-head-cursor-00002'));
+      await pending.promise;
+    });
+    expect(await screen.findByText(freshRow.body)).toBeVisible();
+    expect(screen.queryByText(retainedRow.body)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+    await waitFor(() => expect(loadMessages).toHaveBeenCalledTimes(3));
+    expect(loadMessages).toHaveBeenLastCalledWith(communityId, 'fresh-head-cursor-00002');
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('retains a confirmed send ACK when an earlier reconnect GET resolves afterwards', async () => {
+    vi.stubGlobal('crypto', webcrypto);
+    const pending = deferredPage();
+    const loadMessages = vi
+      .fn()
+      .mockResolvedValueOnce(stationPage())
+      .mockReturnValueOnce(pending.promise);
+    const sendMessage = vi.fn<NonNullable<CommunityChatsSource['sendMessage']>>(
+      (_community, request) =>
+        Promise.resolve({
+          contractVersion: 1,
+          contract: 'station-message',
+          requestId: request.requestId,
+          outcome: 'CONFIRMED',
+          message: { ...freshRow, body: request.text, isViewer: true },
+        }),
+    );
+    await open({
+      ...sourceFor(loadMessages),
+      custodyScope: 'synthetic-tenant/synthetic-user',
+      sendMessage,
+      getMessageRequest: vi.fn(),
+    });
+    fireEvent(window, new Event('focus'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение сообществу' }), {
+      target: { value: 'Confirmed during reconnect' },
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Отправить' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+    await screen.findByText('Сообщение сохранено. Это не подтверждение прочтения.');
+    await act(async () => {
+      pending.resolve(stationPage());
+      await pending.promise;
+    });
+    expect(screen.getByText('Confirmed during reconnect')).toBeVisible();
+    expect(
+      communityThreadCache
+        .read('synthetic-tenant/synthetic-user', communityId)
+        ?.map((row) => row.body),
+    ).toContain('Confirmed during reconnect');
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(loadMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for visible online state and does not refresh other community kinds', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const loadMessages = vi
+      .fn()
+      .mockResolvedValueOnce(stationPage())
+      .mockResolvedValueOnce(communityChatPage([freshRow]));
+    await open(sourceFor(loadMessages));
+    fireEvent(window, new Event('online'));
+    visibility.mockReturnValue('visible');
+    fireEvent(document, new Event('visibilitychange'));
+    expect(loadMessages).toHaveBeenCalledTimes(1);
+    online.mockReturnValue(true);
+    fireEvent(window, new Event('focus'));
+    await screen.findByText(freshRow.body);
+    fireEvent(window, new Event('online'));
+    expect(loadMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([401, 403, 404])(
+    'clears displayed and cached history on fresh %s without another send',
+    async (status) => {
+      const loadMessages = vi
+        .fn()
+        .mockResolvedValueOnce(stationPage())
+        .mockRejectedValueOnce({ status });
+      const sendMessage = vi.fn();
+      await open({ ...sourceFor(loadMessages), sendMessage });
+      fireEvent(window, new Event('online'));
+      await waitFor(() => expect(screen.queryByText(retainedRow.body)).toBeNull());
+      expect(communityThreadCache.read(currentUserId, communityId)).toBeNull();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(loadMessages).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(['unmount', 'source removal'] as const)(
+    'ignores late history and removes listeners after %s',
+    async (end) => {
+      const pending = deferredPage();
+      const loadMessages = vi
+        .fn()
+        .mockResolvedValueOnce(stationPage())
+        .mockReturnValueOnce(pending.promise);
+      const rendered = await open(sourceFor(loadMessages));
+      fireEvent(window, new Event('focus'));
+      if (end === 'unmount') rendered.unmount();
+      else
+        rendered.rerender(<ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} />);
+      communityThreadCache.clear(currentUserId, communityId);
+      await act(async () => {
+        pending.resolve(stationPage(freshRow));
+        await pending.promise;
+      });
+      expect(communityThreadCache.read(currentUserId, communityId)).toBeNull();
+      expect(screen.queryByText(freshRow.body)).toBeNull();
+      fireEvent(window, new Event('online'));
+      fireEvent(document, new Event('visibilitychange'));
+      expect(loadMessages).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('drops an older in-flight page when reconnect starts a new head walk', async () => {
+    const older = deferredPage();
+    const fresh = deferredPage();
+    const loadMessages = vi
+      .fn()
+      .mockResolvedValueOnce(stationPage())
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(fresh.promise);
+    await open(sourceFor(loadMessages));
+    fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+    fireEvent(window, new Event('online'));
+    await act(async () => {
+      fresh.resolve(stationPage(freshRow));
+      await fresh.promise;
+    });
+    await act(async () => {
+      older.resolve(communityChatPage([{ ...retainedRow, body: 'Obsolete older page' }]));
+      await older.promise;
+    });
+    expect(screen.getByText(freshRow.body)).toBeVisible();
+    expect(screen.queryByText('Obsolete older page')).toBeNull();
+    expect(communityThreadCache.read(currentUserId, communityId)?.map((row) => row.body)).toEqual([
+      freshRow.body,
+    ]);
   });
 });

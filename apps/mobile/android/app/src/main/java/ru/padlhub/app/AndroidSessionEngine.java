@@ -349,6 +349,7 @@ final class AndroidSessionEngine {
     }
 
     private int responseLimit(Request request) {
+        if (AndroidStationStreamRequest.history(request)) return 3 * 1024 * 1024;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
         if (request.path.matches(".*/conversations/" + uuid + "/media/" + uuid + "/content")) return 15 * 1024 * 1024;
         if (request.path.matches(".*/support/attachments/[A-Za-z0-9_-]{43}/content")) return 3_145_710;

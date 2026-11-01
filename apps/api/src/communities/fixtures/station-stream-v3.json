@@ -1,0 +1,59 @@
+{
+  "history": {
+    "historyVersion": 3,
+    "mode": "STREAM",
+    "streamId": "00000000-0000-4000-8000-000000000090",
+    "membershipEpoch": 0,
+    "baselineSequence": 0,
+    "readThroughSequence": 0,
+    "publishedThroughSequence": 1,
+    "unreadCount": 0,
+    "afterSequence": 0,
+    "throughSequence": 1,
+    "messages": [
+      {
+        "publicId": "13c851c8-6ff3-885f-86f4-911b7ab3544e",
+        "text": "Synthetic station message",
+        "createdAt": "2026-11-01T12:00:00.000Z",
+        "createdTs": 1793534400000,
+        "authorId": "player-a",
+        "authorName": "Synthetic",
+        "sequence": 1
+      }
+    ],
+    "nextAfterSequence": null,
+    "hasMore": false
+  },
+  "readRequest": {
+    "requestId": "00000000-0000-4000-8000-000000000011",
+    "streamId": "00000000-0000-4000-8000-000000000090",
+    "membershipEpoch": 0,
+    "throughSequence": 1
+  },
+  "receipt": {
+    "contractVersion": 1,
+    "contract": "station-read",
+    "requestId": "00000000-0000-4000-8000-000000000011",
+    "outcome": "CONFIRMED",
+    "streamId": "00000000-0000-4000-8000-000000000090",
+    "membershipEpoch": 0,
+    "throughSequence": 1,
+    "readThroughSequence": 1
+  },
+  "summary": {
+    "contractVersion": 1,
+    "contract": "station-stream-summaries",
+    "items": [
+      {
+        "communityId": "station-community",
+        "availability": "AVAILABLE",
+        "streamId": "00000000-0000-4000-8000-000000000090",
+        "membershipEpoch": 0,
+        "baselineSequence": 0,
+        "readThroughSequence": 1,
+        "publishedThroughSequence": 1,
+        "unreadCount": 0
+      }
+    ]
+  }
+}

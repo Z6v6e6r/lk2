@@ -1,0 +1,629 @@
+import { TournamentReadCustody } from './tournament-read-custody.js';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  parseTournamentChatPage,
+  parseTournamentChatReadPosition,
+  type TournamentChatReadPosition,
+  type TournamentChatReadRequest,
+  type TournamentChatReadReceipt,
+  type TournamentChatReceipt,
+  type TournamentChatRequest,
+  type TournamentChatPage as HistoryPage,
+} from '@phub/api-sdk';
+import { TournamentChatCustody, type TournamentChatLocks } from './tournament-chat-custody.js';
+import {
+  tournamentReadableThrough,
+  refreshTournamentThread,
+  type TournamentThread,
+} from './tournament-chat-history.js';
+import './TournamentChatPage.css';
+export interface TournamentChatGateway {
+  getTournamentChatReadPosition?: (id: string) => Promise<TournamentChatReadPosition>;
+  advanceTournamentChatRead?: (
+    id: string,
+    input: TournamentChatReadRequest,
+  ) => Promise<TournamentChatReadReceipt>;
+  getTournamentChatReadRequest?: (
+    id: string,
+    requestId: string,
+  ) => Promise<TournamentChatReadReceipt>;
+  tournamentChatPrincipal: () => string | null;
+  sendTournamentChatMessage: (
+    id: string,
+    request: TournamentChatRequest,
+  ) => Promise<TournamentChatReceipt>;
+  getTournamentChatRequest: (id: string, requestId: string) => Promise<TournamentChatReceipt>;
+  getTournamentChatHistory: (id: string, limit?: number, cursor?: string) => Promise<HistoryPage>;
+}
+export function TournamentChatPage({
+  tournamentId,
+  principal,
+  gateway,
+}: {
+  readonly tournamentId: string;
+  readonly principal: { tenantId: string; userId: string };
+  readonly gateway: TournamentChatGateway;
+}): React.JSX.Element {
+  const [readPosition, setReadPosition] = useState<TournamentChatReadPosition | null>(null),
+    [readPending, setReadPending] = useState(0),
+    [readBusy, setReadBusy] = useState(false),
+    [readNotice, setReadNotice] = useState('');
+  const readPositionRef = useRef<TournamentChatReadPosition | null>(null),
+    readCommandBusy = useRef(false);
+  const [thread, setThread] = useState<TournamentThread | null>(null),
+    [draft, setDraft] = useState(''),
+    [notice, setNotice] = useState(''),
+    [pending, setPending] = useState(0),
+    [busy, setBusy] = useState(false),
+    [loading, setLoading] = useState(false),
+    [denied, setDenied] = useState(false),
+    [gap, setGap] = useState(false);
+  const historyBusy = useRef(false),
+    commandBusy = useRef(false),
+    threadRef = useRef<TournamentThread | null>(null),
+    draftRevision = useRef(0);
+  const lifetime = useRef({
+    active: true,
+    epoch: 0,
+    accessEpoch: 0,
+    original: gateway.tournamentChatPrincipal(),
+    gateway,
+  });
+  useLayoutEffect(() => {
+    lifetime.current.gateway = gateway;
+  }, [gateway, lifetime]);
+  const refreshQueued = useRef(false);
+  const poll = useRef({ delay: 10_000, notBefore: 0, blocked: false });
+  const current = () =>
+    lifetime.current.active &&
+    lifetime.current.original !== null &&
+    lifetime.current.gateway.tournamentChatPrincipal() === lifetime.current.original;
+  // Constructor stores the callback; it does not call it or read any React ref.
+  const [custody] = useState(() => {
+    try {
+      const locks: TournamentChatLocks = {
+        request: async (name, options, callback) => {
+          if (!navigator.locks) throw new Error('TOURNAMENT_CHAT_LOCK_UNAVAILABLE');
+          return await navigator.locks.request(name, options, callback);
+        },
+      };
+      return new TournamentChatCustody(
+        tournamentId,
+        principal,
+        window.localStorage,
+        locks,
+        current,
+      );
+    } catch {
+      return null;
+    }
+  });
+  const [readCustody] = useState(() => {
+    try {
+      return new TournamentReadCustody(
+        tournamentId,
+        principal,
+        window.localStorage,
+        {
+          request: async (name, options, callback) => {
+            if (!navigator.locks) throw new Error('TOURNAMENT_CHAT_LOCK_UNAVAILABLE');
+            return await navigator.locks.request(name, options, callback);
+          },
+        },
+        current,
+      );
+    } catch {
+      return null;
+    }
+  });
+  function countReads() {
+    try {
+      setReadPending(readCustody?.pending().length ?? 0);
+    } catch {
+      setReadNotice('Не удалось прочитать сохранённые отметки. Новая отметка недоступна.');
+    }
+  }
+  function clearReadPosition() {
+    readPositionRef.current = null;
+    setReadPosition(null);
+  }
+  async function loadPosition(
+    unavailable: (error: unknown) => void,
+  ): Promise<TournamentChatReadPosition | null> {
+    if (!gateway.getTournamentChatReadPosition) return null;
+    try {
+      return parseTournamentChatReadPosition(
+        await gateway.getTournamentChatReadPosition(tournamentId),
+        tournamentId,
+      );
+    } catch (error) {
+      const status =
+        typeof error === 'object' && error !== null && 'status' in error ? Number(error.status) : 0;
+      if ([401, 403, 404].includes(status)) throw error;
+      unavailable(error);
+      return null; // Existing history remains usable when owner read adoption is unavailable.
+    }
+  }
+  function pendingCount() {
+    try {
+      setPending(custody?.pending().length ?? 0);
+    } catch {
+      setNotice('Не удалось прочитать исходные запросы. Новая отправка недоступна.');
+    }
+  }
+  function failure(error: unknown) {
+    if (!current()) return;
+    const status =
+      typeof error === 'object' && error !== null && 'status' in error ? Number(error.status) : 0;
+    if ([401, 403, 404].includes(status)) {
+      lifetime.current.epoch++;
+      lifetime.current.accessEpoch++;
+      poll.current.blocked = true;
+      setDenied(true);
+      clearReadPosition();
+      setThread(null);
+      threadRef.current = null;
+      setDraft('');
+      draftRevision.current++;
+      setNotice('Доступ к чату сейчас недоступен. Исходные запросы сохранены.');
+    } else if (
+      error instanceof Error &&
+      ['TOURNAMENT_CHAT_HISTORY_GAP', 'TOURNAMENT_CHAT_STREAM_CHANGED'].includes(error.message)
+    ) {
+      poll.current.blocked = true;
+      setGap(true);
+      clearReadPosition();
+      setNotice('Не удалось загрузить все новые сообщения. Откройте историю заново.');
+    } else setNotice('Не удалось подтвердить состояние чата. Проверьте статус сообщения.');
+  }
+  function deferPolling(error: unknown, earlierError?: unknown) {
+    // A later history failure must not shorten an earlier position rate-limit cooldown.
+    // ApiClientError currently exposes status, not HTTP Retry-After headers.
+    const rateLimited = [error, earlierError].some(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        'status' in item &&
+        Number(item.status) === 429,
+    );
+    poll.current.delay = rateLimited ? 60_000 : Math.min(60_000, poll.current.delay * 2);
+    poll.current.notBefore = Date.now() + poll.current.delay;
+  }
+  async function refresh(reset = false, automatic = false) {
+    if (!current()) return;
+    if (
+      automatic &&
+      (document.visibilityState === 'hidden' ||
+        navigator.onLine === false ||
+        poll.current.blocked ||
+        Date.now() < poll.current.notBefore)
+    )
+      return;
+    if (historyBusy.current) {
+      if (!automatic) refreshQueued.current = true;
+      return;
+    }
+    historyBusy.current = true;
+    if (!automatic) setLoading(true);
+    const id = ++lifetime.current.epoch;
+    let positionError: unknown;
+    try {
+      let positionFailed = false;
+      const unavailable = (error: unknown) => {
+        positionFailed = true;
+        positionError = error;
+      };
+      const beforePosition = await loadPosition(unavailable);
+      if (!current() || id !== lifetime.current.epoch) return;
+      const next = await refreshTournamentThread(
+        tournamentId,
+        reset ? null : threadRef.current,
+        gateway.getTournamentChatHistory,
+        () => current() && id === lifetime.current.epoch,
+      );
+      if (!current() || id !== lifetime.current.epoch) return;
+      const afterPosition = positionFailed ? null : await loadPosition(unavailable);
+      if (!current() || id !== lifetime.current.epoch) return;
+      const previous = readPositionRef.current;
+      if (
+        beforePosition &&
+        afterPosition &&
+        (beforePosition.streamId !== afterPosition.streamId ||
+          beforePosition.witnessHash !== afterPosition.witnessHash ||
+          beforePosition.baselineSequence !== afterPosition.baselineSequence ||
+          (previous &&
+            (previous.streamId !== afterPosition.streamId ||
+              previous.witnessHash !== afterPosition.witnessHash)))
+      ) {
+        lifetime.current.accessEpoch++;
+        threadRef.current = null;
+        setThread(null);
+        clearReadPosition();
+        throw new Error('TOURNAMENT_CHAT_STREAM_CHANGED');
+      }
+      const boundPosition =
+        beforePosition && afterPosition && afterPosition.streamId === next.streamId
+          ? afterPosition
+          : null;
+      readPositionRef.current = boundPosition;
+      setReadPosition(boundPosition);
+      threadRef.current = next;
+      setThread(next);
+      setDenied(false);
+      setGap(false);
+      poll.current.blocked = false;
+      if (positionFailed) deferPolling(positionError);
+      else poll.current = { delay: 10_000, notBefore: Date.now() + 10_000, blocked: false };
+    } catch (error) {
+      if (current() && id === lifetime.current.epoch) {
+        deferPolling(error, positionError);
+        refreshQueued.current = false;
+        failure(error);
+      }
+    } finally {
+      historyBusy.current = false;
+      if (current()) {
+        setLoading(false);
+        if (refreshQueued.current) {
+          refreshQueued.current = false;
+          void refresh();
+        }
+      }
+    }
+  }
+  async function restore() {
+    if (!current() || !custody || commandBusy.current) return;
+    commandBusy.current = true;
+    const accessEpoch = lifetime.current.accessEpoch;
+    const commandCurrent = () => current() && accessEpoch === lifetime.current.accessEpoch;
+    setBusy(true);
+    try {
+      for (const original of custody.pending()) {
+        const receipt = await gateway.getTournamentChatRequest(tournamentId, original.requestId);
+        if (!commandCurrent()) return;
+        if (await custody.accept(receipt, original.requestId, commandCurrent)) {
+          pendingCount();
+          if (current()) {
+            setNotice('Сообщение сохранено. Это не подтверждение доставки или прочтения.');
+            void refresh();
+          }
+        } else setNotice('Не удалось подтвердить отправку. Проверьте статус сообщения.');
+      }
+    } catch (error) {
+      if (commandCurrent()) failure(error);
+    } finally {
+      commandBusy.current = false;
+      if (current()) {
+        setBusy(false);
+        pendingCount();
+      }
+    }
+  }
+  useEffect(() => {
+    const mounted = lifetime.current;
+    mounted.active = true;
+    queueMicrotask(() => {
+      if (current()) {
+        pendingCount();
+        void refresh();
+        void restore();
+        countReads();
+        void restoreReads();
+      }
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const schedule = () => {
+      if (stopped || !current()) return;
+      timer = setTimeout(
+        () => {
+          void refresh(false, true).finally(schedule);
+        },
+        Math.max(10_000, poll.current.notBefore - Date.now()),
+      );
+    };
+    schedule();
+    const reconnect = () => {
+      void refresh(false, true);
+    };
+    window.addEventListener('focus', reconnect);
+    window.addEventListener('online', reconnect);
+    document.addEventListener('visibilitychange', reconnect);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      mounted.active = false;
+      mounted.epoch++;
+      window.removeEventListener('focus', reconnect);
+      window.removeEventListener('online', reconnect);
+      document.removeEventListener('visibilitychange', reconnect);
+    };
+    // The parent keys this component by principal + tournament; captured gateway identity is fenced.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  async function restoreReads() {
+    if (
+      !current() ||
+      !readCustody ||
+      !gateway.getTournamentChatReadRequest ||
+      readCommandBusy.current
+    )
+      return;
+    readCommandBusy.current = true;
+    setReadBusy(true);
+    const epoch = lifetime.current.accessEpoch;
+    const active = () => current() && epoch === lifetime.current.accessEpoch;
+    try {
+      let changed = false;
+      for (const original of readCustody.pending()) {
+        const receipt = await gateway.getTournamentChatReadRequest(
+          tournamentId,
+          original.requestId,
+        );
+        if (!active()) return;
+        if (await readCustody.accept(receipt, original.requestId, active)) {
+          changed = true;
+          setReadNotice('Отметка о прочтении сохранена.');
+        } else setReadNotice('Отметка пока не подтверждена. Проверьте её статус.');
+      }
+      if (active()) {
+        countReads();
+        if (changed) void refresh();
+      }
+    } catch (error) {
+      if (active()) {
+        failure(error);
+        setReadNotice('Не удалось подтвердить отметку. Исходный запрос сохранён.');
+      }
+    } finally {
+      readCommandBusy.current = false;
+      if (current()) {
+        setReadBusy(false);
+        countReads();
+      }
+    }
+  }
+  async function markRead() {
+    const position = readPositionRef.current,
+      through = tournamentReadableThrough(threadRef.current, position);
+    if (
+      !current() ||
+      denied ||
+      gap ||
+      !position ||
+      through === null ||
+      !readCustody ||
+      !gateway.advanceTournamentChatRead ||
+      readCommandBusy.current ||
+      document.visibilityState === 'hidden'
+    )
+      return;
+    readCommandBusy.current = true;
+    setReadBusy(true);
+    const epoch = lifetime.current.accessEpoch;
+    const active = () =>
+      current() &&
+      epoch === lifetime.current.accessEpoch &&
+      readPositionRef.current?.streamId === position.streamId &&
+      readPositionRef.current.witnessHash === position.witnessHash;
+    try {
+      const original = await readCustody.original({
+        streamId: position.streamId,
+        witnessHash: position.witnessHash,
+        throughSequence: through,
+      });
+      if (!active()) return;
+      countReads();
+      const receipt = await gateway.advanceTournamentChatRead(tournamentId, {
+        requestId: original.requestId,
+        streamId: original.streamId,
+        witnessHash: original.witnessHash,
+        throughSequence: original.throughSequence,
+      });
+      if (!active()) return;
+      if (await readCustody.accept(receipt, original.requestId, active)) {
+        setReadNotice('Отметка о прочтении сохранена.');
+        void refresh();
+      } else setReadNotice('Отметка пока не подтверждена. Проверьте её статус.');
+    } catch (error) {
+      if (active()) {
+        failure(error);
+        setReadNotice('Не удалось подтвердить отметку. Исходный запрос сохранён.');
+      }
+    } finally {
+      readCommandBusy.current = false;
+      if (current()) {
+        setReadBusy(false);
+        countReads();
+      }
+    }
+  }
+  async function send() {
+    if (!current() || !custody || commandBusy.current || denied || !thread) return;
+    commandBusy.current = true;
+    const accessEpoch = lifetime.current.accessEpoch;
+    const commandCurrent = () => current() && accessEpoch === lifetime.current.accessEpoch;
+    setBusy(true);
+    const text = draft,
+      revision = draftRevision.current;
+    try {
+      const original = await custody.original(text);
+      pendingCount();
+      if (!commandCurrent()) return;
+      const receipt = await gateway.sendTournamentChatMessage(tournamentId, {
+        requestId: original.requestId,
+        text,
+      });
+      if (!commandCurrent()) return;
+      if (await custody.accept(receipt, original.requestId, commandCurrent)) {
+        if (current() && draftRevision.current === revision) {
+          setDraft('');
+          draftRevision.current++;
+        }
+        setNotice('Сообщение сохранено. Это не подтверждение доставки или прочтения.');
+        void refresh();
+      } else setNotice('Не удалось подтвердить отправку. Проверьте статус сообщения.');
+    } catch (error) {
+      if (commandCurrent()) failure(error);
+    } finally {
+      commandBusy.current = false;
+      if (current()) {
+        setBusy(false);
+        pendingCount();
+      }
+    }
+  }
+  async function older() {
+    const old = threadRef.current;
+    if (!current() || !old?.olderCursor || historyBusy.current) return;
+    historyBusy.current = true;
+    setLoading(true);
+    const id = ++lifetime.current.epoch;
+    try {
+      const p = parseTournamentChatPage(
+        await gateway.getTournamentChatHistory(tournamentId, 50, old.olderCursor),
+        tournamentId,
+        50,
+        old.olderCursor,
+      );
+      if (!current() || id !== lifetime.current.epoch) return;
+      if (p.streamId !== old.streamId || p.throughSequence !== old.olderThrough)
+        throw new Error('TOURNAMENT_CHAT_STREAM_CHANGED');
+      const seen = new Set(old.messages.map((m) => m.messageId));
+      if (p.messages.some((m) => seen.has(m.messageId)))
+        throw new Error('TOURNAMENT_CHAT_STREAM_CHANGED');
+      const next = {
+        ...old,
+        olderCursor: p.nextCursor,
+        messages: [...old.messages, ...p.messages],
+      };
+      threadRef.current = next;
+      setThread(next);
+    } catch (error) {
+      if (id === lifetime.current.epoch) failure(error);
+    } finally {
+      historyBusy.current = false;
+      if (current()) {
+        setLoading(false);
+        if (refreshQueued.current) {
+          refreshQueued.current = false;
+          void refresh();
+        }
+      }
+    }
+  }
+  return (
+    <main className="tournament-chat" aria-labelledby="tournament-chat-heading">
+      <header>
+        <a href={`/tournaments?event=${encodeURIComponent(tournamentId)}`}>← К турниру</a>
+        <h1 id="tournament-chat-heading">Чат турнира</h1>
+        <p>Для текущих участников и назначенного организатора</p>
+      </header>
+      <div className="tournament-chat__actions">
+        <button type="button" disabled={loading} onClick={() => void refresh()}>
+          Обновить
+        </button>
+        {gap && (
+          <button type="button" disabled={loading} onClick={() => void refresh(true)}>
+            Открыть историю заново
+          </button>
+        )}
+      </div>
+      {loading && <p role="status">Загружаем сообщения…</p>}
+      {notice && <p role="status">{notice}</p>}
+      {!denied && thread && (
+        <>
+          <ol aria-label="Сообщения турнира">
+            {[...thread.messages].reverse().map((m) => (
+              <li key={m.messageId}>
+                <strong>{m.authorUserId === principal.userId ? 'Вы' : 'Участник'}</strong>
+                <p>{m.text}</p>
+                <time dateTime={m.acceptedAt}>
+                  {new Date(m.acceptedAt).toLocaleTimeString('ru-RU', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </time>
+              </li>
+            ))}
+          </ol>
+          {!thread.messages.length && <p>Сообщений пока нет</p>}
+          {thread.olderCursor && (
+            <button disabled={loading} onClick={() => void older()}>
+              Более ранние сообщения
+            </button>
+          )}
+        </>
+      )}
+      {!denied && thread && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send();
+          }}
+        >
+          <label htmlFor="tournament-message">Сообщение</label>
+          <textarea
+            id="tournament-message"
+            value={draft}
+            maxLength={8000}
+            onChange={(e) => {
+              draftRevision.current++;
+              setDraft(e.target.value);
+            }}
+          />
+          <button type="submit" disabled={busy || !custody || !draft.trim()}>
+            Отправить
+          </button>
+          <p>Текст черновика не сохраняется после перезагрузки.</p>
+        </form>
+      )}
+      {gateway.getTournamentChatReadPosition &&
+        gateway.advanceTournamentChatRead &&
+        gateway.getTournamentChatReadRequest && (
+          <section aria-label="Отметка о прочтении">
+            {readNotice && <p role="status">{readNotice}</p>}
+            <button
+              type="button"
+              disabled={
+                readBusy ||
+                loading ||
+                denied ||
+                gap ||
+                !readCustody ||
+                tournamentReadableThrough(thread, readPosition) === null
+              }
+              onClick={() => void markRead()}
+            >
+              Отметить прочитанным
+            </button>
+            {!denied &&
+              readPosition &&
+              tournamentReadableThrough(thread, readPosition) === null &&
+              thread &&
+              thread.headSequence > readPosition.readThroughSequence && (
+                <p>Загрузите недостающие сообщения перед отметкой о прочтении.</p>
+              )}
+            <p>Ожидают подтверждения отметки: {readPending}</p>
+            <button
+              type="button"
+              disabled={readBusy || !readCustody || readPending === 0}
+              onClick={() => void restoreReads()}
+            >
+              Проверить отметку
+            </button>
+          </section>
+        )}
+      <section aria-label="Проверка отправки">
+        <p>Ожидают подтверждения: {pending}</p>
+        <button
+          type="button"
+          disabled={busy || !custody || pending === 0}
+          onClick={() => void restore()}
+        >
+          Проверить статус
+        </button>
+      </section>
+    </main>
+  );
+}

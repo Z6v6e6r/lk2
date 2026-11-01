@@ -29,6 +29,27 @@ const workflow = parse(source) as {
 };
 
 describe('pull request CI profiles and stable gates', () => {
+  it('requires the isolated physical game suites in the existing full-quality service job', () => {
+    const steps = workflow.jobs['quality-full']?.steps ?? [];
+    const required = steps.find(
+      (step) => step.run === 'node --import tsx scripts/required-game-ci.ts',
+    );
+    expect(required).toBeDefined();
+    expect(required?.if).toBeUndefined();
+    expect(required).not.toHaveProperty('continue-on-error');
+    expect(required).toHaveProperty('timeout-minutes', 12);
+    expect(required).toHaveProperty(
+      'env.CI_GAME_RABBIT_CONTAINER',
+      '${{ job.services.rabbitmq.id }}',
+    );
+    const upload = steps.findIndex((step) => step.name === 'Upload test and coverage diagnostics');
+    expect(upload).toBeGreaterThan(steps.indexOf(required!));
+    expect(steps[upload]).toHaveProperty(
+      'with.path',
+      expect.stringContaining('.ci-artifacts/required-game'),
+    );
+  });
+
   it('runs the full contour on main and temporary integration branches only', () => {
     expect(workflow.on.push.branches).toEqual(['main', 'integration/**']);
     expect(source).not.toContain('workflow_dispatch');

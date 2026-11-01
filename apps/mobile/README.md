@@ -260,3 +260,92 @@ background and cold-start alert receipt, account switch/logout/revocation and op
 Provider acceptance and device receipt are distinct evidence. No unsigned simulator result closes
 either. Archive/export, credential installation, provider sends, TestFlight and store publication
 require their own exact authority; this source workflow performs none of them.
+
+## Local organizer cancellation
+
+The game detail exposes the existing organizer CANCEL only when the authenticated server's
+`allowedActions` includes `CANCEL`. This requires the matching canonical read implementation:
+NO_PAYMENT, original organizer, scheduled future game, and matching aggregate/projection revision
+in one tenant-scoped SQL statement. A missing/stale projection or unknown payment mode removes
+only the action, never the card. Price zero and `NOT_REQUIRED` are not eligibility evidence.
+Deploy the compatible API before distributing these clients; older APIs advertised a broader
+advisory action. The command writer still rechecks the actual aggregate under its existing lock.
+
+Android allows only the existing POST `/games/:uuid/cancel` with the exact organizer reason,
+Bearer and original idempotency key. iOS uses a typed `gameCancel` bridge request; no caller URL
+or provider method is accepted. Both retain the SDK's one network retry with the same key.
+Logout blocks new sends and late responses synchronously. There is no new command journal.
+After an ambiguous acknowledgement, only an authenticated GET displaying `CANCELLED` confirms
+the aggregate outcome; unavailable/old reads remain unconfirmed. Manual status refresh never
+sends a command. A reload does not claim authorship of the previous cancellation.
+
+Paid/subscription/provider cancellation, refund and entitlement compensation remain unsupported
+by this action. Roster/history stays with the existing canonical writer; no forced removal or
+station-membership change is introduced. Rollback to an older API may restore its broader advisory action; the unchanged canonical
+writer still rejects non-NO_PAYMENT or unauthorized cancellation. Native transport alone never
+changes server authorization. No pending training/direct branch is copied.
+
+Verification: focused Vitest including game read/lifecycle fixtures, host JVM policy/engine,
+Swift package tests and rendered synthetic UI are separate from Android/iOS app builds and
+real-device/backend acceptance. The existing lifecycle PostgreSQL fixture is CI-only; no local
+database is provisioned for this packet.
+
+## Official station messages
+
+Android's existing communities thread and iOS's `/chats` community entry now use only
+PadlHub history, station-message POST and original-request status GET. The fresh server
+`canRequestStationMessage` capability controls the composer; directory verification or a
+community name never grants send authority. Other community histories remain read-only.
+The initial message packet adds no DIRECT/GAME chat, media or realtime capability.
+The separate v3 companion below adds only explicit original read receipts.
+
+Native custody uses localStorage metadata `{requestId, fingerprint}` scoped to the
+original tenant/user/community. No message body, token or provider identity is persisted.
+Ordinary Web retains sessionStorage. Storage denial, corruption or quota failure blocks
+sending. After process restart, reload or an ambiguous response, recovery reads only the
+original request UUID; 403/404, timeout and UNKNOWN do not erase custody or generate a new
+UUID. While any native request is pending, even an explicit Send with edited text performs
+only original status reads; it cannot create or resend a command. Confirmed receipts must match the original request and SHA256 of the normalized
+message body before metadata acknowledgement. Logout closes the original epoch before
+waiting for revocation; queued hashing/reads and late replies cannot dispatch or acknowledge
+under another session. Visible native history is cleared while pending metadata is retained.
+
+The station POST alone permits a 64 KiB serialized UTF-8 envelope and at most 8000 UTF-16
+text units. JavaScript, Java and Swift independently reject unknown keys, duplicate JSON
+keys, unsupported methods/queries, malformed UUIDs, a mismatched idempotency key and a
+caller-selected origin. Other Android command limits remain 16 KiB. The existing SDK
+performs no automatic POST or 401 retry for station sends.
+
+Install the matched station owner/message and history API before distributing this client.
+An older or disabled server leaves sending unavailable or the original request UNKNOWN;
+rollback must retain custody and server receipts. This branch starts from #538 and does not
+copy #525 integration or #512/#518 chat work. Integrate overlapping session/policy/cabinet
+changes deliberately before combined release and rerun their native regressions.
+Host JVM/reference JSON, Swift package and synthetic component rendering are LOCAL source
+checks, separate from APK/app compilation, device process-death, live membership and
+provider acceptance. No credentials, deployment or store activation are part of this work.
+
+### Station stream v3 adoption
+
+The existing Android community entry and iOS station entry now use fresh authorized v3 summaries
+and the shared sequence-aware reader. Only explicit UNADOPTED/NOT_STATION uses old history.
+Missing/denied/unproven adopted state remains unavailable, never unread zero. Read marking is
+explicit after contiguous displayed coverage; new windows, archives and send acknowledgements
+cannot silently mark unseen messages read.
+
+Original read-request metadata persists in native localStorage under tenant/user/community;
+exclusive Web Locks serialize two views. No plaintext messages/credentials are stored. Restart,
+UNKNOWN or manual pending recovery performs original GET only, and logout/session/epoch changes
+drop late results without discarding custody. Missing storage/locks or corruption prevents POST.
+Ordinary Web retains sessionStorage. The four exact native routes have independent TS/Java/Swift
+validation; stream cursor1024 does not change old history512. Read commands remain16KiB, station
+message commands retain their separate64KiB limit. V3 history alone has a3MiB response budget at
+the owner API, Android sender+engine+bridge and iOS transport, covering escaped legal text pages.
+
+This source packet starts from #541 and must integrate before tournament native Stage B. It
+adds no DIRECT/GAME features from pending branches and changes no signing/workflow/credentials.
+LOCAL Java tests use existing JDK21, Android36 compile stubs and reference org.json/JUnit; they
+exercise actual policy/engine with synthetic transport, not Android framework/device behavior.
+Swift package/app tests are left to automatic iOS CI because of local disk constraints. Android
+APK build still needs the separately reviewed Android workflow integration; no dispatch/store
+activation is authorized. Preserve original read metadata and server receipts on rollback.

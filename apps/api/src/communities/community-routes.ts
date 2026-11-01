@@ -27,18 +27,28 @@ import { LegacyCommunityReadError } from './legacy-community-read-repository.js'
 
 function principal(
   request: FastifyRequest,
-): { tenantId: string; userId: string; permissions: readonly string[] } | undefined {
+):
+  | { tenantId: string; userId: string; sessionId?: string; permissions: readonly string[] }
+  | undefined {
   const communityRequest = request as FastifyRequest & {
     readonly tenantId?: string;
     readonly padlHubClaims?: {
       readonly sub?: string;
+      readonly sid?: string;
       readonly permissions?: readonly string[];
     };
   };
   const tenantId = communityRequest.tenantId;
   const userId = communityRequest.padlHubClaims?.sub;
   return tenantId && userId
-    ? { tenantId, userId, permissions: communityRequest.padlHubClaims?.permissions ?? [] }
+    ? {
+        tenantId,
+        userId,
+        ...(communityRequest.padlHubClaims?.sid
+          ? { sessionId: communityRequest.padlHubClaims.sid }
+          : {}),
+        permissions: communityRequest.padlHubClaims?.permissions ?? [],
+      }
     : undefined;
 }
 
@@ -801,6 +811,8 @@ export function registerCommunityRoutes(
 
       try {
         const page = await options.service.listMemberships({
+          tenantKey: (request.params as { tenantKey: string }).tenantKey,
+          ...(current.sessionId ? { sessionId: current.sessionId } : {}),
           tenantId: current.tenantId,
           userId: current.userId,
           correlationId: request.id,
