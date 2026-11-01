@@ -525,6 +525,7 @@ export function ChatsPage({
   /** Directory pages and chat pages are read independently, so they count generations separately. */
   const communityListRequestRef = useRef(0);
   const communityRequestRef = useRef(0);
+  const communityHeadLoadingRef = useRef(false);
   /** One directory read at a time: the screen prefetch and the tab refresh must not both fire. */
   const communityListLoadingRef = useRef(false);
   /** The tab refresh reads state without making it a dependency, which would loop on a failure. */
@@ -1050,47 +1051,85 @@ export function ChatsPage({
   useEffect(() => {
     const communityId = communityState.selectedCommunityId;
     if (filter !== 'COMMUNITY' || !communityMessages || !communityId) return;
-    const generation = communityRequestRef.current + 1;
-    communityRequestRef.current = generation;
-    void communityMessages(communityId).then(
-      (page) => {
-        if (communityRequestRef.current !== generation) return;
-        const messages = communityThreadPage(page);
-        communityThreadCache.write(
-          communitySource?.custodyScope ?? currentUserId,
-          communityId,
-          messages,
-        );
-        setCommunityState((current) => ({
-          ...current,
-          messages,
-          canRequestStationMessage: page.canRequestStationMessage === true,
-          messagesCommunityId: communityId,
-          olderCursor: page.nextCursor ?? null,
-          loadingEarlier: false,
-          threadRefreshing: false,
-          threadError: null,
-        }));
-      },
-      (error: unknown) => {
-        if (communityRequestRef.current !== generation) return;
-        const denied = ['AUTH', 'FORBIDDEN', 'NOT_FOUND'].includes(
-          communityChatsError(error, 'thread').kind,
-        );
-        if (denied)
-          communityThreadCache.clear(communitySource?.custodyScope ?? currentUserId, communityId);
-        setCommunityState((current) => ({
-          ...current,
-          canRequestStationMessage: false,
-          messages: !denied && current.messagesCommunityId === communityId ? current.messages : [],
-          messagesCommunityId: communityId,
-          olderCursor: null,
-          loadingEarlier: false,
-          threadRefreshing: false,
-          threadError: communityChatsError(error, 'thread'),
-        }));
-      },
-    );
+    let active = true;
+    let pending = false;
+    let stationHistory = false;
+    const readHead = (): void => {
+      if (!active || pending) return;
+      pending = true;
+      communityHeadLoadingRef.current = true;
+      const generation = communityRequestRef.current + 1;
+      communityRequestRef.current = generation;
+      void communityMessages(communityId).then(
+        (page) => {
+          pending = false;
+          if (active) communityHeadLoadingRef.current = false;
+          if (!active || communityRequestRef.current !== generation) return;
+          stationHistory = page.canRequestStationMessage === true;
+          const messages = communityThreadPage(page);
+          communityThreadCache.write(
+            communitySource?.custodyScope ?? currentUserId,
+            communityId,
+            messages,
+          );
+          setCommunityState((current) => ({
+            ...current,
+            messages,
+            canRequestStationMessage: page.canRequestStationMessage === true,
+            messagesCommunityId: communityId,
+            olderCursor: page.nextCursor ?? null,
+            loadingEarlier: false,
+            threadRefreshing: false,
+            threadError: null,
+          }));
+        },
+        (error: unknown) => {
+          pending = false;
+          if (active) communityHeadLoadingRef.current = false;
+          if (!active || communityRequestRef.current !== generation) return;
+          const denied = ['AUTH', 'FORBIDDEN', 'NOT_FOUND'].includes(
+            communityChatsError(error, 'thread').kind,
+          );
+          if (denied)
+            communityThreadCache.clear(communitySource?.custodyScope ?? currentUserId, communityId);
+          setCommunityState((current) => ({
+            ...current,
+            canRequestStationMessage: false,
+            messages:
+              !denied && current.messagesCommunityId === communityId ? current.messages : [],
+            messagesCommunityId: communityId,
+            olderCursor: null,
+            loadingEarlier: false,
+            threadRefreshing: false,
+            threadError: communityChatsError(error, 'thread'),
+          }));
+        },
+      );
+    };
+    const refreshVisibleStation = (): void => {
+      if (!stationHistory || pending || document.visibilityState !== 'visible' || !navigator.onLine)
+        return;
+      setCommunityState((current) => ({
+        ...current,
+        threadRefreshing: true,
+        loadingEarlier: false,
+      }));
+      // Restart the history walk from the new head. Merging disconnected ranges could hide a gap
+      // when more than one page arrived offline; reservation time cannot prove a catch-up frontier.
+      readHead();
+    };
+    readHead();
+    window.addEventListener('online', refreshVisibleStation);
+    window.addEventListener('focus', refreshVisibleStation);
+    document.addEventListener('visibilitychange', refreshVisibleStation);
+    return () => {
+      active = false;
+      communityHeadLoadingRef.current = false;
+      communityRequestRef.current += 1;
+      window.removeEventListener('online', refreshVisibleStation);
+      window.removeEventListener('focus', refreshVisibleStation);
+      document.removeEventListener('visibilitychange', refreshVisibleStation);
+    };
   }, [
     filter,
     communityMessages,
@@ -1149,14 +1188,20 @@ export function ChatsPage({
   }
 
   /**
-   * Walking a community chat backwards is the only read that is appended above the current view, so
-   * a page that repeats what is already on screen ends the walk instead of leaving a control that
-   * can never make progress.
+   * Receipt ACKs can already expose every row in an older page. Continue by the server cursor;
+   * a repeated cursor is a retryable protocol error, never proof that history ended.
    */
   function loadOlderCommunityMessages(): void {
     const communityId = communityState.selectedCommunityId;
     const cursor = communityState.olderCursor;
-    if (!communityMessages || !communityId || !cursor || communityState.loadingEarlier) return;
+    if (
+      !communityMessages ||
+      !communityId ||
+      !cursor ||
+      communityState.loadingEarlier ||
+      communityHeadLoadingRef.current
+    )
+      return;
     const generation = communityRequestRef.current;
     setCommunityState((current) => ({ ...current, loadingEarlier: true, threadError: null }));
     void communityMessages(communityId, cursor).then(
@@ -1170,6 +1215,15 @@ export function ChatsPage({
             // control would never be usable again.
             return current.loadingEarlier ? { ...current, loadingEarlier: false } : current;
           }
+          if (page.nextCursor === cursor)
+            return {
+              ...current,
+              loadingEarlier: false,
+              threadError: {
+                kind: 'RETRYABLE',
+                message: 'Не удалось загрузить предыдущие сообщения.',
+              },
+            };
           const merged = mergeCommunityThreadPage(current.messages, page);
           if (merged.added > 0)
             communityThreadCache.write(
@@ -1180,7 +1234,7 @@ export function ChatsPage({
           return {
             ...current,
             loadingEarlier: false,
-            olderCursor: merged.added > 0 ? (page.nextCursor ?? null) : null,
+            olderCursor: page.nextCursor ?? null,
             messages: merged.messages,
           };
         });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { stationHistoryBoundary, stationHistoryPage } from './station-history-page.js';
 import type { LegacyCommunityToken } from '@phub/communities';
 import type {
   CommunityLegacyBridgeRepository,
@@ -210,6 +211,45 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
   }
   public async getChat(input: Parameters<CommunityReadExperienceRepository['getChat']>[0]) {
     const access = await this.authorized(input);
+    if (access.summary.communityType === 'STATION') {
+      if (!access.bearer)
+        throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_UNAVAILABLE');
+      let boundary;
+      try {
+        boundary = stationHistoryBoundary(input.cursor, input);
+        if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 50)
+          invalid('station-history-limit');
+      } catch {
+        invalid('station-history-cursor');
+      }
+      const query = new URLSearchParams({ historyVersion: '2', limit: String(input.limit) });
+      if (boundary) {
+        query.set('beforeTs', String(boundary.createdTs));
+        if (boundary.publicId) query.set('beforeId', boundary.publicId);
+      }
+      const payload = await this.getJson(
+        `/lk/communities/${encodeURIComponent(access.externalId)}/messages?${query}`,
+        input.correlationId,
+        access,
+      );
+      let page;
+      try {
+        page = stationHistoryPage(payload, input.limit, input, input.cursor);
+      } catch {
+        invalid('station-history-page');
+      }
+      return {
+        items: page.rows.map((row) => ({
+          id: row.publicId,
+          body: requiredText(row.text),
+          sentAt: row.createdAt,
+          author: { displayName: requiredText(row.authorName, 120) },
+          isViewer: identityMatches(row, access.identity),
+        })),
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+        canRequestStationMessage: this.options.stationMessageRequests === true,
+      };
+    }
     return {
       ...this.page(
         await this.getJson(
