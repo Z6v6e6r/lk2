@@ -760,3 +760,50 @@ voice/video calls, bot marketplace, reactions/threads и federation между t
 Первый управляемый срез, совместимость доставки и границы доступных источников описаны в
 [контракте сценариев](notification-scenarios.md). Исполнитель по умолчанию выключен; наличие
 исходников не подтверждает активацию или доставку в рабочей среде.
+
+### Ordinary FCM and Web Push dispatch policy
+
+Ordinary queued pushes are rechecked after claim, before address decryption/provider handoff.
+The delivery is locked by its original tenant, intent, endpoint and attempt; the endpoint is
+locked next. A separate READ COMMITTED statement after lock waits checks the live lease using
+`clock_timestamp()`, current endpoint ownership against the intent recipient, ACTIVE user and
+endpoint/provider, expected channel/platform/app/environment, runtime, template and rule.
+FCM acquires the existing runtime then Android-provider advisory gates before any row lock.
+No endpoint-registration advisory is acquired after the endpoint row. A busy post-claim FCM
+gate reuses the existing 30-second deferral without spending an attempt, but only through an
+atomic ordinary-only predicate: original intent/endpoint/attempt, live lease, no scheduling or
+dispatch markers and no scenarioRunId key. Retained/malformed scenarios and stale generations
+are not rescheduled as ordinary (including when the scenario feature is disabled).
+
+A present rule must remain active. Existing rule-less `ADMIN_MESSAGE` intents remain supported
+as nonmandatory; other missing-rule intents fail closed. Current mandatory rules may bypass
+opt-out/quiet hours, but never ownership, runtime or template checks. Nonmandatory preferences
+and quiet hours use the fresh database clock. These are decision-time policy snapshots, not
+locks retained until or across the external provider request. A change after transaction commit
+can race the provider handoff; there is no claim of instantaneous external revocation.
+
+A suppressed delivery atomically becomes SUPPRESSED, restores the unconsumed attempt, clears
+its lease, recomputes the intent after locking it (before reading sibling states), and writes
+`notifications.delivery.changed.v1`. It creates no provider attempt/receipt and performs no
+decryption/send. Eligible ordinary delivery decrypts only the current approved ciphertext/key.
+Its finalizer binds invalidation/policy-suspension to the exact dispatched address, key, recipient
+and provider account, so a late provider result cannot invalidate a rotated or transferred endpoint.
+
+Persisted scheduling/run/dispatch markers distinguish scenario jobs independently of runtime
+flags and claim projections. They never enter the ordinary lane; valid enabled scenarios retain
+the existing scenario owner, while disabled/malformed markers fail closed. APNs is unchanged.
+
+This packet does **not** add ordinary FCM/Web no-resend UNKNOWN dispatch custody. Existing
+retryable provider failures, ambiguous timeouts and expired ordinary SENDING leases retain
+their prior retry semantics and can produce duplicate external sends. A stable provider key
+is not a provider deduplication guarantee. No new social recipient ACL/producer is supplied.
+
+Acceptance: unit/transport tests cover post-claim policy and scenario compatibility;
+`ordinary-push-policy.pg.test.ts` uses only the already-migrated quality-full PostgreSQL16
+service (exact Actions/ci/standard-verifier/loopback database guard). A mismatched target in
+that CI contour fails collection. Local runs explicitly skip physical cases; no local DB is
+provisioned. The physical cases must execute with zero skips before CI acceptance; mocks are
+not PostgreSQL/runtime/provider/device evidence. No schema or configuration change is needed.
+Rollback restores the previous worker code but loses these fresh ordinary-policy protections;
+existing persisted deliveries stay schema-compatible. Do not enable new social notification
+traffic on mixed workers or infer provider/device acceptance from source or CI success.
