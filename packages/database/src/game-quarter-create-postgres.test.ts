@@ -1,7 +1,9 @@
+import { QuarterCreateOwnerClient } from '../../subscription-runtime-adapter/src/quarter-create.js';
+import { createQuarterCreateRuntime } from '../../../apps/api/src/games/game-quarter-create-runtime.js';
 import { quarterStationFixture } from '../../subscription-runtime-adapter/src/quarter-create-station.test-fixture.js';
 import { Pool } from 'pg';
 import { randomUUID, createHash } from 'node:crypto';
-import { beforeAll, afterAll, describe, it, expect } from 'vitest';
+import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest';
 import {
   createQuarterCreateRepository,
   createQuarterStationFactRepository,
@@ -12,7 +14,10 @@ import {
   type LegacyGameImportSnapshot,
 } from './legacy-game-import-repository.js';
 import { withTenantTransaction } from './connection.js';
-import { quarterFixture } from '../../subscription-runtime-adapter/src/quarter-create.test-fixture.js';
+import {
+  quarterFixture,
+  expiredQuarterReceipt,
+} from '../../subscription-runtime-adapter/src/quarter-create.test-fixture.js';
 function ci() {
   if (process.env.GITHUB_ACTIONS !== 'true' || process.env.APP_ENV !== 'ci') return undefined;
   if (!process.env.DATABASE_URL) throw new Error('QUARTER_CI_DATABASE_REQUIRED');
@@ -629,4 +634,104 @@ const url = ci();
     );
     expect(events.rowCount).toBe(0);
   });
+  it.each([false, true])(
+    'schema2 HTTP→runtime→physical JSONB preserves station outcome (blocked=%s), GET is read-only and lost completion ACK replays',
+    async (blocked) => {
+      const f = await fixture(),
+        r = await adopted(f, blocked);
+      await r.claimDispatch(f.scope, 'synthetic-initial-dispatch');
+      await withTenantTransaction(one, tenantId, (c) =>
+        c.query(
+          "update games.quarter_create_attempts set lease_until=clock_timestamp()-interval '1 second' where tenant_id=$1 and id=$2",
+          [tenantId, f.receipt.operationId],
+        ),
+      );
+      const before = await b.read(f.scope),
+        receipt = expiredQuarterReceipt(f);
+      // Only owner/identity transport and passage of time are synthetic; journal/CAS/RLS/JSONB are actual PG.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(Date.parse(receipt.rejectedAt) + 1000));
+      try {
+        const http = vi.fn(
+          async () =>
+            await Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  contractVersion: 1,
+                  operationId: receipt.operationId,
+                  operation: { status: 'REJECTED', receipt },
+                  registration: { status: 'UNKNOWN', asOf: null },
+                }),
+              ),
+            ),
+        );
+        const client = new QuarterCreateOwnerClient({
+          baseUrl: 'https://padlhub.su/',
+          environment: 'production',
+          timeoutMs: 1000,
+          fetchImplementation: http,
+        });
+        let lost = true;
+        const complete = vi.fn(async (...args: Parameters<typeof r.complete>) => {
+          const result = await r.complete(...args);
+          if (lost) {
+            lost = false;
+            throw new Error('synthetic-local-commit-ACK-lost');
+          }
+          return result;
+        });
+        const runtime = createQuarterCreateRuntime({
+          enabled: true,
+          repository: {
+            ...r,
+            complete,
+            identity: () =>
+              Promise.resolve({
+                providerClientId: f.context.providerClientId,
+                providerMappingId: f.context.providerMappingId,
+                providerClientSubscriptionId: f.context.providerClientSubscriptionId,
+              }),
+          },
+          client,
+          issuer: { issueQuarterCreate: () => Promise.resolve('synthetic-verified-delegation') },
+          token: () =>
+            Promise.resolve({
+              token: 'synthetic-actor-token',
+              expiresAt: new Date(Date.now() + 60000).toISOString(),
+            }),
+        });
+        const actor = {
+          tenantKey: 'public-tenant',
+          tenantId,
+          userId: actorId,
+          sessionId: randomUUID(),
+          correlationId: 'synthetic-expiry',
+        };
+        await runtime.read(actor, f.key);
+        expect(complete).not.toHaveBeenCalled();
+        expect(await b.read(f.scope)).toEqual(before);
+        await runtime.execute(actor, f.key, f.input, true);
+        const stored = await b.read(f.scope);
+        expect(stored?.state).toBe('REJECTED');
+        expect(stored?.receipt).toEqual(receipt);
+        expect(stored?.stationMembership).toEqual(before?.stationMembership);
+        expect(stored?.stationMembership?.outcome).toBe('OWNER_ADMISSION');
+        const again = await runtime.execute(actor, f.key, f.input, true);
+        expect(again.operation.status).toBe('REJECTED');
+        expect(complete).toHaveBeenCalledOnce();
+        expect(await b.read(f.scope)).toEqual(stored);
+        const rows = await withTenantTransaction(two, tenantId, (c) =>
+          c.query<{ dispatch_started_at: Date | null; events: number }>(
+            "select dispatch_started_at,(select count(*)::int from audit.outbox_events where tenant_id=$1 and aggregate_id=$2 and event_type='game.quarter-create.organizer-confirmed.v1') events from games.quarter_create_attempts where tenant_id=$1 and id=$2",
+            [tenantId, f.receipt.operationId],
+          ),
+        );
+        expect(rows.rows[0]!.dispatch_started_at).not.toBeNull();
+        expect(rows.rows[0]!.events).toBe(0);
+        expect(http.mock.calls).toHaveLength(3); // status, explicit recovery admission, terminal read; no preparation.
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

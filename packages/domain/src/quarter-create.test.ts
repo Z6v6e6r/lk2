@@ -1,3 +1,4 @@
+import expiryFixture from './fixtures/quarter-create-expired-v2.json';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -33,6 +34,13 @@ function receipt() {
 }
 afterEach(() => vi.useRealTimers());
 describe('frozen quarter owner wire', () => {
+  it('pins paired expired receipt fixture bytes', () => {
+    expect(
+      createHash('sha256')
+        .update(readFileSync(new URL('./fixtures/quarter-create-expired-v2.json', import.meta.url)))
+        .digest('hex'),
+    ).toBe('137702393ed139a92cf1d408ac5ab1ff7ada115b337d8cbdd01c950c1950a7c0');
+  });
   it('uses exact paired LK/CUP fixture bytes and canonical preparation/admission', async () => {
     expect(
       createHash('sha256')
@@ -181,3 +189,54 @@ it.each(['operation-array', 'registration-array', 'rejection-string', 'rejection
     ).rejects.toThrow();
   },
 );
+
+// Strict receipt v2 is an irreversible unused-reservation abort, never provider rejection.
+it.each([
+  'valid',
+  'expiry',
+  'before-expiry',
+  'before-abort',
+  'future',
+  'actor',
+  'operation',
+  'target',
+  'booking',
+  'state',
+  'compensation',
+  'reason',
+  'usage',
+  'abort',
+  'provider-field',
+  'extra',
+])('unused quarter expiry receipt: %s', async (mode) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2035-04-01T09:02:00Z'));
+  const q = await parseQuarterAdmission(raw),
+    r = structuredClone(expiryFixture.receipt);
+  if (mode === 'expiry') r.capsuleExpiresAt = '2035-04-01T09:01:01.000Z';
+  if (mode === 'before-expiry') r.abortedAt = '2035-04-01T09:00:59.000Z';
+  if (mode === 'before-abort') r.rejectedAt = '2035-04-01T09:00:59.000Z';
+  if (mode === 'future') r.rejectedAt = '2036-04-01T09:00:59.000Z';
+  if (mode === 'actor') r.actor.userId = q.target.draftId;
+  if (mode === 'operation') r.operationId = q.target.draftId;
+  if (mode === 'target') r.target.expectedRevision++;
+  if (mode === 'booking') Object.assign(r.entitlement, { providerBookingId: 'booking:forged' });
+  if (mode === 'state') r.entitlement.operationState = 'CONFIRMED';
+  if (mode === 'compensation') r.entitlement.compensationState = 'PENDING';
+  if (mode === 'reason') r.entitlement.releaseReason = 'PROVIDER_REJECTED';
+  if (mode === 'usage') r.entitlement.usageOperationId = '';
+  if (mode === 'abort') r.abortId = 'invalid';
+  if (mode === 'provider-field') Object.assign(r, { providerRejectedAt: r.abortedAt });
+  if (mode === 'extra') Object.assign(r, { token: 'synthetic-forbidden' });
+  const parse = parseQuarterOutcome(
+    {
+      contractVersion: 1,
+      operationId: q.preparation.operationId,
+      operation: { status: 'REJECTED', receipt: r },
+      registration: { status: 'UNKNOWN', asOf: null },
+    },
+    q,
+  );
+  if (mode === 'valid') expect((await parse).receipt).toEqual(r);
+  else await expect(parse).rejects.toThrow();
+});
