@@ -946,10 +946,19 @@ export function App({
   >([]);
   const [friendRequestBusyId, setFriendRequestBusyId] = useState<string | null>(null);
   const [, refreshLocation] = useReducer((revision: number) => revision + 1, 0);
+  const chatNavigationEpoch = useRef(0);
   useEffect(() => {
-    const handlePopState = (): void => refreshLocation();
+    const handlePopState = (): void => {
+      chatNavigationEpoch.current += 1;
+      setChatsBusy((current) => (current === 'create' ? null : current));
+      setChatsError(null);
+      refreshLocation();
+    };
     window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+    return () => {
+      chatNavigationEpoch.current += 1;
+      window.removeEventListener('popstate', handlePopState);
+    };
   }, []);
   const requestedRoute = resolveProtectedRoute(
     typeof window === 'undefined' ? '/' : window.location.pathname,
@@ -1987,8 +1996,9 @@ export function App({
   }
 
   function handleLogout(): void {
+    chatNavigationEpoch.current += 1;
+    gateway.closeQuarterCreate?.();
     if (clientPlatform === 'android') {
-      gateway.closeQuarterCreate?.();
       try {
         const userId = state.session?.context.user.id;
         if (userId) {
@@ -2075,16 +2085,26 @@ export function App({
             idempotencyKey: createMessagingCommandId(),
           };
     chatCreateCommandRef.current = command;
+    const epoch = chatNavigationEpoch.current;
+    const route = window.location.pathname + window.location.search;
+    const principal = gateway.quarterCreatePrincipal?.();
+    const isCurrent = (): boolean =>
+      chatNavigationEpoch.current === epoch &&
+      chatCreateCommandRef.current === command &&
+      window.location.pathname + window.location.search === route &&
+      gateway.quarterCreatePrincipal?.() === principal;
     setChatsBusy('create');
     setChatsError(null);
     void gateway.createDirectConversation(command.recipientUserId, command.idempotencyKey).then(
       (result) => {
+        if (!isCurrent()) return;
         chatCreateCommandRef.current = null;
         setChatsBusy(null);
         window.history.pushState({}, '', `/chats/${result.conversation.id}`);
         setChatsReloadToken((token) => token + 1);
       },
       (error: unknown) => {
+        if (!isCurrent()) return;
         setChatsError(chatUiError(error, 'create'));
         setChatsBusy(null);
       },

@@ -880,3 +880,13 @@ custody, edited intents, reload GET, late ACK/logout and denied-cache removal. L
 use only synthetic CommunityThread/auth-gateway transport at narrow/wide sizes. Full automatic CI
 and independent R3 review remain separate evidence; no provider/live database, deployment, owner
 installation or end-to-end live delivery is asserted.
+
+### Messaging command session retirement
+
+Web and Android messaging commands bind their bounded network retry to the original tenant, user, session epoch and access token. Logout, account replacement (including reauthentication as the same user), or token replacement retires that attempt: late acknowledgements and failures cannot trigger a new command under the replacement session. A command receiving 401 is surfaced without automatic refresh/replay; an independent read may still refresh its own session. Retries within the unchanged principal retain the original body and idempotency key. Native media upload follows the same rule.
+
+Direct-conversation creation also binds its UI completion to the original navigation epoch and route. Leaving and returning, unmounting or starting logout prevents a late completion from navigating or changing the current view. This does not cancel or compensate a server-side command that may already have completed; it must be reconciled under its original identity.
+
+For Web/CUP cookie sessions, the SDK also retires pending authentication/refresh work by a session generation. Native iOS/Android adapters retain ownership of their existing revocation, credential rotation and read-drain lifecycle; these browser-generation rules do not replace it. A stale refresh success or failure cannot overwrite or clear a replacement session; stale protected JSON/media responses cannot expose the former account's data. Automatic refresh must return the established tenant/user and a consistent user/context identity before replaying a read. A mismatch retires local credentials and blocks subsequent automatic adoption. An explicit restore or verification may establish the new account; changing that identity invalidates earlier protected reads. Same-account refresh remains shared by concurrent readers and a cancelled reader does not cancel other readers' refresh.
+
+Starting logout retires local credentials immediately, including when the network cannot confirm revocation. This is local retirement only: a lost logout response does not prove the server cookie was revoked. A late logout cannot clear a newly verified session or retry against it. The gateway delegates generation-aware cleanup to the SDK so a stale startup restore cannot erase newer credentials.

@@ -1929,7 +1929,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       }
       return session;
     } catch (error) {
-      client.clearAccessToken();
+      // The SDK retires only the refresh generation that failed. A stale restore must
+      // not clear credentials installed by a newer successful authentication.
       if (isUnauthorized(error)) return null;
       throw error;
     }
@@ -1962,11 +1963,29 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   async function retryMessagingCommand<TResult>(
     operation: (signal: AbortSignal) => Promise<TResult>,
   ): Promise<TResult> {
+    const principal = requireQuarterPrincipal();
+    const accessToken = client.getAccessToken();
+    const current = () => {
+      requireQuarterPrincipal(principal);
+      if (!accessToken || client.getAccessToken() !== accessToken)
+        throw new Error('AUTH_PRINCIPAL_CHANGED');
+    };
+    const attempt = async () => {
+      current();
+      try {
+        const result = await runMessagingCommandAttempt(operation);
+        current();
+        return result;
+      } catch (error) {
+        current();
+        throw error;
+      }
+    };
     try {
-      return await runMessagingCommandAttempt(operation);
+      return await attempt();
     } catch (error) {
       if (!isRetryableMessagingFailure(error)) throw error;
-      return runMessagingCommandAttempt(operation);
+      return attempt();
     }
   }
 
@@ -2865,6 +2884,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           method: 'POST',
           idempotencyKey: command.clientMessageId,
           body: JSON.stringify(payload),
+          retryOnUnauthorized: false,
           signal,
         }),
       );
@@ -2888,6 +2908,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           method: 'POST',
           idempotencyKey,
           body: JSON.stringify({ otherUserId }),
+          retryOnUnauthorized: false,
           signal,
         }),
       );
@@ -2900,6 +2921,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           method: 'POST',
           idempotencyKey,
           body: JSON.stringify({ gameId }),
+          retryOnUnauthorized: false,
           signal,
         }),
       );
@@ -2930,6 +2952,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'POST',
             idempotencyKey: command.clientMessageId,
             body: JSON.stringify(payload),
+            retryOnUnauthorized: false,
             signal,
           },
         ),
@@ -2944,6 +2967,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'POST',
             idempotencyKey,
             body: JSON.stringify(input),
+            retryOnUnauthorized: false,
             signal,
           },
         ),
@@ -2958,6 +2982,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'POST',
             idempotencyKey,
             body: JSON.stringify({ declaredByteSize }),
+            retryOnUnauthorized: false,
             signal,
           },
         ),
@@ -2995,6 +3020,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'PUT',
             idempotencyKey,
             body: JSON.stringify({ throughSequence }),
+            retryOnUnauthorized: false,
             signal,
           },
         ),
@@ -3009,6 +3035,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'PUT',
             idempotencyKey,
             body: JSON.stringify(update),
+            retryOnUnauthorized: false,
             signal,
           },
         ),

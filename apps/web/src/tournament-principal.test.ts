@@ -118,7 +118,7 @@ describe('tournament-only principal fence', () => {
       two = gateway.logout();
     await vi.waitFor(() => expect(pending).toHaveLength(2));
     pending[0]!(new Response(null, { status: 204 }));
-    await one;
+    await expect(one).rejects.toMatchObject({ code: 'AUTH_PRINCIPAL_CHANGED' });
     const auth = gateway.verifyCode({
       challengeId: id,
       code: '000000',
@@ -126,7 +126,7 @@ describe('tournament-only principal fence', () => {
     });
     await vi.waitFor(() => expect(pending).toHaveLength(3));
     pending[1]!(new Response(null, { status: 204 }));
-    await two;
+    await expect(two).rejects.toMatchObject({ code: 'AUTH_PRINCIPAL_CHANGED' });
     pending[2]!(Response.json(session));
     await auth;
     expect(gateway.tournamentPrincipal!()).toBeNull();
