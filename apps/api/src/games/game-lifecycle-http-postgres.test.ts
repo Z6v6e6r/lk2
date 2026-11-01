@@ -987,8 +987,15 @@ describePostgres('FREE/LOCAL game lifecycle through HTTP and PostgreSQL', () => 
     });
     expect(await management.projectCardEvent({ tenantId, gameId: id, eventId })).toBe('applied');
     const original = await withTenantTransaction(pool, tenantId, async (client) => {
-      const r = await client.query<{ revision: string; starts_at: Date }>(
-        `select revision::text,starts_at from games.games where tenant_id=$1 and id=$2`,
+      const r = await client.query<{
+        revision: string;
+        starts_at: Date;
+        join_cutoff_at: Date | null;
+        cancellation_reason_code: string | null;
+        cancelled_at: Date | null;
+      }>(
+        `select revision::text,starts_at,join_cutoff_at,cancellation_reason_code,cancelled_at
+           from games.games where tenant_id=$1 and id=$2`,
         [tenantId, id],
       );
       return r.rows[0]!;
@@ -1041,7 +1048,13 @@ describePostgres('FREE/LOCAL game lifecycle through HTTP and PostgreSQL', () => 
     ]) {
       await withTenantTransaction(pool, tenantId, async (client) => {
         await client.query(
-          `update games.games set payment_mode=$3,revision=$4,organizer_user_id=$5,lifecycle_state=$6,starts_at=$7 where tenant_id=$1 and id=$2`,
+          `update games.games
+              set payment_mode=$3,revision=$4,organizer_user_id=$5,lifecycle_state=$6,
+                  starts_at=case when $11 then now() - interval '1 minute' else $7::timestamptz end,
+                  join_cutoff_at=case when $11 then now() - interval '2 minutes' else $8::timestamptz end,
+                  cancellation_reason_code=case when $12 then 'ORGANIZER_REQUEST' else $9::text end,
+                  cancelled_at=case when $12 then now() else $10::timestamptz end
+            where tenant_id=$1 and id=$2`,
           [
             tenantId,
             id,
@@ -1051,7 +1064,12 @@ describePostgres('FREE/LOCAL game lifecycle through HTTP and PostgreSQL', () => 
             Number(original.revision) + (scenario === 'stale' ? 1 : 0),
             scenario === 'foreign' ? playerAId : ownerId,
             scenario === 'cancelled' ? 'CANCELLED' : 'SCHEDULED',
-            scenario === 'started' ? new Date(Date.now() - 60000) : original.starts_at,
+            original.starts_at,
+            original.join_cutoff_at,
+            original.cancellation_reason_code,
+            original.cancelled_at,
+            scenario === 'started',
+            scenario === 'cancelled',
           ],
         );
         await client.query(
