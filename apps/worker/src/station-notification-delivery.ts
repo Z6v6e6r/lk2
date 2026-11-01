@@ -1,3 +1,4 @@
+import { fcmRolloutClaimAllowed } from './fcm-rollout-gate.js';
 import type {
   NotificationEndpointCipher,
   NotificationPushDeliveryPort,
@@ -188,6 +189,7 @@ export async function runStationDelivery(
   tenantId: string,
   t: StationTransport,
 ) {
+  if (t.provider === 'FCM' && !fcmRolloutClaimAllowed()) return false;
   const c = await claim(repo, tenantId, t);
   if (!c) return false;
   let job: ClaimedNotificationDelivery = {
