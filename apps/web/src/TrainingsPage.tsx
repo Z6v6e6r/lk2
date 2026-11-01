@@ -1,3 +1,4 @@
+import { TrainingRegistrationPanel } from './TrainingRegistrationPanel.js';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { BookingActivityCard } from './BookingRecommendations.js';
@@ -30,18 +31,21 @@ const levelRangeLabels: Readonly<Record<TrainingLevelRangeFilter, string>> = {
   B_A: 'B–A',
 };
 
-const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
-const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
+const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', {
+  weekday: 'short',
+  timeZone: 'Europe/Moscow',
+});
+const dayFormatter = new Intl.DateTimeFormat('ru-RU', {
+  day: '2-digit',
+  timeZone: 'Europe/Moscow',
+});
 type EventCatalogMetadata = Pick<
   EventCatalogPage,
   'state' | 'totalMatched' | 'facets' | 'sourceStatus'
 >;
 
 function dateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return new Date(date.getTime() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function isExpiredCatalogCursor(error: Error | null): boolean {
@@ -159,13 +163,18 @@ function MultiSelectFilter({
 
 export interface TrainingsPageProps {
   readonly gateway: AuthGateway;
+  readonly principal?: { tenantId: string; userId: string };
+  readonly eventId?: string;
   readonly individualTrainingRoute?: string;
 }
 
 export function TrainingsPage({
   gateway,
+  principal,
+  eventId,
   individualTrainingRoute = '/coaches',
 }: TrainingsPageProps): React.JSX.Element {
+  const [registrationId, setRegistrationId] = useState<string | null>(eventId ?? null);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<readonly string[]>([]);
   const [selectedStationIds, setSelectedStationIds] = useState<readonly string[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -178,9 +187,8 @@ export function TrainingsPage({
   const days = useMemo(
     () =>
       Array.from({ length: 7 }, (_, index) => {
-        const date = new Date();
-        date.setHours(0, 0, 0, 0);
-        date.setDate(date.getDate() + index);
+        const today = dateKey(new Date());
+        const date = new Date(Date.parse(`${today}T00:00:00+03:00`) + index * 86_400_000);
         return {
           key: dateKey(date),
           day: dayFormatter.format(date),
@@ -519,6 +527,30 @@ export function TrainingsPage({
         </p>
       ) : null}
 
+      {registrationId && principal
+        ? (() => {
+            const target = activities.find((a) => a.id === registrationId);
+            return target ? (
+              <TrainingRegistrationPanel
+                key={`${principal.tenantId}:${principal.userId}:${target.id}`}
+                gateway={gateway}
+                principal={principal}
+                training={target}
+                onClose={() => setRegistrationId(null)}
+              />
+            ) : (
+              <section role="status">
+                <p>
+                  Тренировка не найдена в загруженном расписании. Загрузите следующие события или
+                  измените дату.
+                </p>
+                <button type="button" onClick={() => setRegistrationId(null)}>
+                  Закрыть
+                </button>
+              </section>
+            );
+          })()
+        : null}
       <section className="games-list trainings-list" aria-live="polite" aria-busy={loading}>
         {loading ? (
           <div className="games-loading" role="status">
@@ -533,7 +565,18 @@ export function TrainingsPage({
           </div>
         ) : null}
         {activities.map((activity) => (
-          <BookingActivityCard activity={activity} key={activity.id} />
+          <div key={activity.id}>
+            <BookingActivityCard activity={activity} />
+            {principal && gateway.registerTraining && activity.kind === 'TRAINING' ? (
+              <button
+                className="games-level-recovery__secondary"
+                type="button"
+                onClick={() => setRegistrationId(activity.id)}
+              >
+                Запись по подписке
+              </button>
+            ) : null}
+          </div>
         ))}
         {nextCursor ? (
           <button

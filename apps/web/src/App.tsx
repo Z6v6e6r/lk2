@@ -870,6 +870,7 @@ export function App({
   // The first native increment exposes canonical API screens. Browser-only provider, payment
   // and upload routes stay unavailable until their native handoff contracts are implemented.
   const nativeSections = new Set([
+    'trainings',
     'home',
     'home-v2',
     'home-v3',
@@ -2933,7 +2934,17 @@ export function App({
       );
     }
     if (protectedRoute.kind === 'trainings') {
-      return <TrainingsPage gateway={gateway} />;
+      return (
+        <TrainingsPage
+          key={`${context.tenant.id}:${context.user.id}`}
+          gateway={gateway}
+          principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+          {...(typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).get('event')
+            ? { eventId: new URLSearchParams(window.location.search).get('event')! }
+            : {})}
+        />
+      );
     }
     if (protectedRoute.kind === 'tournaments') {
       const tournamentId =

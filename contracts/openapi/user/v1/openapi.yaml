@@ -3987,6 +3987,10 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join
   /{tenantKey}/games/{gameId}/join-operation:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join-operation
+  /{tenantKey}/games/{gameId}/leave-operation/reconcile:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1leave-operation~1reconcile
+  /{tenantKey}/games/{gameId}/leave-operation:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1leave-operation
   /{tenantKey}/games/{gameId}/participants/me:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1participants~1me
   /{tenantKey}/games/{gameId}/waitlist:
@@ -5756,6 +5760,13 @@ paths:
       description:
         ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
         ticket before an explicit fresh command.'
+  /{tenantKey}/trainings/catalog:
+    $ref: ./training-catalogue.yaml#/paths/~1{tenantKey}~1trainings~1catalog
+  /{tenantKey}/trainings/{trainingId}/registrations:
+    $ref: ./training-registrations.yaml#/paths/~1{tenantKey}~1trainings~1{trainingId}~1registrations
+  /{tenantKey}/trainings/{trainingId}/registration-operation:
+    $ref: ./training-registrations.yaml#/paths/~1{tenantKey}~1trainings~1{trainingId}~1registration-operation
+
 components:
   schemas:
     GameJoinConditions:

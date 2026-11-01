@@ -1,3 +1,5 @@
+import managedFixture from '../../../../packages/subscription-runtime-adapter/src/fixtures/managed-join-v2.json';
+import { parseManagedJoinEntitlement } from '@phub/domain';
 import type { BookedOperationReceipt } from '@phub/subscription-runtime-adapter';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -7,6 +9,7 @@ import {
   reconcileCommercialJoinOperation,
   commercialJoinRequestHash,
   commercialJoinRequestHashV2,
+  managedJoinRequestHash,
   type CommercialJoinAttemptView,
   type CommercialJoinBeginResult,
   type CommercialJoinCommandEnvelope,
@@ -843,5 +846,264 @@ describe('commercial JOIN request fingerprint v2 (B2)', () => {
     }
     expect(repo.calls).toEqual([]);
     expect(owner.calls).toEqual([]);
+  });
+});
+
+describe('managed JOIN v2 expectation acquisition', () => {
+  const binding = {
+    ...managedFixture.confirmed.receipt,
+    startsAt: '2099-09-21T04:00:00.000Z',
+    durationMinutes: 90,
+    capacity: 4,
+    admissible: true,
+  };
+  const managedJoin = {
+    contractVersion: 2 as const,
+    requestFingerprint: envelope.requestHash,
+    entitlement: parseManagedJoinEntitlement(managedFixture.preflight.response.entitlement),
+  };
+  function freeFixture() {
+    const fixture = createJoinConditionsFixture(0);
+    fixture.setQuotes({
+      quotes: [
+        {
+          subscriptionId: fixtureId(6),
+          selectionKey: JSON.stringify([
+            'EXISTING_GAME',
+            'pay_synthetic_existing_game',
+            '2099-09-21T07:00:00+03:00',
+            90,
+          ]),
+          status: 'AVAILABLE',
+          basePriceMinor: 300000,
+          amountMinor: 0,
+          freeMinutes: 90,
+          paidMinutes: 0,
+          reasonCode: null,
+          evaluatedAt: Date.now(),
+          expiresAt: Date.now() + 30000,
+        },
+      ],
+    });
+    return fixture;
+  }
+  it.each(['managed', 'legacy'] as const)(
+    'free %s selection preflights before seat and freezes only managed refs',
+    async (mode) => {
+      const order: string[] = [];
+      const begin = vi.fn<CommercialJoinRepositoryPort['beginPaidJoin']>(() => {
+        order.push('reserve');
+        return resolved({
+          outcome: 'reserved' as const,
+          operationId,
+          reservationId,
+          expiresAt: new Date(Date.now() + 900000).toISOString(),
+          revision: 9,
+        });
+      });
+      const repo = repository({ beginPaidJoin: begin }).repository;
+      const prepareManaged = vi.fn(() => {
+        order.push('preflight');
+        return resolved({
+          outcome: 'prepared' as const,
+          binding,
+          ...(mode === 'managed' ? { managedJoin } : {}),
+        });
+      });
+      const execute = vi.fn(() => {
+        order.push('admit');
+        return resolved({ status: 'PENDING' as const });
+      });
+      const result = await executeCommercialJoin(
+        { ...envelope, priceConsent: { amountMinor: 0, currency: 'RUB' } },
+        {
+          ...dependencies(repo, { execute, read: () => resolved(null) }, freeFixture()),
+          owner: { prepareManaged, execute, read: () => resolved(null) },
+        },
+      );
+      expect(result.kind).toBe('accepted');
+      expect(order).toEqual(['preflight', 'reserve', 'admit']);
+      expect(begin.mock.calls[0]?.[0]).toMatchObject({
+        requestHash:
+          mode === 'managed' ? managedJoinRequestHash(managedJoin) : envelope.requestHash,
+      });
+      if (mode === 'managed') {
+        expect(begin.mock.calls[0]?.[0]).toHaveProperty('managedJoin', managedJoin);
+        expect(begin.mock.calls[0]?.[0]).not.toHaveProperty('bindingRefs.usageRef');
+      } else expect(begin.mock.calls[0]?.[0]).not.toHaveProperty('managedJoin');
+    },
+  );
+  it('never treats an unavailable preflight as legacy or reserves a seat', async () => {
+    const begin = vi.fn();
+    const prepare = vi.fn();
+    const execute = vi.fn();
+    const result = await executeCommercialJoin(
+      { ...envelope, priceConsent: { amountMinor: 0, currency: 'RUB' } },
+      {
+        ...dependencies(
+          repository({ beginPaidJoin: begin }).repository,
+          { execute, read: () => resolved(null) },
+          freeFixture(),
+        ),
+        owner: {
+          prepareManaged: () => Promise.reject(new Error('owner unavailable')),
+          prepare,
+          execute,
+          read: () => resolved(null),
+        },
+      },
+    );
+    expect(result).toMatchObject({ kind: 'failed', code: 'GAME_RECONCILIATION_REQUIRED' });
+    expect(begin).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it('paid legacy skips managed preflight and preserves request bytes', async () => {
+    const prepareManaged = vi.fn();
+    const begin = vi.fn<CommercialJoinRepositoryPort['beginPaidJoin']>().mockResolvedValue({
+      outcome: 'reserved',
+      operationId,
+      reservationId,
+      expiresAt: new Date(Date.now() + 900000).toISOString(),
+      revision: 9,
+    });
+    const owner = { ...ownerPort([{ status: 'PENDING' }]).owner, prepareManaged };
+    await executeCommercialJoin(
+      envelope,
+      dependencies(repository({ beginPaidJoin: begin }).repository, owner),
+    );
+    expect(prepareManaged).not.toHaveBeenCalled();
+    expect(begin.mock.calls[0]?.[0].requestHash).toBe(envelope.requestHash);
+  });
+  it('replays the original expectation before current price/owner resolution and rejects changed input', async () => {
+    const fixture = freeFixture();
+    const prepareManaged = vi.fn();
+    const execute = vi.fn();
+    const begin = vi.fn();
+    const prior: CommercialJoinAttemptView = {
+      commandId: operationId,
+      gameId: envelope.gameId,
+      state: 'IN_PROGRESS',
+      result: null,
+      errorCode: null,
+      reservation: null,
+      receipt: null,
+      managedJoin,
+      requestHash: managedJoinRequestHash(managedJoin),
+    };
+    const deps = {
+      ...dependencies(
+        repository({ getPaidJoinAttempt: () => resolved(prior), beginPaidJoin: begin }).repository,
+        { execute, read: () => resolved(null) },
+        fixture,
+      ),
+      owner: { prepareManaged, execute, read: () => resolved(null) },
+    };
+    expect((await executeCommercialJoin(envelope, deps)).kind).toBe('accepted');
+    expect(
+      await executeCommercialJoin({ ...envelope, requestHash: 'f'.repeat(64) }, deps),
+    ).toMatchObject({ kind: 'failed', code: 'GAME_COMMERCIAL_ATTEMPT_CONFLICT' });
+    expect(fixture.calls).toEqual([]);
+    expect(prepareManaged).not.toHaveBeenCalled();
+    expect(begin).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it('same-key pending managed retry invokes only restricted recovery then reads receipt', async () => {
+    const fixture = freeFixture();
+    const prepareManaged = vi.fn();
+    const execute = vi.fn();
+    const begin = vi.fn();
+    const recover = vi.fn().mockResolvedValue({ status: 'UNKNOWN' });
+    const read = vi.fn().mockResolvedValue({ status: 'UNKNOWN' });
+    const prior: CommercialJoinAttemptView = {
+      commandId: operationId,
+      gameId: envelope.gameId,
+      state: 'IN_PROGRESS',
+      result: null,
+      errorCode: null,
+      reservation: {
+        id: reservationId,
+        state: 'ACTIVE',
+        expiresAt: new Date(Date.now() + 900000).toISOString(),
+      },
+      receipt: null,
+      providerBinding: binding,
+      managedJoin,
+      requestHash: managedJoinRequestHash(managedJoin),
+    };
+    const deps = {
+      ...dependencies(
+        repository({
+          getPaidJoinAttempt: () => resolved(prior),
+          beginPaidJoin: begin,
+          confirmPayment: vi.fn(),
+        }).repository,
+        { execute, read },
+        fixture,
+      ),
+      owner: { prepareManaged, execute, recover, read },
+    };
+    expect((await executeCommercialJoin(envelope, deps)).kind).toBe('accepted');
+    expect(recover).toHaveBeenCalledOnce();
+    expect(recover.mock.calls[0]?.[0]).toMatchObject({
+      operationId,
+      reservationId,
+      managedJoin,
+      providerBinding: binding,
+      actor: { expectedRevision: envelope.expectedRevision },
+    });
+    expect(read).toHaveBeenCalled();
+    expect(fixture.calls).toEqual([]);
+    expect(prepareManaged).not.toHaveBeenCalled();
+    expect(begin).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    await executeCommercialJoin({ ...envelope, requestHash: 'e'.repeat(64) }, deps);
+    expect(recover).toHaveBeenCalledOnce();
+  });
+  it('a concurrent COMPLETED reserve replay cannot bypass the stored full v2 receipt check', async () => {
+    const prior: CommercialJoinAttemptView = {
+      commandId: operationId,
+      gameId: envelope.gameId,
+      state: 'COMPLETED',
+      result: {
+        commandId: operationId,
+        gameId: envelope.gameId,
+        revision: 9,
+        viewerRelation: 'PARTICIPANT',
+        committedAt: new Date().toISOString(),
+      },
+      errorCode: null,
+      reservation: null,
+      receipt: null,
+      managedJoin,
+    };
+    const get = vi
+      .fn<CommercialJoinRepositoryPort['getPaidJoinAttempt']>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(prior);
+    const begin = vi.fn<CommercialJoinRepositoryPort['beginPaidJoin']>().mockResolvedValue({
+      outcome: 'replayed',
+      operationId,
+      state: 'COMPLETED',
+      result: prior.result!,
+    });
+    const execute = vi.fn();
+    const owner = {
+      prepareManaged: () => resolved({ outcome: 'prepared' as const, binding, managedJoin }),
+      execute,
+      read: () => resolved(null),
+    };
+    const result = await executeCommercialJoin(
+      { ...envelope, priceConsent: { amountMinor: 0, currency: 'RUB' } },
+      dependencies(
+        repository({ getPaidJoinAttempt: get, beginPaidJoin: begin }).repository,
+        owner,
+        freeFixture(),
+      ),
+    );
+    expect(result.kind).toBe('accepted');
+    if (result.kind === 'accepted') expect(result.body.operation.status).toBe('UNKNOWN');
+    expect(execute).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledTimes(2);
   });
 });

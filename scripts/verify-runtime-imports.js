@@ -61,3 +61,22 @@ if (
 ) {
   throw new Error('Support ticket runtime repository surface is invalid');
 }
+
+const { createManagedSelfLeaveRepository, ManagedSelfLeaveError } =
+  await import('@phub/database/managed-self-leave');
+if (
+  typeof createManagedSelfLeaveRepository !== 'function' ||
+  typeof ManagedSelfLeaveError !== 'function'
+) {
+  throw new Error('Managed SELF leave runtime exports are missing');
+}
+const managedSelfLeave = createManagedSelfLeaveRepository({});
+if (
+  Object.keys(managedSelfLeave).sort().join(',') !==
+  'begin,claim,finalize,isNoPayment,read,readByKey,readCommand,reconcileUndispatched'
+) {
+  throw new Error('Managed SELF leave runtime repository surface is invalid');
+}
+if (new ManagedSelfLeaveError('GAME_NOT_LEAVABLE').code !== 'GAME_NOT_LEAVABLE') {
+  throw new Error('Managed SELF leave runtime error contract is invalid');
+}

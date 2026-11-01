@@ -1631,7 +1631,7 @@ describe('Timeweb amd64 publication workflow', () => {
       uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
       with: {
         'if-no-files-found': 'error',
-        path: '.ci-artifacts/test-and-coverage\ncoverage\n',
+        path: '.ci-artifacts/test-and-coverage\n.ci-artifacts/required-game\ncoverage\n',
       },
     });
     expect(secretScanJob?.permissions).toEqual({

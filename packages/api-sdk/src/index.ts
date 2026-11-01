@@ -1,3 +1,5 @@
+import type { TrainingRegistrationResult } from '@phub/api-contracts';
+export type { TrainingRegistrationResult } from '@phub/api-contracts';
 import type { components, PublicApiComponents, UserApiV2Components } from '@phub/api-contracts';
 
 export type AuthChallengeRequest = components['schemas']['AuthChallengeRequest'];
@@ -1647,8 +1649,89 @@ export class PadlHubApiClient {
     });
   }
 
-  public leaveGame(gameId: string): Promise<GameCommandResult> {
+  public listTrainingCatalogue(query: EventCatalogQuery): Promise<EventCatalogPage> {
+    if (query.surface !== 'TRAININGS')
+      return Promise.reject(new Error('TRAINING_CATALOGUE_INPUT_INVALID'));
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (key === 'surface' || value === undefined) continue;
+      params.set(key, Array.isArray(value) ? value.join(',') : String(value));
+    }
+    return this.request<EventCatalogPage>(`/trainings/catalog?${params.toString()}`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+
+  public continueTrainingCatalogue(cursor: string, limit = 20): Promise<EventCatalogPage> {
+    const params = new URLSearchParams({ cursor, limit: String(limit) });
+    return this.request<EventCatalogPage>(`/trainings/catalog?${params.toString()}`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+
+  public registerTraining(
+    trainingId: string,
+    input: { dateHint: string; subscriptionId: string },
+    idempotencyKey: string,
+  ): Promise<TrainingRegistrationResult> {
+    return this.request<TrainingRegistrationResult>(
+      `/trainings/${encodeURIComponent(trainingId)}/registrations`,
+      { method: 'POST', body: JSON.stringify(input), idempotencyKey, retryOnUnauthorized: false },
+    );
+  }
+  public getTrainingRegistration(
+    trainingId: string,
+    idempotencyKey: string,
+  ): Promise<TrainingRegistrationResult> {
+    return this.request<TrainingRegistrationResult>(
+      `/trainings/${encodeURIComponent(trainingId)}/registration-operation`,
+      { cache: 'no-store', idempotencyKey, retryOnUnauthorized: false },
+    );
+  }
+
+  public leaveGame(
+    gameId: string,
+    options?: { readonly idempotencyKey?: string },
+  ): Promise<GameCommandResult> {
+    if (options?.idempotencyKey !== undefined)
+      return this.request<GameCommandResult>(
+        `/games/${encodeURIComponent(gameId)}/participants/me`,
+        {
+          method: 'DELETE',
+          idempotencyKey: options.idempotencyKey,
+          retryOnUnauthorized: false,
+        },
+      );
     return this.gameCommand(gameId, '/participants/me', 'DELETE');
+  }
+
+  /** Read-only recovery. A missing response/404 never authorizes a replacement leave key. */
+  public getManagedLeaveOperation(
+    gameId: string,
+    idempotencyKey: string,
+  ): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(`/games/${encodeURIComponent(gameId)}/leave-operation`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+      idempotencyKey,
+    });
+  }
+
+  /** Restrictive recovery: this route cannot start a new SELF LEAVE, including on an older API. */
+  public reconcileManagedLeaveOperation(
+    gameId: string,
+    idempotencyKey: string,
+  ): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(
+      `/games/${encodeURIComponent(gameId)}/leave-operation/reconcile`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        retryOnUnauthorized: false,
+      },
+    );
   }
 
   public joinGameWaitlist(gameId: string, invitationId?: string): Promise<GameCommandResult> {

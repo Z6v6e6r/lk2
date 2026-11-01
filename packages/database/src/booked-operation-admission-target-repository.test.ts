@@ -209,3 +209,24 @@ describe('admission canonical target repository', () => {
       ).toBeNull();
   });
 });
+
+describe('internal CREATE location binding resolver', () => {
+  it('checks the authenticated original draft before integration reads', async () => {
+    const f = fixture();
+    const repository = createBookedOperationAdmissionTargetRepository(f.pool as never);
+    expect(await repository.resolveCreateDraftLocation(draftInput)).toBeNull();
+    const calls = f.query.mock.calls.map(([sql]) => sql);
+    expect(
+      calls.some((sql) => sql.includes('organizer_user_id=$3') && sql.includes('for share')),
+    ).toBe(true);
+    expect(calls.some((sql) => sql.includes('game_create_location_bindings'))).toBe(false);
+  });
+  it('does not add integration identifiers to the established draft response', async () => {
+    const f = fixture([], [draftRow]);
+    const result = await createBookedOperationAdmissionTargetRepository(
+      f.pool as never,
+    ).resolveCreateDraft(draftInput);
+    expect(result).not.toHaveProperty('provider_room_id');
+    expect(result).not.toHaveProperty('locationBinding');
+  });
+});

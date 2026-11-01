@@ -1,3 +1,8 @@
+import { registerTrainingCatalogueRoutes } from './bookings/training-catalogue-routes.js';
+import type { TrainingCatalogueSource } from './bookings/training-catalogue-source.js';
+import { registerTrainingRegistrationRoutes } from './bookings/training-registration-routes.js';
+import type { TrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
+import type { ManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { attachUpcomingRosters } from './bookings/upcoming-rosters.js';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -370,6 +375,7 @@ export interface BuildAppOptions {
   readonly communityLogoMediaRepository?: CommunityLogoMediaRepository;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
+  readonly trainingCatalogueSource?: TrainingCatalogueSource;
   readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
   readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
   readonly upcomingBookingsRepository?: UpcomingBookingsRepository;
@@ -405,6 +411,8 @@ export interface BuildAppOptions {
     'issue'
   >;
   readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
+  readonly trainingRegistration?: TrainingRegistrationRuntime;
+  readonly gameManagedSelfLeave?: ManagedSelfLeaveRuntime;
   readonly gameCommercialJoin?: GameCommercialJoinOptions;
   /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
   readonly gameCommercialCreate?: GameCommercialCreateOptions;
@@ -1103,6 +1111,7 @@ export async function buildApp(options: BuildAppOptions) {
       ? { managementRepository: options.gameCommandRepository }
       : {}),
     ...(options.gameCommercialJoin ? { commercialJoin: options.gameCommercialJoin } : {}),
+    ...(options.gameManagedSelfLeave ? { managedSelfLeave: options.gameManagedSelfLeave } : {}),
     ...(options.gameCommercialCreate ? { commercialCreate: options.gameCommercialCreate } : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
@@ -1211,6 +1220,15 @@ export async function buildApp(options: BuildAppOptions) {
     publicTenantHandlers: [resolvePublicTenant],
   });
   const bookingRecommendationAuthService = options.authService;
+  registerTrainingRegistrationRoutes(app as unknown as FastifyInstance, {
+    ...(options.trainingRegistration ? { runtime: options.trainingRegistration } : {}),
+    handlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerTrainingCatalogueRoutes(app as unknown as FastifyInstance, {
+    ...(options.trainingCatalogueSource ? { source: options.trainingCatalogueSource } : {}),
+    ...(options.eventCatalogSnapshotStore ? { store: options.eventCatalogSnapshotStore } : {}),
+    handlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
   registerBookingRecommendationRoutes(app as unknown as FastifyInstance, {
     ...(options.gameReadRepository?.listRecommendationCardProjections
       ? {

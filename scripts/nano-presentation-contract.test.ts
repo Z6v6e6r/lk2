@@ -525,11 +525,27 @@ describe('Nano presentation release contract', () => {
       "logger.info({ metric, providerTenantKey }, 'Viva Home read operation')",
     );
     expect(apiMain).not.toContain('VivaCoachGameSummaryAdapter');
-    expect(apiMain).not.toContain('VivaExerciseRecommendationSourceAdapter');
+    expect(apiMain).not.toMatch(/\bexerciseRecommendationSource\b/);
     expect(apiMain).not.toContain('VIVA_AUTH_PROFILE_API_URL');
     expect(webAuthGateway).not.toContain('listPublicCoachGameSummaries');
     expect(webAuthGateway).toContain('loadClientAssistedEventCatalog');
     expect(webAuthGateway).toContain("completion.screen !== 'EVENT_CATALOG'");
+  });
+
+  it('limits the server training catalogue to authenticated actor access behind the read gate', () => {
+    const trainingComposition = apiMain.match(
+      /const trainingCatalogueSource =([\s\S]*?)\nconst phoneSubjectLinkService =/,
+    )?.[1];
+    expect(trainingComposition).toBeDefined();
+    expect(trainingComposition).toContain(
+      "config.GAMES_READ_ENABLED && ['sandbox', 'production'].includes(config.VIVA_MODE)",
+    );
+    expect(trainingComposition).toContain(
+      'access: (actor) => authService.issueTrainingCatalogueAccess(actor)',
+    );
+    expect(trainingComposition).toContain('new VivaExerciseRecommendationSourceAdapter({');
+    expect(trainingComposition).toContain(': undefined;');
+    expect(apiMain.match(/new VivaExerciseRecommendationSourceAdapter\(/g)).toHaveLength(1);
   });
 
   it('activates Nano client-assisted Viva reads without the blocked server Home sync', () => {

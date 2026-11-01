@@ -606,7 +606,11 @@ export interface AuthGateway {
   /** Readback of the same commercial operation by its original idempotency key. */
   readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
   readonly reconcilePaidJoinOperation?: PadlHubApiClient['reconcilePaidJoinOperation'];
-  readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
+  readonly leaveGame: PadlHubApiClient['leaveGame'];
+  readonly reconcileManagedLeaveOperation?: PadlHubApiClient['reconcileManagedLeaveOperation'];
+  readonly registerTraining?: PadlHubApiClient['registerTraining'];
+  readonly getTrainingRegistration?: PadlHubApiClient['getTrainingRegistration'];
+  readonly getManagedLeaveOperation?: PadlHubApiClient['getManagedLeaveOperation'];
   readonly joinGameWaitlist: (gameId: string, invitationId?: string) => Promise<GameCommandResult>;
   readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
   readonly submitGameResult: (
@@ -2169,12 +2173,17 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     listEventCatalog(query) {
-      if (nativeClient) return nativeUnavailable();
+      if (nativeClient)
+        return query.surface === 'TRAININGS'
+          ? client.listTrainingCatalogue(query)
+          : nativeUnavailable();
       return loadClientAssistedEventCatalog(query);
     },
 
     continueEventCatalog(cursor, limit) {
-      return client.continueEventCatalog(cursor, limit);
+      return nativeClient
+        ? client.continueTrainingCatalogue(cursor, limit)
+        : client.continueEventCatalog(cursor, limit);
     },
 
     getHomeBase() {
@@ -2336,8 +2345,20 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getPaidJoinOperation(gameId, idempotencyKey);
     },
 
-    leaveGame(gameId) {
-      return client.leaveGame(gameId);
+    leaveGame(gameId, options) {
+      return client.leaveGame(gameId, options);
+    },
+    reconcileManagedLeaveOperation(gameId, key) {
+      return client.reconcileManagedLeaveOperation(gameId, key);
+    },
+    registerTraining(trainingId, input, key) {
+      return client.registerTraining(trainingId, input, key);
+    },
+    getTrainingRegistration(trainingId, key) {
+      return client.getTrainingRegistration(trainingId, key);
+    },
+    getManagedLeaveOperation(gameId, key) {
+      return client.getManagedLeaveOperation(gameId, key);
     },
 
     joinGameWaitlist(gameId, invitationId) {

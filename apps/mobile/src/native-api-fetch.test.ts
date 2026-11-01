@@ -270,3 +270,30 @@ describe('Android native bridge adapter', () => {
     expect(observe).not.toHaveBeenCalled();
   });
 });
+
+it('relays training registration bytes and key once, with no network or 401 retry', async () => {
+  const native = plugin();
+  const fetcher = createNativeApiFetch(config, native);
+  const body = JSON.stringify({
+    dateHint: '2035-04-02',
+    subscriptionId: '22222222-2222-4222-8222-222222222222',
+  });
+  const path = '/trainings/11111111-1111-4111-8111-111111111111/registrations';
+  const headers = {
+    authorization: 'Bearer synthetic-access',
+    'idempotency-key': 'synthetic-original-training-key',
+  };
+  native.request.mockResolvedValueOnce(result(401));
+  expect((await fetcher(root + path, { method: 'POST', headers, body })).status).toBe(401);
+  expect(native.request).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      path: `/user/api/v1/local-padel${path}`,
+      method: 'POST',
+      body,
+    }),
+  );
+  expect(native.request.mock.calls[0]?.[0].headers).toMatchObject(headers);
+  native.request.mockRejectedValueOnce(new Error('NATIVE_NETWORK_UNAVAILABLE'));
+  await expect(fetcher(root + path, { method: 'POST', headers, body })).rejects.toThrow();
+  expect(native.request).toHaveBeenCalledTimes(2);
+});

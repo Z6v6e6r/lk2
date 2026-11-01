@@ -1,3 +1,4 @@
+import { ManagedSelfLeaveError } from '@phub/database/managed-self-leave';
 import { loadConfig } from '@phub/config';
 import type {
   CreateStoredGameInput,
@@ -1230,5 +1231,136 @@ describe('managed commercial CREATE HTTP boundary (WARN)', () => {
       message: 'В ранней beta можно создать только бесплатную игру.',
     });
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('managed SELF leave route projection', () => {
+  it('keeps bodyless DELETE, returns 202 UNKNOWN, journals before ordinary lookup, scopes both GETs and enforces auth', async () => {
+    const body = {
+      commandId,
+      operation: {
+        id: commandId,
+        type: 'LEAVE_GAME' as const,
+        status: 'UNKNOWN' as const,
+        gameId,
+        aggregateRevision: 8,
+        createdAt: committedAt,
+        updatedAt: committedAt,
+        nextAction: { type: 'WAIT_FOR_RECONCILIATION' as const, retryAfterSeconds: 15 },
+        error: null,
+      },
+      game: null,
+      replayed: true,
+    };
+    const managed = {
+      execute: vi.fn(() => Promise.resolve().then(() => body)),
+      reconcile: vi.fn(() => Promise.resolve().then(() => body)),
+      read: vi.fn(() => Promise.resolve().then(() => body)),
+      readByKey: vi.fn(() => Promise.resolve().then(() => body)),
+    };
+    const roster = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('self-leave-test', 'silent'),
+      pool: fakePool(),
+      gameRosterRepository: roster,
+      gameManagedSelfLeave: managed,
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await accessToken()}`,
+      'idempotency-key': 'self-leave-original-key',
+    };
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/user/api/v1/local-padel/games/${gameId}/participants/me`,
+      headers,
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual(body);
+    expect(managed.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        actorUserId: userId,
+        gameId,
+        idempotencyKey: headers['idempotency-key'],
+      }),
+    );
+    const read = await app.inject({
+      url: `/user/api/v1/local-padel/game-operations/${commandId}`,
+      headers,
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.headers['cache-control']).toContain('no-store');
+    expect(managed.read).toHaveBeenCalledWith({
+      tenantId,
+      actorUserId: userId,
+      operationId: commandId,
+    });
+    const byKey = await app.inject({
+      url: `/user/api/v1/local-padel/games/${gameId}/leave-operation`,
+      headers,
+    });
+    expect(byKey.statusCode).toBe(200);
+    expect(managed.readByKey).toHaveBeenCalledWith({
+      tenantId,
+      actorUserId: userId,
+      gameId,
+      idempotencyKey: headers['idempotency-key'],
+    });
+    const reconcile = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+      headers,
+    });
+    expect(reconcile.statusCode).toBe(202);
+    expect(managed.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ gameId, idempotencyKey: headers['idempotency-key'] }),
+    );
+    expect(roster.leave).not.toHaveBeenCalled();
+    for (const extra of [
+      { payload: { recoveryOnly: true } },
+      { url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile?retry=true` },
+    ]) {
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+            headers,
+            ...extra,
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+    expect(managed.reconcile).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+        })
+      ).statusCode,
+    ).toBe(401);
+    managed.readByKey.mockRejectedValueOnce(new ManagedSelfLeaveError('IDEMPOTENCY_CONFLICT'));
+    const wrongGame = await app.inject({
+      url: `/user/api/v1/local-padel/games/${invitationId}/leave-operation`,
+      headers,
+    });
+    expect(wrongGame.statusCode).toBe(409);
+    expect(wrongGame.json()).toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+
+    expect(
+      (await app.inject({ url: `/user/api/v1/local-padel/games/${gameId}/leave-operation` }))
+        .statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await app.inject({
+          url: `/user/api/v1/local-padel/games/${gameId}/leave-operation`,
+          headers: { authorization: headers.authorization },
+        })
+      ).statusCode,
+    ).toBe(400);
   });
 });
