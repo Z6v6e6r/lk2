@@ -1,5 +1,17 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Дополнение recovery — 2026-11-01
+
+552: сохранять immutable sources/facts/recipient witnesses, раздельные after/completed sequence, глобальную message/user identity и TOURNAMENT_PENDING/SENDING. После provider attempt/dispatch marker неопределённый исход остаётся UNKNOWN, без обычного sender fallback или нового intent. Отмена source не стирает ledger и не доказывает отсутствие доставки. Реальные drain/disable/rollback требуют exact-target approval.
+
+553: persistent FCM hold запрещает новый station claim; не применять это как разрешение очистить уже принятые попытки. Provisioning actor-column correction — backward-compatible source fix без migration/down или grants; audit остаётся внутри общей транзакции.
+
+554: сохранить original tenant/user/tournament/request/hash metadata; history/text/драфт не выдавать после principal retirement. Reload восстанавливает статус только исходным GET, не пересоздаёт POST. Навигация A→B должна создавать новый keyed component, возврат в A сохраняет только его custody. Удаление app data теряет локальные metadata; это не подтверждение отсутствия принятой команды. Device/process-death acceptance ещё не выполнена.
+
+Production backup freshness, exact retained artifacts и rehearsed operational rollback по-прежнему не подтверждены этим source/CI пакетом.
+
+Messaging principal fence: при смене principal/token поздний ответ отвергается, автоматического write replay после401 нет. Original idempotency key сохраняется для явного повтора в допустимой сессии; UI fence не отменяет уже принятую сервером команду. При integration сохранить этот порядок вместе с native epoch/generation fences.
+
 ## Station/read recovery — 2026-11-01
 
 545: retain source/facts/recipients, original membership epoch/context, STATION_PENDING/STATION_SENDING и acknowledged dispatch marker. UNKNOWN после возможной отправки не превращать в resend и не передавать старому ordinary worker. Отключение нового consumer и drain — только по разрешённому operational plan; не удалять custody для «перезапуска».

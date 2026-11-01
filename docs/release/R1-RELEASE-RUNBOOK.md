@@ -1,5 +1,19 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## Дополнение подготовки — 2026-11-01
+
+Текущий общий native source551 и leaf552/553/554 green на точных heads. Не выбирать отдельный leaf PR как полный release candidate: catalogue/registration531, iOS DIRECT/GAME518 и новое messaging principal fence должны войти в согласованную native интеграцию, затем notification/native исходники — в один проверенный source. Exact heads/runs: [READINESS](R1-READINESS.md).
+
+Tournament552 требует согласованных CUP publications/recipients/eligibility, canonical identity mappings,0114 и durable staged/completed fanout. Source/template/rule adoption helper явно вызывается отдельно, default dry-run/disabled; actor должен быть текущим ACTIVE admin с notifications.manage. Отдельно проверить реальные worker-role privileges без автоматического расширения grants. Dedicated key/config/feature activation — только по конкретному operational approval.
+
+Перед включением FCM проверить persistent hold;553 теперь проверяет его до station claim,552 — до tournament claim. UNKNOWN после dispatch marker не разрешает resend. Provider receipts, quiet-hours/opt-out и actual-device delivery не выводятся из синтетического CI.
+
+Native554 exact chat route не означает catalogue discovery, OS universal link или push route. Сохранить iOS reset маршрута при смене аккаунта. Проверить на устройстве session/logout/hash, metadata persistence/Web Locks, background/foreground и cold UNKNOWN recovery. Signed artifacts/store activation требуют отдельного пакета и разрешения. Текущая работа ни одной live transition не выполнила.
+
+Дополнение source reuse: #518 `f3102c2a9f78cf734d201b078ccb5700205438a4` содержит513/516 и готовые iOS DIRECT/GAME, создание DIRECT и5 native acceptance cases; remote head, full41229015245/iOS41229015147 SUCCESS перепроверены. Эта ветка также отсутствует в554. Следующая партия включает конечный messaging fence +531 +518; без переписывания существующих native journeys. Game-card chat navigation подключается только через существующую canonical команду.
+
+Messaging fence555: head `29ab1a1e1dc2a4e083f021eb91e5396d1bb232ad`, full41346201488/native CI pending; LOCAL286PASS, static/build и независимое security/reliability review CLEAR. До green это не замороженный integration input.
+
 ## Новые prerequisites — 2026-11-01
 
 545 требует совместимых LK287/CUP73 writers/drain, exact source incarnation/replay floor, immutable mappings и0112. Проверить права реальной worker-role на пять row-lock таблиц из domain contract; CI-superuser их не подтверждает, grants автоматически не расширять. Provisioning остаётся dry-run/default-disabled до отдельной операции.

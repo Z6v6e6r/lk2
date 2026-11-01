@@ -1,5 +1,18 @@
 # LK2 R1 — зависимости и критический путь
 
+## Текущий dependency-aware путь — 2026-11-01
+
+1. Завершено SOURCE/CI: approved549 core/social →550 catch-up +542 native station → approved551 `b1dd1314`. Exact CI в [READINESS](R1-READINESS.md).
+2. Независимая ветка: approved549+548 →552 durable tournament consumer `aa39dfa0`; исправлен первый physical provisioning failure, full41343845232 SUCCESS8461PASS/127SKIP,19tournamentPG PASS. Параллельно553 `4d6aefb8`: station FCM hold и attribution; full41343973371 SUCCESS8409PASS/127SKIP,27stationPG PASS.
+3. Native551 →554 exact chat `c6005720`, full41344723280 SUCCESS8505PASS/127SKIP, Android41PASS, iOS54PASS/1KeychainSKIP. После завершения нового исправления messaging principal fence отдельно согласовать **три** конечных head: его потомок554 +531 `99f5d942` (уже содержит Android4406) +518 `f3102c2a` (уже содержит513/516, iOS DIRECT/GAME и native acceptance). Не дублировать реализацию каталога/регистрации и не интегрировать Android второй раз.
+4. Один integration owner разрешает пересечения native API/session/router и concrete chat/registration recognizers; сохранить station/training/quarter paths, readonly/public versus authenticated transport и original logout/generation fences. Обязательные регрессии: directory→detail→chat→back, UNKNOWN registration при переходе в chat, logout во время hash обеих команд. Native test suites сохраняются раздельно.
+5. После green подготовить общий source batch с notification consumer/safety; только отдельное exact-target owner approval позволяет merge. Main merge не разрешает publication/activation.
+6. P0 settlement contract и runtime/provider/device acceptance → immutable signed artifacts и backup/restore/rollback evidence → отдельное release/deploy/store решение. Недоступный Swagger не компенсируется fixture или booking cancellation proof.
+
+Дополнение source reuse: #518 `f3102c2a9f78cf734d201b078ccb5700205438a4` содержит513/516 и готовые iOS DIRECT/GAME, создание DIRECT и5 native acceptance cases; remote head, full41229015245/iOS41229015147 SUCCESS перепроверены. Эта ветка также отсутствует в554. Следующая партия включает конечный messaging fence +531 +518; без переписывания существующих native journeys. Game-card chat navigation подключается только через существующую canonical команду.
+
+Messaging fence555: head `29ab1a1e1dc2a4e083f021eb91e5396d1bb232ad`, full41346201488/native CI pending; LOCAL286PASS, static/build и независимое security/reliability review CLEAR. До green это не замороженный integration input.
+
 ## Актуальный критический путь — 2026-11-01
 
 1. SOURCE/CI: station LK287+CUP73→LK2545 завершён; tournament CUP74→LK2546→MESSAGE547 завершён. Exact heads/runs: [READINESS](R1-READINESS.md).

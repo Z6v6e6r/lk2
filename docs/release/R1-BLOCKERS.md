@@ -1,5 +1,20 @@
 # LK2 R1 — приоритетные блокеры
 
+## Текущий остаток P0 — 2026-11-01
+
+**NO-GO.** Общая native station база551 VERIFIED SOURCE/CI; прежнее отсутствие этой интеграции больше не blocker.552 durable tournament delivery,553 station FCM gate/provisioning и554 native tournament chat VERIFIED SOURCE/CI на точных heads. Initial failed runs исправлены и не используются как успешное evidence. Точные heads/runs: [READINESS](R1-READINESS.md).
+
+- **P0 / PARTIAL — coherent source:** native catalogue/registration531 уже существуют, но не входят в551/554. Нужна отдельная разрешённая интеграция конечного chat head с53199f5, resolution concrete route/transport/principal conflicts и full/native CI. Затем общий notification/native release source; отдельные зелёные ветки не являются единым кандидатом.
+- **P0 / BLOCKED — attributable settlement:** доступного Viva refund/DEPOSIT-credit read contract нет, Swagger более недоступен по ответу владельца. Booking CANCEL/исходный PAID не подтверждают возврат или зачисление; новый refund/retry по UNKNOWN запрещён. Не требовать повторно тот же недоступный Swagger.
+- **P0 / UNKNOWN — runtime acceptance:** owner/API/worker coherent activation, реальные роли/привязки/replay floors, provider/device push, offline/process-death journeys и recovery ещё не подтверждены.
+- **P0 / BLOCKED — release operations:** нет отдельного разрешения и полного проверенного пакета для source main merge, publication, signing/stores, backup/restore/rollback и deployment. Подготовка исходников продолжается автономно; live разрешения не выводятся из общего поручения.
+
+Новые подтверждённые source дефекты: station FCM sender обходил persistent hold (553 gate до claim); оба source-provision helper использовали отсутствующую audit колонку actor_user_id вместо actor_id (552/553 исправлены и подтверждены новым полным CI). Отказ транзакции сохранял atomic rollback, но мешал корректному provisioning. Не менять schema/grants ради ошибочного имени.
+
+P0 messaging principal fence: воспроизведён повтор старой команды после logout/смены пользователя/повторного входа тем же пользователем (RED85). В [#555](https://github.com/Z6v6e6r/lk2/pull/555) `29ab1a1e1dc2a4e083f021eb91e5396d1bb232ad` исправлены исходный principal/token перед retry и после ACK, запрещён автоматический replay write после401; независимый read-refresh сохраняется. Поздний DIRECT-create не меняет маршрут после ухода/возврата. LOCAL286 уникальных проверок в5suites PASS (составное evidence); независимое security/reliability review CLEAR. Полная LOCAL статика/5types/contracts/build/runtime imports PASS; source tests выполняются. Full CI41346201488, Android41346201352/iOS41346201305 pending; Draft создан. Серверный уже принятый command не компенсируется клиентским fence.
+
+Дополнение source reuse: #518 `f3102c2a9f78cf734d201b078ccb5700205438a4` содержит513/516 и готовые iOS DIRECT/GAME, создание DIRECT и5 native acceptance cases; remote head, full41229015245/iOS41229015147 SUCCESS перепроверены. Эта ветка также отсутствует в554. Следующая партия включает конечный messaging fence +531 +518; без переписывания существующих native journeys. Game-card chat navigation подключается только через существующую canonical команду.
+
 ## Актуальные блокеры — 2026-11-01
 
 B07 PARTIAL: station Web/native и tournament Web/API/READ имеют SOURCE/CI, CUP73 закрывает type-flip epoch defect, CUP74/LK2546 — causal baseline/READ. Общий source549 прошёл combined CI; согласование native, tournament realtime и runtime acceptance открыты. B08: station producer→current-recipient ACL→inbox→guarded push больше не MISSING —545 SOURCE/CI VERIFIED,26 physical cases. Tournament query adapter548/CUP75 SOURCE/CI VERIFIED, включая6PG/10Mongo; durable importer/dispatch ещё MISSING. Runtime privileges/provider/device остаются UNKNOWN/BLOCKED.

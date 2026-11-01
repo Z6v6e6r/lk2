@@ -1,5 +1,15 @@
 # LK2 R1 — GO / NO-GO
 
+## Текущее решение — 2026-11-01
+
+**NO-GO для production.** Approved native551 VERIFIED SOURCE/CI;552 tournament durable delivery,553 station delivery safety и554 native tournament chat VERIFIED SOURCE/CI. Native catalogue/registration531 и iOS DIRECT/GAME518 готовы отдельно; нужна согласованная интеграция с конечным messaging principal fence. Точные версии и пределы: [READINESS](R1-READINESS.md).
+
+Следующие обязательные gates: full/native CI → согласованный единый source → attributable refund/DEPOSIT settlement → owner/API/worker/runtime/provider/device acceptance → signed immutable artifacts, backup/restore/rollback → отдельные main/publication/deploy/store approvals. Отсутствующее денежное доказательство не заменяется CANCEL/PAID и не закрывается зелёным CI.
+
+Выполнены только разрешённые локальные integration merges, source commits, task-branch pushes и Draft PR. Main/flags/publication/realDB/provider/keys/signing/deploy/stores не изменялись. Вопросы разрешения пока не открыты; безопасная реализация и проверка продолжаются. Последующие разделы — исторические checkpoint.
+
+Messaging fence555: head `29ab1a1e1dc2a4e083f021eb91e5396d1bb232ad`, full41346201488/native CI pending; LOCAL286PASS, static/build и независимое security/reliability review CLEAR. До green это не замороженный integration input.
+
 ## Решение — 2026-11-01
 
 **NO-GO.**545,546,547 и CUP73/74 прошли соответствующий source/physical CI; это закрывает конкретные станционные уведомления, READ и logout-гонку, но не весь R1. Общий source собран в Draft549 и прошёл combined full/Android/iOS CI; всё ещё нет полного native/tournament notification контура, attributable monetary settlement, provider/device/signing/store acceptance и production backup/restore/rollback custody.
