@@ -1465,9 +1465,15 @@ export class PadlHubApiClient {
   public async sendTournamentChatMessage(
     tournamentId: string,
     input: TournamentChatRequest,
+    assertCurrent?: () => void,
   ): Promise<TournamentChatReceipt> {
+    const token = this.getAccessToken();
+    if (!token) throw new TournamentChatError('TOURNAMENT_CHAT_FORBIDDEN', 403);
     const request = parseTournamentChatRequest(input);
     const hash = await tournamentChatRequestHash(tournamentId, request);
+    if (this.getAccessToken() !== token)
+      throw new TournamentChatError('TOURNAMENT_CHAT_FORBIDDEN', 403);
+    assertCurrent?.();
     const value = await this.request<unknown>(
       `/tournaments/${encodeURIComponent(tournamentId)}/chat/message-requests`,
       {
@@ -1477,6 +1483,7 @@ export class PadlHubApiClient {
         retryOnUnauthorized: false,
       },
     );
+    assertCurrent?.();
     return parseTournamentChatReceipt(value, tournamentId, request.requestId, hash);
   }
   public async getTournamentChatRequest(

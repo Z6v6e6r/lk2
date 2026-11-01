@@ -64,6 +64,12 @@ Reload performs GET status only; it cannot reconstruct or automatically resend a
 An UNKNOWN/timeout/403/404/malformed result is not evidence of nonacceptance. Only a valid
 CONFIRMED receipt bound to the original full request hash clears that original entry.
 Logout/session retirement fences late results and never consumes original custody.
+MESSAGE submission also captures the original access token and gateway principal before
+asynchronous WebCrypto hashing. It rechecks both immediately before the request and checks
+the principal again before returning its response. Logout start closes that principal even
+while revocation is pending; a subsequent login cannot rebind the original message attempt.
+The concrete request path reaches fetch without another await after this submission check.
+Native gating, original UUID/body and disabled unauthorized retries remain unchanged.
 Current access denial hides cached history and draft but retains minimal metadata.
 Clearing browser site data loses local recovery metadata; no server-side listing or durable
 multi-device custody is introduced in Stage A.

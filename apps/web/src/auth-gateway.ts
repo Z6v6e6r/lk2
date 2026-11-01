@@ -2518,7 +2518,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     async sendTournamentChatMessage(id, input) {
       if (nativeClient) return nativeUnavailable();
       const p = requireQuarterPrincipal();
-      const result = await client.sendTournamentChatMessage(id, input);
+      const result = await client.sendTournamentChatMessage(id, input, () => {
+        requireQuarterPrincipal(p);
+      });
       requireQuarterPrincipal(p);
       return result;
     },

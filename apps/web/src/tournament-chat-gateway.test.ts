@@ -170,3 +170,117 @@ it('READ still dispatches exactly once for the unchanged actual gateway principa
     vi.unstubAllGlobals();
   }
 });
+
+it.each(['revoke-pending', 'reauthenticated-session'] as const)(
+  'MESSAGE cannot dispatch after original principal closes during digest (%s)',
+  async (phase) => {
+    vi.stubGlobal('crypto', webcrypto);
+    const digest = webcrypto.subtle.digest.bind(webcrypto.subtle);
+    let finishHash!: () => void;
+    let finishLogout!: (response: Response) => void;
+    let logout: Promise<void> | undefined;
+    const spy = vi.spyOn(webcrypto.subtle, 'digest').mockImplementationOnce(
+      (...args) =>
+        new Promise((resolve, reject) => {
+          finishHash = () => {
+            void digest(...args).then(resolve, reject);
+          };
+        }),
+    );
+    const transport = vi.fn<typeof fetch>((raw, init) => {
+      const url = urlOf(raw);
+      if (url.endsWith('/auth/session') && init?.method === 'DELETE')
+        return new Promise((resolve) => {
+          finishLogout = resolve;
+        });
+      if (url.endsWith('/chat/message-requests'))
+        return Promise.resolve(
+          Response.json({
+            contractVersion: 'tournament-chat.v1',
+            tournamentId: id,
+            requestId: id,
+            status: 'UNKNOWN',
+          }),
+        );
+      return Promise.resolve(Response.json(session));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.invalid',
+      tenantKey: 'synthetic',
+      appVersion: 'test',
+      fetchImplementation: transport,
+    });
+    try {
+      await gateway.restoreSession();
+      const original = gateway.tournamentChatPrincipal!();
+      const pending = gateway.sendTournamentChatMessage!(id, {
+        requestId: id,
+        text: 'Synthetic original message',
+      });
+      const rejected = expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+      expect(finishHash).toBeTypeOf('function');
+      logout = gateway.logout();
+      expect(finishLogout).toBeTypeOf('function');
+      expect(gateway.tournamentChatPrincipal!()).toBeNull();
+      if (phase === 'reauthenticated-session') {
+        finishLogout(new Response(null, { status: 204 }));
+        await logout;
+        await gateway.verifyCode({
+          challengeId: id,
+          code: '000000',
+          acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+        });
+        expect(gateway.tournamentChatPrincipal!()).not.toBeNull();
+        expect(gateway.tournamentChatPrincipal!()).not.toBe(original);
+      }
+      finishHash();
+      await rejected;
+      expect(
+        transport.mock.calls.filter((call) => urlOf(call[0]).endsWith('/chat/message-requests')),
+      ).toHaveLength(0);
+    } finally {
+      finishLogout?.(new Response(null, { status: 204 }));
+      await logout;
+      spy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+it('MESSAGE submits original UUID and exact body once for unchanged gateway principal', async () => {
+  vi.stubGlobal('crypto', webcrypto);
+  const transport = vi.fn<typeof fetch>((raw) =>
+    Promise.resolve(
+      Response.json(
+        urlOf(raw).endsWith('/chat/message-requests')
+          ? {
+              contractVersion: 'tournament-chat.v1',
+              tournamentId: id,
+              requestId: id,
+              status: 'UNKNOWN',
+            }
+          : session,
+      ),
+    ),
+  );
+  const gateway = createBrowserAuthGateway({
+    baseUrl: 'https://api.invalid',
+    tenantKey: 'synthetic',
+    appVersion: 'test',
+    fetchImplementation: transport,
+  });
+  const input = { requestId: id, text: '  Synthetic original\n🙂  ' };
+  try {
+    await gateway.restoreSession();
+    expect((await gateway.sendTournamentChatMessage!(id, input)).status).toBe('UNKNOWN');
+    const calls = transport.mock.calls.filter((call) =>
+      urlOf(call[0]).endsWith('/chat/message-requests'),
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1]?.method).toBe('POST');
+    expect(new Headers(calls[0]![1]?.headers).get('Idempotency-Key')).toBe(input.requestId);
+    expect(calls[0]![1]?.body).toBe(JSON.stringify(input));
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
