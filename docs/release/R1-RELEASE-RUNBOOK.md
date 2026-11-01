@@ -1,6 +1,14 @@
 # LK2 R1 — release preparation и controlled handoff
 
-## Текущие решения и интеграция — 2026-11-01
+## Обновление source/CI — 2026-11-01
+
+Native542 и tournament543 устанавливаются только после общей source integration и её полного CI; отдельные Draft heads нельзя считать единой сборкой. Перед sandbox/device smoke включить exact actor-purpose pairing, approved owner indexes и current ACL только по разрешённому операционному плану. До закрытия station/tournament notification bridge и согласованной установки #544 push acceptance по этим событиям не заявлять. Новые local batches A/B ожидают отдельного разрешения; merge/main, publication, workflow dispatch и live writes не выполнялись.
+
+Для286 обязательна согласованная установка daily и canonical guard с завершением старых исполнений до открытия recovery. Уже отправленные CUP/provider команды source-патч не отзывает; сохранять исходные markers/receipts и только exact APPLIED readback. Для544 требуется coherent worker version; ordinary provider uncertainty остаётся прежней, no-resend guarantee не подтверждена.
+
+Station notification feed: локально подготовлены 15 файлов и 54 unit/contract cases, отдельные 2 release-packaging tests PASS; 6 физических Mongo cases пока CI-only. Независимое review нашло P0 в зависимости CUP#72 `6a6301197cecbc90cb6ba37f55c520f3d39564c1`: STATION→FRIENDS→REMOVE/APPROVE→STATION сохраняет старый membership epoch и может снова разрешить старого получателя. Feed не считается готовым. Исправление CUP должно запретить type flip после adoption и атомарно закрыть гонку type update/adoption; уже несогласованное состояние не ремонтировать автоматически. Затем нужны повторное review и physical CI. Downstream LK2 import/outbox/dispatch ACL ещё не реализованы.
+
+## Предыдущая контрольная точка — 2026-11-01
 
 Перед station v3 activation требуются совместимые LK#285/CUP#72/LK2#541, drain старых executors/array outbox, exact community adoption plan и подтверждённая durability/retention. Adoption lifetime v2 + outbox v2 выполняется атомарно только по отдельному разрешению. Для CUP#71 отдельно подтвердить dedicated signer/owner pairing, существующие CHAT_INDEXES без TTL, storage capacity, current ACL и bounded recovery worker. Source readiness ничего не создаёт и не включает. Native v3/tournament consumer ещё не прошли общую приёмку.
 

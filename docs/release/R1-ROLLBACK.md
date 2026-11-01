@@ -1,6 +1,16 @@
 # LK2 R1 — rollback и recovery readiness
 
-## Текущие решения и интеграция — 2026-11-01
+## Обновление source/CI — 2026-11-01
+
+Для542 сохранить metadata-only read/message custody и возможность GET исходного UUID после process restart; downgrade на v2 не подтверждает unread parity. Для543 сохранить original request UUID/hash и CUP receipt/sequence, не повторять POST после UNKNOWN и не заменять историю при bounded catch-up gap. Native tournament entry остаётся закрыт до Stage B.
+
+Ordinary FCM/Web policy #544 завершён в SOURCE/CI: он не меняет существующую семантику повторов при неопределённом provider результате и не доказывает no-resend guarantee. Будущий social import обязан сохранять durable cursor/dedup/current ACL; конкретный rollback определяется вместе с этим source-контрактом, не выдумывается из общей outbox схемы.
+
+Откат286 на прежний canonical release возвращает подтверждённый attribution defect и не является безопасным восстановлением. Удерживать новые aggregate-only managed compensation, сохранять исторические exact receipts и APPLIED readback; не создавать новый marker/claim из текущего баланса. Rollback544 schema-compatible, но удаляет fresh policy protection; не использовать его как подтверждение корректного dispatch.
+
+Station notification feed: локально подготовлены 15 файлов и 54 unit/contract cases, отдельные 2 release-packaging tests PASS; 6 физических Mongo cases пока CI-only. Независимое review нашло P0 в зависимости CUP#72 `6a6301197cecbc90cb6ba37f55c520f3d39564c1`: STATION→FRIENDS→REMOVE/APPROVE→STATION сохраняет старый membership epoch и может снова разрешить старого получателя. Feed не считается готовым. Исправление CUP должно запретить type flip после adoption и атомарно закрыть гонку type update/adoption; уже несогласованное состояние не ремонтировать автоматически. Затем нужны повторное review и physical CI. Downstream LK2 import/outbox/dispatch ACL ещё не реализованы.
+
+## Предыдущая контрольная точка — 2026-11-01
 
 Station v3 rollback сохраняет lifetime/outbox v2, sequence frontier, исходные READ receipts и epoch baselines; downconversion и timeout-удаление pending запрещены. Shared pending cap32 не позволяет пропускать sequence hole; требуется совместимый recovery. CUP#71 сохраняет tournamentChatV1, original candidates/receipts и sequence frontier, без TTL/eviction; отключение новых send не разрешает отключить восстановление принятых intents. Старые writers на adopted rows недопустимы. Возврат Web к v2 теряет точный unread/catch-up и не равен функциональному rollback acceptance.
 

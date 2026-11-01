@@ -1,6 +1,20 @@
 # LK2 R1 — зависимости и критический путь
 
-## Текущие решения и интеграция — 2026-11-01
+## Обновление source/CI — 2026-11-01
+
+Критический путь исходников: (1) ordinary FCM/Web pre-dispatch policy#544 на525, SOURCE/LOCAL/review готовы, CI41285469025 SUCCESS (новыеPG17/17); (2) station owner feed → канонические получатели/current-epoch ACL → durable LK2 import/outbox → dispatch ACL и recovery; (3) аналогичный tournament bridge. Эти SOURCE gaps должны быть закрыты до device/provider acceptance.
+
+Параллельная social ветка: owner285/72 → Web541 → native542 (full/iOS CI SUCCESS); CUP71 → API/Web543 (full/iOS CI SUCCESS) → согласованная интеграция542/543 → tournament native Stage B. Native consumer не создаётся копированием конфликтующих App/gateway файлов.
+
+Новая локальная batch A ожидает точного ответа владельца: `integration/r1-core-social-source-20261101`, base541e38dd886 +525f042389b +53663bd45ff +5391de0ef60. Эта партия не включает542/543 и не выполнялась. Ранее разрешённые #525/#528 завершены; их разрешение не переносится на новую партию. Merge в main, publication и live gates остаются отдельными.
+
+Новая local batch B ожидает точного разрешения: base542c6a03c21 +54389b4c7b9 → `integration/r1-social-clients-source-20261101`, только два shared Web файла требуют согласования. Оба head full/iOS green; после coherent integration следует native tournament Stage B. Batch B не включает A или544 и не выполнялась.
+
+Перед managed SELF activation включить286 поверх283; partial daily-only installation недостаточна, нужен canonical guard и остановка старых исполнений. SOURCE-защита pending не заменяет attributable per-booking credit. Station notification owner feed находится в реализации; downstream importer/current-ACL/worker floor остаются незакрыты.
+
+Station notification feed: локально подготовлены 15 файлов и 54 unit/contract cases, отдельные 2 release-packaging tests PASS; 6 физических Mongo cases пока CI-only. Независимое review нашло P0 в зависимости CUP#72 `6a6301197cecbc90cb6ba37f55c520f3d39564c1`: STATION→FRIENDS→REMOVE/APPROVE→STATION сохраняет старый membership epoch и может снова разрешить старого получателя. Feed не считается готовым. Исправление CUP должно запретить type flip после adoption и атомарно закрыть гонку type update/adoption; уже несогласованное состояние не ремонтировать автоматически. Затем нужны повторное review и physical CI. Downstream LK2 import/outbox/dispatch ACL ещё не реализованы.
+
+## Предыдущая контрольная точка — 2026-11-01
 
 Актуальная social цепь: LK#282 → LK#285 ↔ CUP#72 → LK2#540 → #541 → native v3; CUP#64 → #70 ↔ LK2#539 → CUP#71 → LK2 tournament API/Web → native. Затем совместимый integration source → отдельные runtime/store gates. #285/#72/#71/#541 имеют полный CI SUCCESS; у#541 также зелёный unsigned iOS CI. Эта зависимость не разрешает merge, adoption, установку ключей или deploy.
 

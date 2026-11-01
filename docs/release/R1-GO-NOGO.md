@@ -1,6 +1,14 @@
 # LK2 R1 — GO / NO-GO
 
-## Текущие решения и интеграция — 2026-11-01
+## Обновление source/CI — 2026-11-01
+
+**NO-GO.** Native station542 прошёл full/iOS CI; tournament API/Web543 прошёл LOCAL/review и full/iOS CI. Это не единый интегрированный release. Дополнительно подтверждены SOURCE gaps station/tournament → notification outbox/recipient ACL; ordinary FCM/Web dispatch policy исправлен в#544 (review/LOCAL/fullCI SUCCESS,17physicalPG). Денежный settlement BLOCKED при недоступном Swagger. Provider/device/signing/store и production custody не подтверждены. Новые local integration batches A/B не выполнялись и ожидают точного разрешения; main merge и live-переходы не разрешены.
+
+286 устраняет подтверждённое unsafe SOURCE разрешение компенсации; новые managed возвраты будут честно pending до attributable proof. Это дополнительная причина не считать зелёный source CI финансовой приёмкой.
+
+Station notification feed: локально подготовлены 15 файлов и 54 unit/contract cases, отдельные 2 release-packaging tests PASS; 6 физических Mongo cases пока CI-only. Независимое review нашло P0 в зависимости CUP#72 `6a6301197cecbc90cb6ba37f55c520f3d39564c1`: STATION→FRIENDS→REMOVE/APPROVE→STATION сохраняет старый membership epoch и может снова разрешить старого получателя. Feed не считается готовым. Исправление CUP должно запретить type flip после adoption и атомарно закрыть гонку type update/adoption; уже несогласованное состояние не ремонтировать автоматически. Затем нужны повторное review и physical CI. Downstream LK2 import/outbox/dispatch ACL ещё не реализованы.
+
+## Предыдущая контрольная точка — 2026-11-01
 
 **NO-GO сохраняется.** Новые station owners LK#285/CUP#72 и tournament message owner CUP#71 имеют полный CI, но Web#541 CI прошёл, но tournament consumer/native v3 и общая source integration не завершены. Денежный settlement остаётся BLOCKED при недоступном Viva Swagger; provider/device/signing/store и production custody не подтверждены. Эти source-пакеты не дают разрешения на live-переход.
 
