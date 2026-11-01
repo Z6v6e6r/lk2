@@ -219,3 +219,28 @@ describe('station v3 concrete owner adapter', () => {
     expect(h.transport).toHaveBeenCalledTimes(3);
   });
 });
+it('accepts fifty legal escaped-control messages above old2M cap; history alone has3MiB bound', async () => {
+  const base = fixture.history as { messages: Record<string, unknown>[] };
+  const payload = {
+    ...base,
+    publishedThroughSequence: 50,
+    throughSequence: 50,
+    unreadCount: 50,
+    messages: Array.from({ length: 50 }, (_, i) => ({
+      ...base.messages[0],
+      publicId: `${String(i + 1).padStart(8, '0')}-1111-4111-8111-111111111111`,
+      sequence: i + 1,
+      text: 'x' + '\u0001'.repeat(7998) + 'y',
+    })),
+  };
+  expect(Buffer.byteLength(JSON.stringify(payload))).toBeGreaterThan(2_000_000);
+  expect((await setup(payload).client.history(actor, 50)).items).toHaveLength(50);
+  const huge = setup();
+  huge.transport.mockImplementation(() =>
+    Promise.resolve(new Response(' '.repeat(3 * 1024 * 1024 + 1))),
+  );
+  await expect(huge.client.history(actor, 50)).rejects.toThrow();
+  const other = setup();
+  other.transport.mockImplementation(() => Promise.resolve(new Response(' '.repeat(2_000_001))));
+  await expect(other.client.summaries(actor, [id])).rejects.toThrow();
+});

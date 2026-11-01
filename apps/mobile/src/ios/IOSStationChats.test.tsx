@@ -44,6 +44,12 @@ function reply(input: Parameters<IOSSessionPlugin['request']>[0]) {
         },
       ],
     });
+  if (input.operation === 'stationStream' && input.resource === 'summaries')
+    return nativeResult({
+      contractVersion: 1,
+      contract: 'station-stream-summaries',
+      items: [{ communityId: community, availability: 'UNADOPTED' }],
+    });
   if (input.operation === 'stationMessage')
     return nativeResult(
       input.resource === 'history'
@@ -168,4 +174,66 @@ it('confirmed ACK wins an older pending history read without losing original rec
   });
   expect(screen.getByText('new text')).toBeVisible();
   expect(Object.values(localStorage).join()).toBe('[]');
+});
+it('actual iOS entry adopts v3 only from fresh summary, shows owner unread and never loads legacy', async () => {
+  const position = {
+    streamId: community,
+    membershipEpoch: 1,
+    baselineSequence: 0,
+    readThroughSequence: 0,
+    publishedThroughSequence: 1,
+    unreadCount: 1,
+  };
+  const request = vi.fn<IOSSessionPlugin['request']>(
+    async (input) =>
+      await Promise.resolve(
+        input.operation === 'stationStream'
+          ? nativeResult(
+              input.resource === 'summaries'
+                ? {
+                    contractVersion: 1,
+                    contract: 'station-stream-summaries',
+                    items: [{ communityId: community, availability: 'AVAILABLE', ...position }],
+                  }
+                : {
+                    historyVersion: 3,
+                    mode: 'STREAM',
+                    ...position,
+                    afterSequence: 0,
+                    throughSequence: 1,
+                    items: [{ ...row, sequence: 1 }],
+                    nextCursor: null,
+                    catchUpCursor: 'catch_up_cursor_',
+                    olderCursor: null,
+                    archiveCursor: 'archive_cursor__',
+                    canRequestStationMessage: true,
+                  },
+            )
+          : reply(input),
+      ),
+  );
+  await open(request);
+  expect(screen.getByText('Непрочитанных сообщений: 1')).toBeTruthy();
+  expect(
+    request.mock.calls.filter(
+      ([v]) => v.operation === 'stationMessage' && v.resource === 'history',
+    ),
+  ).toHaveLength(0);
+  expect(
+    request.mock.calls.filter(([v]) => v.operation === 'stationStream').map(([v]) => v.resource),
+  ).toEqual(['summaries', 'stream']);
+});
+it('iOS unproven summary does not fall back to legacy history', async () => {
+  const request = vi.fn<IOSSessionPlugin['request']>(
+    async (input) =>
+      await Promise.resolve(
+        input.operation === 'stationStream' ? nativeResult({}, 503) : reply(input),
+      ),
+  );
+  const session = syntheticSession(request);
+  await session.restore();
+  render(<IOSStationChats session={session} />);
+  await screen.findByText('Не удалось обновить чат. Попробуйте ещё раз.');
+  expect(request.mock.calls.filter(([v]) => v.operation === 'stationMessage')).toHaveLength(0);
+  expect(screen.queryByRole('textbox')).toBeNull();
 });

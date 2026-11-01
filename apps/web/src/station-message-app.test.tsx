@@ -19,9 +19,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
   window.history.replaceState({}, '', '/');
 });
-it.each(['android', 'web'] as const)(
-  'actual App %s uses its scoped station custody and real handlers',
-  async (platform) => {
+it.each([
+  ['android', 'UNADOPTED'],
+  ['web', 'UNADOPTED'],
+  ['android', 'AVAILABLE'],
+  ['web', 'AVAILABLE'],
+] as const)(
+  'actual App %s/%s uses its scoped station custody and real handlers',
+  async (platform, availability) => {
     const gateway = createBrowserAuthGateway({
       baseUrl: 'https://api.example.test',
       tenantKey: 'test',
@@ -65,7 +70,20 @@ it.each(['android', 'web'] as const)(
     vi.spyOn(gateway, 'listStationStreamSummaries').mockResolvedValue({
       contractVersion: 1,
       contract: 'station-stream-summaries',
-      items: [{ communityId: community, availability: 'UNADOPTED' }],
+      items: [
+        availability === 'AVAILABLE'
+          ? {
+              communityId: community,
+              availability,
+              streamId: community,
+              membershipEpoch: 1,
+              baselineSequence: 0,
+              readThroughSequence: 0,
+              publishedThroughSequence: 1,
+              unreadCount: 1,
+            }
+          : { communityId: community, availability },
+      ],
     });
     const history = vi.spyOn(gateway, 'listCommunityReadExperienceChat').mockResolvedValue({
       canRequestStationMessage: true,
@@ -78,6 +96,33 @@ it.each(['android', 'web'] as const)(
           isViewer: true,
         },
       ],
+    });
+    vi.spyOn(gateway, 'getStationCommunityStream').mockResolvedValue({
+      historyVersion: 3,
+      mode: 'STREAM',
+      streamId: community,
+      membershipEpoch: 1,
+      baselineSequence: 0,
+      readThroughSequence: 0,
+      publishedThroughSequence: 1,
+      unreadCount: 1,
+      afterSequence: 0,
+      throughSequence: 1,
+      items: [
+        {
+          id: '33333333-3333-8333-8333-333333333333',
+          body: 'station history',
+          sentAt: '2026-11-01T00:00:00.000Z',
+          author: { displayName: 'Player' },
+          isViewer: true,
+          sequence: 1,
+        },
+      ],
+      nextCursor: null,
+      catchUpCursor: 'catch_up_cursor_',
+      olderCursor: null,
+      archiveCursor: 'archive_cursor__',
+      canRequestStationMessage: true,
     });
     const send = vi
       .spyOn(gateway, 'sendStationCommunityMessage')
@@ -110,7 +155,10 @@ it.each(['android', 'web'] as const)(
     fireEvent.click(await screen.findByRole('button', { name: /Сообщества/ }, { timeout: 5000 }));
     fireEvent.click(await screen.findByRole('button', { name: /Station club/ }));
     await screen.findByText('station history');
-    expect(history).toHaveBeenCalledWith(community, undefined);
+    if (availability === 'AVAILABLE') {
+      expect(history).not.toHaveBeenCalled();
+      expect(screen.getByText('Непрочитанных сообщений: 1')).toBeTruthy();
+    } else expect(history).toHaveBeenCalledWith(community, undefined);
     await waitFor(() => expect(status).toHaveBeenCalledWith(community, pending.requestId));
     fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение сообществу' }), {
       target: { value: 'Web message' },
