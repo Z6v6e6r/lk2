@@ -42,8 +42,15 @@ shape, index availability and query timing must be checked before separately app
 activation. No index creation, backfill or real database operation is part of this PR.
 
 Canonical createdTs is reservation time, not publication time. A delayed outbox message
-can appear behind an already-read boundary. Reconnect starts a fresh head walk; own
-unresolved sends retain original-request GET recovery. This candidate does not promise
+can appear behind an already-read boundary. After a successful station page, online,
+window focus and document-visible events start one fresh first-page GET while visible
+and online. Events coalesce while that read is in flight. The returned head replaces the
+old page and cursor; this deliberately restarts the history walk instead of joining two
+ranges that might have missing pages between them. Older reads are fenced during the
+refresh, and late replies cannot repopulate a deselected/unmounted/principal-changed
+thread or its cache. Current ACL denials clear displayed and cached messages. No POST,
+read-marker write or automatic retry of an unresolved send is triggered. Own unresolved
+sends retain original-request GET recovery. This candidate does not promise
 complete reconnect delivery, unread counters, native process-death recovery or realtime.
 
 Rollback disables the reader or restores the prior compatible source. Retain all
