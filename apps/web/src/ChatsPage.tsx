@@ -1149,9 +1149,8 @@ export function ChatsPage({
   }
 
   /**
-   * Walking a community chat backwards is the only read that is appended above the current view, so
-   * a page that repeats what is already on screen ends the walk instead of leaving a control that
-   * can never make progress.
+   * Receipt ACKs can already expose every row in an older page. Continue by the server cursor;
+   * a repeated cursor is a retryable protocol error, never proof that history ended.
    */
   function loadOlderCommunityMessages(): void {
     const communityId = communityState.selectedCommunityId;
@@ -1170,6 +1169,15 @@ export function ChatsPage({
             // control would never be usable again.
             return current.loadingEarlier ? { ...current, loadingEarlier: false } : current;
           }
+          if (page.nextCursor === cursor)
+            return {
+              ...current,
+              loadingEarlier: false,
+              threadError: {
+                kind: 'RETRYABLE',
+                message: 'Не удалось загрузить предыдущие сообщения.',
+              },
+            };
           const merged = mergeCommunityThreadPage(current.messages, page);
           if (merged.added > 0)
             communityThreadCache.write(
@@ -1180,7 +1188,7 @@ export function ChatsPage({
           return {
             ...current,
             loadingEarlier: false,
-            olderCursor: merged.added > 0 ? (page.nextCursor ?? null) : null,
+            olderCursor: page.nextCursor ?? null,
             messages: merged.messages,
           };
         });

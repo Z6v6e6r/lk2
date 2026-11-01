@@ -2335,3 +2335,63 @@ describe('ChatsPage communities tab', () => {
     expect(loadCommunities).toHaveBeenCalledTimes(2);
   });
 });
+
+it.each([false, true])(
+  'community history preserves progress on duplicate rows; repeated cursor=%s',
+  async (repeated) => {
+    const firstCursor = 'history-cursor-000000001';
+    const nextCursor = 'history-cursor-000000002';
+    const existing = {
+      id: '11111111-1111-8111-8111-111111111111',
+      body: 'Already visible receipt',
+      sentAt: '2026-11-01T00:00:00.000Z',
+      author: { displayName: 'Synthetic player' },
+      isViewer: false,
+    };
+    const loadMessages = vi
+      .fn()
+      .mockResolvedValueOnce(communityChatPage([existing], firstCursor))
+      .mockResolvedValueOnce(communityChatPage([existing], repeated ? firstCursor : nextCursor))
+      .mockResolvedValueOnce(
+        communityChatPage([
+          {
+            ...existing,
+            id: '22222222-2222-8222-8222-222222222222',
+            body: 'Older retained message',
+            sentAt: '2026-10-31T00:00:00.000Z',
+          },
+        ]),
+      );
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({
+          loadCommunities: vi
+            .fn()
+            .mockResolvedValue({ items: [communitySummary(communityId, 'Synthetic community')] }),
+          loadMessages,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Synthetic community/ }));
+    await screen.findByText('Already visible receipt');
+    fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+    await waitFor(() => expect(loadMessages).toHaveBeenCalledTimes(2));
+    if (repeated) {
+      expect(await screen.findByText('Не удалось загрузить предыдущие сообщения.')).toBeVisible();
+      expect(screen.getAllByText('Already visible receipt')).toHaveLength(1);
+      expect(loadMessages).toHaveBeenLastCalledWith(communityId, firstCursor);
+    } else {
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Показать предыдущие сообщения' })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+      expect(await screen.findByText('Older retained message')).toBeVisible();
+      expect(loadMessages).toHaveBeenLastCalledWith(communityId, nextCursor);
+      expect(screen.getAllByText('Already visible receipt')).toHaveLength(1);
+    }
+  },
+);

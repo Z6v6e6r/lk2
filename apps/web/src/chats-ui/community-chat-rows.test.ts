@@ -170,3 +170,16 @@ it('preserves two canonical messages with identical text/author/timestamp but di
     second,
   ]);
 });
+
+it('orders equal-time UUID messages consistently across page insertion orders and repeated ACK rows', () => {
+  const first = {
+    ...message('2026-11-01T00:00:00.000Z', 'same'),
+    id: '11111111-1111-5111-8111-111111111111',
+  };
+  const second = { ...first, id: '22222222-2222-8222-8222-222222222222' };
+  expect(communityThreadPage({ items: [second, first] })).toEqual([first, second]);
+  expect(mergeCommunityThreadPage([second], { items: [first, second, first] })).toEqual({
+    messages: [first, second],
+    added: 1,
+  });
+});

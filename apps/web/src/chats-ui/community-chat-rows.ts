@@ -19,16 +19,22 @@ function communityInstant(message: CommunityChatMessage): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function chronological(left: CommunityChatMessage, right: CommunityChatMessage): number {
+  const time = communityInstant(left) - communityInstant(right);
+  if (time !== 0 || !left.id || !right.id) return time;
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
 /**
  * The chat reads chronologically: the newest message sits at the bottom and earlier pages are pulled
  * in above it. The projection exposes a send instant for every message, so the reading order comes
  * from that instant rather than from the direction the provider happened to use for the page — a page
- * that arrives oldest-first would otherwise be shown upside down. Equal instants keep provider order.
+ * that arrives oldest-first would otherwise be shown upside down. Equal instants use public UUID order; old rows without UUID retain compatibility.
  */
 export function communityThreadPage(
   page: CommunityReadExperienceChatPage,
 ): readonly CommunityChatMessage[] {
-  return [...page.items].sort((left, right) => communityInstant(left) - communityInstant(right));
+  return [...page.items].sort(chronological);
 }
 
 /**
@@ -40,14 +46,15 @@ export function mergeCommunityThreadPage(
   page: CommunityReadExperienceChatPage,
 ): { readonly messages: readonly CommunityChatMessage[]; readonly added: number } {
   const known = new Set(current.map(communityMessageKey));
-  const added = communityThreadPage(page).filter(
-    (message) => !known.has(communityMessageKey(message)),
-  );
+  const added = communityThreadPage(page).filter((message) => {
+    const key = communityMessageKey(message);
+    if (known.has(key)) return false;
+    known.add(key);
+    return true;
+  });
   if (added.length === 0) return { messages: current, added: 0 };
   return {
-    messages: [...current, ...added].sort(
-      (left, right) => communityInstant(left) - communityInstant(right),
-    ),
+    messages: [...current, ...added].sort(chronological),
     added: added.length,
   };
 }
