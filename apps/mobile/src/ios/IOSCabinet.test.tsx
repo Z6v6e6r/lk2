@@ -4,6 +4,7 @@ import type * as CapacitorCore from '@capacitor/core';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IOSAuthApp } from './IOSAuthApp.js';
+import type { QuarterCustody } from '../../../web/src/quarter-create-attempt.js';
 import type { IOSSessionPlugin } from './session.js';
 import {
   fixtureReply,
@@ -179,10 +180,121 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     );
     const before = request.mock.calls.length;
     act(() => {
-      window.history.pushState(null, '', '/games/new?new=1');
+      window.history.pushState(null, '', '/tournaments?new=1');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
     await screen.findByRole('heading', { name: 'Раздел пока недоступен' });
     expect(request.mock.calls).toHaveLength(before);
+  });
+});
+
+describe('native quarter CREATE through the actual cabinet and session', () => {
+  it('retains original UNKNOWN across cold restore and sends only explicit same-key reconciliation', async () => {
+    const { webcrypto } = await import('node:crypto');
+    vi.stubGlobal('crypto', webcrypto);
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      locks: {
+        request: async (_n: unknown, _o: unknown, fn: () => unknown) => {
+          await Promise.resolve();
+          return fn();
+        },
+      },
+    });
+    const { quarterStorageKey, quarterOperationId, quarterDraftId } =
+      await import('../../../web/src/quarter-create-attempt.js');
+    const { auth } = await import('./testing/cabinet-fixtures.js');
+    const principal = { tenantId: auth.context.tenantId, userId: auth.context.userId };
+    const id = '11111111-1111-4111-8111-111111111111';
+    let confirmed = false;
+    const request = vi.fn<IOSSessionPlugin['request']>(async (input) => {
+      await Promise.resolve();
+      if (input.operation === 'read' && input.resource === 'home')
+        return nativeResult({
+          ...homeDashboard,
+          subscriptions: [{ id, title: 'Тестовая подписка' }],
+        });
+      if (input.operation !== 'quarterCreate') return fixtureReply(input);
+      if (input.resource === 'capability')
+        return nativeResult({ contractVersion: 1, available: true });
+      if (input.resource === 'locations')
+        return nativeResult({
+          items: [
+            { stationId: id, courtId: id, stationTitle: 'Тестовая станция', courtName: 'Корт 1' },
+          ],
+        });
+      const raw = localStorage.getItem(quarterStorageKey(principal));
+      if (!raw) throw new Error('Custody must precede HTTP');
+      const c = JSON.parse(raw) as QuarterCustody;
+      if (input.resource === 'reconcile') confirmed = true;
+      const h = Array.from(
+        new Uint8Array(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(c.key))),
+      )
+        .map((x) => x.toString(16).padStart(2, '0'))
+        .join('');
+      return nativeResult({
+        contractVersion: 1,
+        request: c.request,
+        keySha256: 'sha256:' + h,
+        operation: {
+          id: await quarterOperationId(c),
+          draftId: await quarterDraftId(c),
+          status: confirmed ? 'CONFIRMED' : 'UNKNOWN',
+        },
+        gameProjection: {
+          status: confirmed ? 'AVAILABLE' : 'PENDING',
+          gameId: confirmed ? game.id : null,
+        },
+        registration: { status: 'UNKNOWN', asOf: null },
+        reason: null,
+      });
+    });
+    const open = async () => {
+      const session = syntheticSession(request);
+      await session.restore();
+      render(<IOSAuthApp session={session} />);
+      fireEvent.click(await screen.findByRole('link', { name: 'Игра по подписке' }));
+      await screen.findByRole('heading', { name: 'Игра по подписке' });
+      return session;
+    };
+    localStorage.clear();
+    await open();
+    await waitFor(() => expect(screen.getByLabelText('Корт')).not.toBeDisabled());
+    fireEvent.change(screen.getByLabelText('Корт'), { target: { value: id } });
+    fireEvent.change(screen.getByLabelText(/Начало — ваше местное время/), {
+      target: { value: '2030-01-01T12:00' },
+    });
+    await screen.findByRole('option', { name: 'Тестовая подписка' });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Выберите подписку' }), {
+      target: { value: id },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Создать игру по подписке' }));
+    await screen.findByText('Результат ещё неизвестен. Сохранён исходный запрос.');
+    const original = localStorage.getItem(quarterStorageKey(principal));
+    cleanup();
+    await open();
+    await screen.findByText('Результат ещё неизвестен. Сохранён исходный запрос.');
+    expect(request.mock.calls.filter(([x]) => x.resource === 'create')).toHaveLength(1);
+    expect(localStorage.getItem(quarterStorageKey(principal))).toBe(original);
+    fireEvent.click(screen.getByRole('button', { name: 'Продолжить исходную операцию' }));
+    await screen.findByText('Создание игры подтверждено.');
+    const calls = request.mock.calls.map(([x]) => x),
+      first = calls.find((x) => x.resource === 'create')!,
+      recovery = calls.find((x) => x.resource === 'reconcile')!;
+    expect(recovery.headers['idempotency-key']).toBe(first.headers['idempotency-key']);
+    expect(recovery.body).toBe(first.body);
+    expect(calls.filter((x) => x.resource === 'create')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть игру' }));
+    await waitFor(() =>
+      expect(
+        request.mock.calls.some(
+          ([x]) => x.operation === 'read' && x.resource === 'game' && x.resourceId === game.id,
+        ),
+      ).toBe(true),
+    );
+    expect(
+      screen.queryByRole('button', { name: /Вступить|Отменить игру/ }),
+    ).not.toBeInTheDocument();
+    localStorage.clear();
   });
 });

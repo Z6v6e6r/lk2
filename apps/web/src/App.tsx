@@ -1,3 +1,5 @@
+import { QuarterCreatePanel } from './QuarterCreatePanel.js';
+import { GameCard } from './GameCard.js';
 import { normalizePhoneE164 } from '@phub/auth';
 import { PrimaryButton } from '@phub/ui';
 import { lazy, useEffect, useMemo, useReducer, useRef, useState } from 'react';
@@ -681,6 +683,36 @@ const HOME_INITIAL_RETRY_DELAYS_MS = [
   400, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000,
 ] as const;
 
+function NativeCreatedGame({ gateway, gameId }: { gateway: AuthGateway; gameId: string }) {
+  const [game, setGame] = useState<Awaited<ReturnType<AuthGateway['getGame']>> | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const principal = gateway.quarterCreatePrincipal?.();
+    void gateway.getGame(gameId).then(
+      (v) => {
+        if (active && principal && gateway.quarterCreatePrincipal?.() === principal) setGame(v);
+      },
+      () => {
+        if (active) setFailed(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [gateway, gameId]);
+  return (
+    <main>
+      <a href="/games/new?quarterCreate=1">К созданию игры</a>
+      {game ? (
+        <GameCard game={game} readOnly />
+      ) : (
+        <p role="status">{failed ? 'Игра пока недоступна.' : 'Загружаем игру…'}</p>
+      )}
+    </main>
+  );
+}
+
 export function App({
   clientPlatform = 'web',
   androidYandexLogin = false,
@@ -873,6 +905,8 @@ export function App({
     'home',
     'home-v2',
     'home-v3',
+    'game-create',
+    'game',
     'profile',
     'profile-level-history',
     'support',
@@ -2891,6 +2925,15 @@ export function App({
       }
       return <LocationDetailPage location={locationDetail} />;
     }
+    if (clientPlatform === 'android' && protectedRoute.kind === 'game') {
+      return (
+        <NativeCreatedGame
+          key={`${context.tenant.id}:${context.user.id}:${protectedRoute.gameId}`}
+          gateway={gateway}
+          gameId={protectedRoute.gameId}
+        />
+      );
+    }
     if (protectedRoute.kind === 'games' || protectedRoute.kind === 'game') {
       const eventId =
         protectedRoute.kind === 'games' && typeof window !== 'undefined'
@@ -2924,6 +2967,18 @@ export function App({
         tenantId: state.session.context.tenant.id,
         userId: state.session.context.user.id,
       };
+      if (clientPlatform === 'android')
+        return (
+          <QuarterCreatePanel
+            gamesHref="/"
+            gateway={gateway}
+            principal={createGamePrincipal}
+            navigate={(url) => {
+              window.history.pushState(null, '', url);
+              window.dispatchEvent(new PopStateEvent('popstate'));
+            }}
+          />
+        );
       return (
         <CreateGamePage
           key={`${createGamePrincipal.tenantId}:${createGamePrincipal.userId}`}

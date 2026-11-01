@@ -7,9 +7,14 @@ import {
   browserCreateGameAttemptLockManager,
   type CreateGameAttemptLockManager,
 } from './create-game-attempt.js';
-import { QuarterCreateAttempts, quarterCanReplace } from './quarter-create-attempt.js';
+import {
+  QuarterCreateAttempts,
+  quarterCanReplace,
+  type QuarterCreateGateway,
+} from './quarter-create-attempt.js';
+type Gateway = QuarterCreateGateway & Pick<AuthGateway, 'getHomeDashboard'>;
 class Lifetime {
-  constructor(readonly gateway: AuthGateway) {}
+  constructor(readonly gateway: Gateway) {}
   active = true;
   start() {
     this.active = true;
@@ -19,11 +24,12 @@ class Lifetime {
   }
 }
 export function QuarterCreatePanel(props: {
-  gateway: AuthGateway;
+  gateway: Gateway;
   principal: { tenantId: string; userId: string };
   attemptStorage?: Storage;
   attemptLockManager?: CreateGameAttemptLockManager;
   navigate?: (url: string) => void;
+  gamesHref?: '/' | '/games';
 }) {
   return (
     <QuarterCreateSession
@@ -38,6 +44,7 @@ function QuarterCreateSession({
   attemptStorage,
   attemptLockManager,
   navigate = (url) => window.location.assign(url),
+  gamesHref = '/games',
 }: Parameters<typeof QuarterCreatePanel>[0]) {
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const localTimeLabel = `Начало — ваше местное время (${timeZone})`;
@@ -189,7 +196,7 @@ function QuarterCreateSession({
   return (
     <main className="games-page games-page--create quarter-create-page">
       <header className="games-page-header">
-        <a href="/games">Игры</a>
+        <a href={gamesHref}>{gamesHref === '/' ? 'На главную' : 'Игры'}</a>
         <h1>Игра по подписке</h1>
       </header>
       <section className="game-create-form" aria-busy={busy}>

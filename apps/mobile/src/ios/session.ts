@@ -1,3 +1,4 @@
+import { quarterRequest } from '../native-quarter-request.js';
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type { AuthenticatedSession, UserContext } from '@phub/api-sdk';
@@ -12,7 +13,14 @@ export interface IOSConfiguration {
 
 interface NativeRequest {
   readonly operation:
-    'challenge' | 'verify' | 'refresh' | 'logout' | 'context' | 'read' | 'notification';
+    | 'challenge'
+    | 'verify'
+    | 'refresh'
+    | 'logout'
+    | 'context'
+    | 'read'
+    | 'notification'
+    | 'quarterCreate';
   readonly challengeId?: string;
   readonly resource?: string;
   readonly resourceId?: string;
@@ -38,7 +46,9 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
-    const read = (init?.method ?? 'GET') === 'GET' ? cabinetReadRequest(value, config) : null;
+    const quarter = quarterRequest(value, init, config);
+    const read =
+      !quarter && (init?.method ?? 'GET') === 'GET' ? cabinetReadRequest(value, config) : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
     if (!read && (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)))
       throw rejectedRequest();
@@ -47,7 +57,8 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (read) operation = 'read';
+    if (quarter) operation = 'quarterCreate';
+    else if (read) operation = 'read';
     else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
     else if (path === '/auth/session/refresh' && method === 'POST') operation = 'refresh';
     else if (path === '/auth/session' && method === 'DELETE') operation = 'logout';
@@ -81,6 +92,7 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
         operation,
         ...(read ?? {}),
         ...(notification ?? {}),
+        ...(quarter ?? {}),
         ...(challengeId ? { challengeId } : {}),
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
@@ -126,6 +138,8 @@ export class IOSSession {
   private busy = false;
   private restoration: Promise<void> | undefined;
   private generation = 0;
+  private quarterClosed = false;
+  private quarterEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
 
   public constructor(
@@ -155,6 +169,23 @@ export class IOSSession {
     }
   }
 
+  public closeQuarterCreate(): void {
+    this.quarterClosed = true;
+    this.quarterEpoch++;
+  }
+  public quarterCreatePrincipal(): string | null {
+    if (this.quarterClosed || this.state.status !== 'signed-in') return null;
+    const c = this.state.session.context;
+    return `${c.tenantId}:${c.userId}:${this.generation}:${this.quarterEpoch}`;
+  }
+  public async quarterCall<T>(load: (api: PadlHubApiClient) => Promise<T>): Promise<T> {
+    const p = this.quarterCreatePrincipal();
+    if (!p) throw rejectedRequest();
+    const v = await this.read(load);
+    if (p !== this.quarterCreatePrincipal())
+      throw new DOMException('Session changed', 'AbortError');
+    return v;
+  }
   public restore(): Promise<void> {
     if (this.restoration) return this.restoration;
     const operation = this.exclusive(async () => {
@@ -185,6 +216,7 @@ export class IOSSession {
   }
 
   public verify(challengeId: string, code: string): Promise<void> {
+    const quarterEpoch = this.quarterEpoch;
     return this.exclusive(async () => {
       if (this.state.status !== 'signed-out' || !/^\d{4}$/.test(code)) throw rejectedRequest();
       await Promise.allSettled([...this.reads]);
@@ -192,11 +224,13 @@ export class IOSSession {
         code,
         acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
       });
+      if (quarterEpoch === this.quarterEpoch) this.quarterClosed = false;
       this.update({ status: 'signed-in', session });
     });
   }
 
   public logout(): Promise<void> {
+    this.closeQuarterCreate();
     return this.exclusive(async () => {
       this.api.clearAccessToken();
       this.update({ status: 'checking' });

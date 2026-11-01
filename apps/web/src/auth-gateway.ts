@@ -592,6 +592,8 @@ export interface AuthGateway {
    */
   readonly createPaidGame?: PadlHubApiClient['createPaidGame'];
   readonly quarterCreatePrincipal?: () => string | null;
+  /** Close the quarter command before native async cleanup. */
+  readonly closeQuarterCreate?: () => void;
   readonly getQuarterCreateLocations?: PadlHubApiClient['getQuarterCreateLocations'];
   readonly getQuarterCreateCapability?: PadlHubApiClient['getQuarterCreateCapability'];
   readonly createQuarterGame?: PadlHubApiClient['createQuarterGame'];
@@ -1005,10 +1007,12 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   const subjectLinkVerifyKeys = new Map<string, string>();
   let principalGeneration = 0;
   let tournamentLogoutStarted = false;
+  let quarterClosed = false;
+  let quarterClosing = false;
   let tournamentLogoutPending = 0;
   let tournamentSessionEpoch = 0;
   function quarterCreatePrincipal(): string | null {
-    return !nativeClient && !tournamentLogoutStarted && currentUserId && currentTenantId
+    return !quarterClosed && !tournamentLogoutStarted && currentUserId && currentTenantId
       ? `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`
       : null;
   }
@@ -1936,6 +1940,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async verifyCode(input) {
+      const quarterAuthenticationOutsideClose = !quarterClosing;
       const tournamentAuthenticationEpoch = tournamentSessionEpoch;
       const tournamentAuthenticationOutsideLogout = tournamentLogoutPending === 0;
       if (!input.acceptance.publicOfferAccepted || !input.acceptance.personalDataPolicyAccepted) {
@@ -1953,8 +1958,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         tournamentAuthenticationOutsideLogout &&
         tournamentAuthenticationEpoch === tournamentSessionEpoch &&
         tournamentLogoutPending === 0
-      )
+      ) {
         tournamentLogoutStarted = false;
+        if (quarterAuthenticationOutsideClose) quarterClosed = false;
+      }
       return normalized;
     },
 
@@ -2354,36 +2361,36 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     quarterCreatePrincipal,
+    closeQuarterCreate() {
+      quarterClosed = true;
+      quarterClosing = true;
+      tournamentSessionEpoch += 1;
+    },
     async getQuarterCreateLocations() {
-      if (nativeClient) return nativeUnavailable();
       const principal = requireQuarterPrincipal(),
         result = await client.getQuarterCreateLocations();
       requireQuarterPrincipal(principal);
       return result;
     },
     async getQuarterCreateCapability() {
-      if (nativeClient) return { contractVersion: 1, available: false };
       const principal = requireQuarterPrincipal(),
         result = await client.getQuarterCreateCapability();
       requireQuarterPrincipal(principal);
       return result;
     },
     async createQuarterGame(input, key) {
-      if (nativeClient) return nativeUnavailable();
       const principal = requireQuarterPrincipal(),
         result = await client.createQuarterGame(input, key);
       requireQuarterPrincipal(principal);
       return result;
     },
     async getQuarterCreateOperation(key) {
-      if (nativeClient) return nativeUnavailable();
       const principal = requireQuarterPrincipal(),
         result = await client.getQuarterCreateOperation(key);
       requireQuarterPrincipal(principal);
       return result;
     },
     async reconcileQuarterCreateOperation(id, input, key) {
-      if (nativeClient) return nativeUnavailable();
       const principal = requireQuarterPrincipal(),
         result = await client.reconcileQuarterCreateOperation(id, input, key);
       requireQuarterPrincipal(principal);
@@ -2935,6 +2942,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         } else await client.revokeSession();
       } finally {
         tournamentLogoutPending -= 1;
+        if (tournamentLogoutPending === 0) quarterClosing = false;
       }
       vivaAccessToken = undefined;
       vivaProfilePhotoGrant = undefined;

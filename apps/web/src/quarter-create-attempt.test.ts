@@ -1,7 +1,6 @@
 import { webcrypto } from 'node:crypto';
 import { qcDraftId, qcHash, qcOperationId } from '@phub/domain/quarter-create';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuthGateway } from './auth-gateway.js';
 import {
   QuarterCreateAttempts,
   quarterStorageKey,
@@ -93,13 +92,7 @@ function setup() {
         return result(JSON.parse(s.getItem(quarterStorageKey(principal))!) as QuarterCustody);
       }),
     };
-  const attempts = new QuarterCreateAttempts(
-    principal,
-    s,
-    locks,
-    gateway as unknown as AuthGateway,
-    () => current,
-  );
+  const attempts = new QuarterCreateAttempts(principal, s, locks, gateway, () => current);
   return {
     s,
     gateway,
@@ -242,13 +235,7 @@ describe('quarter CREATE durable browser custody', () => {
     const t = setup();
     await t.attempts.submit(input);
     const c = t.attempts.load(),
-      reloaded = new QuarterCreateAttempts(
-        principal,
-        t.s,
-        locks,
-        t.gateway as unknown as AuthGateway,
-        () => true,
-      );
+      reloaded = new QuarterCreateAttempts(principal, t.s, locks, t.gateway, () => true);
     await reloaded.read();
     expect(reloaded.load()).toEqual(c);
     expect(t.gateway.createQuarterGame).toHaveBeenCalledOnce();

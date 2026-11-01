@@ -32,3 +32,37 @@ Owner transport metrics contain only bounded operation/outcome labels and durati
 ## Rollback and evidence
 
 Through a separately approved configuration operation, set the paired dormant values `GAME_COMMERCIAL_CREATE_ENABLED=false` and `GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT=ADVISORY` (false with QUARTER_OWNER is intentionally invalid); retain0110, its old-writer fences and all receipts. Do not delete/rewrite unknown attempts, revert an applied migration destructively or run an old writer against a removed fence. Imported games and provider state are untouched. Physical PostgreSQL tests run only in the existing localhost GitHub CI fixture with unique owned tenants/role and independent pools; no local provisioning is authorized. SOURCE, LOCAL synthetic tests, CI, PROVIDER and PRODUCTION remain distinct. Runtime/provider acceptance and native support are not claimed by green source checks.
+
+## Native companion (Android and iOS)
+
+The native entry is `/games/new?quarterCreate=1`, using the concrete quarter form only.
+Android keeps legacy CREATE and general game mutation controls closed; the confirmed-game
+link opens a read-only card. iOS uses the same form and its existing cabinet navigation and
+read-only game detail. Both reuse the original quarter custody/lock/key/receipt controller.
+The shared panel accepts a narrow gateway and native navigation callback; Web behavior is
+unchanged. No tournament/TRAINING/DIRECT task heads are imported by this companion.
+
+Only five authenticated `/user/api/v1/:tenantKey/game-create-operations` requests are added:
+GET capability/locations/by-key, POST create and POST `:operationId/reconcile`. Even catalogue
+and capability reads require the existing user bearer. There is no new public discovery or
+generic native fetch permission. JS and Java/Swift independently constrain origin, tenant,
+method, path, no query, exact four-field body, calendar-valid minute-aligned UTC timestamp,
+UUIDs and caller idempotency key. No client price, service/provider identity or payment fields
+are accepted. Reconciliation preserves the original body/key; status GET never dispatches a
+mutation. SDK and native transport do not automatically refresh/replay a failed mutation.
+
+The current principal closes synchronously before outer native booking/push cleanup. Late
+responses, restore and verification crossing that fence cannot reopen command custody. The
+fence before cleanup is process-local: the existing durable Keystore/Keychain revocation
+journal still starts when native logout is invoked. A process death before that retains the
+baseline authentication restoration behavior, but never automatically retries CREATE.
+Reopening the form reads the saved original operation; explicit reconciliation is required.
+Missing usable storage, Web Locks, randomUUID or SHA-256 capability fails closed with zero
+CREATE POST. The declared iOS15 minimum does not prove these WKWebView capabilities exist.
+
+Rollback removes the native entry/typed permission and preserves unresolved local custody
+and server journals. Existing backend/owner flags and production activation gates are unchanged.
+LOCAL synthetic bridge/JVM/UI results do not prove real device, provider, signing or store
+acceptance. Automatic iOS CI must compile Swift and build the unsigned simulator app. Android
+unsigned packaging remains dependent on separately approved #526 integration; this ancestry's
+release workflow is dispatch/tag-only and must not be dispatched as a verification workaround.
