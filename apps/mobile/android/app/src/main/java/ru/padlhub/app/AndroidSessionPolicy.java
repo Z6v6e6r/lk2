@@ -203,7 +203,7 @@ final class AndroidSessionPolicy {
     }
 
     private int maxJsonBodyBytes(String path, String method) {
-        if (AndroidStationMessageRequest.send(path, method)) return 65_536;
+        if (AndroidStationMessageRequest.send(path, method) || AndroidTournamentChatRequest.send(path, method)) return 65_536;
         return "POST".equals(method) && "/support/attachments".equals(path) ? 11_188_907 : 16_384;
     }
 

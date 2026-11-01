@@ -168,10 +168,7 @@ it.each(['android', 'ios'] as const)(
       };
       const transport =
         platform === 'android'
-          ? createNativeApiFetch(
-              config,
-              plugin,
-            )
+          ? createNativeApiFetch(config, plugin)
           : createIOSFetch(config, plugin, undefined, undefined, () => true);
       const history = transport(root + 'messages?limit=50', { headers });
       if (size <= 3 * 1024 * 1024) expect((await history).status).toBe(200);

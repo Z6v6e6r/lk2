@@ -32,6 +32,7 @@ public class AndroidTournamentChatSessionTest {
   denied(ROOT+"read-requests","POST",headers(true),read().replace("}",",\"throughSequence\":42}"));
   denied(ROOT+"read-requests","GET",headers(false),null);
   denied(ROOT+"read-position","POST",headers(true),read());
+  denied(ROOT+"read-requests","POST",headers(true),read()+" ".repeat(17000));
  }
  @Test public void engineNeverRetriesEitherCommandAndUsesOriginalGetRecovery() throws Exception {
   for(String path:new String[]{"message-requests","read-requests"})for(int status:new int[]{401,403,404,503,0}) {
