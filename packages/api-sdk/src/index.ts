@@ -760,6 +760,18 @@ export class PadlHubApiClient {
     return this.requestWithPolicy<TResponse>(path, policy, createCorrelationId(), true);
   }
 
+  public requestAdmin<TResponse>(path: string, init: ApiRequestInit = {}): Promise<TResponse> {
+    const method = (init.method ?? 'GET').toUpperCase();
+    return this.requestFromRoot<TResponse>(this.adminApiRoot, path, {
+      ...init,
+      auth: 'required',
+      credentials: 'same-origin',
+      // Commands, including binary uploads and read-only POSTs, require an explicit retry.
+      retryOnUnauthorized:
+        (method === 'GET' || method === 'HEAD') && init.retryOnUnauthorized !== false,
+    });
+  }
+
   public createAuthChallenge(input: AuthChallengeRequest): Promise<AuthChallenge> {
     const idempotencyKey = createCorrelationId();
     return this.retryOnceOnNetworkFailure(() =>
@@ -2948,15 +2960,12 @@ export class PadlHubApiClient {
   ): Promise<SupportTicketPage> {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(input)) if (v) q.set(k, v);
-    return this.requestFromRoot<SupportTicketPage>(
-      this.adminApiRoot,
-      `/support/tickets${q.size ? `?${q}` : ''}`,
-      { cache: 'no-store' },
-    );
+    return this.requestAdmin<SupportTicketPage>(`/support/tickets${q.size ? `?${q}` : ''}`, {
+      cache: 'no-store',
+    });
   }
   public getAdminSupportTicket(id: string, before?: string): Promise<SupportTicket> {
-    return this.requestFromRoot<SupportTicket>(
-      this.adminApiRoot,
+    return this.requestAdmin<SupportTicket>(
       `/support/tickets/${encodeURIComponent(id)}${before ? `?before=${encodeURIComponent(before)}` : ''}`,
       { cache: 'no-store' },
     );
@@ -2973,22 +2982,22 @@ export class PadlHubApiClient {
     },
     idempotencyKey: string,
   ): Promise<SupportTicket> {
-    return this.requestFromRoot<SupportTicket>(
-      this.adminApiRoot,
-      `/support/tickets/${encodeURIComponent(id)}`,
-      { method: 'PATCH', idempotencyKey, body: jsonRequestBody(input) },
-    );
+    return this.requestAdmin<SupportTicket>(`/support/tickets/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      idempotencyKey,
+      body: jsonRequestBody(input),
+    });
   }
   public sendAdminSupportTicketMessage(
     id: string,
     input: { readonly body: string; readonly internal: boolean; readonly expectedVersion: number },
     idempotencyKey: string,
   ): Promise<SupportTicket> {
-    return this.requestFromRoot<SupportTicket>(
-      this.adminApiRoot,
-      `/support/tickets/${encodeURIComponent(id)}/messages`,
-      { method: 'POST', idempotencyKey, body: jsonRequestBody(input) },
-    );
+    return this.requestAdmin<SupportTicket>(`/support/tickets/${encodeURIComponent(id)}/messages`, {
+      method: 'POST',
+      idempotencyKey,
+      body: jsonRequestBody(input),
+    });
   }
 
   public markNotificationsRead(throughId: string): Promise<NotificationReadCursorResult> {
@@ -3293,7 +3302,11 @@ export class PadlHubApiClient {
 
     if (response.status === 401 && policy.auth === 'required')
       this.expireMemorySession(requestAccessToken);
-    if (!response.ok) throw await this.toApiClientError(response, correlationId);
+    if (!response.ok) {
+      const error = await this.toApiClientError(response, correlationId);
+      if (policy.auth === 'required') this.assertSessionGeneration(requestGeneration);
+      throw error;
+    }
     if (response.status === 204) return undefined as TResponse;
     const result = (await response.json()) as TResponse;
     if (policy.auth === 'required') this.assertSessionGeneration(requestGeneration);
@@ -3360,7 +3373,11 @@ export class PadlHubApiClient {
     }
     if (response.status === 401 && auth === 'required')
       this.expireMemorySession(requestAccessToken);
-    if (!response.ok) throw await this.toApiClientError(response, correlationId);
+    if (!response.ok) {
+      const error = await this.toApiClientError(response, correlationId);
+      if (auth === 'required') this.assertSessionGeneration(requestGeneration);
+      throw error;
+    }
     const result = await response.blob();
     if (auth === 'required') this.assertSessionGeneration(requestGeneration);
     return result;
