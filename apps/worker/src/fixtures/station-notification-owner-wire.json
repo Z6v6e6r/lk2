@@ -1,0 +1,231 @@
+{
+  "synthetic": true,
+  "ownerBase": "19e48d4efe99e2ee7f606328cb100b833762b688",
+  "ownerManifest": "501f2d562c1f730d5376c19ca02bb554db282573a812abaf05d30639c78f4ed0",
+  "provenance": "Executed actual additive composer authentication/read/router with synthetic read-only Mongo interpreter; not provider/runtime evidence.",
+  "operations": [
+    {
+      "mode": "publications",
+      "path": "/lk/internal/station-notifications/v1/publications",
+      "request": {
+        "contractVersion": 1,
+        "requestId": "00000000-0000-4000-8000-000000000950",
+        "communityId": "station-community",
+        "streamId": "00000000-0000-4000-8000-000000000900",
+        "incarnationHash": "sha256:0220ef7c76af245f4052ee9347fea69a540b3b6690ba82e4669f394717bf11ef",
+        "afterSequence": 0,
+        "throughSequence": null,
+        "limit": 50
+      },
+      "bodyHash": "sha256:8f86ba482d16e410ce8bbb72fedec181a75390196e22195469c35afbe2af0122",
+      "jwtHeader": {
+        "alg": "RS256",
+        "kid": "synthetic-notification-key",
+        "typ": "phub-station-notification-feed+jwt"
+      },
+      "jwtClaims": {
+        "aud": "synthetic-station-notification-owner",
+        "body_sha256": "sha256:8f86ba482d16e410ce8bbb72fedec181a75390196e22195469c35afbe2af0122",
+        "contract": "station-notifications.v1",
+        "correlation_id": "synthetic-feed",
+        "exp": 1793520965,
+        "iat": 1793520935,
+        "iss": "https://synthetic.example.test",
+        "jti": "00000000-0000-4000-8000-000000000997",
+        "method": "POST",
+        "nbf": 1793520935,
+        "owner_namespace": "iSkq6G",
+        "path": "/lk/internal/station-notifications/v1/publications",
+        "request_id": "00000000-0000-4000-8000-000000000950",
+        "scope": "communities.station-notifications.publications",
+        "sub": "lk2-station-notification-importer",
+        "tenant_id": "00000000-0000-4000-8000-000000000999"
+      },
+      "response": {
+        "contract": "station-notifications.v1",
+        "requestId": "00000000-0000-4000-8000-000000000950",
+        "ownerNamespace": "iSkq6G",
+        "communityId": "station-community",
+        "incarnationHash": "sha256:0220ef7c76af245f4052ee9347fea69a540b3b6690ba82e4669f394717bf11ef",
+        "streamId": "00000000-0000-4000-8000-000000000900",
+        "checkedAtMs": 1793520935918,
+        "validUntilMs": 1793520940918,
+        "throughSequence": 3,
+        "items": [
+          {
+            "messageId": "13c851c8-6ff3-885f-86f4-911b7ab3544e",
+            "sequence": 1,
+            "authorPlayerId": "player-a",
+            "proofHash": "sha256:c0dce2edcfd90da7aefd9bcc265db338b3d26b6ee04c8334d1f32fff3d2f2966"
+          },
+          {
+            "messageId": "e9c70aa5-585d-88db-9d85-b89b190e11dc",
+            "sequence": 2,
+            "authorPlayerId": "player-a",
+            "proofHash": "sha256:81b9b2d768c03fddee1bafe4f30fa751c15df234e22da3a2687b40648bf2e7a6"
+          },
+          {
+            "messageId": "5e20f678-f281-8fe9-8a09-179132758cbe",
+            "sequence": 3,
+            "authorPlayerId": "player-a",
+            "proofHash": "sha256:f66589b78dce1fd98c1c23f8d2841f1df731ced28ef53779721336ca558bb692"
+          }
+        ],
+        "nextAfterSequence": null,
+        "complete": true
+      }
+    },
+    {
+      "mode": "recipients",
+      "path": "/lk/internal/station-notifications/v1/recipients",
+      "request": {
+        "contractVersion": 1,
+        "requestId": "00000000-0000-4000-8000-000000000950",
+        "communityId": "station-community",
+        "streamId": "00000000-0000-4000-8000-000000000900",
+        "incarnationHash": "sha256:0220ef7c76af245f4052ee9347fea69a540b3b6690ba82e4669f394717bf11ef",
+        "fact": {
+          "messageId": "13c851c8-6ff3-885f-86f4-911b7ab3544e",
+          "sequence": 1,
+          "authorPlayerId": "player-a",
+          "proofHash": "sha256:c0dce2edcfd90da7aefd9bcc265db338b3d26b6ee04c8334d1f32fff3d2f2966"
+        },
+        "afterPlayerId": null,
+        "limit": 50
+      },
+      "bodyHash": "sha256:5b9389f6497e0cec0a568e58854f71b900a0c834e20494391a1d22e509fd11c6",
+      "jwtHeader": {
+        "alg": "RS256",
+        "kid": "synthetic-notification-key",
+        "typ": "phub-station-notification-feed+jwt"
+      },
+      "jwtClaims": {
+        "aud": "synthetic-station-notification-owner",
+        "body_sha256": "sha256:5b9389f6497e0cec0a568e58854f71b900a0c834e20494391a1d22e509fd11c6",
+        "contract": "station-notifications.v1",
+        "correlation_id": "synthetic-feed",
+        "exp": 1793520965,
+        "iat": 1793520935,
+        "iss": "https://synthetic.example.test",
+        "jti": "00000000-0000-4000-8000-000000000997",
+        "method": "POST",
+        "nbf": 1793520935,
+        "owner_namespace": "iSkq6G",
+        "path": "/lk/internal/station-notifications/v1/recipients",
+        "request_id": "00000000-0000-4000-8000-000000000950",
+        "scope": "communities.station-notifications.recipients",
+        "sub": "lk2-station-notification-importer",
+        "tenant_id": "00000000-0000-4000-8000-000000000999"
+      },
+      "response": {
+        "contract": "station-notifications.v1",
+        "requestId": "00000000-0000-4000-8000-000000000950",
+        "ownerNamespace": "iSkq6G",
+        "communityId": "station-community",
+        "incarnationHash": "sha256:0220ef7c76af245f4052ee9347fea69a540b3b6690ba82e4669f394717bf11ef",
+        "streamId": "00000000-0000-4000-8000-000000000900",
+        "checkedAtMs": 1793520935920,
+        "validUntilMs": 1793520940920,
+        "fact": {
+          "messageId": "13c851c8-6ff3-885f-86f4-911b7ab3544e",
+          "sequence": 1,
+          "authorPlayerId": "player-a",
+          "proofHash": "sha256:c0dce2edcfd90da7aefd9bcc265db338b3d26b6ee04c8334d1f32fff3d2f2966"
+        },
+        "items": [
+          {
+            "playerId": "recipient-001",
+            "membershipEpoch": 0,
+            "baselineSequence": 0,
+            "readThroughSequence": 0
+          },
+          {
+            "playerId": "recipient-002",
+            "membershipEpoch": 0,
+            "baselineSequence": 0,
+            "readThroughSequence": 0
+          },
+          {
+            "playerId": "recipient-003",
+            "membershipEpoch": 0,
+            "baselineSequence": 0,
+            "readThroughSequence": 0
+          }
+        ],
+        "nextAfterPlayerId": null,
+        "complete": true
+      }
+    },
+    {
+      "mode": "eligibility",
+      "path": "/lk/internal/station-notifications/v1/eligibility",
+      "request": {
+        "contractVersion": 1,
+        "requestId": "00000000-0000-4000-8000-000000000950",
+        "communityId": "station-community",
+        "streamId": "00000000-0000-4000-8000-000000000900",
+        "incarnationHash": "sha256:0220ef7c76af245f4052ee9347fea69a540b3b6690ba82e4669f394717bf11ef",
+        "fact": {
+          "messageId": "13c851c8-6ff3-885f-86f4-911b7ab3544e",
+          "sequence": 1,
+          "authorPlayerId": "player-a",
+          "proofHash": "sha256:c0dce2edcfd90da7aefd9bcc265db338b3d26b6ee04c8334d1f32fff3d2f2966"
+        },
+        "recipient": {
+          "playerId": "recipient-001",
+          "membershipEpoch": 0,
+          "baselineSequence": 0,
+          "readThroughSequence": 0
+        }
+      },
+      "bodyHash": "sha256:dd4f777527de71239f552dacfacfe804aabd620e7b61ab646713a5f5cbce5425",
+      "jwtHeader": {
+        "alg": "RS256",
+        "kid": "synthetic-notification-key",
+        "typ": "phub-station-notification-feed+jwt"
+      },
+      "jwtClaims": {
+        "aud": "synthetic-station-notification-owner",
+        "body_sha256": "sha256:dd4f777527de71239f552dacfacfe804aabd620e7b61ab646713a5f5cbce5425",
+        "contract": "station-notifications.v1",
+        "correlation_id": "synthetic-feed",
+        "exp": 1793520965,
+        "iat": 1793520935,
+        "iss": "https://synthetic.example.test",
+        "jti": "00000000-0000-4000-8000-000000000997",
+        "method": "POST",
+        "nbf": 1793520935,
+        "owner_namespace": "iSkq6G",
+        "path": "/lk/internal/station-notifications/v1/eligibility",
+        "request_id": "00000000-0000-4000-8000-000000000950",
+        "scope": "communities.station-notifications.eligibility",
+        "sub": "lk2-station-notification-importer",
+        "tenant_id": "00000000-0000-4000-8000-000000000999"
+      },
+      "response": {
+        "contract": "station-notifications.v1",
+        "requestId": "00000000-0000-4000-8000-000000000950",
+        "ownerNamespace": "iSkq6G",
+        "communityId": "station-community",
+        "incarnationHash": "sha256:0220ef7c76af245f4052ee9347fea69a540b3b6690ba82e4669f394717bf11ef",
+        "streamId": "00000000-0000-4000-8000-000000000900",
+        "checkedAtMs": 1793520935922,
+        "validUntilMs": 1793520940922,
+        "fact": {
+          "messageId": "13c851c8-6ff3-885f-86f4-911b7ab3544e",
+          "sequence": 1,
+          "authorPlayerId": "player-a",
+          "proofHash": "sha256:c0dce2edcfd90da7aefd9bcc265db338b3d26b6ee04c8334d1f32fff3d2f2966"
+        },
+        "recipient": {
+          "playerId": "recipient-001",
+          "membershipEpoch": 0,
+          "baselineSequence": 0,
+          "readThroughSequence": 0
+        },
+        "outcome": "ALLOW",
+        "currentReadThroughSequence": 0
+      }
+    }
+  ]
+}

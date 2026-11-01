@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lookup } from 'node:dns';
 import { Agent } from 'node:https';
-import type { LookupFunction } from 'node:net';
 
 import {
   createNotificationReceiptToken,
@@ -12,7 +10,16 @@ import {
   type PushDeliveryResult,
 } from '@phub/notifications';
 import webPush, { type PushSubscription, type RequestOptions, type SendResult } from 'web-push';
-import ipaddr from 'ipaddr.js';
+import {
+  createPublicWebPushLookup,
+  createStationHttpsAgent as createStationWebPushAgent,
+  isStationNotSubmitted,
+} from './station-https-agent.js';
+export {
+  isPublicWebPushAddress,
+  areAllWebPushAddressesPublic,
+  createStationHttpsAgent as createStationWebPushAgent,
+} from './station-https-agent.js';
 
 import { WEB_PUSH_PAYLOAD_MAX_BYTES } from './web-push-delivery.js';
 
@@ -51,59 +58,9 @@ function providerOutcome(result: PushDeliveryResult): WebPushProviderOutcome {
     : 'WEB_PUSH_NETWORK_FAILURE';
 }
 
-export function isPublicWebPushAddress(address: string): boolean {
-  if (!ipaddr.isValid(address)) return false;
-  const parsed = ipaddr.parse(address);
-  if (parsed instanceof ipaddr.IPv6 && parsed.isIPv4MappedAddress()) {
-    return parsed.toIPv4Address().range() === 'unicast';
-  }
-  return parsed.range() === 'unicast';
-}
-
-export function areAllWebPushAddressesPublic(addresses: readonly string[]): boolean {
-  return addresses.length > 0 && addresses.every(isPublicWebPushAddress);
-}
-
-function egressBlockedError(): NodeJS.ErrnoException {
-  const error = new Error('Web Push endpoint resolved outside the public network');
-  return Object.assign(error, { code: 'WEB_PUSH_EGRESS_BLOCKED' });
-}
-
-function createPublicWebPushLookup(): LookupFunction {
-  return (hostname, options, callback) => {
-    lookup(
-      hostname,
-      {
-        all: true,
-        verbatim: true,
-        ...(options.family === 4 || options.family === 6 ? { family: options.family } : {}),
-        ...(options.hints === undefined ? {} : { hints: options.hints }),
-      },
-      (error, addresses) => {
-        if (error) {
-          callback(error, []);
-          return;
-        }
-        if (!areAllWebPushAddressesPublic(addresses.map(({ address }) => address))) {
-          callback(egressBlockedError(), []);
-          return;
-        }
-        if (options.all) {
-          callback(null, addresses);
-          return;
-        }
-        const selected = addresses[0];
-        if (!selected) {
-          callback(egressBlockedError(), []);
-          return;
-        }
-        callback(null, selected.address, selected.family);
-      },
-    );
-  };
-}
-
 export function mapWebPushFailure(error: unknown): PushDeliveryResult {
+  if (isStationNotSubmitted(error))
+    return { outcome: 'retryable_failure', errorCode: 'STATION_NOT_SUBMITTED' };
   if ((error as NodeJS.ErrnoException | undefined)?.code === 'WEB_PUSH_EGRESS_BLOCKED') {
     return {
       outcome: 'terminal_failure',
@@ -260,6 +217,9 @@ export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
     } else if (currentCircuit && currentCircuit.openUntil > providerCallAt) {
       return this.observe({ outcome: 'retryable_failure', errorCode: 'WEB_PUSH_CIRCUIT_OPEN' });
     }
+    const stationAgent = request.stationCanSubmit
+      ? createStationWebPushAgent(request.stationCanSubmit)
+      : undefined;
     try {
       await send(subscription, payload, {
         vapidDetails: {
@@ -269,7 +229,7 @@ export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
         },
         TTL: request.ttlSeconds ?? this.options.ttlSeconds,
         timeout: this.options.timeoutMs,
-        agent: this.egressAgent,
+        agent: stationAgent ?? this.egressAgent,
         contentEncoding: 'aes128gcm',
         urgency: request.urgency ?? 'normal',
         topic: createHash('sha256')
@@ -278,6 +238,12 @@ export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
           .slice(0, 32),
       });
       this.circuits.delete(request.providerAccountId);
+      if (request.stationCanSubmit && !request.stationCanSubmit())
+        return this.observe({
+          outcome: 'terminal_failure',
+          errorCode: 'STATION_PROVIDER_OUTCOME_UNKNOWN',
+          invalidate: false,
+        });
       return this.observe({ outcome: 'accepted' });
     } catch (error) {
       const result = mapWebPushFailure(error);
@@ -297,6 +263,7 @@ export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
       }
       return this.observe(result);
     } finally {
+      stationAgent?.destroy();
       if (ownsHalfOpenProbe) this.halfOpenProbes.delete(request.providerAccountId);
     }
   }

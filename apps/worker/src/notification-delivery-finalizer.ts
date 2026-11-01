@@ -23,6 +23,7 @@ export interface ClaimedNotificationDelivery {
   readonly attemptNo: number;
   readonly startedAt: string;
   readonly scenarioDelivery?: boolean;
+  readonly station?: { readonly contextId: string; readonly generation: number };
   /** Fence late ordinary push invalidation against token rotation and account transfer. */
   readonly dispatchedEndpoint?: {
     readonly ciphertext: Buffer;
@@ -86,7 +87,15 @@ export function resolveNotificationIntentState(states: readonly string[]): {
   readonly state: 'PROCESSING' | 'DELIVERED' | 'PARTIAL' | 'FAILED' | 'SUPPRESSED';
   readonly completed: boolean;
 } {
-  if (states.some((state) => state === 'PENDING' || state === 'SENDING')) {
+  if (
+    states.some(
+      (state) =>
+        state === 'PENDING' ||
+        state === 'SENDING' ||
+        state === 'STATION_PENDING' ||
+        state === 'STATION_SENDING',
+    )
+  ) {
     return { state: 'PROCESSING', completed: false };
   }
   const successful = states.some((state) => state === 'SENT' || state === 'DELIVERED');
@@ -173,13 +182,50 @@ export async function finalizeNotificationDelivery(options: {
 }): Promise<NotificationDeliveryFinalization> {
   return withTenantTransaction(options.pool, options.job.tenantId, async (client) => {
     const now = new Date().toISOString();
+    const station = options.job.station;
+    const sending = station ? 'STATION_SENDING' : 'SENDING';
+    const pending = station ? 'STATION_PENDING' : 'PENDING';
+    const result =
+      station &&
+      options.result.outcome === 'retryable_failure' &&
+      ![
+        'STATION_NOT_SUBMITTED',
+        'FCM_CIRCUIT_OPEN',
+        'WEB_PUSH_CIRCUIT_OPEN',
+        'APNS_CIRCUIT_OPEN',
+        'FCM_AUTH_REJECTED',
+        'WEB_PUSH_AUTH_REJECTED',
+        'APNS_AUTH_REJECTED',
+        'APNS_NETWORK_FAILURE',
+      ].includes(options.result.errorCode)
+        ? {
+            outcome: 'terminal_failure' as const,
+            errorCode: 'STATION_PROVIDER_OUTCOME_UNKNOWN',
+            invalidate: false,
+          }
+        : options.result;
+    if (station) {
+      const bound = await client.query(
+        `select id from notifications.deliveries where tenant_id=$1 and id=$2 and intent_id=$3 and endpoint_id=$4 and station_notification_context_id=$5 and station_claim_generation=$6 and state='STATION_SENDING' and attempt_count=$7 and station_dispatch_started_at is not null and lease_expires_at>clock_timestamp() for update`,
+        [
+          options.job.tenantId,
+          options.job.deliveryId,
+          options.job.intentId,
+          options.job.endpointId,
+          station.contextId,
+          station.generation,
+          options.job.attemptNo,
+        ],
+      );
+      if (bound.rowCount !== 1) return 'stale';
+    }
     let terminalState: Exclude<NotificationDeliveryFinalization, 'stale'>;
     let attemptOutcome: 'SENT' | 'RETRYABLE_FAILURE' | 'TERMINAL_FAILURE';
     let errorCode: string | null = null;
-    let deliveryState: 'SENT' | 'PENDING' | 'DEAD';
+    let deliveryState: 'SENT' | 'PENDING' | 'STATION_PENDING' | 'DEAD';
     let updatedRows: number;
 
-    if (options.result.outcome === 'accepted') {
+    if (result.outcome === 'accepted') {
       terminalState = 'sent';
       attemptOutcome = 'SENT';
       deliveryState = 'SENT';
@@ -187,23 +233,22 @@ export async function finalizeNotificationDelivery(options: {
         `update notifications.deliveries
             set state = 'SENT', lease_expires_at = null, completed_at = now(),
                 updated_at = now(), last_error_code = null
-          where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3
-            and lease_expires_at > now()`,
+          where tenant_id = $1 and id = $2 and state = '${sending}' and attempt_count = $3
+            and lease_expires_at > ${station ? 'clock_timestamp()' : 'now()'}`,
         [options.job.tenantId, options.job.deliveryId, options.job.attemptNo],
       );
       updatedRows = updated.rowCount ?? 0;
     } else {
-      errorCode = options.result.errorCode;
+      errorCode = result.errorCode;
       const exhausted = options.job.attemptNo >= options.maxAttempts;
-      const retryable = options.result.outcome === 'retryable_failure' && !exhausted;
+      const retryable = result.outcome === 'retryable_failure' && !exhausted;
       terminalState = retryable ? 'retry' : 'dead';
       attemptOutcome = retryable ? 'RETRYABLE_FAILURE' : 'TERMINAL_FAILURE';
-      deliveryState = retryable ? 'PENDING' : 'DEAD';
+      deliveryState = retryable ? pending : 'DEAD';
       if (retryable) {
         const providerDelay =
-          options.result.outcome === 'retryable_failure' &&
-          Number.isFinite(options.result.retryAfterMs)
-            ? Math.max(0, Math.min(options.result.retryAfterMs ?? 0, 3_600_000))
+          result.outcome === 'retryable_failure' && Number.isFinite(result.retryAfterMs)
+            ? Math.max(0, Math.min(result.retryAfterMs ?? 0, 3_600_000))
             : 0;
         const delayMs = Math.max(
           notificationRetryDelayMs(options.job.attemptNo, options.retryBaseMs),
@@ -211,14 +256,15 @@ export async function finalizeNotificationDelivery(options: {
         );
         const updated = await client.query(
           `update notifications.deliveries
-              set state = 'PENDING',
+              set state = '${pending}',
+                  ${station ? 'station_dispatch_started_at=null,' : ''}
                   scenario_dispatch_started_at = null,
                   ${options.job.scenarioDelivery ? "scenario_available_at = case when scenario_v2_available_at is null then now() + ($4::integer * interval '1 millisecond') else null end, scenario_v2_available_at = case when scenario_v2_available_at is not null then now() + ($4::integer * interval '1 millisecond') else null end, next_attempt_at='infinity'::timestamptz" : "next_attempt_at=now() + ($4::integer * interval '1 millisecond')"},
                   lease_expires_at = null,
                   updated_at = now(),
                   last_error_code = $5
-            where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3
-              and lease_expires_at > now()`,
+            where tenant_id = $1 and id = $2 and state = '${sending}' and attempt_count = $3
+              and lease_expires_at > ${station ? 'clock_timestamp()' : 'now()'}`,
           [options.job.tenantId, options.job.deliveryId, options.job.attemptNo, delayMs, errorCode],
         );
         updatedRows = updated.rowCount ?? 0;
@@ -227,8 +273,8 @@ export async function finalizeNotificationDelivery(options: {
           `update notifications.deliveries
               set state = 'DEAD', lease_expires_at = null, completed_at = now(),
                   updated_at = now(), last_error_code = $4
-            where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3
-              and lease_expires_at > now()`,
+            where tenant_id = $1 and id = $2 and state = '${sending}' and attempt_count = $3
+              and lease_expires_at > ${station ? 'clock_timestamp()' : 'now()'}`,
           [options.job.tenantId, options.job.deliveryId, options.job.attemptNo, errorCode],
         );
         updatedRows = updated.rowCount ?? 0;
@@ -237,14 +283,14 @@ export async function finalizeNotificationDelivery(options: {
 
     if (updatedRows !== 1) return 'stale';
 
-    if (options.result.outcome === 'accepted') {
+    if (result.outcome === 'accepted') {
       let providerLinkConflict = false;
-      if (options.result.externalMessageId) {
+      if (result.externalMessageId) {
         providerLinkConflict =
           (await linkProviderMessage(
             client,
             options.job,
-            validateExternalMessageId(options.result.externalMessageId),
+            validateExternalMessageId(result.externalMessageId),
           )) === 'conflict';
       }
       if (providerLinkConflict) {
@@ -271,15 +317,15 @@ export async function finalizeNotificationDelivery(options: {
           [options.job.tenantId, options.job.deliveryId, receiptKey, options.platform, now],
         );
       }
-    } else if (options.result.outcome === 'terminal_failure') {
-      const endpointStatus = options.result.invalidate
+    } else if (result.outcome === 'terminal_failure') {
+      const endpointStatus = result.invalidate
         ? 'INVALID'
-        : options.result.suspendPolicy
+        : result.suspendPolicy
           ? 'SUSPENDED_POLICY'
           : undefined;
-      const endpointAction = options.result.invalidate
+      const endpointAction = result.invalidate
         ? `${options.transport}_ENDPOINT_INVALIDATED`
-        : options.result.suspendPolicy
+        : result.suspendPolicy
           ? `${options.transport}_ENDPOINT_POLICY_SUSPENDED`
           : undefined;
       const endpointUpdated = endpointStatus
@@ -346,7 +392,7 @@ export async function finalizeNotificationDelivery(options: {
         `${options.transport.toLowerCase()}-delivery-${options.job.deliveryId}`,
         JSON.stringify({
           deliveryId: options.job.deliveryId,
-          state: deliveryState,
+          state: deliveryState === 'STATION_PENDING' ? 'PENDING' : deliveryState,
           ...(errorCode ? { errorCode } : {}),
         }),
       ],

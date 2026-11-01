@@ -197,21 +197,21 @@ export async function collectWorkerOperationalSnapshot(options: {
         const deliveries = await client.query<PushDeliveryMetricRow>(
           `select count(*) filter (
                     where endpoint.status in ('ACTIVE', 'INVALID', 'REVOKED')
-                      and ((state = 'PENDING' and next_attempt_at <= clock_timestamp())
-                        or (state = 'SENDING' and lease_expires_at <= clock_timestamp()))
+                      and ((state in ('PENDING','STATION_PENDING') and next_attempt_at <= clock_timestamp())
+                        or (state in ('SENDING','STATION_SENDING') and lease_expires_at <= clock_timestamp()))
                   )::bigint as due_count,
                   coalesce(max(
                     extract(epoch from (clock_timestamp() - delivery.created_at))
                   ) filter (
                     where endpoint.status in ('ACTIVE', 'INVALID', 'REVOKED')
-                      and ((state = 'PENDING' and next_attempt_at <= clock_timestamp())
-                        or (state = 'SENDING' and lease_expires_at <= clock_timestamp()))
+                      and ((state in ('PENDING','STATION_PENDING') and next_attempt_at <= clock_timestamp())
+                        or (state in ('SENDING','STATION_SENDING') and lease_expires_at <= clock_timestamp()))
                   ), 0)::double precision as oldest_due_age_seconds,
                   count(*) filter (where state = 'DEAD')::bigint as dead_count,
                   count(*) filter (
                     where endpoint.status = 'SUSPENDED_POLICY'
-                      and ((state = 'PENDING' and next_attempt_at <= clock_timestamp())
-                        or (state = 'SENDING' and lease_expires_at <= clock_timestamp()))
+                      and ((state in ('PENDING','STATION_PENDING') and next_attempt_at <= clock_timestamp())
+                        or (state in ('SENDING','STATION_SENDING') and lease_expires_at <= clock_timestamp()))
                   )::bigint as policy_suspended_count
              from notifications.deliveries delivery
              join integration.notification_endpoints endpoint

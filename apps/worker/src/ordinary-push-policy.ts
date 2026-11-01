@@ -1,6 +1,6 @@
 import { withTenantTransaction } from '@phub/database';
 import { quietHoursActive } from '@phub/notifications';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import {
   resolveNotificationIntentState,
   type ClaimedNotificationDelivery,
@@ -8,7 +8,13 @@ import {
 
 type Job = Pick<
   ClaimedNotificationDelivery,
-  'tenantId' | 'deliveryId' | 'intentId' | 'endpointId' | 'providerAccountId' | 'attemptNo'
+  | 'tenantId'
+  | 'deliveryId'
+  | 'intentId'
+  | 'endpointId'
+  | 'providerAccountId'
+  | 'attemptNo'
+  | 'station'
 >;
 export type OrdinaryPushDecision =
   | { outcome: 'SEND'; endpoint: NonNullable<ClaimedNotificationDelivery['dispatchedEndpoint']> }
@@ -33,6 +39,7 @@ interface PolicyRow {
   app_id: string;
   environment: string;
   provider_status: string;
+  credential_ref: string;
   user_status: string;
   runtime_enabled: boolean | null;
   trigger_rule_id: string | null;
@@ -51,7 +58,10 @@ interface PolicyRow {
 export async function checkOrdinaryPushPolicy(options: {
   pool: Pool;
   job: Job;
-  provider: 'FCM' | 'WEB_PUSH';
+  provider: 'FCM' | 'WEB_PUSH' | 'APNS';
+  credentialRef?: string;
+  stationFresh?: () => boolean;
+  stationValidate?: (client: PoolClient) => Promise<void>;
   appId: string;
   environment: 'SANDBOX' | 'PRODUCTION';
 }): Promise<OrdinaryPushDecision> {
@@ -73,10 +83,18 @@ export async function checkOrdinaryPushPolicy(options: {
         if (lock.rows[0]?.acquired !== true) return { outcome: 'BUSY' };
       }
     }
+    const station = job.station;
     const delivery = await client.query(
       `select id from notifications.deliveries where tenant_id=$1 and id=$2 and intent_id=$3
-         and endpoint_id=$4 and state='SENDING' and attempt_count=$5 and channel='PUSH' for update`,
-      [job.tenantId, job.deliveryId, job.intentId, job.endpointId, job.attemptNo],
+         and endpoint_id=$4 and state='${station ? 'STATION_SENDING' : 'SENDING'}' and attempt_count=$5 and channel='PUSH' ${station ? 'and station_notification_context_id=$6 and station_claim_generation=$7 and station_dispatch_started_at is null' : ''} for update`,
+      [
+        job.tenantId,
+        job.deliveryId,
+        job.intentId,
+        job.endpointId,
+        job.attemptNo,
+        ...(station ? [station.contextId, station.generation] : []),
+      ],
     );
     if (delivery.rowCount !== 1) return { outcome: 'STALE' };
     const endpoint = await client.query(
@@ -84,6 +102,11 @@ export async function checkOrdinaryPushPolicy(options: {
       [job.tenantId, job.endpointId],
     );
     if (endpoint.rowCount !== 1) return { outcome: 'STALE' };
+    if (station) {
+      if (!options.stationValidate) return { outcome: 'STALE' };
+      await options.stationValidate(client);
+      if (!options.stationFresh?.()) return { outcome: 'STALE' };
+    }
     // Separate statement AFTER lock waits: READ COMMITTED sees policies committed while waiting.
     // Preferences are a decision-time snapshot, not a lock held across the provider call.
     const result = await client.query<PolicyRow>(
@@ -93,8 +116,8 @@ export async function checkOrdinaryPushPolicy(options: {
          i.render_data->>'scenarioRunId' scenario_run_id,
          i.recipient_user_id,e.user_id endpoint_user_id,e.status endpoint_status,e.channel endpoint_channel,
          e.provider_account_id,e.address_ciphertext,e.encryption_key_id,
-         a.provider,a.platform,a.channel provider_channel,a.app_id,a.environment,a.status provider_status,
-         u.status user_status,${options.provider === 'FCM' ? 'r.android_push_enabled' : 'r.web_push_enabled'} runtime_enabled,
+         a.provider,a.platform,a.channel provider_channel,a.app_id,a.environment,a.status provider_status,a.credential_ref,
+         u.status user_status,${options.provider === 'FCM' ? 'r.android_push_enabled' : options.provider === 'APNS' ? 'r.ios_push_enabled' : 'r.web_push_enabled'} runtime_enabled,
          i.trigger_rule_id,tr.active rule_active,tr.mandatory,t.active template_active,t.category,
          p.enabled preference_enabled,left(p.quiet_from::text,5) quiet_from,
          left(p.quiet_until::text,5) quiet_until,p.timezone,clock_timestamp() database_now
@@ -131,12 +154,18 @@ export async function checkOrdinaryPushPolicy(options: {
       row.endpoint_status !== 'ACTIVE' ||
       row.endpoint_channel !== 'PUSH' ||
       row.provider !== options.provider ||
-      row.platform !== (options.provider === 'FCM' ? 'ANDROID' : 'WEB') ||
+      row.platform !==
+        (options.provider === 'FCM' ? 'ANDROID' : options.provider === 'APNS' ? 'IOS' : 'WEB') ||
       row.provider_channel !== 'PUSH' ||
       row.app_id !== options.appId ||
       row.environment !== options.environment ||
       row.provider_status !== 'ACTIVE' ||
       row.user_status !== 'ACTIVE' ||
+      (options.credentialRef !== undefined && row.credential_ref !== options.credentialRef) ||
+      (station &&
+        (row.category !== 'MESSAGING' ||
+          row.mandatory !== false ||
+          row.trigger_rule_id === null)) ||
       row.runtime_enabled !== true ||
       row.template_active !== true ||
       !ruleAllowed
@@ -189,6 +218,14 @@ export async function checkOrdinaryPushPolicy(options: {
         ],
       );
       return { outcome: 'SUPPRESSED' };
+    }
+    if (station) {
+      if (!options.stationFresh?.()) return { outcome: 'STALE' };
+      const marked = await client.query(
+        `update notifications.deliveries set station_dispatch_started_at=clock_timestamp() where tenant_id=$1 and id=$2 and station_claim_generation=$3 and station_notification_context_id=$4 and state='STATION_SENDING' and station_dispatch_started_at is null and lease_expires_at>clock_timestamp() returning id`,
+        [job.tenantId, job.deliveryId, station.generation, station.contextId],
+      );
+      if (marked.rowCount !== 1) return { outcome: 'STALE' };
     }
     return {
       outcome: 'SEND',
