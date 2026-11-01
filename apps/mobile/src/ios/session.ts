@@ -1,3 +1,7 @@
+import {
+  stationStreamRequest,
+  type NativeStationStreamRequest,
+} from '../native-station-stream-request.js';
 import { stationRequest, type NativeStationRequest } from '../native-station-message-request.js';
 import { gameCancelRequest } from '../native-game-cancel-request.js';
 import { quarterRequest } from '../native-quarter-request.js';
@@ -24,7 +28,8 @@ interface NativeRequest {
     | 'notification'
     | 'quarterCreate'
     | 'gameCancel'
-    | 'stationMessage';
+    | 'stationMessage'
+    | 'stationStream';
   readonly requestId?: string;
   readonly challengeId?: string;
   readonly resource?: string;
@@ -51,14 +56,15 @@ export function createIOSFetch(
   config: IOSConfiguration,
   plugin: IOSSessionPlugin,
   canDispatchGameCancellation?: (gameId: string) => boolean,
-  canDispatchStation?: (request: NativeStationRequest) => boolean,
+  canDispatchStation?: (request: NativeStationRequest | NativeStationStreamRequest) => boolean,
 ): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   let cancellationClosed = false;
   let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
-    const station = stationRequest(value, init, config);
+    const stream = stationStreamRequest(value, init, config);
+    const station = stream ?? stationRequest(value, init, config);
     const cancel = gameCancelRequest(value, init, config);
     const quarter = quarterRequest(value, init, config);
     const read =
@@ -73,7 +79,7 @@ export function createIOSFetch(
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (station) operation = 'stationMessage';
+    if (station) operation = stream ? 'stationStream' : 'stationMessage';
     else if (cancel) operation = 'gameCancel';
     else if (quarter) operation = 'quarterCreate';
     else if (read) operation = 'read';
@@ -261,16 +267,27 @@ export class IOSSession {
     return this.quarterCreatePrincipal();
   }
   private stationKey(
-    request: Pick<NativeStationRequest, 'resource' | 'resourceId' | 'requestId'>,
+    request: Pick<
+      NativeStationRequest | NativeStationStreamRequest,
+      'resource' | 'resourceId' | 'requestId'
+    > & { readonly query?: Record<string, string> },
   ): string {
-    return JSON.stringify([request.resource, request.resourceId, request.requestId]);
+    return JSON.stringify([
+      request.resource,
+      request.resourceId,
+      request.requestId,
+      request.resource === 'summaries' ? request.query?.communityIds : undefined,
+    ]);
   }
-  public canDispatchStation(request: NativeStationRequest): boolean {
+  public canDispatchStation(request: NativeStationRequest | NativeStationStreamRequest): boolean {
     const original = this.stationRequests.get(this.stationKey(request));
     return original !== undefined && original === this.stationMessagePrincipal();
   }
   private async stationCall<T>(
-    request: Pick<NativeStationRequest, 'resource' | 'resourceId' | 'requestId'>,
+    request: Pick<
+      NativeStationRequest | NativeStationStreamRequest,
+      'resource' | 'resourceId' | 'requestId'
+    > & { readonly query?: Record<string, string> },
     load: (api: PadlHubApiClient) => Promise<T>,
   ): Promise<T> {
     const principal = this.stationMessagePrincipal(),
@@ -282,6 +299,31 @@ export class IOSSession {
     } finally {
       this.stationRequests.delete(key);
     }
+  }
+  public stationStreamSummaries(ids: readonly string[]) {
+    return this.stationCall(
+      { resource: 'summaries', query: { communityIds: ids.join(',') } },
+      (api) => api.listStationStreamSummaries(ids),
+    );
+  }
+  public stationStream(communityId: string, cursor?: string) {
+    return this.stationCall({ resource: 'stream', resourceId: communityId }, (api) =>
+      api.getStationCommunityStream(communityId, { limit: 50, ...(cursor ? { cursor } : {}) }),
+    );
+  }
+  public stationRead(
+    communityId: string,
+    input: Parameters<PadlHubApiClient['requestStationCommunityRead']>[1],
+  ) {
+    return this.stationCall(
+      { resource: 'read', resourceId: communityId, requestId: input.requestId },
+      (api) => api.requestStationCommunityRead(communityId, input),
+    );
+  }
+  public stationReadStatus(communityId: string, requestId: string) {
+    return this.stationCall({ resource: 'readStatus', resourceId: communityId, requestId }, (api) =>
+      api.getStationCommunityReadRequest(communityId, requestId),
+    );
   }
   public stationHistory(communityId: string, cursor?: string) {
     return this.stationCall({ resource: 'history', resourceId: communityId }, (api) =>

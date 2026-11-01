@@ -18,6 +18,7 @@ import {
   type StationStreamView,
 } from './station-stream-state.js';
 export interface StationStreamSource {
+  readonly readStorage?: 'native-local';
   readonly scope: string;
   readonly principal: string;
   readonly isCurrent: () => boolean;
@@ -61,15 +62,17 @@ export function StationStreamThread({
   const displayed = useRef(0);
   const key = `lk2:station-read:v1:${source.scope}:${community.id}`;
   const current = () => life.current.active && source.isCurrent();
+  const storage = () =>
+    source.readStorage === 'native-local' ? window.localStorage : window.sessionStorage;
   const persist = (request: StationReadRequest | null) => {
     if (!current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
     if (request) {
       const encoded = JSON.stringify(request);
-      window.sessionStorage.setItem(key, encoded);
-      if (window.sessionStorage.getItem(key) !== encoded) throw new Error('READ_CUSTODY_UNPROVEN');
+      storage().setItem(key, encoded);
+      if (storage().getItem(key) !== encoded) throw new Error('READ_CUSTODY_UNPROVEN');
     } else {
-      window.sessionStorage.removeItem(key);
-      if (window.sessionStorage.getItem(key) !== null) throw new Error('READ_CUSTODY_UNPROVEN');
+      storage().removeItem(key);
+      if (storage().getItem(key) !== null) throw new Error('READ_CUSTODY_UNPROVEN');
     }
     if (!current()) throw new Error('AUTH_PRINCIPAL_CHANGED');
     setPending(request);
@@ -129,6 +132,24 @@ export function StationStreamThread({
     }
   }
   async function readReceipt(request: StationReadRequest, dispatch: boolean): Promise<void> {
+    if (!current()) return;
+    if (source.readStorage !== 'native-local') return runReadReceipt(request, dispatch);
+    try {
+      if (!navigator.locks?.request) throw new Error('READ_CUSTODY_LOCK_UNAVAILABLE');
+      await navigator.locks.request(key, { ifAvailable: true }, async (lock) => {
+        if (!lock || !current()) return;
+        // Another native view may have reserved the original request before this view's click.
+        const raw = storage().getItem(key);
+        const original = raw ? validateStationReadRequest(JSON.parse(raw)) : request;
+        if (!current()) return;
+        await runReadReceipt(original, dispatch && !raw);
+      });
+    } catch {
+      if (current())
+        setNotice('Хранилище статуса прочтения недоступно. Отметка прочтения отключена.');
+    }
+  }
+  async function runReadReceipt(request: StationReadRequest, dispatch: boolean): Promise<void> {
     if (!current() || life.current.flight) return;
     const lifetime = life.current;
     const valid = () => life.current === lifetime && lifetime.active && source.isCurrent();
@@ -158,13 +179,15 @@ export function StationStreamThread({
         return;
       }
       if (
+        (source.readStorage === 'native-local' &&
+          !sameStationStream(request, viewRef.current.position)) ||
         receipt.requestId !== request.requestId ||
         !sameStationStream(receipt, request) ||
         receipt.throughSequence !== request.throughSequence
       )
         throw new Error('READ_RECEIPT_CONFLICT');
       // Storage is removed only for the exact original receipt. An epoch change cannot adopt it.
-      const stored = window.sessionStorage.getItem(key);
+      const stored = storage().getItem(key);
       if (
         !stored ||
         JSON.stringify(validateStationReadRequest(JSON.parse(stored))) !== JSON.stringify(request)
@@ -206,7 +229,7 @@ export function StationStreamThread({
     };
     const begin = async () => {
       try {
-        const raw = window.sessionStorage.getItem(key);
+        const raw = storage().getItem(key);
         if (raw) {
           const request = validateStationReadRequest(JSON.parse(raw));
           setPending(request);
@@ -239,7 +262,7 @@ export function StationStreamThread({
   const read = () => {
     if (!current() || busy || error || document.visibilityState !== 'visible') return;
     try {
-      const raw = window.sessionStorage.getItem(key);
+      const raw = storage().getItem(key);
       if (raw) {
         void readReceipt(validateStationReadRequest(JSON.parse(raw)), false);
         return;
@@ -315,6 +338,7 @@ export function StationStreamThread({
           chat.sendMessage && chat.getMessageRequest
             ? {
                 scope: source.scope,
+                ...(chat.custodyStorage ? { storage: chat.custodyStorage } : {}),
                 communityId: community.id,
                 isCurrent: current,
                 eligible: view.allowed && !error,

@@ -414,3 +414,181 @@ describe('explicit station stream read and catch-up', () => {
     expect(status).toHaveBeenCalledOnce();
   });
 });
+
+describe('native read custody', () => {
+  function locks() {
+    const held = new Set<string>();
+    const request = vi.fn(
+      async (name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) => {
+        if (held.has(name)) return callback(null);
+        held.add(name);
+        try {
+          await callback({ name });
+        } finally {
+          held.delete(name);
+        }
+      },
+    );
+    vi.stubGlobal('navigator', { locks: { request }, onLine: true });
+    localStorage.clear();
+    return request;
+  }
+  const key = `lk2:station-read:v1:tenant:user:${id}`;
+  it('two views reserve one original tuple before POST; restart recovers only GET', async () => {
+    locks();
+    const h = setup();
+    const source = { ...h.source, readStorage: 'native-local' as const };
+    let finish!: (receipt: Awaited<ReturnType<StationStreamSource['read']>>) => void;
+    h.read.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const a = render(
+      <StationStreamThread
+        community={community}
+        summary={summary}
+        source={source}
+        chat={h.chat}
+        onPosition={vi.fn()}
+      />,
+    );
+    const b = render(
+      <StationStreamThread
+        community={community}
+        summary={summary}
+        source={source}
+        chat={h.chat}
+        onPosition={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getAllByText('Сообщение 2')).toHaveLength(2));
+    for (const button of screen.getAllByText('Отметить показанное прочитанным'))
+      fireEvent.click(button);
+    await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
+    const original = h.read.mock.calls[0]![1];
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(original);
+    expect(sessionStorage.getItem(key)).toBeNull();
+    await act(async () => {
+      finish({
+        contractVersion: 1,
+        contract: 'station-read',
+        requestId: original.requestId,
+        outcome: 'UNKNOWN',
+        code: 'READ_RECEIPT_UNPROVEN',
+      });
+      await Promise.resolve();
+    });
+    a.unmount();
+    b.unmount();
+    sessionStorage.clear();
+    render(
+      <StationStreamThread
+        community={community}
+        summary={summary}
+        source={source}
+        chat={h.chat}
+        onPosition={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(source.status).toHaveBeenCalledWith(id, original.requestId));
+    expect(h.read).toHaveBeenCalledOnce();
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(original);
+  });
+  it('another view custody appearing before click is GET-only, never overwritten', async () => {
+    locks();
+    const h = setup();
+    const source = { ...h.source, readStorage: 'native-local' as const };
+    render(
+      <StationStreamThread
+        community={community}
+        summary={summary}
+        source={source}
+        chat={h.chat}
+        onPosition={vi.fn()}
+      />,
+    );
+    await screen.findByText('Сообщение 2');
+    const original = { requestId: id, streamId: id, membershipEpoch: 0, throughSequence: 1 };
+    localStorage.setItem(key, JSON.stringify(original));
+    fireEvent.click(screen.getByText('Отметить показанное прочитанным'));
+    await waitFor(() => expect(source.status).toHaveBeenCalledWith(id, id));
+    expect(h.read).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(original);
+  });
+  it.each(['corrupt', 'quota', 'lock', 'logout'])(
+    'fails closed for native %s without erasing custody',
+    async (mode) => {
+      locks();
+      const h = setup();
+      const source = { ...h.source, readStorage: 'native-local' as const };
+      render(
+        <StationStreamThread
+          community={community}
+          summary={summary}
+          source={source}
+          chat={h.chat}
+          onPosition={vi.fn()}
+        />,
+      );
+      await screen.findByText('Сообщение 2');
+      if (mode === 'corrupt') localStorage.setItem(key, 'broken');
+      if (mode === 'quota')
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+          throw new Error('quota');
+        });
+      if (mode === 'lock') vi.stubGlobal('navigator', { onLine: true });
+      if (mode === 'logout') h.logout();
+      fireEvent.click(screen.getByText('Отметить показанное прочитанным'));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(h.read).not.toHaveBeenCalled();
+      if (mode === 'corrupt') expect(localStorage.getItem(key)).toBe('broken');
+    },
+  );
+});
+it('native old-epoch confirmed receipt cannot erase original retained custody', async () => {
+  localStorage.clear();
+  vi.stubGlobal('navigator', {
+    onLine: true,
+    locks: {
+      request: async (
+        _name: string,
+        _options: unknown,
+        callback: (lock: object) => Promise<void>,
+      ) => await callback({}),
+    },
+  });
+  const h = setup(),
+    original = { requestId: id, streamId: id, membershipEpoch: 0, throughSequence: 1 };
+  const key = `lk2:station-read:v1:tenant:user:${id}`;
+  localStorage.setItem(key, JSON.stringify(original));
+  const source = {
+    ...h.source,
+    readStorage: 'native-local' as const,
+    status: vi.fn(() =>
+      Promise.resolve({
+        contractVersion: 1 as const,
+        contract: 'station-read' as const,
+        ...original,
+        outcome: 'CONFIRMED' as const,
+        readThroughSequence: 1,
+      }),
+    ),
+  };
+  render(
+    <StationStreamThread
+      community={community}
+      summary={summary}
+      source={source}
+      chat={h.chat}
+      onPosition={vi.fn()}
+    />,
+  );
+  await waitFor(() => expect(source.status).toHaveBeenCalledOnce());
+  await screen.findByText('Сообщение 2');
+  expect(localStorage.getItem(key)).toBe(JSON.stringify(original));
+  expect(h.read).not.toHaveBeenCalled();
+});

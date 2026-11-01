@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import type { CommunityMembershipPage, CommunityReadExperienceChatPage } from '@phub/api-sdk';
+import {
+  StationStreamThread,
+  type StationStreamSource,
+} from '../../../web/src/chats-ui/StationStreamThread.js';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  StationStreamSummary,
+  CommunityMembershipPage,
+  CommunityReadExperienceChatPage,
+} from '@phub/api-sdk';
 import { CommunityChatList, CommunityThread } from '../../../web/src/chats-ui/CommunityChats.js';
 import {
   appendCommunityPage,
@@ -21,6 +29,7 @@ export function IOSStationChats({ session }: { readonly session: IOSSession }): 
   const [busy, setBusy] = useState<'load' | 'load-earlier' | null>(null);
   const [error, setError] = useState<ChatUiError | null>(null);
   const [enabled, setEnabled] = useState(false);
+  const [summaries, setSummaries] = useState<ReadonlyMap<string, StationStreamSummary>>(new Map());
   const selectedRef = useRef(selected);
   function select(id: string | null): void {
     selectedRef.current = id;
@@ -59,6 +68,17 @@ export function IOSStationChats({ session }: { readonly session: IOSSession }): 
         api.listMyCommunities({ limit: 50, ...(cursor ? { cursor } : {}) }),
       );
       if (!current()) return;
+      const summary = value.items.length
+        ? await session.stationStreamSummaries(value.items.map((item) => item.id))
+        : { items: [] };
+      if (!current()) return;
+      setSummaries(
+        (previous) =>
+          new Map([
+            ...(cursor ? previous : []),
+            ...summary.items.map((item) => [item.communityId, item] as const),
+          ]),
+      );
       setDirectory((previous) => ({
         ...value,
         items: cursor ? Array.from(appendCommunityPage(previous.items, value.items)) : value.items,
@@ -75,6 +95,7 @@ export function IOSStationChats({ session }: { readonly session: IOSSession }): 
       setDirectoryError(null);
     } catch {
       if (current()) {
+        setSummaries(new Map());
         setDirectoryError(failure());
         setDirectory({ items: [] });
         setPage({ items: [] });
@@ -135,7 +156,11 @@ export function IOSStationChats({ session }: { readonly session: IOSSession }): 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
-    if (!selected) return;
+    if (
+      !selected ||
+      !['UNADOPTED', 'NOT_STATION'].includes(summaries.get(selected)?.availability ?? '')
+    )
+      return;
     queueMicrotask(() => void loadThread(selected));
     const refresh = () => {
       if (document.visibilityState === 'visible' && navigator.onLine) void loadThread(selected);
@@ -151,13 +176,43 @@ export function IOSStationChats({ session }: { readonly session: IOSSession }): 
     };
     // Only a selected thread starts these GET-only listeners.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, enabled]);
+  }, [selected, enabled, summaries]);
   const community = directory.items.find((v) => v.id === selected);
   const auth = session.getSnapshot();
   const scope =
     auth.status === 'signed-in'
       ? JSON.stringify([session.configuration.tenantKey, auth.session.context.userId])
       : '';
+  const streamSource = useMemo<StationStreamSource>(
+    () => ({
+      scope,
+      principal: principal ?? '',
+      readStorage: 'native-local',
+      isCurrent: () =>
+        active.current && principal !== null && session.stationMessagePrincipal() === principal,
+      summaries: (ids) => session.stationStreamSummaries(ids),
+      page: (id, cursor) => session.stationStream(id, cursor),
+      read: (id, input) => session.stationRead(id, input),
+      status: (id, requestId) => session.stationReadStatus(id, requestId),
+    }),
+    [session, principal, scope],
+  );
+  const chatSource = useMemo(
+    () => ({
+      custodyScope: scope,
+      custodyStorage: 'native-local' as const,
+      isCurrent: streamSource.isCurrent,
+      loadCommunities: (cursor?: string) =>
+        session.read((api) => api.listMyCommunities({ limit: 50, ...(cursor ? { cursor } : {}) })),
+      loadMessages: (id: string, cursor?: string) => session.stationHistory(id, cursor),
+      sendMessage: (id: string, input: Parameters<IOSSession['sendStationMessage']>[1]) =>
+        session.sendStationMessage(id, input),
+      getMessageRequest: (id: string, requestId: string) =>
+        session.stationMessageStatus(id, requestId),
+    }),
+    [session, scope, streamSource],
+  );
+  const position = community ? summaries.get(community.id) : undefined;
   return (
     <main className="games-page">
       <header className="ios-cabinet-heading">
@@ -177,57 +232,75 @@ export function IOSStationChats({ session }: { readonly session: IOSSession }): 
           >
             К сообществам
           </button>
-          <CommunityThread
-            community={community}
-            messages={page.items}
-            busy={busy}
-            error={error}
-            refreshing={false}
-            hasEarlierMessages={Boolean(page.nextCursor)}
-            onRetry={() => void loadThread(community.id)}
-            onLoadEarlier={() => {
-              if (page.nextCursor) void loadThread(community.id, page.nextCursor);
-            }}
-            composer={{
-              scope,
-              communityId: community.id,
-              storage: 'native-local',
-              isCurrent: current,
-              eligible:
-                principal !== null &&
-                session.stationMessagePrincipal() === principal &&
-                page.canRequestStationMessage === true &&
-                !error,
-              send: (id, input) => session.sendStationMessage(id, input),
-              status: (id, idempotency) => session.stationMessageStatus(id, idempotency),
-              onConfirmed: (message) => {
-                if (!current()) return;
-                invalidate();
-                setBusy(null);
-                setPage((old) => ({
-                  ...old,
-                  items: Array.from(
-                    mergeCommunityThreadPage(old.items, { items: [message] }).messages,
-                  ),
-                }));
-              },
-              onAccessDenied: () => {
-                if (!current()) return;
-                invalidate();
-                setBusy(null);
-                setPage({ items: [] });
-                setError({
-                  kind: 'FORBIDDEN',
-                  message: 'Чат недоступен. Исходный запрос сохранён.',
-                });
-              },
-            }}
-          />
+          {position?.availability === 'AVAILABLE' ? (
+            <StationStreamThread
+              key={`${principal}:${community.id}:${position.streamId}:${position.membershipEpoch}`}
+              community={community}
+              summary={position}
+              source={streamSource}
+              chat={chatSource}
+              onPosition={(value) =>
+                setSummaries((previous) => new Map([...previous, [value.communityId, value]]))
+              }
+            />
+          ) : ['UNADOPTED', 'NOT_STATION'].includes(position?.availability ?? '') ? (
+            <CommunityThread
+              community={community}
+              messages={page.items}
+              busy={busy}
+              error={error}
+              refreshing={false}
+              hasEarlierMessages={Boolean(page.nextCursor)}
+              onRetry={() => void loadThread(community.id)}
+              onLoadEarlier={() => {
+                if (page.nextCursor) void loadThread(community.id, page.nextCursor);
+              }}
+              composer={{
+                scope,
+                communityId: community.id,
+                storage: 'native-local',
+                isCurrent: current,
+                eligible:
+                  principal !== null &&
+                  session.stationMessagePrincipal() === principal &&
+                  page.canRequestStationMessage === true &&
+                  !error,
+                send: (id, input) => session.sendStationMessage(id, input),
+                status: (id, idempotency) => session.stationMessageStatus(id, idempotency),
+                onConfirmed: (message) => {
+                  if (!current()) return;
+                  invalidate();
+                  setBusy(null);
+                  setPage((old) => ({
+                    ...old,
+                    items: Array.from(
+                      mergeCommunityThreadPage(old.items, { items: [message] }).messages,
+                    ),
+                  }));
+                },
+                onAccessDenied: () => {
+                  if (!current()) return;
+                  invalidate();
+                  setBusy(null);
+                  setPage({ items: [] });
+                  setError({
+                    kind: 'FORBIDDEN',
+                    message: 'Чат недоступен. Исходный запрос сохранён.',
+                  });
+                },
+              }}
+            />
+          ) : (
+            <p role="status">История пока недоступна. Обновите список сообществ.</p>
+          )}
         </>
       ) : (
         <>
           <CommunityChatList
-            communities={directory.items}
+            communities={directory.items.map((item) => ({
+              ...item,
+              stationStream: summaries.get(item.id) ?? { availability: 'UNAVAILABLE' as const },
+            }))}
             query=""
             unreadOnly={false}
             hasMore={Boolean(directory.nextCursor)}

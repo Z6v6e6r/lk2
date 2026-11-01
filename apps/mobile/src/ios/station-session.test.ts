@@ -101,3 +101,69 @@ it('reads history/status with no command and rejects unbound bridge calls', asyn
   ).rejects.toThrow('Session changed');
   expect(viewerId).toBeTruthy();
 });
+it.each([401, 403, 503, 0])(
+  'v3 original read uses one native command and no automatic retry (%i)',
+  async (status) => {
+    const request = vi.fn(async (input: Parameters<typeof fixtureReply>[0]) => {
+      await Promise.resolve();
+      if (input.operation === 'stationStream') {
+        if (status === 0)
+          throw Object.assign(new Error('offline'), { code: 'NATIVE_NETWORK_UNAVAILABLE' });
+        return nativeResult({}, status);
+      }
+      return fixtureReply(input);
+    });
+    const session = syntheticSession(request);
+    await session.restore();
+    await expect(
+      session.stationRead(community, {
+        requestId: id,
+        streamId: community,
+        membershipEpoch: 1,
+        throughSequence: 2,
+      }),
+    ).rejects.toThrow();
+    expect(request.mock.calls.filter(([v]) => v.operation === 'stationStream')).toHaveLength(1);
+    expect(request.mock.calls.find(([v]) => v.operation === 'stationStream')?.[0]).toMatchObject({
+      operation: 'stationStream',
+      resource: 'read',
+      resourceId: community,
+      requestId: id,
+    });
+  },
+);
+it('v3 deferred original reply cannot survive synchronous logout or rebind to new session', async () => {
+  let finish!: (v: ReturnType<typeof nativeResult>) => void;
+  const request = vi.fn(async (input: Parameters<typeof fixtureReply>[0]) =>
+    input.operation === 'stationStream'
+      ? new Promise<ReturnType<typeof nativeResult>>((r) => {
+          finish = r;
+        })
+      : fixtureReply(input),
+  );
+  const session = syntheticSession(request);
+  await session.restore();
+  const pending = session.stationRead(community, {
+    requestId: id,
+    streamId: community,
+    membershipEpoch: 1,
+    throughSequence: 2,
+  });
+  const observed = pending.catch((e) => e as Error);
+  session.closeQuarterCreate();
+  finish(
+    nativeResult({
+      contractVersion: 1,
+      contract: 'station-read',
+      requestId: id,
+      outcome: 'CONFIRMED',
+      streamId: community,
+      membershipEpoch: 1,
+      throughSequence: 2,
+      readThroughSequence: 2,
+    }),
+  );
+  expect(await observed).toBeInstanceOf(Error);
+  await expect(session.stationReadStatus(community, id)).rejects.toThrow();
+  expect(request.mock.calls.filter(([v]) => v.operation === 'stationStream')).toHaveLength(1);
+});

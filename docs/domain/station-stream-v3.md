@@ -1,8 +1,9 @@
-# Official station stream: Web consumer
+# Official station stream: Web and native consumer
 
 This concrete consumer pairs with the authenticated LK station v3 history, summaries and
-`station-read.v1` owner. It does not replace `/chat` v2, change native allowlists, introduce a
-message writer, or run a database migration. All browser requests go to PadlHub APIs.
+`station-read.v1` owner. It does not replace `/chat` v2, introduce a message writer, or run a
+database migration. The native companion below adds only the concrete v3 allowlist. All requests
+go to PadlHub APIs.
 
 The existing legacy-community read/chat and OAuth gates compose the server adapter. Fresh,
 authorized owner summaries choose `AVAILABLE`, `UNADOPTED`, or `NOT_STATION` for each mapped
@@ -50,3 +51,38 @@ by the actual LK helper and bound in its test and this adapter test. SHA-256:
 `40093222ddf4c9b020f48868dc4dd08a02d490949d57b091ba42e4aa35ee2385`.
 LOCAL tests are synthetic parser/transport/SQL-shape/UI evidence, not a live provider or Mongo
 read. Full repository gates and matched owner physical/runtime acceptance are reported separately.
+
+## Native v3 companion
+
+Android's shared community entry and the existing iOS station directory now select the same
+`StationStreamThread` only from fresh AVAILABLE summaries. Explicit UNADOPTED/NOT_STATION
+keeps the existing v2 reader; missing/malformed/forbidden summaries cannot downgrade an adopted
+stream. No new backend route, owner authority, schema, SDK retry or feature flag is introduced.
+
+Native read custody uses localStorage for the original request UUID, public stream UUID,
+membership epoch and requested sequence, scoped by tenant/user/community. Web retains its
+sessionStorage default. An exclusive WebLock prevents two native views reserving simultaneous
+commands. A pending request, including an older epoch, is never overwritten or automatically
+resent; reload/process restart and manual recovery use only its original status GET. Exact
+receipt matching and original principal/lifetime checks precede metadata deletion. Corrupt,
+unavailable or quota-limited storage and missing Web Locks fail closed. No message text, token,
+phone or private provider identity is stored. Owner unread observations remain separate from
+historical read receipts; ACK overlays/archive cannot authorize read-through.
+
+The concrete JS/Java/Swift guards permit only batch summaries (1–50 unique public UUIDs), stream
+GET (limit1–50, opaque base64url cursor16–1024), exact read POST and original read status GET.
+Read POST remains <=16KiB UTF8 with exact UUID/header identity and safe integer counters; the
+separate message-send64KiB/8000UTF16 exception is unchanged. Only v3 history responses allow
+3MiB: fifty legal8000-unit messages can exceed the old2M/1MiB bounds after JSON escaping.
+The API owner client, Android streaming sender/engine/JS bridge and iOS checked transport enforce
+that bound. Summary/receipt and old v2 limits remain unchanged. This fixes the bounded size gap
+in #541; it is not permission to increase arbitrary provider/native response limits.
+
+Native distribution requires the coherent #541 server plus matched station owner contract.
+Rollback may remove native v3 presentation, but must retain local original custody and owner
+receipts. Integrate this packet before tournament native Stage B; root must serialize shared
+App/auth gateway/session changes. Pending #525/#512/#518 features are not copied here.
+LOCAL host JVM/reference JSON and rendered synthetic components are not Android device or app
+acceptance. Local Swift build is intentionally not run under the disk budget; automatic iOS CI
+must compile/test the actual bridge. Android APK automatic PR build is absent on this ancestry;
+it requires the separately owned coherent Android CI integration, not workflow dispatch here.
