@@ -56,6 +56,9 @@
       "@phub/domain/training-registration": ["packages/domain/src/training-registration.ts"],
       "@phub/database/training-registration": [
         "packages/database/src/training-registration-repository.ts"
+      ],
+      "@phub/database/station-message-notifications": [
+        "packages/database/src/station-message-notifications.ts"
       ]
     },
     "types": ["node", "vitest/globals"]

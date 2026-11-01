@@ -10,6 +10,7 @@ import { Pool } from 'pg';
 export const suites = [
   {
     id: 'lifecycle',
+    resource: 'postgres',
     file: 'apps/api/src/games/game-lifecycle-http-postgres.test.ts',
     env: 'GAME_LIFECYCLE_HTTP_TEST_DATABASE_URL',
     physical: 'FREE/LOCAL game lifecycle through HTTP and PostgreSQL',
@@ -44,6 +45,7 @@ export const suites = [
   },
   {
     id: 'comms',
+    resource: 'postgres',
     file: 'apps/worker/src/game-comms-integration-postgres.test.ts',
     env: 'GAME_COMMS_INTEGRATION_TEST_DATABASE_URL',
     physical: 'GAME lifecycle -> notification -> chat real PostgreSQL integration',
@@ -63,6 +65,7 @@ export const suites = [
   },
   {
     id: 'rabbit',
+    resource: 'rabbit',
     file: 'apps/worker/src/game-messaging-membership-rabbitmq.test.ts',
     env: 'GAME_MESSAGING_MEMBERSHIP_TEST_RABBITMQ_URL',
     physical: 'GAME messaging membership RabbitMQ physical resilience',
@@ -74,6 +77,36 @@ export const suites = [
       'redelivers after channel loss and accepts the idempotent no-op replay',
     ],
     guards: ['accepts only a query-free loopback disposable vhost'],
+  },
+  {
+    id: 'notification_pg',
+    resource: 'postgres',
+    file: 'apps/worker/src/notification-resilience-postgres.test.ts',
+    env: 'NOTIFICATION_RESILIENCE_TEST_DATABASE_URL',
+    physical: 'GAME notification real PostgreSQL resilience',
+    guard: '',
+    cases: [
+      'applies the exact same event 2, 10 and 100 times without duplicate projection',
+      'suppresses an old event after a newer projection and rolls back a failed projection for replay',
+      'serializes two projector processes and keeps recipients and tenants isolated',
+      'keeps the first multi-tab read cursor monotonic and a later arrival unread',
+    ],
+    guards: [],
+  },
+  {
+    id: 'notification_rabbit',
+    resource: 'rabbit',
+    file: 'apps/worker/src/notification-resilience-rabbitmq.test.ts',
+    env: 'NOTIFICATION_RESILIENCE_TEST_RABBITMQ_URL',
+    physical: 'notification RabbitMQ physical resilience',
+    guard: '',
+    cases: [
+      'recreates required queues and provisions the exact topology twice',
+      'rejects wrong queue arguments and wrong DLX instead of silently accepting drift',
+      'redelivers an unacked delivery after worker loss',
+      'bounds retry into DLQ and supports an explicit replay fixture',
+    ],
+    guards: [],
   },
 ] as const;
 type Suite = (typeof suites)[number];
@@ -104,7 +137,11 @@ export function validateContext(env: Environment): {
   )
     fail('UNSAFE_CONTEXT');
   // Never inherit alternate endpoints/options or fixture targets from the caller.
-  if (Object.keys(env).some((key) => /^(PG|DOCKER_|GAME_.*TEST_)/.test(key) && env[key]))
+  if (
+    Object.keys(env).some(
+      (key) => /^(PG|DOCKER_|GAME_.*TEST_|NOTIFICATION_RESILIENCE_TEST_)/.test(key) && env[key],
+    )
+  )
     fail('AMBIENT_OVERRIDE');
   const endpoint = (
     raw: string | undefined,
@@ -352,7 +389,7 @@ export function requireDatabaseOwnership(
     !actual ||
     !expected ||
     !/^[a-f0-9]{32}$/.test(expected.name.split('_')[1] ?? '') ||
-    !/^lk2_[a-f0-9]{32}_(lifecycle|comms)_verify$/.test(expected.name) ||
+    !/^lk2_[a-f0-9]{32}_(lifecycle|comms|notification_pg)_verify$/.test(expected.name) ||
     !/^lk2_game_[0-9]+_[0-9]+_[a-f0-9]{32}$/.test(expected.marker ?? '') ||
     expected.owner !== 'phub' ||
     !Number.isSafeInteger(expected.oid) ||
@@ -390,7 +427,7 @@ export function requireVhostOwnership(
   acknowledged: boolean,
 ): void {
   if (
-    !/^lk2_[a-f0-9]{32}_rabbit_verify$/.test(name) ||
+    !/^lk2_[a-f0-9]{32}_(rabbit|notification_rabbit)_verify$/.test(name) ||
     !/^lk2_game_[0-9]+_[0-9]+_[a-f0-9]{32}$/.test(marker) ||
     !acknowledged ||
     !Array.isArray(rows)
@@ -546,7 +583,7 @@ export async function main(
       controller.signal.throwIfAborted();
       const name = fixtureName(nonce, suite.id);
       await record({ suite: suite.id, name, marker, phase: 'planned' });
-      if (suite.id === 'rabbit') {
+      if (suite.resource === 'rabbit') {
         let attempted = false;
         let acknowledged = false;
         await withCleanup(

@@ -1856,6 +1856,28 @@ export class PadlHubApiClient {
     });
   }
 
+  public listTrainingCatalogue(query: EventCatalogQuery): Promise<EventCatalogPage> {
+    if (query.surface !== 'TRAININGS')
+      return Promise.reject(new Error('TRAINING_CATALOGUE_INPUT_INVALID'));
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (key === 'surface' || value === undefined) continue;
+      params.set(key, Array.isArray(value) ? value.join(',') : String(value));
+    }
+    return this.request<EventCatalogPage>(`/trainings/catalog?${params.toString()}`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+
+  public continueTrainingCatalogue(cursor: string, limit = 20): Promise<EventCatalogPage> {
+    const params = new URLSearchParams({ cursor, limit: String(limit) });
+    return this.request<EventCatalogPage>(`/trainings/catalog?${params.toString()}`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+
   public registerTraining(
     trainingId: string,
     input: { dateHint: string; subscriptionId: string },

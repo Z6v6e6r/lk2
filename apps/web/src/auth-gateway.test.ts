@@ -4093,3 +4093,35 @@ describe('CANCEL invocation survives session transitions without acquiring new a
     },
   );
 });
+
+it('Android training catalogue stays on the server route and does not open browser provider read jobs', async () => {
+  const session = profilePhotoSession();
+  const calls: string[] = [];
+  const fetchImplementation = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input);
+    calls.push(url);
+    if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+    if (url.includes('/trainings/catalog?'))
+      return Promise.resolve(Response.json({ state: 'READY', items: [], nextCursor: null }));
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+  const gateway = createBrowserAuthGateway({
+    baseUrl: 'https://lk2.padlhub.su',
+    tenantKey: 'local-padel',
+    platform: 'android',
+    nativeSessionTransport: true,
+    appVersion: 'test',
+    fetchImplementation,
+  });
+  await gateway.restoreSession();
+  await gateway.listEventCatalog({
+    surface: 'TRAININGS',
+    localDates: ['2035-04-02'],
+    kinds: ['GROUP_TRAINING'],
+    availability: 'INCLUDE_FULL',
+    limit: 20,
+  });
+  await gateway.continueEventCatalog('11111111-1111-4111-8111-111111111111', 20);
+  expect(calls.filter((url) => url.includes('/trainings/catalog?'))).toHaveLength(2);
+  expect(calls.join(' ')).not.toMatch(/booking-screen-read-jobs|viva|\/user\/api\/v2/);
+});

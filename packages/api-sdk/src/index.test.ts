@@ -2792,3 +2792,39 @@ describe('training stable-key boundary', () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });
+
+it('uses PadlHub-only training catalogue GETs and preserves original registration key without 401 replay', async () => {
+  const fetcher = vi.fn<typeof fetch>(() =>
+    Promise.resolve(jsonResponse({ state: 'READY', items: [] })),
+  );
+  const client = createClient(fetcher, { initialAccessToken: authenticatedSession.accessToken });
+  await client.listTrainingCatalogue({
+    surface: 'TRAININGS',
+    localDates: ['2035-04-02'],
+    kinds: ['GROUP_TRAINING'],
+    availability: 'INCLUDE_FULL',
+    levelFrom: 'D+',
+    limit: 20,
+  });
+  const initial = new URL(requestUrl(fetcher.mock.calls[0]![0]));
+  expect(initial.pathname).toBe('/user/api/v1/local-padel/trainings/catalog');
+  expect(initial.searchParams.get('levelFrom')).toBe('D+');
+  await client.continueTrainingCatalogue('11111111-1111-4111-8111-111111111111', 20);
+  expect(new URL(requestUrl(fetcher.mock.calls[1]![0])).searchParams.has('localDates')).toBe(false);
+  fetcher.mockResolvedValue(
+    jsonResponse({ code: 'AUTH_REQUIRED', message: 'Synthetic failure' }, 401),
+  );
+  const key = 'synthetic-training-original-key';
+  await expect(
+    client.registerTraining(
+      '22222222-2222-4222-8222-222222222222',
+      { dateHint: '2035-04-02', subscriptionId: '33333333-3333-4333-8333-333333333333' },
+      key,
+    ),
+  ).rejects.toThrow();
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(new Headers(fetcher.mock.calls[2]![1]?.headers).get('idempotency-key')).toBe(key);
+  expect(fetcher.mock.calls.map((call) => requestUrl(call[0])).join(' ')).not.toMatch(
+    /auth\/session\/refresh|booking-screen-read-jobs|viva/,
+  );
+});

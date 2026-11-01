@@ -431,6 +431,55 @@ function normalizeExercise(value: unknown): VivaExerciseRecommendation | undefin
   };
 }
 
+/** Strict server catalogue input: no implicit empty page, pagination or duration fallback. */
+function completeTrainingDay(payload: unknown, date: string): readonly unknown[] {
+  if (!Array.isArray(payload) || payload.length > 500) throw new VivaExerciseSourceError(false);
+  const seen = new Set<string>();
+  return payload.filter((value: unknown) => {
+    const item = recordValue(value);
+    const id = stringValue(item?.id);
+    if (!item || !id || seen.has(id)) throw new VivaExerciseSourceError(false);
+    seen.add(id);
+    const type = namedElement(item.type);
+    const direction = namedElement(item.direction);
+    if (!type.id && !type.name && !direction.id && !direction.name)
+      throw new VivaExerciseSourceError(false);
+    if (classifyExercise(item) !== 'TRAINING') return false;
+    for (const name of ['isCancelled', 'cancelled', 'canceled', 'archived', 'isArchived']) {
+      if (item[name] !== undefined && typeof item[name] !== 'boolean')
+        throw new VivaExerciseSourceError(false);
+      if (item[name] === true) return false;
+    }
+    if (item.cancelledAt || item.canceledAt || item.archivedAt) return false;
+    for (const name of ['status', 'state']) {
+      if (item[name] === undefined || item[name] === null) continue;
+      if (typeof item[name] !== 'string') throw new VivaExerciseSourceError(false);
+      const status = item[name].toUpperCase();
+      if (['CANCELLED', 'CANCELED', 'ARCHIVED', 'DELETED'].includes(status)) return false;
+      if (!['ACTIVE', 'SCHEDULED', 'CONFIRMED'].includes(status))
+        throw new VivaExerciseSourceError(false);
+    }
+    const starts = stringValue(item.timeFrom) ?? stringValue(item.startsAt);
+    const ends = stringValue(item.timeTo) ?? stringValue(item.endsAt);
+    const instant = (v: string | undefined): v is string =>
+      Boolean(
+        v &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(v) &&
+        Number.isFinite(Date.parse(v)) &&
+        new Date(v.slice(0, 10)).toISOString().slice(0, 10) === v.slice(0, 10),
+      );
+    if (
+      !instant(starts) ||
+      !instant(ends) ||
+      Date.parse(ends) <= Date.parse(starts) ||
+      new Date(Date.parse(starts) + 3 * 60 * 60 * 1000).toISOString().slice(0, 10) !== date ||
+      !normalizeExercise(item)
+    )
+      throw new VivaExerciseSourceError(false);
+    return true;
+  });
+}
+
 /**
  * Converts an end-user Viva schedule response into the provider-free shape
  * consumed by PadlHub recommendation code. The function is intentionally
@@ -569,17 +618,40 @@ export class VivaExerciseRecommendationSourceAdapter {
     this.avatarSources.set(activityId, { source, fetchedAt: this.now() });
   }
 
-  public async readDate(input: {
+  public readDate(input: {
     readonly date: string;
     readonly accessToken: string;
     readonly correlationId: string;
   }): Promise<readonly VivaExerciseRecommendation[]> {
+    return this.readDateInternal(input, false);
+  }
+
+  /** Server-only complete TRAININGS read; legacy recommendation normalization stays unchanged. */
+  public readCompleteTrainingDate(input: {
+    readonly date: string;
+    readonly accessToken: string;
+    readonly correlationId: string;
+    readonly signal: AbortSignal;
+  }): Promise<readonly VivaExerciseRecommendation[]> {
+    return this.readDateInternal(input, true);
+  }
+
+  private async readDateInternal(
+    input: {
+      readonly date: string;
+      readonly accessToken: string;
+      readonly correlationId: string;
+      readonly signal?: AbortSignal;
+    },
+    complete: boolean,
+  ): Promise<readonly VivaExerciseRecommendation[]> {
     if (
       this.options.mode === 'disabled' ||
       this.options.mode === 'mock' ||
       !/^\d{4}-\d{2}-\d{2}$/.test(input.date) ||
       !input.accessToken
     ) {
+      if (complete) throw new VivaExerciseSourceError(false);
       return [];
     }
     const now = this.now();
@@ -608,8 +680,16 @@ export class VivaExerciseRecommendationSourceAdapter {
             Authorization: `Bearer ${input.accessToken}`,
             'X-Correlation-ID': input.correlationId,
           },
-          signal: AbortSignal.timeout(this.options.timeoutMs),
+          ...(complete ? { redirect: 'error' as const } : {}),
+          signal: input.signal
+            ? AbortSignal.any([input.signal, AbortSignal.timeout(this.options.timeoutMs)])
+            : AbortSignal.timeout(this.options.timeoutMs),
         });
+        if (
+          complete &&
+          (response.status !== 200 || response.redirected || response.url !== url.toString())
+        )
+          throw new VivaExerciseSourceError(false);
         if (!response.ok) {
           throw new VivaExerciseSourceError(
             response.status === 408 || response.status === 429 || response.status >= 500,
@@ -619,20 +699,23 @@ export class VivaExerciseRecommendationSourceAdapter {
         const bytes = await response.arrayBuffer();
         if (bytes.byteLength > 5 * 1_024 * 1_024) throw new VivaExerciseSourceError(false);
         const payload = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-        const items = normalizeVivaExerciseRecommendationPayload(payload, {
-          onStationExternalId: (activityId, externalId) => {
-            this.stationSources.delete(activityId);
-            this.stationSources.set(activityId, { externalId, fetchedAt: now });
-            while (this.stationSources.size > 5_000) {
-              const oldest = this.stationSources.keys().next().value;
-              if (oldest) this.stationSources.delete(oldest);
-            }
+        const items = normalizeVivaExerciseRecommendationPayload(
+          complete ? completeTrainingDay(payload, input.date) : payload,
+          {
+            onStationExternalId: (activityId, externalId) => {
+              this.stationSources.delete(activityId);
+              this.stationSources.set(activityId, { externalId, fetchedAt: now });
+              while (this.stationSources.size > 5_000) {
+                const oldest = this.stationSources.keys().next().value;
+                if (oldest) this.stationSources.delete(oldest);
+              }
+            },
+            onAvatarSource: (activityId, sourceUrl) =>
+              this.rememberAvatarSource(activityId, sourceUrl, now),
+            onTrainerAvatarSource: (activityId, source) =>
+              this.registerTrainerAvatarSource(activityId, source),
           },
-          onAvatarSource: (activityId, sourceUrl) =>
-            this.rememberAvatarSource(activityId, sourceUrl, now),
-          onTrainerAvatarSource: (activityId, source) =>
-            this.registerTrainerAvatarSource(activityId, source),
-        });
+        );
         this.consecutiveFailures = 0;
         this.circuitOpenedAt = undefined;
         this.emit({ outcome: 'success', attempt, durationMs: this.now() - startedAt });

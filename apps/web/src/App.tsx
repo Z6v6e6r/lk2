@@ -956,6 +956,7 @@ export function App({
   // The first native increment exposes canonical API screens. Browser-only provider, payment
   // and upload routes stay unavailable until their native handoff contracts are implemented.
   const nativeSections = new Set([
+    'trainings',
     'home',
     'home-v2',
     'home-v3',

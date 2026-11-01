@@ -6037,6 +6037,8 @@ paths:
     $ref: ./tournament-local.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1registration-operation
   /{tenantKey}/tournaments/{tournamentId}/registration-operations/{operationId}/retry:
     $ref: ./tournament-local.yaml#/paths/~1{tenantKey}~1tournaments~1{tournamentId}~1registration-operations~1{operationId}~1retry
+  /{tenantKey}/trainings/catalog:
+    $ref: ./training-catalogue.yaml#/paths/~1{tenantKey}~1trainings~1catalog
   /{tenantKey}/trainings/{trainingId}/registrations:
     $ref: ./training-registrations.yaml#/paths/~1{tenantKey}~1trainings~1{trainingId}~1registrations
   /{tenantKey}/trainings/{trainingId}/registration-operation:

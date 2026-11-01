@@ -576,6 +576,13 @@ const environmentSchema = z.object({
   WEB_PUSH_ENDPOINTS_PER_USER_MAX: z.coerce.number().int().min(1).max(20).default(5),
   WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
   WEB_PUSH_CIRCUIT_RESET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
+  STATION_NOTIFICATIONS_ENABLED: booleanFromEnvironment,
+  STATION_NOTIFICATION_OWNER_ORIGIN: z.string().url().optional(),
+  STATION_NOTIFICATION_TENANT_ID: z.string().uuid().optional(),
+  STATION_NOTIFICATION_ISSUER: z.string().min(1).max(300).optional(),
+  STATION_NOTIFICATION_AUDIENCE: z.string().min(1).max(300).optional(),
+  STATION_NOTIFICATION_KEY_ID: z.string().min(1).max(100).optional(),
+  STATION_NOTIFICATION_PRIVATE_KEY_FILE: z.string().min(1).max(1024).optional(),
   FCM_ENABLED: booleanFromEnvironment,
   FCM_APP_ID: z.string().min(1).max(300).default('ru.padlhub.app'),
   FCM_PROJECT_ID: z.string().min(1).max(300).optional(),
@@ -1597,6 +1604,27 @@ export function loadConfig(
     throw new Error(
       'Notification attendance requires lifecycle and explicit training type/studio allowlists',
     );
+  if (parsed.data.STATION_NOTIFICATIONS_ENABLED) {
+    for (const key of [
+      'STATION_NOTIFICATION_OWNER_ORIGIN',
+      'STATION_NOTIFICATION_TENANT_ID',
+      'STATION_NOTIFICATION_ISSUER',
+      'STATION_NOTIFICATION_AUDIENCE',
+      'STATION_NOTIFICATION_KEY_ID',
+      'STATION_NOTIFICATION_PRIVATE_KEY_FILE',
+    ] as const)
+      if (!parsed.data[key]) throw new Error('STATION_NOTIFICATION_CONFIGURATION_REQUIRED');
+    const origin = new URL(parsed.data.STATION_NOTIFICATION_OWNER_ORIGIN!);
+    if (
+      origin.protocol !== 'https:' ||
+      origin.username ||
+      origin.password ||
+      origin.search ||
+      origin.hash ||
+      origin.pathname !== '/'
+    )
+      throw new Error('STATION_NOTIFICATION_ORIGIN_INVALID');
+  }
   if (parsed.data.FCM_ENABLED) {
     const missingFcm = [
       ['FCM_PROJECT_ID', parsed.data.FCM_PROJECT_ID],

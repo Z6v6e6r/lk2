@@ -7,6 +7,7 @@ import { createTournamentLocalRepository } from '@phub/database';
 import { TournamentLocalOwnerClient } from '@phub/legacy-games-adapter';
 import { createTournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';
 import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
+import { createTrainingCatalogueSource } from './bookings/training-catalogue-source.js';
 import { createTrainingRegistrationRepository } from '@phub/database/training-registration';
 import { TrainingRegistrationOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createTrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
@@ -76,7 +77,11 @@ import {
 import { notificationReceiptSecret } from '@phub/notifications';
 import { createRuntimeNotificationEndpointCipher } from './notifications/runtime-endpoint-cipher.js';
 import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
-import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
+import {
+  VivaHomeSourceAdapter,
+  VivaIdentityProvider,
+  VivaExerciseRecommendationSourceAdapter,
+} from '@phub/viva-adapter';
 import {
   ManagedSubscriptionRuntimeQuoteClient,
   SubscriptionPolicyRegistryClient,
@@ -267,6 +272,30 @@ const authService = new AuthService({
     ),
   ...(legacyViewerIdentityLink ? { legacyViewerIdentityLink } : {}),
 });
+// Trusted tenant bindings only; keep circuit state across requests and bound cache cardinality.
+const trainingCatalogueAdapters = new Map<string, VivaExerciseRecommendationSourceAdapter>();
+const trainingCatalogueSource =
+  config.GAMES_READ_ENABLED && ['sandbox', 'production'].includes(config.VIVA_MODE)
+    ? createTrainingCatalogueSource({
+        access: (actor) => authService.issueTrainingCatalogueAccess(actor),
+        adapter: (providerTenantKey) => {
+          const existing = trainingCatalogueAdapters.get(providerTenantKey);
+          if (existing) return existing;
+          if (trainingCatalogueAdapters.size >= 64)
+            throw new Error('TRAINING_CATALOGUE_UNAVAILABLE');
+          const adapter = new VivaExerciseRecommendationSourceAdapter({
+            mode: config.VIVA_MODE,
+            apiBaseUrl: config.VIVA_END_USER_API_URL,
+            providerTenantKey,
+            timeoutMs: Math.min(config.VIVA_TIMEOUT_MS, 2_500),
+            maxAttempts: 1,
+            onMetric: (metric) => logger.info({ metric }, 'training catalogue provider read'),
+          });
+          trainingCatalogueAdapters.set(providerTenantKey, adapter);
+          return adapter;
+        },
+      })
+    : undefined;
 const phoneSubjectLinkService = new PhoneSubjectLinkService({
   config,
   repository: createPhoneSubjectLinkRepository(pool),
@@ -950,6 +979,7 @@ const app = await buildApp({
         promotionEngagementSink,
       }
     : {}),
+  ...(trainingCatalogueSource ? { trainingCatalogueSource } : {}),
   bookingPreferencesRepository: createBookingPreferencesRepository(pool),
   upcomingBookingsRepository: createUpcomingBookingsRepository(pool),
   ...(config.VIVA_DIRECT_READ_ENABLED || config.GAMES_READ_ENABLED
