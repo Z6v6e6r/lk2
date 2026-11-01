@@ -267,3 +267,20 @@ fields to PadlHub after projection completion in a bounded background queue; tel
 has no retries, and cannot change session/projection
 state. Active detail IDs follow the browser contract's 128-character bound; cancelled list entries
 are never requested as details. No additional provider operation or server permission is added.
+
+## Automatic unsigned Android verification
+
+The `mobile-android.yaml` PR workflow checks the exact proposed head using JDK21 and SDK36.
+It builds the shared Web assets, synchronizes Android only, runs Gradle `testDebugUnitTest`
+and builds `assembleRelease` without a signing configuration. The JVM session tests use
+`org.json:json:20240303` as a test-only dependency; Android's throwing JSON stubs must not be
+silenced with `returnDefaultValues`. The actual Gradle XML reports must contain the JOIN,
+TRAINING, OAuth callback and baseline suites with zero failures, errors or skipped tests.
+
+The workflow verifies the application ID, refuses a signed APK, records the unsigned APK SHA256
+and retains only that artifact and test XML for14days. It does not create signing material,
+load Firebase configuration, execute the app on a device, call a provider or upload to a store.
+Explicit signed-release/tag requests fail the separate unavailable-release gate. The build has
+empty API/tenant configuration and is evidence of compilation and synthetic JVM behavior only.
+Physical-device session/lifecycle, FCM, installation/upgrade and signed store readiness remain
+separate acceptance steps. Never distribute this unsigned verification artifact as a release.
