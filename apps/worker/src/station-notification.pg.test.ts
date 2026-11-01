@@ -95,7 +95,15 @@ physical('station notifications: existing PostgreSQL CI service, no provider', (
         "insert into integration.notification_provider_accounts(tenant_id,id,channel,platform,provider,app_id,environment,credential_ref,status) values($1,$2,'PUSH',$3,$4,'station-test','SANDBOX','synthetic','ACTIVE')",
         [tenant, account, kind === 'FCM' ? 'ANDROID' : kind === 'APNS' ? 'IOS' : 'WEB', kind],
       );
-      const enc = cipher.encrypt('synthetic-token');
+      const enc = cipher.encrypt(
+        kind === 'WEB_PUSH'
+          ? JSON.stringify({
+              endpoint: 'https://push.example.test/subscription',
+              expirationTime: null,
+              keys: { p256dh: 'A'.repeat(40), auth: 'B'.repeat(16) },
+            })
+          : 'synthetic-token',
+      );
       await c.query(
         "insert into integration.notification_endpoints(tenant_id,id,user_id,provider_account_id,channel,address_ciphertext,address_hash,encryption_key_id) values($1,$2,$3,$4,'PUSH',$5,$6,$7)",
         [
@@ -172,6 +180,26 @@ physical('station notifications: existing PostgreSQL CI service, no provider', (
   }
   const rows = (tenant: string, sql: string, values: unknown[] = []) =>
     repo.tx(tenant, (c) => c.query<Record<string, unknown>>(sql, [tenant, ...values]));
+  async function ordinaryConfig(tenant: string) {
+    const template = randomUUID(),
+      trigger = randomUUID();
+    await rows(
+      tenant,
+      "insert into notifications.templates(tenant_id,id,template_key,version,category,channels,title_template,body_template,active) values($1,$2,$3,1,'MESSAGING',array['IN_APP','PUSH']::text[],'Generic','Generic',true)",
+      [template, 'ordinary.compat.' + template],
+    );
+    await rows(
+      tenant,
+      "insert into notifications.trigger_rules(tenant_id,id,rule_key,source_event_type,template_id,audience_selector,mandatory,active) values($1,$2,$3,'test.ordinary.compat.v1',$4,$5::jsonb,false,true)",
+      [
+        trigger,
+        'ordinary.compat.' + trigger,
+        template,
+        JSON.stringify({ type: 'EVENT_USERS', field: 'recipientUserIds' }),
+      ],
+    );
+    return { template, trigger };
+  }
   afterAll(async () => {
     await second.end();
     try {
@@ -353,7 +381,11 @@ physical('station notifications: existing PostgreSQL CI service, no provider', (
           [provider],
         );
         if (kind === 'retarget') {
-          const failure = expect(pending).rejects.toThrow('STATION_MAPPING_CHANGED');
+          // EPQ may exclude the retargeted row because the reverse-count subquery retains its statement snapshot.
+          // Either exact denial is valid; never accept a different mapping or write a notification.
+          const failure = expect(pending).rejects.toThrow(
+            /^STATION_MAPPING_(CHANGED|UNAVAILABLE)$/,
+          );
           await started.wait;
           await waitBlocked(pid);
           await holder.query('commit');
@@ -640,6 +672,137 @@ physical('station notifications: existing PostgreSQL CI service, no provider', (
       ).rows,
     ).toEqual([{ station_notification_context_id: f.recipient.context_id }]);
   });
+  it('ordinary restricted writer needs no station-table grant; old station context cannot be stripped', async () => {
+    const f = await setup();
+    await f.project();
+    const station = (
+      await rows(
+        f.tenant,
+        'select id,trigger_rule_id,template_id from notifications.intents where tenant_id=$1',
+      )
+    ).rows[0]!;
+    const ordinary = await ordinaryConfig(f.tenant);
+    const role = 'station_ordinary_' + randomUUID().replaceAll('-', '');
+    const c = await pool.connect();
+    let created = false;
+    try {
+      await c.query(`create role ${role} nologin nosuperuser nobypassrls`);
+      created = true;
+      await c.query(`grant usage on schema notifications to ${role}`);
+      await c.query(
+        `grant select on notifications.templates,notifications.trigger_rules to ${role}`,
+      );
+      await c.query(
+        `grant select,insert,update on notifications.intents,notifications.deliveries to ${role}`,
+      );
+      await c.query(`set role ${role}`);
+      await c.query("select set_config('app.tenant_id',$1,false)", [f.tenant]);
+      expect(
+        (
+          await c.query<{ allowed: boolean }>(
+            "select has_table_privilege(current_user,'notifications.station_message_recipient_outbox','SELECT') allowed",
+          )
+        ).rows[0]!.allowed,
+      ).toBe(false);
+      const normal = randomUUID();
+      await c.query(
+        "insert into notifications.intents(tenant_id,id,recipient_user_id,source_event_id,trigger_rule_id,template_id,dedupe_key,rendered_title,rendered_body,state) values($1,$2,$3,$4,$5,$6,$7,'Generic','Generic','PROCESSING')",
+        [f.tenant, normal, f.user, randomUUID(), ordinary.trigger, ordinary.template, randomUUID()],
+      );
+      await c.query(
+        "insert into notifications.deliveries(tenant_id,intent_id,endpoint_id,channel) values($1,$2,$3,'PUSH')",
+        [f.tenant, normal, f.endpoint],
+      );
+      await c.query(
+        'update notifications.intents set available_at=clock_timestamp() where tenant_id=$1 and id=$2',
+        [f.tenant, normal],
+      );
+      expect(
+        (
+          await c.query('select id from notifications.intents where tenant_id=$1 and id=$2', [
+            f.tenant,
+            normal,
+          ])
+        ).rowCount,
+      ).toBe(1);
+      for (const [trigger, template] of [
+        [station.trigger_rule_id, ordinary.template],
+        [ordinary.trigger, station.template_id],
+        [null, station.template_id],
+      ]) {
+        await expect(
+          c.query(
+            "insert into notifications.intents(tenant_id,id,recipient_user_id,source_event_id,trigger_rule_id,template_id,dedupe_key,rendered_title,rendered_body,state) values($1,$2,$3,$4,$5,$6,$7,'Generic','Generic','PROCESSING')",
+            [f.tenant, randomUUID(), f.user, randomUUID(), trigger, template, randomUUID()],
+          ),
+        ).rejects.toThrow('STATION_CONTEXT_REQUIRED');
+      }
+      await expect(
+        c.query('update notifications.intents set template_id=$3 where tenant_id=$1 and id=$2', [
+          f.tenant,
+          normal,
+          station.template_id,
+        ]),
+      ).rejects.toThrow('STATION_CONTEXT_REQUIRED');
+      await expect(
+        c.query(
+          'update notifications.intents set station_notification_context_id=null where tenant_id=$1 and id=$2',
+          [f.tenant, station.id],
+        ),
+      ).rejects.toThrow('STATION_CONTEXT_IMMUTABLE');
+      await expect(
+        c.query(
+          "insert into notifications.deliveries(tenant_id,intent_id,channel,state,completed_at) values($1,$2,'IN_APP','DELIVERED',now())",
+          [f.tenant, station.id],
+        ),
+      ).rejects.toThrow('STATION_CONTEXT_MISMATCH');
+      // Existing scenario writers read templates but need no trigger-rule or station-ledger grant.
+      await c.query('reset role');
+      await c.query(`revoke select on notifications.trigger_rules from ${role}`);
+      await c.query(`set role ${role}`);
+      expect(
+        (
+          await c.query<{ allowed: boolean }>(
+            "select has_table_privilege(current_user,'notifications.trigger_rules','SELECT') allowed",
+          )
+        ).rows[0]!.allowed,
+      ).toBe(false);
+      const scenario = randomUUID();
+      await c.query(
+        "insert into notifications.intents(tenant_id,id,recipient_user_id,source_event_id,trigger_rule_id,template_id,dedupe_key,rendered_title,rendered_body,state) values($1,$2,$3,$4,null,$5,$6,'Generic','Generic','PROCESSING')",
+        [f.tenant, scenario, f.user, randomUUID(), ordinary.template, randomUUID()],
+      );
+      await c.query(
+        'update notifications.intents set available_at=clock_timestamp() where tenant_id=$1 and id=$2',
+        [f.tenant, scenario],
+      );
+      expect(
+        (
+          await c.query('select id from notifications.intents where tenant_id=$1 and id=$2', [
+            f.tenant,
+            scenario,
+          ])
+        ).rowCount,
+      ).toBe(1);
+      await expect(
+        c.query(
+          "insert into notifications.intents(tenant_id,id,recipient_user_id,source_event_id,trigger_rule_id,template_id,dedupe_key,rendered_title,rendered_body,state) values($1,$2,$3,$4,null,$5,$6,'Generic','Generic','PROCESSING')",
+          [f.tenant, randomUUID(), f.user, randomUUID(), station.template_id, randomUUID()],
+        ),
+      ).rejects.toThrow('STATION_CONTEXT_REQUIRED');
+    } finally {
+      try {
+        await c.query('reset role');
+        await c.query("select set_config('app.tenant_id','',false)");
+        if (created) {
+          await c.query(`drop owned by ${role}`);
+          await c.query(`drop role ${role}`);
+        }
+      } finally {
+        c.release();
+      }
+    }
+  });
   it.each(['FCM', 'APNS', 'WEB_PUSH'] as const)(
     'actual old %s worker ignores station initial/retry/expired, but delivers ordinary control',
     async (kind) => {
@@ -684,11 +847,12 @@ physical('station notifications: existing PostgreSQL CI service, no provider', (
           "update notifications.deliveries set scenario_available_at=now() where tenant_id=$1 and channel='PUSH'",
         ),
       ).rejects.toThrow('STATION_SCENARIO_FORBIDDEN');
-      const normal = randomUUID();
+      const normal = randomUUID(),
+        ordinary = await ordinaryConfig(f.tenant);
       await rows(
         f.tenant,
-        `insert into notifications.intents(tenant_id,id,recipient_user_id,source_event_id,trigger_rule_id,template_id,dedupe_key,rendered_title,rendered_body,state) select tenant_id,$2,recipient_user_id,$3,trigger_rule_id,template_id,$4,rendered_title,rendered_body,'PROCESSING' from notifications.intents where tenant_id=$1`,
-        [normal, randomUUID(), randomUUID()],
+        `insert into notifications.intents(tenant_id,id,recipient_user_id,source_event_id,trigger_rule_id,template_id,dedupe_key,rendered_title,rendered_body,state) values($1,$2,$3,$4,$5,$6,$7,'Generic','Generic','PROCESSING')`,
+        [normal, f.user, randomUUID(), ordinary.trigger, ordinary.template, randomUUID()],
       );
       await rows(
         f.tenant,
@@ -697,6 +861,15 @@ physical('station notifications: existing PostgreSQL CI service, no provider', (
       );
       await run();
       expect(send).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          await rows(
+            f.tenant,
+            'select state from notifications.deliveries where tenant_id=$1 and intent_id=$2',
+            [normal],
+          )
+        ).rows,
+      ).toEqual([{ state: 'SENT' }]);
     },
   );
   it('current read/leave DENY suppresses before provider with original context retained', async () => {

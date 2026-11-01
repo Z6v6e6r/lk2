@@ -73,11 +73,26 @@ begin
    or (old.station_notification_context_id is not null and (new.tenant_id,new.id,new.recipient_user_id) is distinct from (old.tenant_id,old.id,old.recipient_user_id))) then
   raise exception 'STATION_CONTEXT_IMMUTABLE';
  end if;
+ -- Ordinary/scenario callers retain their existing privileges; never probe station tables for NULL context.
+ -- The UPDATE guard above still rejects stripping any previously bound station context.
+ if new.station_notification_context_id is null then
+  -- Existing generic projection can select an active station rule. It must not create an unbound station intent.
+  -- These are existing projector-readable tables, not the private station recipient ledger.
+  if exists(select 1 from notifications.templates where tenant_id=new.tenant_id and id=new.template_id and template_key='station.message.v1') then
+   raise exception 'STATION_CONTEXT_REQUIRED';
+  end if;
+  -- Scenario writers with NULL rule need no trigger_rules privilege. A SQL OR does not avoid ACL checks.
+  if new.trigger_rule_id is not null then
+   if exists(select 1 from notifications.trigger_rules where tenant_id=new.tenant_id and id=new.trigger_rule_id and (rule_key='station.message.default.v1' or source_event_type='communities.station.message.published.v1')) then
+    raise exception 'STATION_CONTEXT_REQUIRED';
+   end if;
+  end if;
+  return new;
+ end if;
  if new.station_notification_context_id is not null then
   if new.render_data ? 'scenarioRunId' then raise exception 'STATION_SCENARIO_FORBIDDEN'; end if;
   if new.source_event_id<>new.station_notification_context_id then raise exception 'STATION_SOURCE_CONTEXT_MISMATCH'; end if;
   if TG_OP='UPDATE' and (new.source_event_id,new.trigger_rule_id,new.template_id,new.dedupe_key,new.render_data,new.rendered_title,new.rendered_body,new.rendered_deep_link) is distinct from (old.source_event_id,old.trigger_rule_id,old.template_id,old.dedupe_key,old.render_data,old.rendered_title,old.rendered_body,old.rendered_deep_link) then raise exception 'STATION_INTENT_IMMUTABLE'; end if;
- elsif exists(select 1 from notifications.station_message_recipient_outbox where tenant_id=new.tenant_id and id=new.source_event_id) then raise exception 'STATION_CONTEXT_REQUIRED';
  end if;
  return new;
 end $$;
