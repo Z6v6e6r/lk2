@@ -73,3 +73,10 @@ export interface QuarterCreateResult {
   registration: { status: 'CONFIRMED' | 'UNKNOWN'; asOf: string | null };
   reason: string | null;
 }
+
+export type {
+  TournamentChatRequest,
+  TournamentChatReceipt,
+  TournamentChatPage,
+  TournamentChatMessage,
+} from '@phub/domain';

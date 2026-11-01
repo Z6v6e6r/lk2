@@ -1,3 +1,4 @@
+import { createTournamentChatOwner } from './tournaments/tournament-chat-owner-client.js';
 import { createCommunityActorToken } from './communities/community-actor-token.js';
 import { createQuarterCreateRepository } from '@phub/database/quarter-create';
 import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
@@ -575,6 +576,7 @@ const stationStreamOwner = createStationStreamRuntime({
   token: communityActorToken,
   logger,
 });
+const tournamentChatOwner = createTournamentChatOwner(config, pool);
 const stationMessageOwner = createStationMessageRuntime({
   config,
   pool,
@@ -854,6 +856,7 @@ const app = await buildApp({
     token: communityActorToken,
   }),
   ...(stationMessageOwner ? { stationMessageOwner } : {}),
+  ...(tournamentChatOwner ? { tournamentChatOwner } : {}),
   ...(stationStreamOwner ? { stationStreamOwner } : {}),
   ...(communityReadExperienceService ? { communityReadExperienceService } : {}),
   ...(communityCreateService ? { communityCreateService } : {}),

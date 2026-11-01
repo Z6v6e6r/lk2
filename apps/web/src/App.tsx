@@ -1,3 +1,4 @@
+import { TournamentChatPage } from './TournamentChatPage.js';
 import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
 import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
 import { QuarterCreatePanel } from './QuarterCreatePanel.js';
@@ -172,6 +173,7 @@ type ProtectedRoute =
   | { readonly kind: 'game'; readonly gameId: string }
   | { readonly kind: 'trainings' }
   | { readonly kind: 'tournaments' }
+  | { readonly kind: 'tournament-chat'; readonly tournamentId: string }
   | { readonly kind: 'subscriptions'; readonly subscriptionId?: string }
   | { readonly kind: 'gift-certificates' }
   | { readonly kind: 'section'; readonly title: string }
@@ -195,6 +197,11 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   );
   if (profileMatch?.[1]) return { kind: 'profile', userId: profileMatch[1] };
   if (normalizedPath === '/bookings') return { kind: 'bookings' };
+  const tournamentChat =
+    /^\/tournaments\/([a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})\/chat$/.exec(
+      normalizedPath,
+    );
+  if (tournamentChat?.[1]) return { kind: 'tournament-chat', tournamentId: tournamentChat[1] };
   if (normalizedPath === '/chats') return { kind: 'chats', mode: 'list' };
   if (normalizedPath === '/chats/new') return { kind: 'chats', mode: 'new' };
   const chatMatch = normalizedPath.match(
@@ -3063,6 +3070,35 @@ export function App({
         />
       );
     }
+    if (protectedRoute.kind === 'tournament-chat') {
+      if (
+        clientPlatform !== 'web' ||
+        !gateway.tournamentChatPrincipal ||
+        !gateway.tournamentChatPrincipal() ||
+        !gateway.sendTournamentChatMessage ||
+        !gateway.getTournamentChatRequest ||
+        !gateway.getTournamentChatHistory
+      )
+        return (
+          <main>
+            <h1>Чат турнира пока недоступен</h1>
+            <a href="/games">К событиям</a>
+          </main>
+        );
+      return (
+        <TournamentChatPage
+          key={`${context.tenant.id}:${context.user.id}:${protectedRoute.tournamentId}`}
+          tournamentId={protectedRoute.tournamentId}
+          principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+          gateway={{
+            tournamentChatPrincipal: gateway.tournamentChatPrincipal,
+            sendTournamentChatMessage: gateway.sendTournamentChatMessage,
+            getTournamentChatRequest: gateway.getTournamentChatRequest,
+            getTournamentChatHistory: gateway.getTournamentChatHistory,
+          }}
+        />
+      );
+    }
     if (protectedRoute.kind === 'tournaments') {
       const tournamentId =
         typeof window === 'undefined'
@@ -3073,6 +3109,10 @@ export function App({
           key={`${context.tenant.id}:${context.user.id}`}
           gateway={gateway}
           tournamentId={tournamentId}
+          chatAvailable={
+            clientPlatform === 'web' &&
+            Boolean(gateway.tournamentChatPrincipal?.() && gateway.getTournamentChatHistory)
+          }
           principal={{ tenantId: context.tenant.id, userId: context.user.id }}
         />
       );

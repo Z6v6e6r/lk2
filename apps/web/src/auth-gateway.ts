@@ -626,6 +626,10 @@ export interface AuthGateway {
   readonly leaveGame: PadlHubApiClient['leaveGame'];
   readonly reconcileManagedLeaveOperation?: PadlHubApiClient['reconcileManagedLeaveOperation'];
   readonly tournamentPrincipal?: () => string | null;
+  readonly tournamentChatPrincipal?: () => string | null;
+  readonly sendTournamentChatMessage?: PadlHubApiClient['sendTournamentChatMessage'];
+  readonly getTournamentChatRequest?: PadlHubApiClient['getTournamentChatRequest'];
+  readonly getTournamentChatHistory?: PadlHubApiClient['getTournamentChatHistory'];
   readonly commandTournament?: PadlHubApiClient['commandTournament'];
   readonly retryTournament?: PadlHubApiClient['retryTournament'];
   readonly getTournamentRegistration?: PadlHubApiClient['getTournamentRegistration'];
@@ -2481,6 +2485,30 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
     reconcileManagedLeaveOperation(gameId, key) {
       return client.reconcileManagedLeaveOperation(gameId, key);
+    },
+    tournamentChatPrincipal() {
+      return !nativeClient ? quarterCreatePrincipal() : null;
+    },
+    async sendTournamentChatMessage(id, input) {
+      if (nativeClient) return nativeUnavailable();
+      const p = requireQuarterPrincipal();
+      const result = await client.sendTournamentChatMessage(id, input);
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    async getTournamentChatRequest(id, requestId) {
+      if (nativeClient) return nativeUnavailable();
+      const p = requireQuarterPrincipal();
+      const result = await client.getTournamentChatRequest(id, requestId);
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    async getTournamentChatHistory(id, limit, cursor) {
+      if (nativeClient) return nativeUnavailable();
+      const p = requireQuarterPrincipal();
+      const result = await client.getTournamentChatHistory(id, limit, cursor);
+      requireQuarterPrincipal(p);
+      return result;
     },
     tournamentPrincipal() {
       return !nativeClient && !tournamentLogoutStarted && currentUserId && currentTenantId

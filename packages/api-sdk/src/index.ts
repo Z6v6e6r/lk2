@@ -1,4 +1,14 @@
 import {
+  parseTournamentChatRequest,
+  parseTournamentChatReceipt,
+  parseTournamentChatPage,
+  tournamentChatRequestHash,
+  type TournamentChatRequest,
+  type TournamentChatReceipt,
+  type TournamentChatPage,
+} from './tournament-chat.js';
+export * from './tournament-chat.js';
+import {
   parseStationReadReceipt,
   parseStationStreamPage,
   parseStationStreamSummaries,
@@ -1401,6 +1411,45 @@ export class PadlHubApiClient {
     );
   }
 
+  public async sendTournamentChatMessage(
+    tournamentId: string,
+    input: TournamentChatRequest,
+  ): Promise<TournamentChatReceipt> {
+    const request = parseTournamentChatRequest(input);
+    const hash = await tournamentChatRequestHash(tournamentId, request);
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/message-requests`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+        idempotencyKey: request.requestId,
+        retryOnUnauthorized: false,
+      },
+    );
+    return parseTournamentChatReceipt(value, tournamentId, request.requestId, hash);
+  }
+  public async getTournamentChatRequest(
+    tournamentId: string,
+    requestId: string,
+  ): Promise<TournamentChatReceipt> {
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/message-requests/${encodeURIComponent(requestId)}`,
+      { cache: 'no-store', retryOnUnauthorized: false },
+    );
+    return parseTournamentChatReceipt(value, tournamentId, requestId);
+  }
+  public async getTournamentChatHistory(
+    tournamentId: string,
+    limit = 50,
+    cursor?: string,
+  ): Promise<TournamentChatPage> {
+    const query = new URLSearchParams({ limit: String(limit), ...(cursor ? { cursor } : {}) });
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/messages?${query}`,
+      { cache: 'no-store', retryOnUnauthorized: false },
+    );
+    return parseTournamentChatPage(value, tournamentId, limit, cursor);
+  }
   public commandTournament(
     tournamentId: string,
     input: TournamentLocalInput,

@@ -1,3 +1,5 @@
+import { registerTournamentChatRoutes } from './tournaments/tournament-chat-routes.js';
+import type { TournamentChatOwner } from './tournaments/tournament-chat-owner-client.js';
 import { registerStationStreamRoutes } from './communities/station-stream-routes.js';
 import type { StationStreamOwner } from './communities/station-stream-owner-client.js';
 import { registerStationMessageRoutes } from './communities/station-message-routes.js';
@@ -265,6 +267,7 @@ export interface BuildAppOptions {
   readonly runtimeContourAttestation?: RuntimeContourAttestation;
   readonly communityDirectory?: CommunityDirectoryService;
   readonly stationMessageOwner?: StationMessageOwner;
+  readonly tournamentChatOwner?: TournamentChatOwner;
   readonly stationStreamOwner?: StationStreamOwner;
   readonly communityReadExperienceService?: CommunityReadExperienceService;
   readonly communityCreateService?: CommunityCreateService;
@@ -1098,6 +1101,10 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
+  registerTournamentChatRoutes(app as unknown as FastifyInstance, {
+    ...(options.tournamentChatOwner ? { owner: options.tournamentChatOwner } : {}),
+    handlers: [authenticate, resolveTenant],
   });
   registerStationMessageRoutes(app as unknown as FastifyInstance, {
     ...(options.stationMessageOwner ? { owner: options.stationMessageOwner } : {}),
