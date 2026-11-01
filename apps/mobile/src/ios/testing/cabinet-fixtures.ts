@@ -89,6 +89,7 @@ export function syntheticSession(
         config,
         plugin,
         (id) => session?.canDispatchGameCancellation(id) === true,
+        (request) => session?.canDispatchStation(request) === true,
       ),
     }),
   );

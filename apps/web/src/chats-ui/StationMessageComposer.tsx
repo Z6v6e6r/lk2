@@ -7,6 +7,8 @@ export interface StationMessageComposerProps {
   readonly scope: string;
   readonly communityId: string;
   readonly eligible: boolean;
+  readonly storage?: 'native-local';
+  readonly isCurrent?: () => boolean;
   readonly send: (
     communityId: string,
     request: StationMessageRequest,
@@ -31,11 +33,17 @@ export function StationMessageComposer(props: StationMessageComposerProps): Reac
   }, [props]);
   const [custody] = useState(() => {
     try {
-      return new StationMessageCustody(props.scope, props.communityId, window.sessionStorage);
+      return new StationMessageCustody(
+        props.scope,
+        props.communityId,
+        props.storage === 'native-local' ? window.localStorage : window.sessionStorage,
+      );
     } catch {
       return null;
     }
   });
+  const [originalPrincipalIsCurrent] = useState(() => props.isCurrent ?? (() => true));
+  const current = (): boolean => active.current && originalPrincipalIsCurrent();
   function updatePending(): void {
     try {
       setPendingCount(custody?.pending().length ?? 0);
@@ -44,7 +52,7 @@ export function StationMessageComposer(props: StationMessageComposerProps): Reac
     }
   }
   function unavailable(error: unknown): void {
-    if (!active.current) return;
+    if (!current()) return;
     if (
       typeof error === 'object' &&
       error !== null &&
@@ -56,14 +64,14 @@ export function StationMessageComposer(props: StationMessageComposerProps): Reac
   }
   async function accept(value: unknown, requestId: string, text?: string): Promise<boolean> {
     const receipt = parseStationMessageReceipt(value, requestId, text);
-    if (!active.current) return false;
+    if (!current()) return false;
     if (receipt.outcome !== 'CONFIRMED') {
       setNotice('Не удалось подтвердить отправку. Проверьте статус сообщения.');
       return false;
     }
     if (!custody || !(await custody.matchesOriginal(requestId, receipt.message.body)))
       throw new Error('STATION_MESSAGE_RECEIPT_UNKNOWN');
-    if (!active.current) return false;
+    if (!current()) return false;
     propsRef.current.onConfirmed(receipt.message);
     custody?.confirmed(requestId);
     updatePending();
@@ -71,12 +79,12 @@ export function StationMessageComposer(props: StationMessageComposerProps): Reac
     return true;
   }
   async function restore(): Promise<void> {
-    if (inFlight.current || !custody) return;
+    if (inFlight.current || !custody || !current()) return;
     inFlight.current = true;
     setBusy(true);
     try {
       for (const original of custody.pending()) {
-        if (!active.current) break;
+        if (!current()) break;
         try {
           await accept(
             await propsRef.current.status(props.communityId, original.requestId),
@@ -86,12 +94,12 @@ export function StationMessageComposer(props: StationMessageComposerProps): Reac
           unavailable(error);
         }
       }
-      if (active.current) updatePending();
+      if (current()) updatePending();
     } catch (error) {
       unavailable(error);
     } finally {
       inFlight.current = false;
-      if (active.current) setBusy(false);
+      if (current()) setBusy(false);
     }
   }
   useLayoutEffect(() => {
@@ -102,7 +110,7 @@ export function StationMessageComposer(props: StationMessageComposerProps): Reac
   }, []);
   useEffect(() => {
     queueMicrotask(() => {
-      if (active.current) {
+      if (current()) {
         updatePending();
         void restore();
       }
@@ -111,14 +119,26 @@ export function StationMessageComposer(props: StationMessageComposerProps): Reac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   async function send(): Promise<void> {
-    if (inFlight.current || !custody || !props.eligible) return;
+    if (inFlight.current || !custody || !props.eligible || !current()) return;
     const text = draftRef.current;
     if (!text.trim() || text.length > 8000) return;
+    // Native recovery keeps every existing request immutable, even if the user edits the draft.
+    if (props.storage === 'native-local') {
+      try {
+        if (custody.pending().length > 0) {
+          await restore();
+          return;
+        }
+      } catch (error) {
+        unavailable(error);
+        return;
+      }
+    }
     inFlight.current = true;
     setBusy(true);
     try {
-      const original = await custody.original(text);
-      if (!active.current) return;
+      const original = await custody.original(text, current, props.storage === 'native-local');
+      if (!current()) return;
       updatePending();
       const result = await props.send(props.communityId, { requestId: original.requestId, text });
       if ((await accept(result, original.requestId, text)) && draftRef.current === text) {
@@ -129,7 +149,7 @@ export function StationMessageComposer(props: StationMessageComposerProps): Reac
       unavailable(error);
     } finally {
       inFlight.current = false;
-      if (active.current) setBusy(false);
+      if (current()) setBusy(false);
     }
   }
   return (

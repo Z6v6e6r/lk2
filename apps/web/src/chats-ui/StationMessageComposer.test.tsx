@@ -10,6 +10,7 @@ import {
 import type { StationMessageReceipt } from '../auth-gateway.js';
 beforeEach(() => {
   sessionStorage.clear();
+  localStorage.clear();
   vi.stubGlobal('crypto', webcrypto);
 });
 afterEach(() => {
@@ -176,4 +177,129 @@ it('GET receipt with correct UUID but wrong original body cannot erase metadata 
   );
   expect(p.onConfirmed).not.toHaveBeenCalled();
   expect(screen.getByText(/Ожидают подтверждения: 1/)).toBeInTheDocument();
+});
+
+it('native metadata survives a fresh composer/session storage loss and restores only GET', async () => {
+  const p = props();
+  const first = render(
+    <StationMessageComposer {...p} storage="native-local" isCurrent={() => true} />,
+  );
+  await send('private native body');
+  const original = vi.mocked(p.send).mock.calls[0]![1];
+  expect(Object.values(localStorage).join()).not.toContain('private native body');
+  first.unmount();
+  sessionStorage.clear();
+  render(<StationMessageComposer {...p} storage="native-local" isCurrent={() => true} />);
+  await waitFor(() => expect(p.status).toHaveBeenCalledWith(id, original.requestId));
+  expect(p.send).toHaveBeenCalledTimes(1);
+});
+it('original epoch remains fenced even if props change to a new authorized epoch while hashing', async () => {
+  let finish!: (value: ArrayBuffer) => void;
+  let original = true;
+  vi.stubGlobal('crypto', {
+    randomUUID: () => id,
+    subtle: {
+      digest: () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          finish = resolve;
+        }),
+    },
+  });
+  const p = props();
+  const view = render(
+    <StationMessageComposer {...p} storage="native-local" isCurrent={() => original} />,
+  );
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'pending digest' } });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Отправить' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+  original = false;
+  view.rerender(<StationMessageComposer {...p} storage="native-local" isCurrent={() => true} />);
+  await act(async () => {
+    finish(new ArrayBuffer(32));
+    await Promise.resolve();
+  });
+  expect(p.send).not.toHaveBeenCalled();
+  expect(localStorage.length).toBe(0);
+});
+it.each(['corrupt', 'quota', 'denied'] as const)(
+  'native storage %s fails closed without a memory-only request',
+  async (failure) => {
+    const p = props();
+    const get = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    const set = vi.spyOn(Storage.prototype, 'setItem');
+    if (failure === 'corrupt')
+      localStorage.setItem(
+        'lk2:station-message:1:' + JSON.stringify(['tenant/user', id]),
+        'invalid',
+      );
+    if (failure === 'quota')
+      set.mockImplementation(() => {
+        throw new DOMException('quota', 'QuotaExceededError');
+      });
+    if (failure === 'denied')
+      Object.defineProperty(window, 'localStorage', {
+        configurable: true,
+        get() {
+          throw new DOMException('denied', 'SecurityError');
+        },
+      });
+    try {
+      render(<StationMessageComposer {...p} storage="native-local" isCurrent={() => true} />);
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'body' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      expect(p.send).not.toHaveBeenCalled();
+    } finally {
+      set.mockRestore();
+      if (get) Object.defineProperty(window, 'localStorage', get);
+    }
+  },
+);
+
+it.each(['original', 'different draft'])(
+  'native manual Send with pending custody reads original status only (%s)',
+  async (text) => {
+    const p = props();
+    render(<StationMessageComposer {...p} storage="native-local" isCurrent={() => true} />);
+    await send('original');
+    const original = vi.mocked(p.send).mock.calls[0]![1].requestId;
+    const metadata = Object.values(localStorage).join();
+    await send(text);
+    expect(p.send).toHaveBeenCalledTimes(1);
+    expect(p.status).toHaveBeenCalledTimes(1);
+    expect(p.status).toHaveBeenCalledWith(id, original);
+    expect(Object.values(localStorage).join()).toBe(metadata);
+    expect(screen.getByRole('textbox')).toHaveValue(text);
+  },
+);
+it('native custody appearing during hashing blocks a new operation and retains its original status recovery', async () => {
+  let finish!: (value: ArrayBuffer) => void;
+  vi.stubGlobal('crypto', {
+    randomUUID: () => id,
+    subtle: {
+      digest: () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          finish = resolve;
+        }),
+    },
+  });
+  const p = props();
+  render(<StationMessageComposer {...p} storage="native-local" isCurrent={() => true} />);
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'new draft' } });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Отправить' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+  const metadata = JSON.stringify([{ requestId: id, fingerprint: 'a'.repeat(64) }]);
+  localStorage.setItem('lk2:station-message:1:' + JSON.stringify(['tenant/user', id]), metadata);
+  await act(async () => {
+    finish(new ArrayBuffer(32));
+    await Promise.resolve();
+  });
+  expect(p.send).not.toHaveBeenCalled();
+  expect(Object.values(localStorage)).toEqual([metadata]);
+  await send('different draft');
+  expect(p.status).toHaveBeenCalledWith(id, id);
+  expect(p.send).not.toHaveBeenCalled();
+  expect(Object.values(localStorage)).toEqual([metadata]);
 });

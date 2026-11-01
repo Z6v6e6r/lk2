@@ -85,6 +85,8 @@ export interface StationSupportSource {
  */
 export interface CommunityChatsSource {
   readonly custodyScope?: string;
+  readonly custodyStorage?: 'native-local';
+  readonly isCurrent?: () => boolean;
   readonly sendMessage?: (
     communityId: string,
     request: StationMessageRequest,
@@ -1534,6 +1536,10 @@ export function ChatsPage({
               communitySource.getMessageRequest
                 ? {
                     scope: communitySource.custodyScope,
+                    ...(communitySource.custodyStorage
+                      ? { storage: communitySource.custodyStorage }
+                      : {}),
+                    ...(communitySource.isCurrent ? { isCurrent: communitySource.isCurrent } : {}),
                     communityId: communitySelected.id,
                     eligible:
                       communityState.messagesCommunityId === communitySelected.id &&

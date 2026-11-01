@@ -289,3 +289,37 @@ Verification: focused Vitest including game read/lifecycle fixtures, host JVM po
 Swift package tests and rendered synthetic UI are separate from Android/iOS app builds and
 real-device/backend acceptance. The existing lifecycle PostgreSQL fixture is CI-only; no local
 database is provisioned for this packet.
+
+## Official station messages
+
+Android's existing communities thread and iOS's `/chats` community entry now use only
+PadlHub history, station-message POST and original-request status GET. The fresh server
+`canRequestStationMessage` capability controls the composer; directory verification or a
+community name never grants send authority. Other community histories remain read-only.
+No DIRECT/GAME chat, media, realtime, unread write or read-marker capability is added.
+
+Native custody uses localStorage metadata `{requestId, fingerprint}` scoped to the
+original tenant/user/community. No message body, token or provider identity is persisted.
+Ordinary Web retains sessionStorage. Storage denial, corruption or quota failure blocks
+sending. After process restart, reload or an ambiguous response, recovery reads only the
+original request UUID; 403/404, timeout and UNKNOWN do not erase custody or generate a new
+UUID. While any native request is pending, even an explicit Send with edited text performs
+only original status reads; it cannot create or resend a command. Confirmed receipts must match the original request and SHA256 of the normalized
+message body before metadata acknowledgement. Logout closes the original epoch before
+waiting for revocation; queued hashing/reads and late replies cannot dispatch or acknowledge
+under another session. Visible native history is cleared while pending metadata is retained.
+
+The station POST alone permits a 64 KiB serialized UTF-8 envelope and at most 8000 UTF-16
+text units. JavaScript, Java and Swift independently reject unknown keys, duplicate JSON
+keys, unsupported methods/queries, malformed UUIDs, a mismatched idempotency key and a
+caller-selected origin. Other Android command limits remain 16 KiB. The existing SDK
+performs no automatic POST or 401 retry for station sends.
+
+Install the matched station owner/message and history API before distributing this client.
+An older or disabled server leaves sending unavailable or the original request UNKNOWN;
+rollback must retain custody and server receipts. This branch starts from #538 and does not
+copy #525 integration or #512/#518 chat work. Integrate overlapping session/policy/cabinet
+changes deliberately before combined release and rerun their native regressions.
+Host JVM/reference JSON, Swift package and synthetic component rendering are LOCAL source
+checks, separate from APK/app compilation, device process-death, live membership and
+provider acceptance. No credentials, deployment or store activation are part of this work.

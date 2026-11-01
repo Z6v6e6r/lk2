@@ -270,3 +270,30 @@ describe('Android native bridge adapter', () => {
     expect(observe).not.toHaveBeenCalled();
   });
 });
+
+it('Android station adapter preserves exact UTF-8 send once and original GET-only recovery', async () => {
+  const native = plugin();
+  const fetcher = createNativeApiFetch(config, native);
+  const community = '11111111-1111-4111-8111-111111111111',
+    requestId = '22222222-2222-4222-8222-222222222222';
+  const path = `${root}/community-views/${community}/message-requests`;
+  const body = JSON.stringify({ requestId, text: 'я'.repeat(8000) });
+  const headers = {
+    authorization: 'Bearer synthetic.session',
+    'content-type': 'application/json',
+    'idempotency-key': requestId,
+  };
+  native.request.mockRejectedValueOnce(
+    Object.assign(new Error('synthetic'), { code: 'NATIVE_NETWORK_UNAVAILABLE' }),
+  );
+  await expect(fetcher(path, { method: 'POST', headers, body })).rejects.toThrow();
+  expect(native.request).toHaveBeenCalledTimes(1);
+  expect(native.request.mock.calls[0]![0]).toMatchObject({ method: 'POST', body, headers });
+  await fetcher(`${path}/${requestId}`, { headers: { authorization: 'Bearer synthetic.session' } });
+  expect(native.request).toHaveBeenCalledTimes(2);
+  expect(native.request.mock.calls[1]![0].method).toBe('GET');
+  await expect(
+    fetcher(path, { method: 'POST', headers, body: body.replace(requestId, community) }),
+  ).rejects.toThrow();
+  expect(native.request).toHaveBeenCalledTimes(2);
+});

@@ -44,12 +44,20 @@ export class StationMessageCustody {
       throw new Error('STATION_MESSAGE_CUSTODY_INVALID');
     return result;
   }
-  async original(text: string): Promise<StationMessagePending> {
+  async original(
+    text: string,
+    isCurrent: () => boolean = () => true,
+    requireEmpty = false,
+  ): Promise<StationMessagePending> {
+    if (!isCurrent()) throw new Error('AUTH_PRINCIPAL_CHANGED');
     const canonical = text.trim();
     if (!canonical || text.length > 8000) throw new Error('STATION_MESSAGE_BODY_INVALID');
     const fingerprint = await this.fingerprint(canonical);
+    if (!isCurrent()) throw new Error('AUTH_PRINCIPAL_CHANGED');
     // Read after hashing: two distinct edited intents cannot overwrite one another's metadata.
     const pending = this.pending();
+    // A native pending request that appeared while hashing also blocks a replacement POST.
+    if (requireEmpty && pending.length > 0) throw new Error('STATION_MESSAGE_RECOVERY_REQUIRED');
     const original = pending.find((v) => v.fingerprint === fingerprint);
     if (original) return original;
     if (pending.length >= 16) throw new Error('STATION_MESSAGE_CUSTODY_FULL');
@@ -57,6 +65,7 @@ export class StationMessageCustody {
     this.storage.setItem(this.key, JSON.stringify([...pending, value]));
     if (!this.pending().some((v) => v.requestId === value.requestId))
       throw new Error('STATION_MESSAGE_CUSTODY_UNAVAILABLE');
+    if (!isCurrent()) throw new Error('AUTH_PRINCIPAL_CHANGED');
     return value;
   }
   private async fingerprint(canonical: string): Promise<string> {

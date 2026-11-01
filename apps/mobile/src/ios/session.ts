@@ -1,3 +1,4 @@
+import { stationRequest, type NativeStationRequest } from '../native-station-message-request.js';
 import { gameCancelRequest } from '../native-game-cancel-request.js';
 import { quarterRequest } from '../native-quarter-request.js';
 import { registerPlugin } from '@capacitor/core';
@@ -22,7 +23,9 @@ interface NativeRequest {
     | 'read'
     | 'notification'
     | 'quarterCreate'
-    | 'gameCancel';
+    | 'gameCancel'
+    | 'stationMessage';
+  readonly requestId?: string;
   readonly challengeId?: string;
   readonly resource?: string;
   readonly resourceId?: string;
@@ -48,25 +51,30 @@ export function createIOSFetch(
   config: IOSConfiguration,
   plugin: IOSSessionPlugin,
   canDispatchGameCancellation?: (gameId: string) => boolean,
+  canDispatchStation?: (request: NativeStationRequest) => boolean,
 ): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   let cancellationClosed = false;
   let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
+    const station = stationRequest(value, init, config);
     const cancel = gameCancelRequest(value, init, config);
     const quarter = quarterRequest(value, init, config);
     const read =
-      !quarter && (init?.method ?? 'GET') === 'GET' ? cabinetReadRequest(value, config) : null;
+      !station && !quarter && (init?.method ?? 'GET') === 'GET'
+        ? cabinetReadRequest(value, config)
+        : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
-    if (!read && (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)))
+    if (!station && !read && (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)))
       throw rejectedRequest();
     const path = value.slice(root.length);
     const method = init?.method ?? 'GET';
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (cancel) operation = 'gameCancel';
+    if (station) operation = 'stationMessage';
+    else if (cancel) operation = 'gameCancel';
     else if (quarter) operation = 'quarterCreate';
     else if (read) operation = 'read';
     else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
@@ -101,6 +109,8 @@ export function createIOSFetch(
     const originalCancellationEpoch = cancellationEpoch;
     if (cancel && (cancellationClosed || canDispatchGameCancellation?.(cancel.resourceId) !== true))
       throw new DOMException('Session changed', 'AbortError');
+    if (station && (cancellationClosed || canDispatchStation?.(station) !== true))
+      throw new DOMException('Session changed', 'AbortError');
     if (init?.body != null && typeof init.body !== 'string') throw rejectedRequest();
     if (read && init?.body != null) throw rejectedRequest();
     if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
@@ -111,10 +121,18 @@ export function createIOSFetch(
         ...(notification ?? {}),
         ...(quarter ?? {}),
         ...(cancel ?? {}),
+        ...(station ?? {}),
         ...(challengeId ? { challengeId } : {}),
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (
+        station &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchStation?.(station) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
       if (
         cancel &&
         (cancellationClosed ||
@@ -173,6 +191,7 @@ export class IOSSession {
   private quarterEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
   private readonly cancellations = new Map<string, string>();
+  private readonly stationRequests = new Map<string, string>();
 
   public constructor(
     public readonly configuration: IOSConfiguration,
@@ -204,6 +223,7 @@ export class IOSSession {
   public closeQuarterCreate(): void {
     this.quarterClosed = true;
     this.quarterEpoch++;
+    this.listeners.forEach((listener) => listener());
   }
   public quarterCreatePrincipal(): string | null {
     if (this.quarterClosed || this.state.status !== 'signed-in') return null;
@@ -236,6 +256,54 @@ export class IOSSession {
     } finally {
       this.cancellations.delete(gameId);
     }
+  }
+  public stationMessagePrincipal(): string | null {
+    return this.quarterCreatePrincipal();
+  }
+  private stationKey(
+    request: Pick<NativeStationRequest, 'resource' | 'resourceId' | 'requestId'>,
+  ): string {
+    return JSON.stringify([request.resource, request.resourceId, request.requestId]);
+  }
+  public canDispatchStation(request: NativeStationRequest): boolean {
+    const original = this.stationRequests.get(this.stationKey(request));
+    return original !== undefined && original === this.stationMessagePrincipal();
+  }
+  private async stationCall<T>(
+    request: Pick<NativeStationRequest, 'resource' | 'resourceId' | 'requestId'>,
+    load: (api: PadlHubApiClient) => Promise<T>,
+  ): Promise<T> {
+    const principal = this.stationMessagePrincipal(),
+      key = this.stationKey(request);
+    if (!principal || this.stationRequests.has(key)) throw rejectedRequest();
+    this.stationRequests.set(key, principal);
+    try {
+      return await this.quarterCall(load);
+    } finally {
+      this.stationRequests.delete(key);
+    }
+  }
+  public stationHistory(communityId: string, cursor?: string) {
+    return this.stationCall({ resource: 'history', resourceId: communityId }, (api) =>
+      api.listCommunityReadExperienceChat(communityId, {
+        limit: 50,
+        ...(cursor ? { cursor } : {}),
+      }),
+    );
+  }
+  public sendStationMessage(
+    communityId: string,
+    input: Parameters<PadlHubApiClient['sendStationCommunityMessage']>[1],
+  ) {
+    return this.stationCall(
+      { resource: 'send', resourceId: communityId, requestId: input.requestId },
+      (api) => api.sendStationCommunityMessage(communityId, input),
+    );
+  }
+  public stationMessageStatus(communityId: string, requestId: string) {
+    return this.stationCall({ resource: 'status', resourceId: communityId, requestId }, (api) =>
+      api.getStationCommunityMessageRequest(communityId, requestId),
+    );
   }
   public restore(): Promise<void> {
     if (this.restoration) return this.restoration;
@@ -370,6 +438,7 @@ export function getIOSSession(): Promise<IOSSession> {
         configuration,
         plugin,
         (id) => session?.canDispatchGameCancellation(id) === true,
+        (request) => session?.canDispatchStation(request) === true,
       ),
     });
     const session: IOSSession = new IOSSession(configuration, api);
