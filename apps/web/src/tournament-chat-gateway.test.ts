@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from 'vitest';
+import { webcrypto } from 'node:crypto';
 import { createBrowserAuthGateway } from './auth-gateway.js';
+const urlOf = (value: Parameters<typeof fetch>[0]) =>
+  typeof value === 'string' ? value : value instanceof URL ? value.href : value.url;
 const id = '10000000-0000-4000-8000-000000000001';
 const session = {
   accessToken: 'synthetic',
@@ -70,4 +73,100 @@ it('native gateway denies tournament API even if directly invoked', async () => 
   await expect(gateway.getTournamentChatRequest!(id, id)).rejects.toThrow();
   await expect(gateway.getTournamentChatHistory!(id)).rejects.toThrow();
   expect(transport).not.toHaveBeenCalled();
+});
+
+it('READ cannot dispatch after logout begins while hashing and revoke are both pending', async () => {
+  vi.stubGlobal('crypto', webcrypto);
+  const digest = webcrypto.subtle.digest.bind(webcrypto.subtle);
+  let finishHash!: () => void;
+  let finishLogout!: (response: Response) => void;
+  const spy = vi.spyOn(webcrypto.subtle, 'digest').mockImplementationOnce(
+    (...args) =>
+      new Promise((resolve, reject) => {
+        finishHash = () => {
+          void digest(...args).then(resolve, reject);
+        };
+      }),
+  );
+  const transport = vi.fn<typeof fetch>((raw, init) => {
+    const url = raw instanceof Request ? raw.url : raw.toString();
+    if (url.endsWith('/auth/session') && init?.method === 'DELETE')
+      return new Promise((resolve) => {
+        finishLogout = resolve;
+      });
+    if (url.endsWith('/chat/read-requests')) throw Error('READ_POST_ESCAPED_LOGOUT');
+    return Promise.resolve(Response.json(session));
+  });
+  const gateway = createBrowserAuthGateway({
+    baseUrl: 'https://api.invalid',
+    tenantKey: 'synthetic',
+    appVersion: 'test',
+    fetchImplementation: transport,
+  });
+  try {
+    await gateway.restoreSession();
+    const pending = gateway.advanceTournamentChatRead!(id, {
+      requestId: id,
+      streamId: id,
+      witnessHash: 'a'.repeat(64),
+      throughSequence: 1,
+    });
+    const rejected = expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+    expect(finishHash).toBeTypeOf('function');
+    const logout = gateway.logout();
+    expect(finishLogout).toBeTypeOf('function');
+    expect(gateway.tournamentChatPrincipal!()).toBeNull();
+    finishHash();
+    await rejected;
+    expect(
+      transport.mock.calls.filter((call) => urlOf(call[0]).endsWith('/chat/read-requests')),
+    ).toHaveLength(0);
+    finishLogout(new Response(null, { status: 204 }));
+    await logout;
+  } finally {
+    spy.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
+it('READ still dispatches exactly once for the unchanged actual gateway principal', async () => {
+  vi.stubGlobal('crypto', webcrypto);
+  const transport = vi.fn<typeof fetch>((raw) =>
+    Promise.resolve(
+      Response.json(
+        urlOf(raw).endsWith('/chat/read-requests')
+          ? {
+              contractVersion: 'tournament-chat-read.v1',
+              tournamentId: id,
+              requestId: id,
+              status: 'UNKNOWN',
+            }
+          : session,
+      ),
+    ),
+  );
+  const gateway = createBrowserAuthGateway({
+    baseUrl: 'https://api.invalid',
+    tenantKey: 'synthetic',
+    appVersion: 'test',
+    fetchImplementation: transport,
+  });
+  try {
+    await gateway.restoreSession();
+    const result = await gateway.advanceTournamentChatRead!(id, {
+      requestId: id,
+      streamId: id,
+      witnessHash: 'a'.repeat(64),
+      throughSequence: 1,
+    });
+    expect(result.status).toBe('UNKNOWN');
+    const calls = transport.mock.calls.filter((call) =>
+      urlOf(call[0]).endsWith('/chat/read-requests'),
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1]?.method).toBe('POST');
+    expect(new Headers(calls[0]![1]?.headers).get('Idempotency-Key')).toBe(id);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

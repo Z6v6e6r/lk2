@@ -336,3 +336,58 @@ export function createTournamentLocalRepository(pool: Pool) {
   };
 }
 export type TournamentLocalRepository = ReturnType<typeof createTournamentLocalRepository>;
+
+/** Read-only reverse resolution of an exact current owner JOIN witness. Never latest-attempt/phone lookup. */
+export async function verifyTournamentReadGeneration(
+  pool: Pool,
+  scope: TournamentScope,
+  generation: string,
+  ownerIdentity: { ownerTenantKey: string; providerClientId: string },
+): Promise<void> {
+  await withTenantTransaction(pool, scope.tenantId, async (client) => {
+    await client.query('set local statement_timeout = 2000');
+    const rows = await client.query<Row>(
+      `select * from booking.tournament_local_attempts where tenant_id=$1 and tournament_id=$2 and owner_operation_id=$3 limit 2`,
+      [scope.tenantId, scope.tournamentId, generation],
+    );
+    const r = rows.rows.length === 1 ? rows.rows[0] : undefined;
+    if (!r || r.actor_user_id !== scope.userId)
+      throw new TournamentLocalError('TOURNAMENT_LOCAL_STORED_INVALID');
+    const original = await decode(r);
+    if (
+      original.command.action !== 'JOIN' ||
+      original.originalJoinId !== null ||
+      original.ownerOperationId !== generation ||
+      !['DISPATCHED', 'COMPLETED'].includes(original.state) ||
+      (original.state === 'COMPLETED' && original.receipt?.operation.outcome !== 'REGISTERED') ||
+      original.identity.providerTenantKey !== ownerIdentity.ownerTenantKey ||
+      original.identity.providerClientId !== ownerIdentity.providerClientId
+    )
+      throw new TournamentLocalError('TOURNAMENT_LOCAL_STORED_INVALID');
+    const mapping = await client.query<{
+      id: string;
+      forward_count: string;
+      reverse_count: string;
+    }>(
+      `
+      select m.id,
+        (select count(*) from integration.external_entity_map f where f.tenant_id=m.tenant_id and f.internal_id=m.internal_id and f.external_system='VIVA' and f.entity_type='viva_profile') forward_count,
+        (select count(*) from integration.external_entity_map r where r.tenant_id=m.tenant_id and r.external_id=m.external_id and r.external_system='VIVA' and r.entity_type='viva_profile') reverse_count
+      from integration.external_entity_map m
+      join identity.users u on u.tenant_id=m.tenant_id and u.id=m.internal_id and u.status='ACTIVE'
+      join identity.tenants t on t.id=u.tenant_id and t.active=true
+      join integration.identity_provider_bindings b on b.tenant_id=u.tenant_id and b.provider='VIVA' and b.provider_tenant_key=$4
+      where m.tenant_id=$1 and m.internal_id=$2 and m.external_id=$3 and m.external_system='VIVA' and m.entity_type='viva_profile'
+        and m.sync_status='synced' and m.sync_error_code is null and m.last_synced_at is not null limit 2`,
+      [scope.tenantId, scope.userId, ownerIdentity.providerClientId, ownerIdentity.ownerTenantKey],
+    );
+    const m = mapping.rows.length === 1 ? mapping.rows[0] : undefined;
+    if (
+      !m ||
+      m.id !== original.identity.providerMappingId ||
+      m.forward_count !== '1' ||
+      m.reverse_count !== '1'
+    )
+      throw new TournamentLocalError('TOURNAMENT_LOCAL_STORED_INVALID');
+  });
+}

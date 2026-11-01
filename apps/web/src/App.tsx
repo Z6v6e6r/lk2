@@ -3095,6 +3095,15 @@ export function App({
             sendTournamentChatMessage: gateway.sendTournamentChatMessage,
             getTournamentChatRequest: gateway.getTournamentChatRequest,
             getTournamentChatHistory: gateway.getTournamentChatHistory,
+            ...(gateway.getTournamentChatReadPosition &&
+            gateway.advanceTournamentChatRead &&
+            gateway.getTournamentChatReadRequest
+              ? {
+                  getTournamentChatReadPosition: gateway.getTournamentChatReadPosition,
+                  advanceTournamentChatRead: gateway.advanceTournamentChatRead,
+                  getTournamentChatReadRequest: gateway.getTournamentChatReadRequest,
+                }
+              : {}),
           }}
         />
       );

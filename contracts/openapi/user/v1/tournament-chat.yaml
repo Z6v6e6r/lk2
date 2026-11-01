@@ -79,6 +79,86 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
         '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/tournaments/{tournamentId}/chat/read-position:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TournamentId'
+    get:
+      tags: [tournaments]
+      operationId: getTournamentChatReadPosition
+      summary: Read current owner position or exact original read receipt
+      description: Current original participation or organizer witness required. UNKNOWN never permits discarding custody. Read status never creates or retries a command. No delivery or read-by-others claim.
+      responses:
+        '200':
+          description: Strict current position or immutable original receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TournamentChatReadPosition' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/tournaments/{tournamentId}/chat/read-requests:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TournamentId'
+    post:
+      tags: [tournaments]
+      operationId: advanceTournamentChatRead
+      summary: Explicit original read-position command
+      description: Current original participation or organizer witness required. UNKNOWN never permits discarding custody. Read status never creates or retries a command. No delivery or read-by-others claim.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TournamentChatReadRequest' }
+      responses:
+        '200':
+          description: Strict current position or immutable original receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TournamentChatReadReceipt' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/tournaments/{tournamentId}/chat/read-requests/{requestId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/TournamentId'
+      - name: requestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [tournaments]
+      operationId: getTournamentChatReadRequest
+      summary: Read current owner position or exact original read receipt
+      description: Current original participation or organizer witness required. UNKNOWN never permits discarding custody. Read status never creates or retries a command. No delivery or read-by-others claim.
+      responses:
+        '200':
+          description: Strict current position or immutable original receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TournamentChatReadReceipt' }
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
 components:
   parameters:
     TournamentId:
@@ -166,3 +246,69 @@ components:
               acceptedAt: { type: string, format: date-time }
         hasMore: { type: boolean }
         nextCursor: { type: [string, 'null'], maxLength: 1800 }
+    TournamentChatReadRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, streamId, witnessHash, throughSequence]
+      properties:
+        requestId: { type: string, format: uuid }
+        streamId: { type: string, format: uuid }
+        witnessHash: { type: string, pattern: '^[a-f0-9]{64}$' }
+        throughSequence: { type: integer, minimum: 0, maximum: 9007199254740990 }
+    TournamentChatReadPosition:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          contractVersion,
+          tournamentId,
+          streamId,
+          witnessHash,
+          baselineSequence,
+          readThroughSequence,
+          publishedSequence,
+        ]
+      properties:
+        contractVersion: { type: string, const: tournament-chat-read.v1 }
+        tournamentId: { type: string, format: uuid }
+        streamId: { type: string, format: uuid }
+        witnessHash: { type: string, pattern: '^[a-f0-9]{64}$' }
+        baselineSequence: { type: integer, minimum: 0, maximum: 9007199254740990 }
+        readThroughSequence: { type: integer, minimum: 0, maximum: 9007199254740990 }
+        publishedSequence: { type: integer, minimum: 0, maximum: 9007199254740990 }
+    TournamentChatReadReceipt:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [contractVersion, tournamentId, requestId, status]
+          properties:
+            contractVersion: { type: string, const: tournament-chat-read.v1 }
+            tournamentId: { type: string, format: uuid }
+            requestId: { type: string, format: uuid }
+            status: { type: string, const: UNKNOWN }
+        - type: object
+          additionalProperties: false
+          required:
+            [
+              contractVersion,
+              tournamentId,
+              requestId,
+              status,
+              requestHash,
+              streamId,
+              witnessHash,
+              baselineSequence,
+              throughSequence,
+              readThroughSequence,
+            ]
+          properties:
+            contractVersion: { type: string, const: tournament-chat-read.v1 }
+            tournamentId: { type: string, format: uuid }
+            requestId: { type: string, format: uuid }
+            status: { type: string, const: CONFIRMED }
+            requestHash: { type: string, pattern: '^[a-f0-9]{64}$' }
+            streamId: { type: string, format: uuid }
+            witnessHash: { type: string, pattern: '^[a-f0-9]{64}$' }
+            baselineSequence: { type: integer, minimum: 0, maximum: 9007199254740990 }
+            throughSequence: { type: integer, minimum: 0, maximum: 9007199254740990 }
+            readThroughSequence: { type: integer, minimum: 0, maximum: 9007199254740990 }

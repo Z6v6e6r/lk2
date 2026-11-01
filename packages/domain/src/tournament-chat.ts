@@ -236,3 +236,131 @@ export function parseTournamentChatPage(
   } else if (x.nextCursor !== null || sequence !== 1) return fail();
   return x as unknown as TournamentChatPage;
 }
+
+export const TOURNAMENT_CHAT_READ_VERSION = 'tournament-chat-read.v1' as const;
+export interface TournamentChatReadRequest {
+  readonly requestId: string;
+  readonly streamId: string;
+  readonly witnessHash: string;
+  readonly throughSequence: number;
+}
+export interface TournamentChatReadPosition {
+  readonly contractVersion: typeof TOURNAMENT_CHAT_READ_VERSION;
+  readonly tournamentId: string;
+  readonly streamId: string;
+  readonly witnessHash: string;
+  readonly baselineSequence: number;
+  readonly readThroughSequence: number;
+  readonly publishedSequence: number;
+}
+export function parseTournamentChatReadRequest(x: unknown): TournamentChatReadRequest {
+  if (
+    !record(x) ||
+    !keys(x, 'requestId,streamId,throughSequence,witnessHash') ||
+    !tournamentChatUuid(x.requestId) ||
+    !tournamentChatUuid(x.streamId) ||
+    !hash(x.witnessHash) ||
+    !count(x.throughSequence)
+  )
+    throw new TournamentChatError('TOURNAMENT_CHAT_INPUT_INVALID', 400);
+  return x as unknown as TournamentChatReadRequest;
+}
+export const tournamentChatReadBody = (tournamentId: string, x: TournamentChatReadRequest) =>
+  JSON.stringify({
+    contractVersion: 1,
+    tournamentId,
+    requestId: x.requestId,
+    streamId: x.streamId,
+    witnessHash: x.witnessHash,
+    throughSequence: x.throughSequence,
+  });
+export async function tournamentChatReadHash(
+  tournamentId: string,
+  x: TournamentChatReadRequest,
+  cryptoApi: Pick<Crypto, 'subtle'> = crypto,
+): Promise<string> {
+  if (!tournamentChatUuid(tournamentId)) return fail();
+  const bytes = new TextEncoder().encode(
+    'tournament-chat-read-request:v1\0' +
+      tournamentChatReadBody(tournamentId, parseTournamentChatReadRequest(x)),
+  );
+  return Array.from(new Uint8Array(await cryptoApi.subtle.digest('SHA-256', bytes)), (b) =>
+    b.toString(16).padStart(2, '0'),
+  ).join('');
+}
+export function parseTournamentChatReadPosition(
+  x: unknown,
+  tournamentId: string,
+): TournamentChatReadPosition {
+  if (
+    !record(x) ||
+    !keys(
+      x,
+      'baselineSequence,contractVersion,publishedSequence,readThroughSequence,streamId,tournamentId,witnessHash',
+    ) ||
+    x.contractVersion !== TOURNAMENT_CHAT_READ_VERSION ||
+    x.tournamentId !== tournamentId ||
+    !tournamentChatUuid(tournamentId) ||
+    !tournamentChatUuid(x.streamId) ||
+    !hash(x.witnessHash) ||
+    !count(x.baselineSequence) ||
+    !count(x.readThroughSequence) ||
+    !count(x.publishedSequence) ||
+    x.baselineSequence > x.readThroughSequence ||
+    x.readThroughSequence > x.publishedSequence
+  )
+    return fail();
+  return x as unknown as TournamentChatReadPosition;
+}
+export type TournamentChatReadReceipt = {
+  readonly contractVersion: typeof TOURNAMENT_CHAT_READ_VERSION;
+  readonly tournamentId: string;
+  readonly requestId: string;
+} & (
+  | { readonly status: 'UNKNOWN' }
+  | {
+      readonly status: 'CONFIRMED';
+      readonly requestHash: string;
+      readonly streamId: string;
+      readonly witnessHash: string;
+      readonly baselineSequence: number;
+      readonly throughSequence: number;
+      readonly readThroughSequence: number;
+    }
+);
+export function parseTournamentChatReadReceipt(
+  x: unknown,
+  tournamentId: string,
+  requestId: string,
+  expectedHash?: string,
+): TournamentChatReadReceipt {
+  if (
+    !record(x) ||
+    x.contractVersion !== TOURNAMENT_CHAT_READ_VERSION ||
+    x.tournamentId !== tournamentId ||
+    x.requestId !== requestId ||
+    !tournamentChatUuid(tournamentId) ||
+    !tournamentChatUuid(requestId)
+  )
+    return fail();
+  if (x.status === 'UNKNOWN' && keys(x, 'contractVersion,requestId,status,tournamentId'))
+    return x as unknown as TournamentChatReadReceipt;
+  if (
+    x.status !== 'CONFIRMED' ||
+    !keys(
+      x,
+      'baselineSequence,contractVersion,readThroughSequence,requestHash,requestId,status,streamId,throughSequence,tournamentId,witnessHash',
+    ) ||
+    !hash(x.requestHash) ||
+    (expectedHash !== undefined && x.requestHash !== expectedHash) ||
+    !tournamentChatUuid(x.streamId) ||
+    !hash(x.witnessHash) ||
+    !count(x.baselineSequence) ||
+    !count(x.throughSequence) ||
+    !count(x.readThroughSequence) ||
+    x.baselineSequence > x.throughSequence ||
+    x.throughSequence > x.readThroughSequence
+  )
+    return fail();
+  return x as unknown as TournamentChatReadReceipt;
+}

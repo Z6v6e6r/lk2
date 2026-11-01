@@ -93,3 +93,44 @@ describe('actual CUP71 synthetic service bytes at SDK boundary', () => {
     expect(transport).toHaveBeenCalledTimes(2);
   });
 });
+
+it('explicit READ uses original metadata, no automatic POST for restore and no dispatch after token change during hash', async () => {
+  const id = '10000000-0000-4000-8000-000000000001',
+    requestId = '10000000-0000-4000-8000-000000000002';
+  const unknown = {
+    contractVersion: 'tournament-chat-read.v1',
+    tournamentId: id,
+    requestId,
+    status: 'UNKNOWN',
+  };
+  const transport = vi
+    .fn<typeof fetch>()
+    .mockImplementation(() => Promise.resolve(new Response(JSON.stringify(unknown))));
+  const client = new PadlHubApiClient({
+    baseUrl: 'https://api.invalid',
+    tenantKey: 'synthetic',
+    platform: 'web',
+    appVersion: 'test',
+    fetchImplementation: transport,
+  });
+  client.setAccessToken('synthetic-original');
+  await client.getTournamentChatReadRequest(id, requestId);
+  expect(transport.mock.calls[0]![1]?.method ?? 'GET').toBe('GET');
+  const input = { requestId, streamId: id, witnessHash: 'a'.repeat(64), throughSequence: 1 };
+  await client.advanceTournamentChatRead(id, input);
+  expect(transport.mock.calls[1]![1]?.method).toBe('POST');
+  expect(new Headers(transport.mock.calls[1]![1]?.headers).get('Idempotency-Key')).toBe(requestId);
+  const digest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle);
+  const spy = vi
+    .spyOn(globalThis.crypto.subtle, 'digest')
+    .mockImplementationOnce(async (...args) => {
+      client.setAccessToken('synthetic-replaced');
+      return digest(...args);
+    });
+  try {
+    await expect(client.advanceTournamentChatRead(id, input)).rejects.toThrow();
+    expect(transport).toHaveBeenCalledTimes(2);
+  } finally {
+    spy.mockRestore();
+  }
+});
