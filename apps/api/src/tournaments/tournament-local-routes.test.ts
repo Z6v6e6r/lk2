@@ -96,6 +96,44 @@ describe('actual tournament route boundaries', () => {
     expect(unauth.runtime.read).not.toHaveBeenCalled();
     await unauth.app.close();
   });
+  it('accepts only Android empty text retry, preserving original operation and command semantics', async () => {
+    const f = await fixture();
+    for (const contentType of ['text/plain', 'text/plain; charset=UTF-8']) {
+      const r = await f.app.inject({
+        method: 'POST',
+        url: base + `registration-operations/${id}/retry`,
+        headers: { 'Idempotency-Key': id, 'Content-Type': contentType },
+        payload: '',
+      });
+      expect(r.statusCode).toBe(200);
+    }
+    expect(f.runtime.retry).toHaveBeenCalledTimes(2);
+    expect(f.runtime.retry).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: id, tenantId: id }),
+      id,
+      id,
+    );
+    for (const [contentType, payload] of [
+      ['text/plain', ' '],
+      ['text/plain', '{}'],
+      ['text/plain', '{"action":"JOIN"}'],
+      ['application/json', '{}'],
+      ['application/json', '""'],
+      ['application/x-www-form-urlencoded', ''],
+      ['text/plain; charset=ascii', ''],
+    ] as const) {
+      const r = await f.app.inject({
+        method: 'POST',
+        url: base + `registration-operations/${id}/retry`,
+        headers: { 'Idempotency-Key': id, 'Content-Type': contentType },
+        payload,
+      });
+      expect(r.statusCode).toBeGreaterThanOrEqual(400);
+    }
+    expect(f.runtime.retry).toHaveBeenCalledTimes(2);
+    expect(f.runtime.execute).not.toHaveBeenCalled();
+    await f.app.close();
+  });
   it('returns explicit disabled status without mutation', async () => {
     const f = await fixture();
     const response = await f.app.inject({ method: 'GET', url: base + 'registration-operation' });

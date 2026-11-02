@@ -6,7 +6,7 @@ import { TournamentLocalAttempts } from './tournament-local-attempt.js';
 class Lifetime {
   constructor(
     readonly key: string,
-    readonly gateway: AuthGateway,
+    readonly gateway: Pick<AuthGateway, 'tournamentPrincipal'>,
   ) {}
   active = true;
   start() {
@@ -21,7 +21,10 @@ export function TournamentRegistrationPanel({
   principal,
   tournamentId,
 }: {
-  gateway: AuthGateway;
+  gateway: Pick<
+    AuthGateway,
+    'tournamentPrincipal' | 'commandTournament' | 'retryTournament' | 'getTournamentRegistration'
+  >;
   principal: { tenantId: string; userId: string };
   tournamentId: string;
 }) {

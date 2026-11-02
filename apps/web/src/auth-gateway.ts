@@ -2557,20 +2557,23 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return result;
     },
     tournamentPrincipal() {
-      return !nativeClient && !tournamentLogoutStarted && currentUserId && currentTenantId
+      return (!nativeClient || options.nativeSessionTransport === true) &&
+        !tournamentLogoutStarted &&
+        currentUserId &&
+        currentTenantId
         ? `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`
         : null;
     },
     commandTournament(id, input, key) {
-      if (nativeClient) return nativeUnavailable();
+      if (nativeClient && !options.nativeSessionTransport) return nativeUnavailable();
       return client.commandTournament(id, input, key);
     },
     retryTournament(id, operation, key) {
-      if (nativeClient) return nativeUnavailable();
+      if (nativeClient && !options.nativeSessionTransport) return nativeUnavailable();
       return client.retryTournament(id, operation, key);
     },
     getTournamentRegistration(id, selector) {
-      if (nativeClient) return nativeUnavailable();
+      if (nativeClient && !options.nativeSessionTransport) return nativeUnavailable();
       return client.getTournamentRegistration(id, selector);
     },
     registerTraining(trainingId, input, key) {

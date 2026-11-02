@@ -78,6 +78,10 @@ final class AndroidSessionPolicy {
         String cleanPath = uri.getRawPath();
         if (uri.isAbsolute() || uri.getRawAuthority() != null || cleanPath == null
             || cleanPath.contains("%") || cleanPath.contains("..") || cleanPath.contains("//")) throw rejected();
+        if ((cleanPath.startsWith(userRoot + "/tournaments") && !AndroidTournamentChatRequest.matches(cleanPath.substring(userRoot.length()))) || cleanPath.startsWith("/public/api/v1/" + tenant + "/tournaments")) {
+            if (binaryBody != null) throw rejected();
+            return tournamentRequest(cleanPath, uri.getRawQuery(), method, inputHeaders, textBody);
+        }
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
         String relativePath = cleanPath.substring(userRoot.length());
         boolean tournamentChat = AndroidTournamentChatRequest.matches(relativePath);
@@ -298,6 +302,63 @@ final class AndroidSessionPolicy {
             if (parsed.length() != 2 || !validTrainingDate(parsed.getString("dateHint"))) throw rejected();
         } catch (Failure error) { throw error; }
         catch (Exception ignored) { throw rejected(); }
+    }
+
+    private static final String TOURNAMENT_UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
+    private static final String TOURNAMENT_KEY = "[A-Za-z0-9][A-Za-z0-9._:-]{15,127}";
+    private Request tournamentRequest(String path, String query, String method, Map<String,String> input, String body) throws Failure {
+        String publicRoot = "/public/api/v1/" + tenant + "/tournaments";
+        boolean publicRead = path.startsWith(publicRoot);
+        String suffix = path.substring((publicRead ? publicRoot : userRoot + "/tournaments").length());
+        Map<String,String> values = new HashMap<>(), headers = new HashMap<>();
+        if (query != null) for (String part : query.split("&", -1)) {
+            String[] pair=part.split("=",2);
+            if (pair.length!=2 || pair[1].isEmpty() || pair[0].contains("%") || pair[1].contains("%") || values.put(pair[0],pair[1])!=null) throw rejected();
+        }
+        Set<String> allowed=new HashSet<>(Arrays.asList("accept","content-type","authorization","idempotency-key","x-correlation-id","x-app-platform","x-app-version","x-app-build"));
+        for(Map.Entry<String,String> entry:input.entrySet()) {
+            String name=entry.getKey().toLowerCase(Locale.ROOT),value=entry.getValue();
+            if(!allowed.contains(name)||headers.containsKey(name)||value==null||value.length()>8192||value.contains("\r")||value.contains("\n"))throw rejected();
+            headers.put(name,value);
+        }
+        if(publicRead) {
+            if(!"GET".equals(method)||body!=null||headers.containsKey("authorization")||headers.containsKey("idempotency-key")||!(suffix.isEmpty()||suffix.matches("/"+TOURNAMENT_UUID)))throw rejected();
+            for(String key:values.keySet()) if(!(suffix.isEmpty()?Arrays.asList("dateFrom","dateTo","availability","limit"):Arrays.asList("dateFrom","dateTo")).contains(key))throw rejected();
+            long delta=tournamentDate(values.get("dateTo"))-tournamentDate(values.get("dateFrom"));
+            if(delta<=0||delta>15L*86400000L)throw rejected();
+            if(values.containsKey("availability")&&!values.get("availability").matches("JOINABLE|INCLUDE_FULL"))throw rejected();
+            if(values.containsKey("limit")&&!values.get("limit").matches("[1-9]|[1-4][0-9]|50"))throw rejected();
+        } else {
+            if(!headers.getOrDefault("authorization","").matches("Bearer [A-Za-z0-9._-]{8,8192}"))throw rejected();
+            if("GET".equals(method)&&suffix.matches("/"+TOURNAMENT_UUID+"/(?:participants|registration-operation)")) {
+                if(body!=null||(suffix.endsWith("/participants")&&!values.isEmpty()))throw rejected();
+                for(Map.Entry<String,String> entry:values.entrySet())if(!entry.getKey().equals("operationId")||!entry.getValue().matches(TOURNAMENT_UUID))throw rejected();
+                if(headers.containsKey("idempotency-key")&&!headers.get("idempotency-key").matches(TOURNAMENT_KEY))throw rejected();
+            } else {
+                if(!"POST".equals(method)||query!=null||!headers.getOrDefault("idempotency-key","").matches(TOURNAMENT_KEY))throw rejected();
+                if(suffix.matches("/"+TOURNAMENT_UUID+"/registration-operations/"+TOURNAMENT_UUID+"/retry")) {
+                    if(body!=null)throw rejected();
+                    // Android adds form Content-Type to an empty POST unless explicitly set.
+                    // This remains a bodyless original-operation retry, never a form command.
+                    headers.put("content-type","text/plain");
+                }
+                else {
+                    if(!suffix.matches("/"+TOURNAMENT_UUID+"/registrations")||body==null||body.length()>256)throw rejected();
+                    String action="\"action\"\\s*:\\s*\"LEAVE\"",original="\"originalJoinOperationId\"\\s*:\\s*\""+TOURNAMENT_UUID+"\"";
+                    if(!body.matches("\\s*\\{\\s*(?:\"action\"\\s*:\\s*\"JOIN\"|"+action+"\\s*,\\s*"+original+"|"+original+"\\s*,\\s*"+action+")\\s*\\}\\s*"))throw rejected();
+                }
+            }
+        }
+        headers.put("accept","application/json");headers.put("x-app-platform","android");headers.put("x-app-version",version);headers.put("x-app-build",build);
+        if(!headers.containsKey("x-correlation-id"))headers.put("x-correlation-id",UUID.randomUUID().toString());
+        if(body!=null)headers.put("content-type","application/json");
+        return new Request(path+(query==null?"":"?"+query),method,headers,body,publicRead?Operation.PUBLIC:Operation.API);
+    }
+    private long tournamentDate(String value) throws Failure {
+        if(value==null||!value.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}"))throw rejected();
+        java.text.SimpleDateFormat format=new java.text.SimpleDateFormat("yyyy-MM-dd",Locale.ROOT);format.setLenient(false);format.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        try {java.util.Date parsed=format.parse(value);if(parsed==null||!format.format(parsed).equals(value))throw rejected();return parsed.getTime();}
+        catch(java.text.ParseException error){throw rejected();}
     }
 
     private void validateAuthBody(Operation operation, String body) throws Failure {

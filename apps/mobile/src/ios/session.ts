@@ -12,6 +12,7 @@ import { quarterRequest } from '../native-quarter-request.js';
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type { AuthenticatedSession, UserContext } from '@phub/api-sdk';
+import { tournamentRequest } from './tournament-routes.js';
 import { cabinetReadRequest } from './cabinet-routes.js';
 
 export interface IOSConfiguration {
@@ -34,9 +35,11 @@ interface NativeRequest {
     | 'gameCancel'
     | 'stationMessage'
     | 'stationStream'
-    | 'tournamentChat';
+    | 'tournamentChat'
+    | 'tournament';
   readonly requestId?: string;
   readonly challengeId?: string;
+  readonly operationId?: string;
   readonly resource?: string;
   readonly resourceId?: string;
   readonly query?: Record<string, string>;
@@ -69,18 +72,30 @@ export function createIOSFetch(
   let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
-    const tournament = tournamentChatRequest(value, init, config);
+    const tournamentChat = value.includes('/chat/')
+      ? tournamentChatRequest(value, init, config)
+      : null;
     const stream = stationStreamRequest(value, init, config);
     const station = stream ?? stationRequest(value, init, config);
     const cancel = gameCancelRequest(value, init, config);
     const quarter = quarterRequest(value, init, config);
+    const tournament = tournamentChat
+      ? null
+      : tournamentRequest(
+          value,
+          init?.method ?? 'GET',
+          init?.body,
+          Object.fromEntries(new Headers(init?.headers).entries()),
+          config,
+        );
     const read =
-      !station && !tournament && !quarter && (init?.method ?? 'GET') === 'GET'
+      !station && !tournamentChat && !tournament && !quarter && (init?.method ?? 'GET') === 'GET'
         ? cabinetReadRequest(value, config)
         : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
     if (
       !station &&
+      !tournamentChat &&
       !tournament &&
       !read &&
       (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value))
@@ -91,10 +106,11 @@ export function createIOSFetch(
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (tournament) operation = 'tournamentChat';
+    if (tournamentChat) operation = 'tournamentChat';
     else if (station) operation = stream ? 'stationStream' : 'stationMessage';
     else if (cancel) operation = 'gameCancel';
     else if (quarter) operation = 'quarterCreate';
+    else if (tournament) operation = 'tournament';
     else if (read) operation = 'read';
     else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
     else if (path === '/auth/session/refresh' && method === 'POST') operation = 'refresh';
@@ -128,7 +144,10 @@ export function createIOSFetch(
     const originalCancellationEpoch = cancellationEpoch;
     if (cancel && (cancellationClosed || canDispatchGameCancellation?.(cancel.resourceId) !== true))
       throw new DOMException('Session changed', 'AbortError');
-    if (tournament && (cancellationClosed || canDispatchTournamentChat?.(tournament) !== true))
+    if (
+      tournamentChat &&
+      (cancellationClosed || canDispatchTournamentChat?.(tournamentChat) !== true)
+    )
       throw new DOMException('Session changed', 'AbortError');
     if (station && (cancellationClosed || canDispatchStation?.(station) !== true))
       throw new DOMException('Session changed', 'AbortError');
@@ -139,26 +158,27 @@ export function createIOSFetch(
       const result = await plugin.request({
         operation,
         ...(read ?? {}),
+        ...(tournament ?? {}),
         ...(notification ?? {}),
         ...(quarter ?? {}),
         ...(cancel ?? {}),
         ...(station ?? {}),
-        ...(tournament ?? {}),
+        ...(tournamentChat ?? {}),
         ...(challengeId ? { challengeId } : {}),
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
       if (
-        tournament &&
+        tournamentChat &&
         new TextEncoder().encode(result.body).length >
-          (tournament.resource === 'history' ? 3 : 1) * 1024 * 1024
+          (tournamentChat.resource === 'history' ? 3 : 1) * 1024 * 1024
       )
         throw rejectedRequest();
       if (
-        tournament &&
+        tournamentChat &&
         (cancellationClosed ||
           originalCancellationEpoch !== cancellationEpoch ||
-          canDispatchTournamentChat?.(tournament) !== true)
+          canDispatchTournamentChat?.(tournamentChat) !== true)
       )
         throw new DOMException('Session changed', 'AbortError');
       if (
@@ -224,6 +244,8 @@ export class IOSSession {
   private generation = 0;
   private quarterClosed = false;
   private quarterEpoch = 0;
+  private tournamentClosed = false;
+  private tournamentEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
   private readonly cancellations = new Map<string, string>();
   private readonly stationRequests = new Map<string, string>();
@@ -485,18 +507,42 @@ export class IOSSession {
     const quarterEpoch = this.quarterEpoch;
     return this.exclusive(async () => {
       if (this.state.status !== 'signed-out' || !/^\d{4}$/.test(code)) throw rejectedRequest();
+      const tournamentEpoch = this.tournamentEpoch;
       await Promise.allSettled([...this.reads]);
       const session = await this.api.verifyAuthChallenge(challengeId, {
         code,
         acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
       });
       if (quarterEpoch === this.quarterEpoch) this.quarterClosed = false;
+      if (tournamentEpoch === this.tournamentEpoch) this.tournamentClosed = false;
       this.update({ status: 'signed-in', session });
+    });
+  }
+
+  public closeTournament(): void {
+    this.tournamentClosed = true;
+    this.tournamentEpoch++;
+  }
+
+  public tournamentPrincipal(): string | null {
+    if (this.tournamentClosed || this.state.status !== 'signed-in') return null;
+    const { context } = this.state.session;
+    return `${context.tenantId}:${context.userId}:${this.generation}`;
+  }
+
+  public tournamentCall<T>(load: (api: PadlHubApiClient) => Promise<T>): Promise<T> {
+    const principal = this.tournamentPrincipal();
+    if (!principal) return Promise.reject(rejectedRequest());
+    return this.read(load).then((value) => {
+      if (this.tournamentPrincipal() !== principal)
+        throw new DOMException('Session changed', 'AbortError');
+      return value;
     });
   }
 
   public logout(): Promise<void> {
     this.closeQuarterCreate();
+    this.closeTournament();
     return this.exclusive(async () => {
       this.api.clearAccessToken();
       this.update({ status: 'checking' });

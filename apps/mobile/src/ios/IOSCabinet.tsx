@@ -11,6 +11,9 @@ import {
   initialAndroidPushState,
   type AndroidPushPlugin,
 } from '../android-push.js';
+import { TournamentDirectoryPage } from '../../../web/src/TournamentDirectoryPage.js';
+import { TournamentDetailPage } from '../../../web/src/TournamentDetailPage.js';
+import { createIOSTournamentGateway } from './tournament-gateway.js';
 import { IOSNotifications } from './IOSNotifications.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -438,6 +441,7 @@ export function IOSCabinet({
   const route = useCabinetRoute();
   const tournamentChatGateway = useMemo(() => createIOSTournamentChatGateway(session), [session]);
   const quarterGateway = useMemo(() => createIOSQuarterGateway(session), [session]);
+  const tournamentGateway = useMemo(() => createIOSTournamentGateway(session), [session]);
   const data = useMemo(() => createCabinetData(session, auth.user.id), [session, auth.user.id]);
   const [push, setPush] = useState(initialAndroidPushState);
   const [logoutError, setLogoutError] = useState<string>();
@@ -477,6 +481,7 @@ export function IOSCabinet({
     );
   const logout = () => {
     session.closeQuarterCreate();
+    session.closeTournament();
     setLogoutError(undefined);
     void controller
       .beforeLogout()
@@ -521,7 +526,19 @@ export function IOSCabinet({
         onDisable={() => void controller.disable().catch(() => undefined)}
       />
     );
-  else if (path === '/bookings') content = <Bookings data={data} />;
+  else if (path === '/tournaments') {
+    const id = new URLSearchParams(route.split('?')[1] ?? '').get('event');
+    content = id ? (
+      <TournamentDetailPage
+        gateway={tournamentGateway}
+        chatAvailable
+        tournamentId={id}
+        principal={{ tenantId: auth.context.tenantId, userId: auth.context.userId }}
+      />
+    ) : (
+      <TournamentDirectoryPage gateway={tournamentGateway} />
+    );
+  } else if (path === '/bookings') content = <Bookings data={data} />;
   else if (path === '/games') content = <Games data={data} />;
   else if (path === '/history')
     content = (
@@ -566,6 +583,7 @@ export function IOSCabinet({
       <nav className="native-quarter-navigation" aria-label="Разделы приложения">
         <a href="/chats">Чаты сообществ</a>
         <a href="/games/new?quarterCreate=1">Игра по подписке</a>
+        <a href="/tournaments">Турниры</a>
       </nav>
       {logoutError ? <p role="alert">{logoutError}</p> : null}
       <div key={path}>{content}</div>

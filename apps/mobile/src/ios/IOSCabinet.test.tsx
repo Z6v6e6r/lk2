@@ -55,6 +55,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('iOS cabinet with the real shared screens and one native session', () => {
@@ -125,8 +126,10 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     await screen.findByRole('heading', { name: 'Хаб Селигерская' });
     fireEvent.click(screen.getByRole('link', { name: 'Профиль' }));
     await screen.findByRole('heading', { name: 'Анна Петрова' });
+    expect(session.tournamentPrincipal()).not.toBeNull();
     nativePush.suspend.mockRejectedValueOnce(new Error('SYNTHETIC_REVOKE_UNAVAILABLE'));
     fireEvent.click(screen.getByRole('button', { name: 'Выйти из аккаунта' }));
+    expect(session.tournamentPrincipal()).toBeNull();
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Не удалось отключить уведомления перед выходом',
     );
@@ -181,7 +184,7 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     );
     const before = request.mock.calls.length;
     act(() => {
-      window.history.pushState(null, '', '/tournaments?new=1');
+      window.history.pushState(null, '', '/tournaments/new');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
     await screen.findByRole('heading', { name: 'Раздел пока недоступен' });
@@ -398,4 +401,149 @@ it('tournament A pending custody cannot leak into tournament B after native rout
   );
   expect(request.mock.calls.filter(([v]) => v.resource === 'send')).toHaveLength(2);
   localStorage.clear();
+});
+describe('iOS concrete tournament consumer', () => {
+  const id = '11111111-1111-4111-8111-111111111111',
+    operation = '22222222-2222-4222-8222-222222222222';
+  const summary = {
+    id,
+    title: 'Synthetic iOS tournament',
+    format: 'Мексикано',
+    startsAt: '2099-11-02T15:00:00Z',
+    endsAt: '2099-11-02T17:00:00Z',
+    venue: 'Synthetic station',
+    trainerName: null,
+    levelRange: null,
+    organizer: null,
+    capacity: { total: 8, registered: 0, open: 8, waitlist: 0 },
+    status: 'REGISTRATION',
+    route: '/tournaments?event=' + id,
+  };
+  function tournamentFixture() {
+    let current: unknown = null;
+    const request = vi.fn<IOSSessionPlugin['request']>(async (input) => {
+      await Promise.resolve();
+      if (input.operation !== 'tournament') return fixtureReply(input);
+      if (input.resource === 'list') return nativeResult({ items: [summary] });
+      if (input.resource === 'summary') return nativeResult(summary);
+      if (input.resource === 'participants')
+        return nativeResult({ items: [], refreshedAt: '2099-11-01T10:00:00Z' });
+      if (input.resource === 'status')
+        return nativeResult({ commandsEnabled: true, result: current });
+      const action =
+        input.resource === 'retry'
+          ? 'JOIN'
+          : (JSON.parse(input.body!) as { action: 'JOIN' | 'LEAVE' }).action;
+      const status =
+        input.resource === 'retry' ? 'REGISTERED' : action === 'JOIN' ? 'UNKNOWN' : 'LEFT';
+      current = {
+        tournamentId: id,
+        operation: {
+          id: action === 'JOIN' ? operation : id,
+          action,
+          status,
+          reason: status === 'UNKNOWN' ? null : status,
+          generation: status === 'UNKNOWN' ? null : operation,
+        },
+        registration: {
+          status:
+            status === 'UNKNOWN'
+              ? 'UNKNOWN'
+              : status === 'REGISTERED'
+                ? 'REGISTERED'
+                : 'NOT_REGISTERED_BY_OPERATION',
+          asOf: null,
+        },
+        retryAfterSeconds: status === 'UNKNOWN' ? 15 : null,
+      };
+      return nativeResult(current);
+    });
+    return { request, session: syntheticSession(request) };
+  }
+  function locks() {
+    vi.stubGlobal(
+      'navigator',
+      Object.create(navigator, {
+        locks: {
+          value: { request: async (_n: string, _o: unknown, cb: () => unknown) => await cb() },
+          configurable: true,
+        },
+      }),
+    );
+  }
+  async function openTournament(session: ReturnType<typeof syntheticSession>) {
+    render(<IOSAuthApp session={session} />);
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Турниры' })).toBeVisible());
+    fireEvent.click(screen.getByRole('link', { name: 'Турниры' }));
+    fireEvent.click(await screen.findByRole('link', { name: summary.title }));
+    await screen.findByRole('heading', { name: summary.title });
+  }
+  it('actual IOSSession/SDK bridge: directory → UNKNOWN → remount → original retry → LEAVE', async () => {
+    locks();
+    const f = tournamentFixture();
+    await f.session.restore();
+    await openTournament(f.session);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Записаться на турнир' })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Записаться на турнир' }));
+    await screen.findByText('Операция ожидает подтверждения. Сохранён исходный запрос.');
+    const original = f.request.mock.calls.find(
+      ([x]) => x.operation === 'tournament' && x.resource === 'command',
+    )![0];
+    expect(original.body).toBe('{"action":"JOIN"}');
+    expect(original.headers['idempotency-key']).toBeTruthy();
+    cleanup();
+    const restored = syntheticSession(f.request);
+    await restored.restore();
+    await openTournament(restored);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Повторить исходную операцию' })).toBeEnabled(),
+    );
+    expect(
+      f.request.mock.calls.filter(
+        ([x]) => x.operation === 'tournament' && x.resource === 'command',
+      ),
+    ).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить исходную операцию' }));
+    await screen.findByText('Запись подтверждена.');
+    expect(f.request.mock.calls.find(([x]) => x.resource === 'retry')![0]).toMatchObject({
+      operationId: operation,
+      headers: { 'idempotency-key': operation },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти из турнира' }));
+    await screen.findByText('Вы вышли из исходной регистрации.');
+    expect(f.request.mock.calls.filter(([x]) => x.resource === 'command').at(-1)![0].body).toBe(
+      JSON.stringify({ action: 'LEAVE', originalJoinOperationId: operation }),
+    );
+    const publicRead = f.request.mock.calls.find(([x]) => x.resource === 'list')![0];
+    expect(publicRead.headers).not.toHaveProperty('authorization');
+    expect(publicRead.headers).not.toHaveProperty('cookie');
+  });
+  it.each(['locks', 'randomUUID', 'storage'] as const)(
+    'missing %s has zero mutation POST, without native fallback',
+    async (missing) => {
+      locks();
+      if (missing === 'locks')
+        vi.stubGlobal('navigator', Object.create(navigator, { locks: { value: undefined } }));
+      else if (missing === 'randomUUID')
+        vi.stubGlobal('crypto', Object.create(crypto, { randomUUID: { value: undefined } }));
+      else
+        vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => {
+          throw new DOMException('denied', 'SecurityError');
+        });
+      const f = tournamentFixture();
+      await f.session.restore();
+      await openTournament(f.session);
+      const button = await screen.findByRole('button', { name: 'Записаться на турнир' });
+      if (missing === 'randomUUID') {
+        await waitFor(() => expect(button).toBeEnabled());
+        fireEvent.click(button);
+        await screen.findByRole('alert');
+      } else await waitFor(() => expect(button).toBeDisabled());
+      expect(
+        f.request.mock.calls.filter(([x]) => x.resource === 'command' || x.resource === 'retry'),
+      ).toHaveLength(0);
+    },
+  );
 });

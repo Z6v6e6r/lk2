@@ -114,10 +114,21 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       }
       read = CabinetRead(resource: resource, id: call.getString("resourceId"), query: query)
     }
+    var tournament: TournamentRequest?
+    if operation == .tournament {
+      let allowed: Set<String> = ["operation", "resource", "resourceId", "operationId", "query", "headers", "body"]
+      guard Set(call.options.keys).isSubset(of: allowed), let resource = call.getString("resource"),
+        let query = call.getObject("query") as? [String: String],
+        call.options["resourceId"] == nil || call.getString("resourceId") != nil,
+        call.options["operationId"] == nil || call.getString("operationId") != nil,
+        call.options["body"] == nil || call.getString("body") != nil
+      else { call.reject("Native tournament request is unavailable", SessionFailure.request.rawValue); return }
+      tournament = TournamentRequest(resource: resource, id: call.getString("resourceId"), operationID: call.getString("operationId"), query: query)
+    }
     let notification = operation == .notification ? NotificationCommand(resource:call.getString("resource") ?? "",id:call.getString("resourceId")) : nil
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat)
+      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat, tournament: tournament)
     Task {
       do {
         let response = try await transport.request(request)

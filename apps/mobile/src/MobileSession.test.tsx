@@ -30,6 +30,7 @@ const calls = vi.hoisted(() => ({
   logout: vi.fn(),
   home: vi.fn(),
   locations: vi.fn(),
+  principal: undefined as (() => string | null) | undefined,
   observe: undefined as ((observation: NativeCacheObservation) => void) | undefined,
   observeRead: undefined as ((observation: NativeReadObservation) => void) | undefined,
 }));
@@ -49,6 +50,7 @@ vi.mock('./native-api-fetch.js', () => ({
 vi.mock('../../web/src/auth-gateway.js', () => ({
   createBrowserAuthGateway: () => ({
     closeQuarterCreate: calls.closeQuarter,
+    tournamentPrincipal: () => 'synthetic-current-principal',
     restoreSession: calls.restore,
     logout: calls.logout,
     getHomeBase: calls.home,
@@ -60,11 +62,13 @@ vi.mock('../../web/src/App.js', () => ({
     gateway,
   }: {
     gateway: {
+      tournamentPrincipal(): string | null;
       restoreSession(): Promise<unknown>;
       logout(): Promise<void>;
       getHomeBase(): Promise<unknown>;
     };
   }) => {
+    calls.principal = () => gateway.tournamentPrincipal();
     const [ready, setReady] = useState(false);
     const [snapshot, setSnapshot] = useState(false);
     useEffect(() => {
@@ -321,6 +325,7 @@ it('retires native bookings before push cleanup or session logout can wait', asy
   expect(calls.closeQuarter).toHaveBeenCalledOnce();
   expect(calls.beforeLogout).not.toHaveBeenCalled();
   expect(calls.logout).not.toHaveBeenCalled();
+  expect(calls.principal?.()).toBeNull();
   act(() => cancelled());
   await waitFor(() => expect(calls.logout).toHaveBeenCalledOnce());
   expect(calls.beforeLogout).toHaveBeenCalledOnce();

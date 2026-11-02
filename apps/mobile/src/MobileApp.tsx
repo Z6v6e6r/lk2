@@ -1,5 +1,6 @@
 import './native-quarter-create.css';
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { AndroidTournamentNavigation } from './AndroidTournamentNavigation.js';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
 import { createNativeApiFetch, type NativeReadFailure } from './native-api-fetch.js';
@@ -29,6 +30,7 @@ function MobileSession({
   readonly onSessionExpired: () => void;
   readonly startYandexLogin?: StartAndroidYandexLogin;
 }): React.JSX.Element {
+  const tournamentLogoutRequested = useRef(false);
   const [blocked, setBlocked] = useState<'restore' | 'logout' | null>(null);
   const [pending, setPending] = useState(false);
   const [restoreFailure, setRestoreFailure] = useState<ReturnType<typeof sessionFailureDetails>>();
@@ -82,6 +84,10 @@ function MobileSession({
     if (!native) return { gateway: service, push: undefined };
     const nativeGateway = {
       ...service,
+      tournamentPrincipal: () =>
+        tournamentLogoutRequested.current || expired
+          ? null
+          : (service.tournamentPrincipal?.() ?? null),
       ...(startYandexLogin
         ? {
             startVivaOAuth: async (input: Parameters<typeof service.startVivaOAuth>[0]) => {
@@ -111,6 +117,7 @@ function MobileSession({
       },
       async logout() {
         service.closeQuarterCreate?.();
+        tournamentLogoutRequested.current = true;
         // Hide account data immediately; an interrupted revoke must be retried, never called success.
         setBlocked('logout');
         setReadDiagnostics({ failures: {}, expanded: false });
@@ -204,6 +211,7 @@ function MobileSession({
       <nav className="native-quarter-navigation" aria-label="Создание игры">
         <a href="/games/new?quarterCreate=1">Игра по подписке</a>
       </nav>
+      {native ? <AndroidTournamentNavigation /> : null}
       <App
         key={dataGeneration}
         gateway={gateway}
