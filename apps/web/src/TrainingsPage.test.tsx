@@ -131,14 +131,10 @@ function deferred<Value>(): {
   return { promise, resolve };
 }
 
-function localDateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe('TrainingsPage', () => {
   it('shows the current group catalog including coach games with trainer and slot cards', async () => {
@@ -267,42 +263,47 @@ describe('TrainingsPage', () => {
     expect(screen.queryByRole('button', { name: 'Показать ещё' })).not.toBeInTheDocument();
   });
 
-  it('starts a new dated query and ignores the late response from the previous query', async () => {
-    const oldPage = deferred<EventCatalogPage>();
-    const datedPage = deferred<EventCatalogPage>();
-    const api = gateway(catalogPage([]));
-    vi.mocked(api.listEventCatalog)
-      .mockImplementationOnce(() => oldPage.promise)
-      .mockImplementationOnce(() => datedPage.promise);
-    const user = userEvent.setup();
+  it.each([
+    { now: '2035-04-01T20:30:00Z', nextDate: '2035-04-02' },
+    { now: '2035-04-01T22:30:00Z', nextDate: '2035-04-03' },
+  ])(
+    'starts a new dated query and ignores the previous late response at $now',
+    async ({ now, nextDate }) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(now));
+      const oldPage = deferred<EventCatalogPage>();
+      const datedPage = deferred<EventCatalogPage>();
+      const api = gateway(catalogPage([]));
+      vi.mocked(api.listEventCatalog)
+        .mockImplementationOnce(() => oldPage.promise)
+        .mockImplementationOnce(() => datedPage.promise);
+      const user = userEvent.setup();
 
-    render(<TrainingsPage gateway={api} />);
-    await waitFor(() => expect(api.listEventCatalog).toHaveBeenCalledTimes(1));
-    const dateButtons = within(screen.getByLabelText('Выбор даты')).getAllByRole('button');
-    const selectedDate = new Date();
-    selectedDate.setHours(0, 0, 0, 0);
-    selectedDate.setDate(selectedDate.getDate() + 1);
+      render(<TrainingsPage gateway={api} />);
+      await waitFor(() => expect(api.listEventCatalog).toHaveBeenCalledTimes(1));
+      const dateButtons = within(screen.getByLabelText('Выбор даты')).getAllByRole('button');
 
-    await user.click(dateButtons[2]!);
+      await user.click(dateButtons[2]!);
 
-    await waitFor(() => expect(api.listEventCatalog).toHaveBeenCalledTimes(2));
-    const datedQuery = vi.mocked(api.listEventCatalog).mock.calls[1]?.[0] as EventCatalogQuery;
-    expect(datedQuery.localDates).toEqual([localDateKey(selectedDate)]);
-    const current = training({
-      id: '99999999-9999-4999-8999-999999999999',
-      title: 'Тренировка новой даты',
-    });
-    const stale = training({
-      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      title: 'Устаревшая тренировка',
-    });
-    act(() => datedPage.resolve(catalogPage([catalogItem(current)])));
-    expect(await screen.findByText(current.title)).toBeInTheDocument();
+      await waitFor(() => expect(api.listEventCatalog).toHaveBeenCalledTimes(2));
+      const datedQuery = vi.mocked(api.listEventCatalog).mock.calls[1]?.[0] as EventCatalogQuery;
+      expect(datedQuery.localDates).toEqual([nextDate]);
+      const current = training({
+        id: '99999999-9999-4999-8999-999999999999',
+        title: 'Тренировка новой даты',
+      });
+      const stale = training({
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        title: 'Устаревшая тренировка',
+      });
+      act(() => datedPage.resolve(catalogPage([catalogItem(current)])));
+      expect(await screen.findByText(current.title)).toBeInTheDocument();
 
-    act(() => oldPage.resolve(catalogPage([catalogItem(stale)])));
-    await waitFor(() => expect(screen.queryByText(stale.title)).not.toBeInTheDocument());
-    expect(screen.getByText(current.title)).toBeInTheDocument();
-  });
+      act(() => oldPage.resolve(catalogPage([catalogItem(stale)])));
+      await waitFor(() => expect(screen.queryByText(stale.title)).not.toBeInTheDocument());
+      expect(screen.getByText(current.title)).toBeInTheDocument();
+    },
+  );
 });
 
 it('anchors the seven-day TRAININGS window to Moscow at the UTC day boundary', async () => {

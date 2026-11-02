@@ -1,5 +1,29 @@
 # LK2 R1 — приоритетные блокеры
 
+## Актуальный срез — 2026-11-03 (MSK)
+
+Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.
+
+| Приоритет            | Блокер                                                                                                       | Условие закрытия / владелец                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CLOSED / SOURCE+CI   | Первый enabled JOIN до lifetime activation                                                                   | PR571 merged в b88f2100; main CI41491347884 SUCCESS, 9144 PASS/133 SKIP, PG16 7/7. Delivery SKIPPED, flag true восстановлен. Runtime rollout ещё не выполнен. |
+| CLOSED (CI/artifact) | Matching publication b88f2100                                                                                | Run41506910421 attempt1 SUCCESS;5 images/canonical V2 verified; не доказательство deploy.                                                                     |
+| P0                   | Timeweb установлен702, ledger106; новый source/helper не enrolled                                            | Заполненный reviewed packet, свежие identity/custody/authority; затем verified backup/restore и106→107→108→119. Deploy owner.                                 |
+| P0                   | CUP83: последний authenticated срез4308 Map rows (2026-11-02T21:47:50Z); late writes и rollback не ограждены | Одобренный one-shot diagnostic export/operator window, preserved custody, admission/pull/send-ACK drain и совместимый rollback до restart. CUP/deploy owner.  |
+| P0                   | Monthly effective binding неизвестен                                                                         | Вход владельца в штатный Node-RED editor, read-only проверка; fresh preimage и guarded plan перед apply. LK owner.                                            |
+| P0                   | CURRENCY/DEPOSIT settlement и training visit-return не атрибутируются исходной операции                      | Неизменяемая запись возврата с original booking/operation/payment/subscription, суммой/валютой/назначением и terminal status. Viva contract/runtime owner.    |
+| P0                   | Единая runtime/provider acceptance не доказана                                                               | Положительные/negative/concurrent/retry/offline/recovery journeys на реально активированной версии. QA/domain owners.                                         |
+
+Открытые границы: Node-RED login; точный CUP export и trusted operator window; fresh Timeweb metadata. Автоматическая проверка отклонила original export и сокращённый hash-only вариант: даже служебные custody identifiers и machine-ID hash требуют точного разрешения. Запрос владельцу остаётся открытым, обе команды отклонены до исполнения. Не обходить отказ другим transport. Mobile signing/stores deferred по решению владельца, не скрытый серверный blocker.
+
+Source-only цикл571 завершён. Matching publication b88f2100 выполнена и проверена. Следующий блокер — fresh host inputs и заполненный enrollment/backup/migration пакет. Автоматическая проверка отклонила fresh metadata export; точное разрешение запрошено. Deploy не выполнен.
+
+CUP: PR78/79/80 source merged; LOCAL/review и PR/main CI завершены; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+
+---
+
+Исторические контрольные точки сохранены ниже; их прежние формулировки «текущий» не описывают состояние на дату раздела выше.
+
 ## Текущий остаток P0 — 2026-11-02, monthly checkout
 
 | Приоритет | Статус  | Блокер и критерий закрытия                                                                                                                                                                                                           |

@@ -1,5 +1,30 @@
 # LK2 R1 — E2E и acceptance matrix
 
+## Актуальный срез — 2026-11-03 (MSK)
+
+Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.
+
+| Journey                        | Обязательные случаи                                                                                              | Подтверждение / остаток                                                                                                                                                                                  |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth/Profile                   | expiry/revocation, logout/account switch, late reply, forbidden mutation                                         | Source/CI; coherent runtime acceptance открыта.                                                                                                                                                          |
+| Subscription purchase/CREATE   | quarter-court pricing, consent, usage/concurrent limits, duplicate key, lost ACK                                 | Source/CI; monthly binding/provider acceptance открыта.                                                                                                                                                  |
+| Game JOIN/LEAVE/CANCEL         | last seat race, organizer ACL, first enabled JOIN, same-key retry, process death, cancellation compensation      | PR571:65 LOCAL cases включая native journeys; full/native CI SUCCESS. Attributable money return blocked.                                                                                                 |
+| Training registration/leave    | capacity, retry, re-registration, visit compensation causality                                                   | Source/CI; per-booking visit-credit contract и runtime proof отсутствуют.                                                                                                                                |
+| Tournament signup/chat         | level/sex eligibility, capacity, organizer assignment, revoked participant, reconnect/unread                     | Source/CI; live end-to-end acceptance открыта.                                                                                                                                                           |
+| Station/community/direct chats | membership generation, voluntary return, ban fence, permission change, delivery/reconnect                        | Source/CI; actual owner/ACL/adoption/device acceptance открыта.                                                                                                                                          |
+| Push/campaigns                 | token lifecycle, retries/dedup, quiet hours/opt-out, current recipient, offline delivery                         | Source/physical CI; APNs/FCM device acceptance открыта.                                                                                                                                                  |
+| Recovery/release               | fresh backup independent restore, partial migrations, exact image/source identity, rollback, CUP in-flight queue | LOCAL34 synthetic +5 physical Linux checks/review CLEAR; CI PG16 7/7; production operations не выполнены. Physical lost-ACK проверяет inode exchange/INTENT, semantic classifier покрыт synthetic suite. |
+
+Текущий main b88f2100: CI41491347884 SUCCESS, 9144 PASS/133 SKIP; PostgreSQL16 7/7. Required physical lifecycle/comms/Rabbit/notifications — без пропусков. PR571 full41478649616 и native41478649474/41478649546 SUCCESS. Предыдущий failure d845 закрыт воспроизведённым JOIN lifetime fix. CI-only physical cases не считать production E2E; skipped не считать PASS.
+
+CUP: PR78/79/80 source merged; LOCAL/review и PR/main CI завершены; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+
+Дополнение CI: детерминированная проверка смены даты Training и позднего ответа до/после Moscow midnight; LOCAL6/6 в UTC и6/6 в Pacific/Auckland. Исправляет ошибочное timezone-зависимое ожидание теста, не runtime date semantics.
+
+---
+
+Исторические контрольные точки сохранены ниже; их прежние формулировки «текущий» не описывают состояние на дату раздела выше.
+
 ## Текущая E2E acceptance matrix — 2026-11-02, monthly checkout
 
 | Journey                               | SOURCE / LOCAL / CI                                                                                                                                                                                                                                                    | Оставшееся acceptance                                                                                             |

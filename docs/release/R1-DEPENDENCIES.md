@@ -1,5 +1,30 @@
 # LK2 R1 — зависимости и критический путь
 
+## Актуальный срез — 2026-11-03 (MSK)
+
+Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.
+
+1. ЗАВЕРШЕНО: initial JOIN fix → PR571 full/native CI → main b88f2100 merge → main CI41491347884 SUCCESS → delivery41494088418 SKIPPED → исходный flag true восстановлен.
+2. Frozen green main b88f2100 → публикация41506910421 пяти AMD64 images VERIFIED → canonical V2 VERIFIED → matching source proof/bundle LOCAL VERIFIED → fresh enrollment inputs pending. Старые images сохраняются, source/controller не смешиваются.
+3. Fresh host identity/config/locks/custody/disk → reviewed and authorized enrollment → source attestation.
+4. Fresh106 backup + независимый restore →0103/107 → fresh107 backup + restore →0104/108 → tail108→119 с отдельными gates и retained predecessors.
+5. Runtime rollout одного immutable комплекта → health/readiness → coherent API/worker/realtime/UI acceptance → soak → rollback evidence.
+
+Параллельные зависимости:
+
+- CUP: explicit export/window → сохранить старую очередь → drain/reconcile/held unknowns → guarded deploy согласованного candidate/recovery artifact → smoke/soak. LK2 notification adoption зависит от согласованного CUP owner/runtime.
+- LK: штатный editor login → binding/admission/storage/recovery → fresh preimage → guarded monthly apply → provider journey.
+- Viva: attributable settlement/visit-return contract → negative/retry/ambiguous-write acceptance. Не блокирует безопасную source-подготовку других областей.
+- Quarter navigation PR569 интегрировать после frozen migration boundary; mobile signing PR567 остаётся отдельным этапом.
+
+Ни merged source, ни публикация, ни metadata readback не закрывают последующие runtime gates.
+
+CUP: PR78/79/80 source merged; LOCAL/review и PR/main CI завершены; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+
+---
+
+Исторические контрольные точки сохранены ниже; их прежние формулировки «текущий» не описывают состояние на дату раздела выше.
+
 ## Текущий dependency-aware critical path — 2026-11-02, monthly checkout
 
 1. VERIFIED SOURCE/CI: LK2#565 включает#558 и native559–564; LK#289 включает#288; CUP#76 включает интегрированный CUP owner. Точные immutable heads/runs в [READINESS](R1-READINESS.md). Нет необходимости повторять уже включённые local merges.
