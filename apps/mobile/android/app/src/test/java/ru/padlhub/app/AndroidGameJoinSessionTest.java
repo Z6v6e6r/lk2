@@ -103,7 +103,7 @@ public class AndroidGameJoinSessionTest {
         AndroidSessionPolicy policy = policy();
         for (String path : Arrays.asList(ROOT + "/games", ROOT + "/games/" + GAME + "/cancel", ROOT + "/games/" + GAME + "/waitlist", ROOT + "/booked-operation-admissions", ROOT + "/auth/viva/access", "/user/api/v1/other/games/" + GAME, ORIGIN + ROOT + "/games/" + GAME))
             rejected(() -> policy.request(path, "POST", headers(), BODY));
-        rejected(() -> policy.request(ROOT + "/games/" + GAME + "/participants/me", "DELETE", headers(), null));
+        rejected(() -> policy.request(ROOT + "/games/" + GAME + "/participants/other", "DELETE", headers(), null));
         rejected(() -> policy.request(ROOT + "/games/" + GAME + "/join?retry=1", "POST", headers(), BODY));
         rejected(() -> policy.request(ROOT + "/games/" + GAME, "GET", Collections.emptyMap(), null));
     }
