@@ -16,7 +16,7 @@ Source work и разрешённая публикация b88f2100 заверш
 
 Разрешённый цикл571 завершён: delivery41494088418 SKIPPED, флаг true восстановлен и проверен. Публикация b88f2100 выполнена один раз, attempt1; все пять образов и canonical manifest проверены. LOCAL Linux companion5/5 PASS; fresh host metadata заблокированы автоматической проверкой, точное разрешение запрошено.
 
-CUP: PR78/79 source merged, PR80 LOCAL/review CLEAR и CI pending; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+CUP: PR78/79/80 source merged; LOCAL/review и PR/main CI завершены; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
 
 ---
 

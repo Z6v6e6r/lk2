@@ -18,7 +18,7 @@
 
 Source-only цикл571 завершён. Matching publication b88f2100 выполнена и проверена. Следующий блокер — fresh host inputs и заполненный enrollment/backup/migration пакет. Автоматическая проверка отклонила fresh metadata export; точное разрешение запрошено. Deploy не выполнен.
 
-CUP: PR78/79 source merged, PR80 LOCAL/review CLEAR и CI pending; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+CUP: PR78/79/80 source merged; LOCAL/review и PR/main CI завершены; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
 
 ---
 

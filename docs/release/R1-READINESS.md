@@ -27,10 +27,12 @@
 
 - LK2 main `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`; [CI41491347884](https://github.com/Z6v6e6r/lk2/actions/runs/41491347884) SUCCESS; [publication41506910421](https://github.com/Z6v6e6r/lk2/actions/runs/41506910421) SUCCESS.
 - LK main `c0bbff523069685eb01d74de51ffbbbdc7b34fac` проверен read-only; source не означает применённый Node-RED flow.
-- CUP main `45f5edb9c8abf5b799a7eb262f7ef03bdd7bb41e`: [PR78](https://github.com/Z6v6e6r/ph-admin/pull/78) и [PR79](https://github.com/Z6v6e6r/ph-admin/pull/79) merged. Для PR78 main fullCI41534627629/runtimeCI41534627725 SUCCESS; artifact13183776269 проверен по ZIP/internal hashes и10061 runtime files +3 recovery modules. Архивы PR/main различаются, содержимое файлов/размер/права совпадают.
-- PR79 offline snapshot normalizer:9/9 LOCAL; independent review CLEAR; fullCI41535737302/MAXCI41535737276 SUCCESS. Main CI41536963813 ещё выполняется.
-- [CUP PR80](https://github.com/Z6v6e6r/ph-admin/pull/80) `4bc839b15a0e79063e917a1dcf2054e7d863c17d`: offline recovery-tree preparation,9/9 LOCAL synthetic +actual reviewed overlay3 +workflow identity2 PASS; review CLEAR; runtime CI41537313550 SUCCESS, full CI41537313551 pending. Production executor не изменён.
+- CUP main `5d764e35e4f0ce991e6b6f13818d98d52d4bb69e`: [PR78](https://github.com/Z6v6e6r/ph-admin/pull/78) и [PR79](https://github.com/Z6v6e6r/ph-admin/pull/79) merged. Для PR78 main fullCI41534627629/runtimeCI41534627725 SUCCESS; artifact13183776269 проверен по ZIP/internal hashes и10061 runtime files +3 recovery modules. Архивы PR/main различаются, содержимое файлов/размер/права совпадают.
+- PR79 offline snapshot normalizer:9/9 LOCAL; independent review CLEAR; fullCI41535737302/MAXCI41535737276 SUCCESS. Main CI41536963813 SUCCESS.
+- [CUP PR80](https://github.com/Z6v6e6r/ph-admin/pull/80) `4bc839b15a0e79063e917a1dcf2054e7d863c17d`: offline recovery-tree preparation,9/9 LOCAL synthetic +actual reviewed overlay3 +workflow identity2 PASS; review CLEAR; PR fullCI41537313551/runtimeCI41537313550 SUCCESS. Merged as5d764e35; main fullCI41538734530/runtimeCI41538734715 SUCCESS. Production executor не изменён.
 - Staff CUP diagnostics `2026-11-02T21:47:50.183Z`:4308 Map rows, initial/periodic sync off, interval0. Это число не доказывает drain, custody или отсутствие поздних записей.
+
+CI отчётов41537759159:9143 PASS/1 FAIL/133 SKIP. Единственный сбой — TrainingsPage test вычислял «завтра» в timezone runner вместо Moscow. Воспроизведён в UTC; исправление только теста задаёт два фиксированных UTC момента до/после московской полуночи и точные ожидаемые даты. LOCAL6/6 PASS в UTC и6/6 в Pacific/Auckland, stale-response assertions сохранены. Corrected PR CI pending; runtime приложения не изменён.
 
 ---
 

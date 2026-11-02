@@ -17,7 +17,9 @@
 
 Текущий main b88f2100: CI41491347884 SUCCESS, 9144 PASS/133 SKIP; PostgreSQL16 7/7. Required physical lifecycle/comms/Rabbit/notifications — без пропусков. PR571 full41478649616 и native41478649474/41478649546 SUCCESS. Предыдущий failure d845 закрыт воспроизведённым JOIN lifetime fix. CI-only physical cases не считать production E2E; skipped не считать PASS.
 
-CUP: PR78/79 source merged, PR80 LOCAL/review CLEAR и CI pending; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+CUP: PR78/79/80 source merged; LOCAL/review и PR/main CI завершены; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+
+Дополнение CI: детерминированная проверка смены даты Training и позднего ответа до/после Moscow midnight; LOCAL6/6 в UTC и6/6 в Pacific/Auckland. Исправляет ошибочное timezone-зависимое ожидание теста, не runtime date semantics.
 
 ---
 
