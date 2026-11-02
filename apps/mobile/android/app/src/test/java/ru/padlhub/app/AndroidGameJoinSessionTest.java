@@ -24,6 +24,8 @@ public class AndroidGameJoinSessionTest {
         result.put("idempotency-key", KEY);
         return result;
     }
+    static Map<String,String> conditionHeaders(){Map<String,String> h=headers();h.remove("idempotency-key");return h;}
+    static Map<String,String> reconcileHeaders(){Map<String,String> h=headers();h.put("idempotency-key","join-reconcile:"+KEY);return h;}
     static class MemoryStore implements Store {
         Credential value = new Credential(ORIGIN + "|local-padel", "synthetic_refresh_credential_00000000000000001", System.currentTimeMillis() + 60_000, null, null);
         public Credential read() { return value; }
@@ -47,7 +49,7 @@ public class AndroidGameJoinSessionTest {
         });
         engine.request(ROOT + "/games?scope=UPCOMING&limit=20", "GET", headers(), null);
         engine.request(ROOT + "/games/" + GAME, "GET", headers(), null);
-        engine.request(ROOT + "/games/" + GAME + "/join-conditions?expectedRevision=1&subscriptionInstanceId=" + SUBSCRIPTION, "GET", headers(), null);
+        engine.request(ROOT + "/games/" + GAME + "/join-conditions?expectedRevision=1&subscriptionInstanceId=" + SUBSCRIPTION, "GET", conditionHeaders(), null);
         engine.request(ROOT + "/games/" + GAME + "/join", "POST", headers(), BODY);
         engine.request(ROOT + "/games/" + GAME + "/join-operation", "GET", headers(), null);
         assertEquals(5, sent.size());
@@ -93,7 +95,7 @@ public class AndroidGameJoinSessionTest {
     @Test public void acceptsHistoryCursorAndEitherConditionParameterOrder() throws Exception {
         AndroidSessionPolicy policy = policy();
         policy.request(ROOT + "/games?cursor=eyJpZCI6MX0&limit=100&scope=HISTORY", "GET", headers(), null);
-        policy.request(ROOT + "/games/" + GAME + "/join-conditions?subscriptionInstanceId=" + SUBSCRIPTION + "&expectedRevision=9007199254740991", "GET", headers(), null);
+        policy.request(ROOT + "/games/" + GAME + "/join-conditions?subscriptionInstanceId=" + SUBSCRIPTION + "&expectedRevision=9007199254740991", "GET", conditionHeaders(), null);
         rejected(() -> policy.request(ROOT + "/games/" + GAME + "/join-conditions?expectedRevision=9007199254740992&subscriptionInstanceId=" + SUBSCRIPTION, "GET", headers(), null));
         rejected(() -> policy.request(ROOT + "/games?scope=UPCOMING%26limit=20", "GET", headers(), null));
         rejected(() -> policy.request(ROOT + "/games?cursor=first&cursor=second", "GET", headers(), null));
@@ -125,14 +127,31 @@ public class AndroidGameJoinSessionTest {
     @Test public void forwardsCanonicalReceiptReconciliationWithTheSameKey() throws Exception {
         AndroidSessionPolicy policy = policy();
         String reconcile = ROOT + "/game-operations/" + KEY + "/reconcile";
-        Request request = policy.request(reconcile, "POST", headers(), null);
+        Request request = policy.request(reconcile, "POST", reconcileHeaders(), null);
         assertEquals(Operation.API, request.operation);
-        assertEquals(KEY, request.headers.get("idempotency-key"));
+        assertEquals("join-reconcile:"+KEY, request.headers.get("idempotency-key"));
         // The reconcile route is a POST command with a reviewed idempotency key on the same
         // operation id; no other game mutation is opened by this increment.
         Map<String, String> missingKey = headers(); missingKey.remove("idempotency-key");
         rejected(() -> policy.request(reconcile, "POST", missingKey, null));
         rejected(() -> policy.request(ROOT + "/game-operations/" + GAME + "/reconcile", "GET", headers(), null));
         rejected(() -> policy.request(ROOT + "/games/" + GAME + "/reconcile", "POST", headers(), null));
+    }
+
+    @Test public void freeBodyAndEscapedDuplicatesAreClosed() throws Exception {
+        Request free=policy().request(ROOT+"/games/"+GAME+"/join","POST",headers(),"{\"expectedRevision\":1}");
+        assertEquals("application/json",free.headers.get("content-type"));
+        for(String body:new String[]{"{\"expectedRevision\":true}","{\"expectedRevision\":1,\"expectedRevision\":2}","{\"expectedRevision\":1,\""+"\\"+"u0065xpectedRevision\":2}","{\"expectedRevision\":1,\"source\":\"viva\"}"}) rejected(()->policy().request(ROOT+"/games/"+GAME+"/join","POST",headers(),body));
+        Request recovery=policy().request(ROOT+"/game-operations/"+KEY+"/reconcile","POST",reconcileHeaders(),null);
+        assertEquals("{}",new String(recovery.body,StandardCharsets.UTF_8));assertEquals("application/json",recovery.headers.get("content-type"));
+        rejected(()->policy().request(ROOT+"/game-operations/"+KEY+"/reconcile","POST",headers(),null));
+    }
+    @Test public void publicCatalogueCannotCarryCredentialsOrExpandQuery() throws Exception {
+        String root="/public/api/v1/local-padel/games";
+        Request read=policy().request(root+"?limit=20&availability=INCLUDE_FULL&cursor=YXNk","GET",Collections.emptyMap(),null);
+        assertEquals(Operation.PUBLIC,read.operation);assertNull(read.headers.get("authorization"));
+        rejected(()->policy().request(root,"GET",headers(),null));
+        for(String suffix:new String[]{"/other","?","?limit=51","?limit=20&limit=20","?source=viva","?cursor=.."})rejected(()->policy().request(root+suffix,"GET",Collections.emptyMap(),null));
+        rejected(()->policy().request(root,"POST",Collections.emptyMap(),null));
     }
 }

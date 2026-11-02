@@ -1,3 +1,6 @@
+import { nativeJoinRequest, nativeJoinIdentity } from '../native-game-join-request.js';
+import { nativeJoinTarget } from '../../../web/src/native-game-join-wire.js';
+import type { NativeJoinRequest } from '../../../web/src/native-game-join-attempt.js';
 import {
   selfLeaveRequest,
   selfLeaveRequestKey,
@@ -51,7 +54,8 @@ interface NativeRequest {
     | 'tournament'
     | 'messaging'
     | 'training'
-    | 'selfLeave';
+    | 'selfLeave'
+    | 'gameJoin';
   readonly requestId?: string;
   readonly challengeId?: string;
   readonly operationId?: string;
@@ -84,12 +88,14 @@ export function createIOSFetch(
   canDispatchGameChat?: (gameId: string) => boolean,
   canDispatchTraining?: (request: NativeTrainingRequest, key?: string, body?: string) => boolean,
   canDispatchSelfLeave?: (request: NativeSelfLeaveRequest, key: string) => boolean,
+  canDispatchJoin?: (request: NativeJoinRequest) => boolean,
 ): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   let cancellationClosed = false;
   let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
+    const join = nativeJoinRequest(value, init, config);
     const selfLeave = selfLeaveRequest(value, init, config);
     const training = trainingRequest(value, init, config);
     const tournamentChat = value.includes('/chat/')
@@ -109,6 +115,7 @@ export function createIOSFetch(
           config,
         );
     const read =
+      !join &&
       !selfLeave &&
       !training &&
       !station &&
@@ -120,6 +127,7 @@ export function createIOSFetch(
         : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
     if (
+      !join &&
       !selfLeave &&
       !training &&
       !station &&
@@ -134,7 +142,8 @@ export function createIOSFetch(
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (selfLeave) operation = 'selfLeave';
+    if (join) operation = 'gameJoin';
+    else if (selfLeave) operation = 'selfLeave';
     else if (training) operation = 'training';
     else if (tournamentChat) operation = 'tournamentChat';
     else if (station) operation = stream ? 'stationStream' : 'stationMessage';
@@ -175,6 +184,8 @@ export function createIOSFetch(
       cancellationEpoch++;
     }
     const originalCancellationEpoch = cancellationEpoch;
+    if (join && (cancellationClosed || canDispatchJoin?.(join) !== true))
+      throw new DOMException('Session changed', 'AbortError');
     const selfLeaveKey = new Headers(init?.headers).get('idempotency-key') ?? '';
     if (
       selfLeave &&
@@ -212,6 +223,9 @@ export function createIOSFetch(
         ...(read ?? {}),
         ...(training ?? {}),
         ...(selfLeave ?? {}),
+        ...(join
+          ? { resource: join.resource, resourceId: join.resourceId, query: join.query ?? {} }
+          : {}),
         ...(tournament ?? {}),
         ...(notification ?? {}),
         ...(quarter ?? {}),
@@ -222,6 +236,13 @@ export function createIOSFetch(
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (
+        join &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchJoin?.(join) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
       if (
         selfLeave &&
         (cancellationClosed ||
@@ -323,11 +344,18 @@ export class IOSSession {
   private tournamentClosed = false;
   private tournamentEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
+  private readonly joinRequests = new Map<
+    string,
+    { principal: string; token: string; count: number }
+  >();
   private readonly selfLeaveRequests = new Map<
     string,
     { principal: string; count: number; token: string }
   >();
-  private readonly trainingRequests = new Map<string, { principal: string; count: number }>();
+  private readonly trainingRequests = new Map<
+    string,
+    { principal: string; count: number; token: string }
+  >();
   private readonly gameChatRequests = new Map<string, string>();
   private readonly cancellations = new Map<string, string>();
   private readonly stationRequests = new Map<string, string>();
@@ -378,6 +406,52 @@ export class IOSSession {
       throw new DOMException('Session changed', 'AbortError');
     return v;
   }
+  public canDispatchJoin(request: NativeJoinRequest): boolean {
+    const value = this.joinRequests.get(nativeJoinIdentity(request));
+    return (
+      value !== undefined &&
+      value.count > 0 &&
+      value.principal === this.quarterCreatePrincipal() &&
+      value.token === this.api.getAccessToken()
+    );
+  }
+  public async gameJoin(request: NativeJoinRequest): Promise<unknown> {
+    const principal = this.quarterCreatePrincipal(),
+      token = this.api.getAccessToken(),
+      identity = nativeJoinIdentity(request),
+      existing = this.joinRequests.get(identity);
+    if (
+      !principal ||
+      !token ||
+      (existing &&
+        (existing.principal !== principal ||
+          existing.token !== token ||
+          request.resource === 'join' ||
+          request.resource === 'reconcile'))
+    )
+      throw rejectedRequest();
+    const custody = existing ?? { principal, token, count: 0 };
+    custody.count++;
+    this.joinRequests.set(identity, custody);
+    try {
+      const target = nativeJoinTarget(request);
+      const result = await this.quarterCall((api) =>
+        api.request(target.path, {
+          method: target.method,
+          ...(request.key ? { idempotencyKey: request.key } : {}),
+          ...(request.body !== undefined ? { body: request.body } : {}),
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        }),
+      );
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return result;
+    } finally {
+      custody.count--;
+      if (custody.count === 0) this.joinRequests.delete(identity);
+    }
+  }
   public canDispatchSelfLeave(request: NativeSelfLeaveRequest, key: string): boolean {
     const original = this.selfLeaveRequests.get(selfLeaveRequestKey(request, key));
     return (
@@ -427,7 +501,8 @@ export class IOSSession {
     return (
       original !== undefined &&
       original.count > 0 &&
-      original.principal === this.quarterCreatePrincipal()
+      original.principal === this.quarterCreatePrincipal() &&
+      original.token === this.api.getAccessToken()
     );
   }
   private async withTraining<T>(
@@ -436,17 +511,26 @@ export class IOSSession {
     body: string | undefined,
     load: (api: PadlHubApiClient) => Promise<T>,
   ): Promise<T> {
-    const principal = this.quarterCreatePrincipal();
-    if (!principal) throw rejectedRequest();
+    const principal = this.quarterCreatePrincipal(),
+      token = this.api.getAccessToken();
+    if (!principal || !token) throw rejectedRequest();
     const identity = trainingRequestKey(request, key, body),
       existing = this.trainingRequests.get(identity);
-    if (existing && (existing.principal !== principal || request.resource === 'register'))
+    if (
+      existing &&
+      (existing.principal !== principal ||
+        existing.token !== token ||
+        request.resource === 'register')
+    )
       throw rejectedRequest();
-    const custody = existing ?? { principal, count: 0 };
+    const custody = existing ?? { principal, count: 0, token };
     custody.count++;
     this.trainingRequests.set(identity, custody);
     try {
-      return await this.quarterCall(load);
+      const result = await this.quarterCall(load);
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return result;
     } finally {
       custody.count--;
       if (custody.count === 0) this.trainingRequests.delete(identity);
@@ -863,6 +947,7 @@ export function getIOSSession(): Promise<IOSSession> {
         (id) => session?.canDispatchGameChat(id) === true,
         (request, key, body) => session?.canDispatchTraining(request, key, body) === true,
         (request, key) => session?.canDispatchSelfLeave(request, key) === true,
+        (request) => session?.canDispatchJoin(request) === true,
       ),
     });
     const session: IOSSession = new IOSSession(configuration, api);

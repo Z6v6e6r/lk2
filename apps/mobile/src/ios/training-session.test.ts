@@ -159,3 +159,38 @@ it('strict routes keep encoded catalogue values and reject duplicate query/body 
       trainingRequest(`${root}/${id}/registration-operation`, { headers: h }, config),
     ).toThrow();
 });
+
+it('training rejects ACK after token rotation during SDK JSON decoding', async () => {
+  const request = vi.fn<IOSSessionPlugin['request']>((v) =>
+    Promise.resolve(
+      v.operation === 'training' ? nativeResult({ marker: 'training' }) : fixtureReply(v),
+    ),
+  );
+  const session = syntheticSession(request);
+  await session.restore();
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- The spy invokes this saved method with original.call(this).
+  const original = Response.prototype.json;
+  let release!: (v: unknown) => void;
+  const spy = vi.spyOn(Response.prototype, 'json').mockImplementation(function (this: Response) {
+    return original.call(this).then((v: unknown) =>
+      typeof v === 'object' && v !== null && 'marker' in v
+        ? new Promise((r) => {
+            release = r;
+          })
+        : v,
+    );
+  });
+  try {
+    const command = session.registerTraining(id, input, key),
+      rejected = expect(command).rejects.toThrow();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    await session.read((api) => {
+      api.setAccessToken('synthetic-rotated-token');
+      return Promise.resolve();
+    });
+    release({});
+    await rejected;
+  } finally {
+    spy.mockRestore();
+  }
+});

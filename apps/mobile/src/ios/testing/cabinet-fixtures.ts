@@ -94,6 +94,7 @@ export function syntheticSession(
         (id) => session?.canDispatchGameChat(id) === true,
         (request, key, body) => session?.canDispatchTraining(request, key, body) === true,
         (request, key) => session?.canDispatchSelfLeave(request, key) === true,
+        (request) => session?.canDispatchJoin(request) === true,
       ),
     }),
   );

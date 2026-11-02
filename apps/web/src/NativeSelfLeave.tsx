@@ -1,3 +1,4 @@
+import { nativeJoinLeaveAdmission } from './native-game-join-attempt.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GameCard, GameCommandResult } from '@phub/api-sdk';
 import type { AuthGateway } from './auth-gateway.js';
@@ -30,7 +31,14 @@ function createLeaveLifetime(gateway: NativeSelfLeaveGateway, tenantId: string, 
       locks &&
       gateway.getManagedLeaveOperation &&
       gateway.reconcileManagedLeaveOperation
-        ? new GameSelfLeaveAttempts({ tenantId, userId }, storage, locks, gateway, current)
+        ? new GameSelfLeaveAttempts(
+            { tenantId, userId },
+            storage,
+            locks,
+            gateway,
+            current,
+            nativeJoinLeaveAdmission(storage, { tenantId, userId }),
+          )
         : null,
   };
 }

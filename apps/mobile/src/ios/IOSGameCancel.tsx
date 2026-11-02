@@ -1,3 +1,5 @@
+import type { NativeJoinRequest } from '../../../web/src/native-game-join-attempt.js';
+import { NativeGameJoin } from '../../../web/src/NativeGameJoin.js';
 import { NativeSelfLeave } from '../../../web/src/NativeSelfLeave.js';
 import { NativeGameChat } from '../../../web/src/NativeGameChat.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -7,6 +9,15 @@ import { cancelGameAndRead } from '../../../web/src/game-cancel-readback.js';
 import type { IOSSession } from './session.js';
 
 export function IOSGameCancel({ game, session }: { game: Game; session: IOSSession }) {
+  const joinGateway = useMemo(
+    () => ({
+      principal: () => session.quarterCreatePrincipal(),
+      getGame: (id: string) => session.read((api) => api.getGame(id)),
+      getHomeDashboard: () => session.read((api) => api.getHomeDashboard()),
+      request: (request: NativeJoinRequest) => session.gameJoin(request),
+    }),
+    [session],
+  );
   const leaveGateway = useMemo(
     () => ({
       principal: () => session.quarterCreatePrincipal(),
@@ -76,8 +87,19 @@ export function IOSGameCancel({ game, session }: { game: Game; session: IOSSessi
     <>
       <GameCard game={currentGame} readOnly />
       {snapshot.status === 'signed-in' && (
+        <NativeGameJoin
+          game={currentGame}
+          gateway={joinGateway}
+          onCanonicalGame={setGame}
+          scope={{
+            tenantId: snapshot.session.context.tenantId,
+            userId: snapshot.session.context.userId,
+          }}
+        />
+      )}
+      {snapshot.status === 'signed-in' && (
         <NativeSelfLeave
-          key={`${snapshot.session.context.tenantId}:${snapshot.session.context.userId}:${game.id}`}
+          key={`${snapshot.session.context.tenantId}:${snapshot.session.context.userId}:${game.id}:${currentGame.viewerRelation}`}
           game={currentGame}
           gateway={leaveGateway}
           scope={{

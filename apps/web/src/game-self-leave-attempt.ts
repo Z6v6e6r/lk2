@@ -18,6 +18,7 @@ export class GameSelfLeaveAttempts {
       'leaveGame' | 'getManagedLeaveOperation' | 'reconcileManagedLeaveOperation'
     >,
     private readonly isCurrent: () => boolean = () => true,
+    private readonly admission?: { name(id: string): string; assertAllowed(id: string): void },
   ) {}
   private assertCurrent(): void {
     if (!this.isCurrent()) throw new Error('SELF_LEAVE_SCOPE_CHANGED');
@@ -97,12 +98,13 @@ export class GameSelfLeaveAttempts {
   async submit(gameId: string): Promise<GameCommandResult> {
     this.assertCurrent();
     const { attempt, fresh } = await this.locks.request(
-      this.key(gameId),
+      this.admission?.name(gameId) ?? this.key(gameId),
       { mode: 'exclusive' },
       () => {
         this.assertCurrent();
         const current = this.load(gameId);
         if (current) return { attempt: current, fresh: false };
+        this.admission?.assertAllowed(gameId);
         const fresh: SelfLeaveAttempt = { version: 1, gameId, idempotencyKey: crypto.randomUUID() };
         this.storage.setItem(this.key(gameId), JSON.stringify(fresh));
         return { attempt: fresh, fresh: true };

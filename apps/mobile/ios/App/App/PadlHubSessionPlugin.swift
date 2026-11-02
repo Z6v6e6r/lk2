@@ -186,6 +186,12 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       else {call.reject("Native training request is unavailable",SessionFailure.request.rawValue);return}
       training=TrainingRequest(resource:resource,id:call.getString("resourceId"),query:query)
     }
+    var gameJoin:GameJoinRequest?
+    if operation == .gameJoin {
+      let allowed:Set<String>=["operation","resource","resourceId","query","headers","body"]
+      guard Set(call.options.keys).isSubset(of:allowed),let resource=call.getString("resource"),let id=call.getString("resourceId"),let query=call.getObject("query") as? [String:String],call.options["body"]==nil||call.getString("body") != nil else{call.reject("Native game JOIN unavailable",SessionFailure.request.rawValue);return}
+      gameJoin=GameJoinRequest(resource:resource,id:id,query:query)
+    }
     var selfLeave:SelfLeaveRequest?
     if operation == .selfLeave {
       let allowed:Set<String>=["operation","resource","resourceId","headers"]
@@ -196,7 +202,7 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
     let messaging = operation == .messaging ? MessagingCommand(resource: call.getString("resource") ?? "", id: call.getString("resourceId")) : nil
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat, tournament: tournament, messaging: messaging, training: training, selfLeave: selfLeave)
+      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat, tournament: tournament, messaging: messaging, training: training, selfLeave: selfLeave, gameJoin: gameJoin)
     Task {
       do {
         let response = try await transport.request(request)

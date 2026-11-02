@@ -397,9 +397,7 @@ function Games({ data }: { readonly data: CabinetData }): React.JSX.Element {
   }
   return (
     <Page title="Игры" active="games">
-      <p className="ios-cabinet-note">
-        Пока доступен просмотр игр. Запись и оплата появятся в следующей версии.
-      </p>
+      <p className="ios-cabinet-note">Откройте игру, чтобы проверить доступные условия записи.</p>
       <label className="ios-cabinet-filter">
         Тип игры
         <select

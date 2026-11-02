@@ -1,3 +1,5 @@
+import { nativeJoinTarget } from './native-game-join-wire.js';
+import type { NativeJoinRequest } from './native-game-join-attempt.js';
 import type {
   StationStreamPage,
   StationStreamSummaries,
@@ -619,6 +621,7 @@ export interface AuthGateway {
    * owns the idempotency key: a lost response is recovered by `getPaidJoinOperation`, never by a new
    * POST. Optional capability: a gateway without it keeps the fail-closed free-join path.
    */
+  readonly nativeGameJoin?: (request: NativeJoinRequest) => Promise<unknown>;
   readonly joinPaidGame?: PadlHubApiClient['joinPaidGame'];
   /** Readback of the same commercial operation by its original idempotency key. */
   readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
@@ -1029,7 +1032,29 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         if (client.getAccessToken() !== leaveCustody.token)
           throw new Error('AUTH_PRINCIPAL_CHANGED');
       }
+      const isJoin =
+        options.platform === 'android' &&
+        (/^\/games\/[^/]+\/join(?:-conditions|-operation)?(?:\?|$)/.test(selfPath) ||
+          selfPath.startsWith('/game-operations/'));
+      const joinIdentity = JSON.stringify([
+        init?.method ?? 'GET',
+        selfPath,
+        selfKey,
+        init?.body ?? null,
+      ]);
+      const joinCustody = isJoin ? nativeJoinPrincipals.get(joinIdentity) : undefined;
+      if (isJoin) {
+        if (!joinCustody) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(joinCustody.principal);
+        if (client.getAccessToken() !== joinCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       const result = await (options.fetchImplementation ?? globalThis.fetch)(input, init);
+      if (joinCustody) {
+        requireQuarterPrincipal(joinCustody.principal);
+        if (client.getAccessToken() !== joinCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       if (leaveCustody) {
         requireQuarterPrincipal(leaveCustody.principal);
         if (client.getAccessToken() !== leaveCustody.token)
@@ -1077,6 +1102,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   const subjectLinkStartKeys = new Map<string, string>();
   const subjectLinkVerifyKeys = new Map<string, string>();
   const cancellationPrincipals = new Map<string, string>();
+  const nativeJoinPrincipals = new Map<
+    string,
+    { principal: string; token: string; count: number }
+  >();
   const selfLeavePrincipals = new Map<
     string,
     { principal: string; count: number; token: string }
@@ -2558,6 +2587,45 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.joinGame(gameId, expectedRevision, invitationId);
     },
 
+    async nativeGameJoin(request) {
+      if (!nativeClient || !options.nativeSessionTransport) return nativeUnavailable();
+      const principal = requireQuarterPrincipal(),
+        token = client.getAccessToken(),
+        target = nativeJoinTarget(request),
+        identity = JSON.stringify([
+          target.method,
+          target.path,
+          request.key ?? '',
+          request.body ?? null,
+        ]),
+        existing = nativeJoinPrincipals.get(identity);
+      if (
+        !token ||
+        (existing &&
+          (existing.principal !== principal ||
+            existing.token !== token ||
+            target.method === 'POST'))
+      )
+        throw new Error('AUTH_PRINCIPAL_CHANGED');
+      const custody = existing ?? { principal, token, count: 0 };
+      custody.count++;
+      nativeJoinPrincipals.set(identity, custody);
+      try {
+        const result = await client.request(target.path, {
+          method: target.method,
+          ...(request.key ? { idempotencyKey: request.key } : {}),
+          ...(request.body !== undefined ? { body: request.body } : {}),
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        });
+        requireQuarterPrincipal(principal);
+        if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        return result;
+      } finally {
+        custody.count--;
+        if (custody.count === 0) nativeJoinPrincipals.delete(identity);
+      }
+    },
     joinPaidGame(gameId, input, idempotencyKey) {
       return client.joinPaidGame(gameId, input, idempotencyKey);
     },
