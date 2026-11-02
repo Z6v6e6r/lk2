@@ -1,0 +1,105 @@
+{
+  "provenance": {
+    "cupHead": "cb413d41c59e0dd14b400884ea71c154fb4520dc",
+    "producer": "TournamentChatService with existing pure MemoryStore; synthetic only"
+  },
+  "requests": [
+    {
+      "contractVersion": 1,
+      "tournamentId": "81c9fad7-f39c-47a7-95ee-df25d9ae24ba",
+      "requestId": "1b4980a8-cf13-4a73-a931-8fdba1f9d2c7",
+      "text": "Same synthetic body"
+    },
+    {
+      "contractVersion": 1,
+      "tournamentId": "81c9fad7-f39c-47a7-95ee-df25d9ae24ba",
+      "requestId": "8b34cced-b125-42f2-91c6-468ffa0a80d1",
+      "text": "Same synthetic body"
+    },
+    {
+      "contractVersion": 1,
+      "tournamentId": "81c9fad7-f39c-47a7-95ee-df25d9ae24ba",
+      "requestId": "33a1ca4d-5937-4a6c-89fe-8a5f1fba53c0",
+      "text": "﻿  Synthetic 🙂\n  "
+    }
+  ],
+  "receipts": [
+    {
+      "contractVersion": "tournament-chat.v1",
+      "tournamentId": "81c9fad7-f39c-47a7-95ee-df25d9ae24ba",
+      "requestId": "1b4980a8-cf13-4a73-a931-8fdba1f9d2c7",
+      "status": "CONFIRMED",
+      "requestHash": "e094392f2cf133af3820cdf0977e2e7a55bf0c18a6d9811acd7883e3d3938d23",
+      "streamId": "a465c233-c89f-444c-9857-27009e751902",
+      "messageId": "ba23bd28-bcc7-4ffa-a204-a595775b6225",
+      "sequence": 1
+    },
+    {
+      "contractVersion": "tournament-chat.v1",
+      "tournamentId": "81c9fad7-f39c-47a7-95ee-df25d9ae24ba",
+      "requestId": "8b34cced-b125-42f2-91c6-468ffa0a80d1",
+      "status": "CONFIRMED",
+      "requestHash": "2b54bdb855b601a002239b45ef74b146d7ac046d706602186f77128e22acde03",
+      "streamId": "a465c233-c89f-444c-9857-27009e751902",
+      "messageId": "98f95bad-bf97-4e9d-999e-33a3770a890e",
+      "sequence": 2
+    },
+    {
+      "contractVersion": "tournament-chat.v1",
+      "tournamentId": "81c9fad7-f39c-47a7-95ee-df25d9ae24ba",
+      "requestId": "33a1ca4d-5937-4a6c-89fe-8a5f1fba53c0",
+      "status": "CONFIRMED",
+      "requestHash": "387660c225f3364ef3e46fe517f9b9790d089cab6c035315d8bd3d916404670c",
+      "streamId": "a465c233-c89f-444c-9857-27009e751902",
+      "messageId": "b97bb49d-5caf-431c-8fe9-ef18de307407",
+      "sequence": 3
+    }
+  ],
+  "first": {
+    "contractVersion": "tournament-chat.v1",
+    "tournamentId": "81c9fad7-f39c-47a7-95ee-df25d9ae24ba",
+    "streamId": "a465c233-c89f-444c-9857-27009e751902",
+    "throughSequence": 3,
+    "messages": [
+      {
+        "messageId": "b97bb49d-5caf-431c-8fe9-ef18de307407",
+        "authorUserId": "4f85dc78-e5ee-48cd-8c5d-e3f75601aaf8",
+        "text": "﻿  Synthetic 🙂\n  ",
+        "sequence": 3,
+        "acceptedAt": "2026-11-01T07:00:05.431Z"
+      },
+      {
+        "messageId": "98f95bad-bf97-4e9d-999e-33a3770a890e",
+        "authorUserId": "4f85dc78-e5ee-48cd-8c5d-e3f75601aaf8",
+        "text": "Same synthetic body",
+        "sequence": 2,
+        "acceptedAt": "2026-11-01T07:00:05.430Z"
+      }
+    ],
+    "hasMore": true,
+    "nextCursor": "eyJ2IjoxLCJ0ZW5hbnRJZCI6ImQwMTAzZTc1LTFhYjAtNDFlNC05NzE0LWQ0NzhjMjhlYTZmNSIsInRvdXJuYW1lbnRJZCI6IjgxYzlmYWQ3LWYzOWMtNDdhNy05NWVlLWRmMjVkOWFlMjRiYSIsImFjdG9yVXNlcklkIjoiNGY4NWRjNzgtZTVlZS00OGNkLThjNWQtZTNmNzU2MDFhYWY4Iiwic3RyZWFtSWQiOiJhNDY1YzIzMy1jODlmLTQ0NGMtOTg1Ny0yNzAwOWU3NTE5MDIiLCJ3aXRuZXNzSGFzaCI6IjgxZDkzNmQxNDhlOWFlNTBlODFkZWMxYTQ2ZGU5ZjdjZjM0ZTNkYWYyZDEzZTRmNzg3YjdhNDg5NTVhYjFiYTEiLCJ0aHJvdWdoIjozLCJiZWZvcmUiOjJ9"
+  },
+  "last": {
+    "contractVersion": "tournament-chat.v1",
+    "tournamentId": "81c9fad7-f39c-47a7-95ee-df25d9ae24ba",
+    "streamId": "a465c233-c89f-444c-9857-27009e751902",
+    "throughSequence": 3,
+    "messages": [
+      {
+        "messageId": "ba23bd28-bcc7-4ffa-a204-a595775b6225",
+        "authorUserId": "4f85dc78-e5ee-48cd-8c5d-e3f75601aaf8",
+        "text": "Same synthetic body",
+        "sequence": 1,
+        "acceptedAt": "2026-11-01T07:00:05.429Z"
+      }
+    ],
+    "hasMore": false,
+    "nextCursor": null
+  },
+  "unknown": {
+    "contractVersion": "tournament-chat.v1",
+    "tournamentId": "81c9fad7-f39c-47a7-95ee-df25d9ae24ba",
+    "requestId": "cc1a61c8-908c-4ae4-9ab1-94c25f52ed13",
+    "status": "UNKNOWN"
+  }
+}

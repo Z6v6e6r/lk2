@@ -304,3 +304,28 @@ describe('TrainingsPage', () => {
     expect(screen.getByText(current.title)).toBeInTheDocument();
   });
 });
+
+it('anchors the seven-day TRAININGS window to Moscow at the UTC day boundary', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(new Date('2035-04-01T22:30:00Z'));
+    const api = gateway(catalogPage([]));
+    render(<TrainingsPage gateway={api} />);
+    await waitFor(() => expect(api.listEventCatalog).toHaveBeenCalled());
+    expect(api.listEventCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localDates: [
+          '2035-04-02',
+          '2035-04-03',
+          '2035-04-04',
+          '2035-04-05',
+          '2035-04-06',
+          '2035-04-07',
+          '2035-04-08',
+        ],
+      }),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});

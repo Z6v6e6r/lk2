@@ -22,6 +22,8 @@ const realtimeMocks = vi.hoisted(() => ({
 vi.mock('./chat-realtime-client.js', () => ({ connectChatRealtime: realtimeMocks.connect }));
 
 import { App } from './App.js';
+import { installMobileNavigation } from '../../mobile/src/navigation.js';
+import type { TournamentLocalResult, TournamentLocalInput } from '@phub/api-contracts';
 import { consumeCommunityInviteToken } from './community-invite-token.js';
 import { prepareCreateGameAttempt } from './create-game-attempt.js';
 import { rememberGameChatNavigation } from './game-chat-navigation.js';
@@ -2201,22 +2203,25 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
   });
 
-  it('loads the trainings route as a real PadlHub page without requesting Home', async () => {
-    window.history.replaceState({}, '', '/trainings');
-    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+  it.each(['web', 'android'] as const)(
+    'loads the trainings route on %s without requesting Home',
+    async (clientPlatform) => {
+      window.history.replaceState({}, '', '/trainings');
+      const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 
-    render(<App gateway={gateway} tenantKey="padlhub" />);
+      render(<App clientPlatform={clientPlatform} gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Тренировки' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Групповые тренировки' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Индивидуальные тренировки' })).toHaveAttribute(
-      'href',
-      '/coaches',
-    );
-    expect(screen.queryByText('Раздел подключается к API ПадлхАБ.')).not.toBeInTheDocument();
-    await waitFor(() => expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1));
-    expect(gateway.getHomeBase).not.toHaveBeenCalled();
-  });
+      expect(await screen.findByRole('heading', { name: 'Тренировки' })).toBeVisible();
+      expect(screen.getByRole('heading', { name: 'Групповые тренировки' })).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Индивидуальные тренировки' })).toHaveAttribute(
+        'href',
+        '/coaches',
+      );
+      expect(screen.queryByText('Раздел подключается к API ПадлхАБ.')).not.toBeInTheDocument();
+      await waitFor(() => expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1));
+      expect(gateway.getHomeBase).not.toHaveBeenCalled();
+    },
+  );
 
   it('keeps the second Home variant available on its own route', async () => {
     window.history.replaceState({}, '', '/home-v2');
@@ -2500,6 +2505,66 @@ describe('PadlHub web authentication', () => {
     expect(createDirectConversation).toHaveBeenCalledWith(recipientUserId, expect.any(String));
     await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
   });
+
+  it.each(['success', 'failure'] as const)(
+    'ignores a late direct-create %s after leaving and returning to the route',
+    async (outcome) => {
+      const recipient = '11111111-1111-4111-8111-111111111111',
+        conversation = '22222222-2222-4222-8222-222222222222';
+      const route = `/chats/new?recipientUserId=${recipient}`;
+      window.history.replaceState({}, '', route);
+      let finish!: (v: Awaited<ReturnType<AuthGateway['createDirectConversation']>>) => void,
+        fail!: (e: Error) => void;
+      const createDirectConversation = vi.fn<AuthGateway['createDirectConversation']>(
+        () =>
+          new Promise((resolve, reject) => {
+            finish = resolve;
+            fail = reject;
+          }),
+      );
+      const gateway = createGateway({
+        restoreSession: vi.fn().mockResolvedValue(session),
+        createDirectConversation,
+      });
+      render(<App gateway={gateway} tenantKey="padlhub" />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Начать диалог' }));
+      await waitFor(() => expect(createDirectConversation).toHaveBeenCalledOnce());
+      act(() => {
+        window.history.pushState({}, '', '/profile');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      act(() => {
+        window.history.pushState({}, '', route);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await act(async () => {
+        if (outcome === 'success')
+          finish({
+            outcome: 'ok',
+            conversation: {
+              id: conversation,
+              kind: 'DIRECT',
+              participant: { userId: recipient, displayName: 'Synthetic' },
+              unreadCount: 0,
+              updatedAt: '2026-11-01T00:00:00.000Z',
+            },
+            created: false,
+            replayed: false,
+          });
+        else fail(new Error('late synthetic failure'));
+        await Promise.resolve();
+      });
+      expect(window.location.pathname + window.location.search).toBe(route);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(createDirectConversation).toHaveBeenCalledOnce();
+      expect(screen.getByRole('button', { name: 'Начать диалог' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Начать диалог' }));
+      expect(createDirectConversation).toHaveBeenCalledTimes(2);
+      expect(createDirectConversation.mock.calls[1]).toEqual(
+        createDirectConversation.mock.calls[0],
+      );
+    },
+  );
 
   it('opens the conversation immediately when the profile link asks for it', async () => {
     const recipientUserId = '11111111-1111-4111-8111-111111111111';
@@ -3712,5 +3777,140 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('status')).toHaveTextContent('ещё не подключён');
     expect(screen.queryByRole('list', { name: 'Чаты сообществ' })).toBeNull();
     expect(listCommunityReadExperienceChat).not.toHaveBeenCalled();
+  });
+});
+
+it('native quarter entry mounts only the bounded subscription form, not legacy CREATE', async () => {
+  window.history.replaceState(null, '', '/games/new?commercialCreate=1');
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
+    getQuarterCreateCapability: vi.fn().mockResolvedValue({ contractVersion: 1, available: false }),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+  await screen.findByRole('heading', { name: 'Игра по подписке' });
+  expect(await screen.findByText(/Создание сейчас недоступно/)).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Создать игру' })).not.toBeInTheDocument();
+  expect(gateway.createGame).not.toHaveBeenCalled();
+});
+it('native game detail exposes only reviewed participation controls', async () => {
+  const { game } = await import('../../mobile/src/ios/testing/cabinet-fixtures.js');
+  window.history.replaceState(null, '', '/games/' + game.id);
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
+    getGame: vi.fn().mockResolvedValue(game),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+  await waitFor(() => expect(gateway.getGame).toHaveBeenCalledWith(game.id));
+  expect(await screen.findByRole('link', { name: 'К списку игр' })).toHaveAttribute(
+    'href',
+    '/games',
+  );
+  expect(screen.queryByRole('button', { name: /Вступить|Отменить игру/ })).not.toBeInTheDocument();
+  expect(gateway.joinGame).not.toHaveBeenCalled();
+});
+describe('Android concrete tournament navigation and custody', () => {
+  it('reachable dated directory → detail → UNKNOWN → reload → original retry → LEAVE', async () => {
+    const id = '11111111-1111-4111-8111-111111111111',
+      op = '22222222-2222-4222-8222-222222222222';
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: {
+        request: async (_n: string, _o: unknown, callback: () => unknown) => await callback(),
+      },
+    });
+    const tournament = {
+      id,
+      title: 'Synthetic Android tournament',
+      format: 'Мексикано',
+      startsAt: new Date().toISOString(),
+      endsAt: new Date(Date.now() + 7200000).toISOString(),
+      venue: 'Synthetic court',
+      trainerName: null,
+      levelRange: null,
+      organizer: null,
+      capacity: { total: 8, registered: 0, open: 8, waitlist: 0 },
+      status: 'REGISTRATION' as const,
+      route: '/tournaments?event=' + id,
+    };
+    let current: TournamentLocalResult | null = null;
+    const command = vi.fn<NonNullable<AuthGateway['commandTournament']>>((_id, input) => {
+      current = {
+        tournamentId: id,
+        operation:
+          input.action === 'JOIN'
+            ? { id: op, action: 'JOIN', status: 'UNKNOWN', reason: null, generation: null }
+            : { id, action: 'LEAVE', status: 'LEFT', reason: 'LEFT', generation: op },
+        registration: {
+          status: input.action === 'JOIN' ? 'UNKNOWN' : 'NOT_REGISTERED_BY_OPERATION',
+          asOf: null,
+        },
+        retryAfterSeconds: 15,
+      };
+      return Promise.resolve(current);
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      tournamentPrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:0:0`,
+      listPublicTournamentSummaries: vi.fn().mockResolvedValue({ items: [tournament] }),
+      getPublicTournamentSummary: vi.fn().mockResolvedValue(tournament),
+      getTournamentParticipants: vi
+        .fn()
+        .mockResolvedValue({ items: [], refreshedAt: new Date().toISOString() }),
+      commandTournament: command,
+      getTournamentRegistration: vi.fn(() =>
+        Promise.resolve({ commandsEnabled: true, result: current }),
+      ),
+      retryTournament: vi.fn(() => {
+        current = {
+          tournamentId: id,
+          operation: {
+            id: op,
+            action: 'JOIN',
+            status: 'REGISTERED',
+            reason: 'REGISTERED',
+            generation: op,
+          },
+          registration: { status: 'REGISTERED', asOf: new Date().toISOString() },
+          retryAfterSeconds: null,
+        };
+        return Promise.resolve(current);
+      }),
+    });
+    const stop = installMobileNavigation(document, window);
+    window.history.replaceState({}, '', '/tournaments');
+    const user = userEvent.setup();
+    try {
+      let mounted = render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+      const card = await screen.findByRole('link', { name: tournament.title });
+      await user.click(card);
+      expect(await screen.findByRole('heading', { name: tournament.title })).toBeVisible();
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Записаться на турнир' })).toBeEnabled(),
+      );
+      await user.click(screen.getByRole('button', { name: 'Записаться на турнир' }));
+      expect(
+        await screen.findByText('Операция ожидает подтверждения. Сохранён исходный запрос.'),
+      ).toBeVisible();
+      mounted.unmount();
+      mounted = render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Повторить исходную операцию' })).toBeEnabled(),
+      );
+      expect(command).toHaveBeenCalledTimes(1);
+      await user.click(screen.getByRole('button', { name: 'Повторить исходную операцию' }));
+      expect(await screen.findByText('Запись подтверждена.')).toBeVisible();
+      await user.click(screen.getByRole('button', { name: 'Выйти из турнира' }));
+      expect(await screen.findByText('Вы вышли из исходной регистрации.')).toBeVisible();
+      expect(command).toHaveBeenLastCalledWith(
+        id,
+        { action: 'LEAVE', originalJoinOperationId: op } satisfies TournamentLocalInput,
+        expect.any(String),
+      );
+      mounted.unmount();
+    } finally {
+      stop();
+    }
   });
 });

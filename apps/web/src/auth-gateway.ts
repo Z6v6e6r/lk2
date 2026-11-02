@@ -1,3 +1,23 @@
+import {
+  profileSettingsCommand,
+  profileSettingsIdentity,
+  profileSettingsPath,
+  profileSettingsResult,
+  type NativeProfileSettingsRequest,
+  type ProfileSettingsResource,
+  type ProfileSettingsInputs,
+  type ProfileSettingsResults,
+} from './native-profile-settings.js';
+import { nativeJoinTarget } from './native-game-join-wire.js';
+import type { NativeJoinRequest } from './native-game-join-attempt.js';
+import type {
+  StationStreamPage,
+  StationStreamSummaries,
+  StationReadRequest,
+  StationReadReceipt,
+} from '@phub/api-sdk';
+import type { StationMessageReceipt, StationMessageRequest } from '@phub/api-sdk';
+export type { StationMessageReceipt, StationMessageRequest } from '@phub/api-sdk';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type {
   AuthenticatedSession as ApiAuthenticatedSession,
@@ -591,6 +611,15 @@ export interface AuthGateway {
    * without it keeps the untouched free-create behavior.
    */
   readonly createPaidGame?: PadlHubApiClient['createPaidGame'];
+  readonly quarterCreatePrincipal?: () => string | null;
+  /** Close the quarter command before native async cleanup. */
+  readonly closeQuarterCreate?: () => void;
+  readonly getQuarterCreateLocations?: PadlHubApiClient['getQuarterCreateLocations'];
+  readonly getQuarterCreateCapability?: PadlHubApiClient['getQuarterCreateCapability'];
+  readonly createQuarterGame?: PadlHubApiClient['createQuarterGame'];
+  readonly getQuarterCreateOperation?: PadlHubApiClient['getQuarterCreateOperation'];
+  readonly reconcileQuarterCreateOperation?: PadlHubApiClient['reconcileQuarterCreateOperation'];
+  readonly gameCancelPrincipal?: () => string | null;
   readonly cancelGame: (gameId: string, input: CancelGameRequest) => Promise<GameCommandResult>;
   readonly joinGame: (
     gameId: string,
@@ -602,11 +631,27 @@ export interface AuthGateway {
    * owns the idempotency key: a lost response is recovered by `getPaidJoinOperation`, never by a new
    * POST. Optional capability: a gateway without it keeps the fail-closed free-join path.
    */
+  readonly nativeGameJoin?: (request: NativeJoinRequest) => Promise<unknown>;
   readonly joinPaidGame?: PadlHubApiClient['joinPaidGame'];
   /** Readback of the same commercial operation by its original idempotency key. */
   readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
   readonly reconcilePaidJoinOperation?: PadlHubApiClient['reconcilePaidJoinOperation'];
-  readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
+  readonly leaveGame: PadlHubApiClient['leaveGame'];
+  readonly reconcileManagedLeaveOperation?: PadlHubApiClient['reconcileManagedLeaveOperation'];
+  readonly tournamentPrincipal?: () => string | null;
+  readonly getTournamentChatReadPosition?: PadlHubApiClient['getTournamentChatReadPosition'];
+  readonly advanceTournamentChatRead?: PadlHubApiClient['advanceTournamentChatRead'];
+  readonly getTournamentChatReadRequest?: PadlHubApiClient['getTournamentChatReadRequest'];
+  readonly tournamentChatPrincipal?: () => string | null;
+  readonly sendTournamentChatMessage?: PadlHubApiClient['sendTournamentChatMessage'];
+  readonly getTournamentChatRequest?: PadlHubApiClient['getTournamentChatRequest'];
+  readonly getTournamentChatHistory?: PadlHubApiClient['getTournamentChatHistory'];
+  readonly commandTournament?: PadlHubApiClient['commandTournament'];
+  readonly retryTournament?: PadlHubApiClient['retryTournament'];
+  readonly getTournamentRegistration?: PadlHubApiClient['getTournamentRegistration'];
+  readonly registerTraining?: PadlHubApiClient['registerTraining'];
+  readonly getTrainingRegistration?: PadlHubApiClient['getTrainingRegistration'];
+  readonly getManagedLeaveOperation?: PadlHubApiClient['getManagedLeaveOperation'];
   readonly joinGameWaitlist: (gameId: string, invitationId?: string) => Promise<GameCommandResult>;
   readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
   readonly submitGameResult: (
@@ -631,6 +676,25 @@ export interface AuthGateway {
     communityId: string,
     cursor?: string,
   ) => Promise<CommunityReadExperienceFeedPage>;
+  readonly listStationStreamSummaries?: (ids: readonly string[]) => Promise<StationStreamSummaries>;
+  readonly getStationCommunityStream?: (id: string, cursor?: string) => Promise<StationStreamPage>;
+  readonly requestStationCommunityRead?: (
+    id: string,
+    input: StationReadRequest,
+  ) => Promise<StationReadReceipt>;
+  readonly getStationCommunityReadRequest?: (
+    id: string,
+    requestId: string,
+  ) => Promise<StationReadReceipt>;
+  readonly stationMessagePrincipal?: () => string | null;
+  readonly sendStationCommunityMessage?: (
+    communityId: string,
+    input: StationMessageRequest,
+  ) => Promise<StationMessageReceipt>;
+  readonly getStationCommunityMessageRequest?: (
+    communityId: string,
+    requestId: string,
+  ) => Promise<StationMessageReceipt>;
   readonly listCommunityReadExperienceChat: (
     communityId: string,
     cursor?: string,
@@ -950,7 +1014,102 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     ...(options.onSessionExpired ? { onSessionExpired: options.onSessionExpired } : {}),
     appVersion: options.appVersion,
     ...(options.appBuild ? { appBuild: options.appBuild } : {}),
-    ...(options.fetchImplementation ? { fetchImplementation: options.fetchImplementation } : {}),
+    fetchImplementation: (async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const cancel =
+        (init?.method ?? 'GET') === 'POST' &&
+        url.startsWith(
+          `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${options.tenantKey}/games/`,
+        ) &&
+        url.endsWith('/cancel');
+      const cancelId = cancel ? url.slice(url.lastIndexOf('/games/') + 7, -'/cancel'.length) : null;
+      const principal = cancelId === null ? undefined : cancellationPrincipals.get(cancelId);
+      if (cancel && principal === undefined) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      if (principal !== undefined) {
+        requireQuarterPrincipal(principal.principal);
+        if (principal.token !== undefined && client.getAccessToken() !== principal.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      const selfPath = url.slice(
+        `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${options.tenantKey}`.length,
+      );
+      const selfKey = new Headers(init?.headers).get('idempotency-key') ?? '';
+      const isSelfLeave =
+        options.platform === 'android' &&
+        /^\/games\/[^/]+\/(?:participants\/me|leave-operation(?:\/reconcile)?)$/.test(selfPath);
+      const leaveCustody = isSelfLeave
+        ? selfLeavePrincipals.get(JSON.stringify([init?.method ?? 'GET', selfPath, selfKey]))
+        : undefined;
+      if (isSelfLeave) {
+        if (!leaveCustody) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(leaveCustody.principal);
+        if (client.getAccessToken() !== leaveCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      const isJoin =
+        options.platform === 'android' &&
+        (/^\/games\/[^/]+\/join(?:-conditions|-operation)?(?:\?|$)/.test(selfPath) ||
+          selfPath.startsWith('/game-operations/'));
+      const joinIdentity = JSON.stringify([
+        init?.method ?? 'GET',
+        selfPath,
+        selfKey,
+        init?.body ?? null,
+      ]);
+      const joinCustody = isJoin ? nativeJoinPrincipals.get(joinIdentity) : undefined;
+      if (isJoin) {
+        if (!joinCustody) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(joinCustody.principal);
+        if (client.getAccessToken() !== joinCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      const settingsResource =
+        options.platform === 'android' && (init?.method ?? 'GET') === 'PUT'
+          ? selfPath === '/profile/privacy'
+            ? 'privacy'
+            : selfPath === '/profile/booking-preferences'
+              ? 'preferences'
+              : null
+          : null;
+      const settingsCustody = settingsResource
+        ? profileSettingsRequests.get(settingsResource)
+        : undefined;
+      if (settingsResource) {
+        if (
+          !settingsCustody?.request ||
+          typeof init?.body !== 'string' ||
+          profileSettingsIdentity(settingsCustody.request) !==
+            profileSettingsIdentity({ resource: settingsResource, key: selfKey, body: init.body })
+        )
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(settingsCustody.principal);
+        if (client.getAccessToken() !== settingsCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      const result = await (options.fetchImplementation ?? globalThis.fetch)(input, init);
+      if (settingsCustody) {
+        requireQuarterPrincipal(settingsCustody.principal);
+        if (client.getAccessToken() !== settingsCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+
+      if (joinCustody) {
+        requireQuarterPrincipal(joinCustody.principal);
+        if (client.getAccessToken() !== joinCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      if (leaveCustody) {
+        requireQuarterPrincipal(leaveCustody.principal);
+        if (client.getAccessToken() !== leaveCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      if (principal !== undefined) {
+        requireQuarterPrincipal(principal.principal);
+        if (principal.token !== undefined && client.getAccessToken() !== principal.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      return result;
+    }) as typeof fetch,
   };
   const client = new PadlHubApiClient(clientOptions);
   const nativeClient = clientOptions.platform === 'android';
@@ -989,7 +1148,116 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let currentTenantId: string | undefined;
   const subjectLinkStartKeys = new Map<string, string>();
   const subjectLinkVerifyKeys = new Map<string, string>();
+  const cancellationPrincipals = new Map<
+    string,
+    { principal: string; token: string | undefined }
+  >();
+  const nativeJoinPrincipals = new Map<
+    string,
+    { principal: string; token: string; count: number }
+  >();
+  const selfLeavePrincipals = new Map<
+    string,
+    { principal: string; count: number; token: string }
+  >();
   let principalGeneration = 0;
+  let tournamentLogoutStarted = false;
+  let quarterClosed = false;
+  let quarterClosing = false;
+  let tournamentLogoutPending = 0;
+  let tournamentSessionEpoch = 0;
+  const profileSettingsRequests = new Map<
+    ProfileSettingsResource,
+    { principal: string; token: string; request?: NativeProfileSettingsRequest }
+  >();
+  async function nativeProfileSettings<R extends ProfileSettingsResource>(
+    resource: R,
+    input: ProfileSettingsInputs[R],
+  ): Promise<ProfileSettingsResults[R]> {
+    if (!options.nativeSessionTransport) return nativeUnavailable();
+    const principal = requireQuarterPrincipal(),
+      token = client.getAccessToken();
+    const existing = profileSettingsRequests.get(resource);
+    if (!token || (existing?.principal === principal && existing.token === token))
+      throw new Error('PROFILE_SETTINGS_IN_PROGRESS');
+    const custody: { principal: string; token: string; request?: NativeProfileSettingsRequest } = {
+      principal,
+      token,
+    };
+    profileSettingsRequests.set(resource, custody);
+    try {
+      const request = await profileSettingsCommand(resource, input);
+      requireQuarterPrincipal(principal);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      custody.request = request;
+      const result = await client.request<ProfileSettingsResults[R]>(
+        profileSettingsPath(resource),
+        {
+          method: 'PUT',
+          idempotencyKey: request.key,
+          body: request.body,
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        },
+      );
+      requireQuarterPrincipal(principal);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return profileSettingsResult(resource, result);
+    } finally {
+      if (profileSettingsRequests.get(resource) === custody)
+        profileSettingsRequests.delete(resource);
+    }
+  }
+  function quarterCreatePrincipal(): string | null {
+    return !quarterClosed && !tournamentLogoutStarted && currentUserId && currentTenantId
+      ? `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`
+      : null;
+  }
+  function requireQuarterPrincipal(original?: string): string {
+    const current = quarterCreatePrincipal();
+    if (!current || (original !== undefined && original !== current))
+      throw new Error('AUTH_PRINCIPAL_CHANGED');
+    return current;
+  }
+  async function nativeSelfLeave(
+    gameId: string,
+    key: string,
+    resource: 'leave' | 'status' | 'reconcile',
+  ): Promise<GameCommandResult> {
+    const principal = requireQuarterPrincipal(),
+      token = client.getAccessToken(),
+      method = resource === 'leave' ? 'DELETE' : resource === 'status' ? 'GET' : 'POST';
+    const path = `/games/${encodeURIComponent(gameId)}/${resource === 'leave' ? 'participants/me' : resource === 'status' ? 'leave-operation' : 'leave-operation/reconcile'}`;
+    const identity = JSON.stringify([method, path, key]),
+      existing = selfLeavePrincipals.get(identity);
+    if (
+      !token ||
+      (existing &&
+        (existing.principal !== principal || existing.token !== token || resource !== 'status'))
+    )
+      throw new Error('AUTH_PRINCIPAL_CHANGED');
+    const custody = existing ?? { principal, count: 0, token };
+    custody.count++;
+    selfLeavePrincipals.set(identity, custody);
+    try {
+      const result = await client.request<GameCommandResult>(path, {
+        method,
+        idempotencyKey: key,
+        retryOnUnauthorized: false,
+      });
+      requireQuarterPrincipal(principal);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    } finally {
+      custody.count--;
+      if (custody.count === 0) selfLeavePrincipals.delete(identity);
+    }
+  }
+  function stationMessagePrincipal(): string {
+    if (quarterClosed || tournamentLogoutStarted || !currentUserId || !currentTenantId)
+      throw new Error('AUTH_PRINCIPAL_CHANGED');
+    return `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`;
+  }
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
   let bookingPreferencesPromise: Promise<BookingPreferences> | undefined;
@@ -1841,7 +2109,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       }
       return session;
     } catch (error) {
-      client.clearAccessToken();
+      // The SDK retires only the refresh generation that failed. A stale restore must
+      // not clear credentials installed by a newer successful authentication.
       if (isUnauthorized(error)) return null;
       throw error;
     }
@@ -1874,11 +2143,29 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   async function retryMessagingCommand<TResult>(
     operation: (signal: AbortSignal) => Promise<TResult>,
   ): Promise<TResult> {
+    const principal = requireQuarterPrincipal();
+    const accessToken = client.getAccessToken();
+    const current = () => {
+      requireQuarterPrincipal(principal);
+      if (!accessToken || client.getAccessToken() !== accessToken)
+        throw new Error('AUTH_PRINCIPAL_CHANGED');
+    };
+    const attempt = async () => {
+      current();
+      try {
+        const result = await runMessagingCommandAttempt(operation);
+        current();
+        return result;
+      } catch (error) {
+        current();
+        throw error;
+      }
+    };
     try {
-      return await runMessagingCommandAttempt(operation);
+      return await attempt();
     } catch (error) {
       if (!isRetryableMessagingFailure(error)) throw error;
-      return runMessagingCommandAttempt(operation);
+      return attempt();
     }
   }
 
@@ -1908,6 +2195,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async verifyCode(input) {
+      const quarterAuthenticationOutsideClose = !quarterClosing;
+      const tournamentAuthenticationEpoch = tournamentSessionEpoch;
+      const tournamentAuthenticationOutsideLogout = tournamentLogoutPending === 0;
       if (!input.acceptance.publicOfferAccepted || !input.acceptance.personalDataPolicyAccepted) {
         throw new Error('Required legal acceptance is missing');
       }
@@ -1918,7 +2208,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           personalDataPolicyAccepted: true,
         },
       });
-      return normalizeSession(session);
+      const normalized = normalizeSession(session);
+      if (
+        tournamentAuthenticationOutsideLogout &&
+        tournamentAuthenticationEpoch === tournamentSessionEpoch &&
+        tournamentLogoutPending === 0
+      ) {
+        tournamentLogoutStarted = false;
+        if (quarterAuthenticationOutsideClose) quarterClosed = false;
+      }
+      return normalized;
     },
 
     async startIdentitySubjectLink(phoneE164) {
@@ -2005,6 +2304,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getProfilePrivacy() {
+      if (nativeClient) return client.getProfilePrivacySettings();
       profilePrivacyPromise ??= client.getProfilePrivacySettings().catch((error: unknown) => {
         profilePrivacyPromise = undefined;
         throw error;
@@ -2013,7 +2313,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async updateProfilePrivacy(input) {
-      const settings = await client.updateProfilePrivacySettings(input);
+      const original = nativeClient
+        ? { principal: requireQuarterPrincipal(), token: client.getAccessToken() }
+        : undefined;
+      const settings = nativeClient
+        ? await nativeProfileSettings('privacy', input)
+        : await client.updateProfilePrivacySettings(input);
+      if (original) {
+        requireQuarterPrincipal(original.principal);
+        if (client.getAccessToken() !== original.token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       profilePrivacyPromise = Promise.resolve(settings);
       return settings;
     },
@@ -2047,6 +2356,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getBookingPreferences() {
+      if (nativeClient) return client.getBookingPreferences();
       bookingPreferencesPromise ??= client.getBookingPreferences().catch((error: unknown) => {
         bookingPreferencesPromise = undefined;
         throw error;
@@ -2055,7 +2365,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async updateBookingPreferences(input) {
-      const settings = await client.updateBookingPreferences(input);
+      const original = nativeClient
+        ? { principal: requireQuarterPrincipal(), token: client.getAccessToken() }
+        : undefined;
+      const settings = nativeClient
+        ? await nativeProfileSettings('preferences', input)
+        : await client.updateBookingPreferences(input);
+      if (original) {
+        requireQuarterPrincipal(original.principal);
+        if (client.getAccessToken() !== original.token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       bookingPreferencesPromise = Promise.resolve(settings);
       return settings;
     },
@@ -2169,12 +2488,17 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     listEventCatalog(query) {
-      if (nativeClient) return nativeUnavailable();
+      if (nativeClient)
+        return query.surface === 'TRAININGS'
+          ? client.listTrainingCatalogue(query)
+          : nativeUnavailable();
       return loadClientAssistedEventCatalog(query);
     },
 
     continueEventCatalog(cursor, limit) {
-      return client.continueEventCatalog(cursor, limit);
+      return nativeClient
+        ? client.continueTrainingCatalogue(cursor, limit)
+        : client.continueEventCatalog(cursor, limit);
     },
 
     getHomeBase() {
@@ -2316,18 +2640,116 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.createGame(input, options);
     },
 
+    quarterCreatePrincipal,
+    closeQuarterCreate() {
+      quarterClosed = true;
+      quarterClosing = true;
+      tournamentSessionEpoch += 1;
+    },
+    async getQuarterCreateLocations() {
+      const principal = requireQuarterPrincipal(),
+        result = await client.getQuarterCreateLocations();
+      requireQuarterPrincipal(principal);
+      return result;
+    },
+    async getQuarterCreateCapability() {
+      const principal = requireQuarterPrincipal(),
+        result = await client.getQuarterCreateCapability();
+      requireQuarterPrincipal(principal);
+      return result;
+    },
+    async createQuarterGame(input, key) {
+      const principal = requireQuarterPrincipal(),
+        result = await client.createQuarterGame(input, key);
+      requireQuarterPrincipal(principal);
+      return result;
+    },
+    async getQuarterCreateOperation(key) {
+      const principal = requireQuarterPrincipal(),
+        result = await client.getQuarterCreateOperation(key);
+      requireQuarterPrincipal(principal);
+      return result;
+    },
+    async reconcileQuarterCreateOperation(id, input, key) {
+      const principal = requireQuarterPrincipal(),
+        result = await client.reconcileQuarterCreateOperation(id, input, key);
+      requireQuarterPrincipal(principal);
+      return result;
+    },
     createPaidGame(input, idempotencyKey) {
       return client.createPaidGame(input, idempotencyKey);
     },
 
-    cancelGame(gameId, input) {
-      return client.cancelGame(gameId, input);
+    gameCancelPrincipal: quarterCreatePrincipal,
+    async cancelGame(gameId, input) {
+      const original = requireQuarterPrincipal();
+      const id = encodeURIComponent(gameId);
+      if (cancellationPrincipals.has(id)) throw new Error('GAME_CANCEL_IN_PROGRESS');
+      const token = nativeClient ? client.getAccessToken() : undefined;
+      if (nativeClient && !token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      cancellationPrincipals.set(id, { principal: original, token });
+      try {
+        const result = nativeClient
+          ? await client.request<GameCommandResult>(`/games/${id}/cancel`, {
+              method: 'POST',
+              idempotencyKey: crypto.randomUUID(),
+              body: JSON.stringify(input),
+              retryOnUnauthorized: false,
+              cache: 'no-store',
+            })
+          : await client.cancelGame(gameId, input);
+        requireQuarterPrincipal(original);
+        if (nativeClient && client.getAccessToken() !== token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+        return result;
+      } finally {
+        cancellationPrincipals.delete(id);
+      }
     },
 
     joinGame(gameId, expectedRevision, invitationId) {
       return client.joinGame(gameId, expectedRevision, invitationId);
     },
 
+    async nativeGameJoin(request) {
+      if (!nativeClient || !options.nativeSessionTransport) return nativeUnavailable();
+      const principal = requireQuarterPrincipal(),
+        token = client.getAccessToken(),
+        target = nativeJoinTarget(request),
+        identity = JSON.stringify([
+          target.method,
+          target.path,
+          request.key ?? '',
+          request.body ?? null,
+        ]),
+        existing = nativeJoinPrincipals.get(identity);
+      if (
+        !token ||
+        (existing &&
+          (existing.principal !== principal ||
+            existing.token !== token ||
+            target.method === 'POST'))
+      )
+        throw new Error('AUTH_PRINCIPAL_CHANGED');
+      const custody = existing ?? { principal, token, count: 0 };
+      custody.count++;
+      nativeJoinPrincipals.set(identity, custody);
+      try {
+        const result = await client.request(target.path, {
+          method: target.method,
+          ...(request.key ? { idempotencyKey: request.key } : {}),
+          ...(request.body !== undefined ? { body: request.body } : {}),
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        });
+        requireQuarterPrincipal(principal);
+        if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        return result;
+      } finally {
+        custody.count--;
+        if (custody.count === 0) nativeJoinPrincipals.delete(identity);
+      }
+    },
     joinPaidGame(gameId, input, idempotencyKey) {
       return client.joinPaidGame(gameId, input, idempotencyKey);
     },
@@ -2336,8 +2758,91 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getPaidJoinOperation(gameId, idempotencyKey);
     },
 
-    leaveGame(gameId) {
-      return client.leaveGame(gameId);
+    leaveGame(gameId, options) {
+      if (nativeClient) {
+        if (!options?.idempotencyKey) return nativeUnavailable();
+        return nativeSelfLeave(gameId, options.idempotencyKey, 'leave');
+      }
+      return client.leaveGame(gameId, options);
+    },
+    reconcileManagedLeaveOperation(gameId, key) {
+      return nativeClient
+        ? nativeSelfLeave(gameId, key, 'reconcile')
+        : client.reconcileManagedLeaveOperation(gameId, key);
+    },
+    tournamentChatPrincipal() {
+      return quarterCreatePrincipal();
+    },
+    async getTournamentChatReadPosition(id) {
+      const p = requireQuarterPrincipal();
+      const result = await client.getTournamentChatReadPosition(id);
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    async advanceTournamentChatRead(id, input) {
+      const p = requireQuarterPrincipal();
+      const result = await client.advanceTournamentChatRead(id, input, () => {
+        requireQuarterPrincipal(p);
+      });
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    async getTournamentChatReadRequest(id, requestId) {
+      const p = requireQuarterPrincipal();
+      const result = await client.getTournamentChatReadRequest(id, requestId);
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    async sendTournamentChatMessage(id, input) {
+      const p = requireQuarterPrincipal();
+      const result = await client.sendTournamentChatMessage(id, input, () => {
+        requireQuarterPrincipal(p);
+      });
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    async getTournamentChatRequest(id, requestId) {
+      const p = requireQuarterPrincipal();
+      const result = await client.getTournamentChatRequest(id, requestId);
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    async getTournamentChatHistory(id, limit, cursor) {
+      const p = requireQuarterPrincipal();
+      const result = await client.getTournamentChatHistory(id, limit, cursor);
+      requireQuarterPrincipal(p);
+      return result;
+    },
+    tournamentPrincipal() {
+      return (!nativeClient || options.nativeSessionTransport === true) &&
+        !tournamentLogoutStarted &&
+        currentUserId &&
+        currentTenantId
+        ? `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`
+        : null;
+    },
+    commandTournament(id, input, key) {
+      if (nativeClient && !options.nativeSessionTransport) return nativeUnavailable();
+      return client.commandTournament(id, input, key);
+    },
+    retryTournament(id, operation, key) {
+      if (nativeClient && !options.nativeSessionTransport) return nativeUnavailable();
+      return client.retryTournament(id, operation, key);
+    },
+    getTournamentRegistration(id, selector) {
+      if (nativeClient && !options.nativeSessionTransport) return nativeUnavailable();
+      return client.getTournamentRegistration(id, selector);
+    },
+    registerTraining(trainingId, input, key) {
+      return client.registerTraining(trainingId, input, key);
+    },
+    getTrainingRegistration(trainingId, key) {
+      return client.getTrainingRegistration(trainingId, key);
+    },
+    getManagedLeaveOperation(gameId, key) {
+      return nativeClient
+        ? nativeSelfLeave(gameId, key, 'status')
+        : client.getManagedLeaveOperation(gameId, key);
     },
 
     joinGameWaitlist(gameId, invitationId) {
@@ -2458,6 +2963,46 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
     },
 
+    async listStationStreamSummaries(ids) {
+      const principal = stationMessagePrincipal();
+      const result = await client.listStationStreamSummaries(ids);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    },
+    async getStationCommunityStream(id, cursor) {
+      const principal = stationMessagePrincipal();
+      const result = await client.getStationCommunityStream(id, {
+        limit: 50,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    },
+    async requestStationCommunityRead(id, input) {
+      const principal = stationMessagePrincipal();
+      const result = await client.requestStationCommunityRead(id, input);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    },
+    async getStationCommunityReadRequest(id, requestId) {
+      const principal = stationMessagePrincipal();
+      const result = await client.getStationCommunityReadRequest(id, requestId);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    },
+    stationMessagePrincipal: () => quarterCreatePrincipal(),
+    async sendStationCommunityMessage(communityId, input) {
+      const principal = stationMessagePrincipal();
+      const receipt = await client.sendStationCommunityMessage(communityId, input);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return receipt;
+    },
+    async getStationCommunityMessageRequest(communityId, requestId) {
+      const principal = stationMessagePrincipal();
+      const receipt = await client.getStationCommunityMessageRequest(communityId, requestId);
+      if (principal !== stationMessagePrincipal()) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return receipt;
+    },
     listCommunityReadExperienceChat(communityId, cursor) {
       return client.listCommunityReadExperienceChat(communityId, {
         limit: 50,
@@ -2601,6 +3146,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           method: 'POST',
           idempotencyKey: command.clientMessageId,
           body: JSON.stringify(payload),
+          retryOnUnauthorized: false,
           signal,
         }),
       );
@@ -2624,6 +3170,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           method: 'POST',
           idempotencyKey,
           body: JSON.stringify({ otherUserId }),
+          retryOnUnauthorized: false,
           signal,
         }),
       );
@@ -2636,6 +3183,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           method: 'POST',
           idempotencyKey,
           body: JSON.stringify({ gameId }),
+          retryOnUnauthorized: false,
           signal,
         }),
       );
@@ -2666,6 +3214,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'POST',
             idempotencyKey: command.clientMessageId,
             body: JSON.stringify(payload),
+            retryOnUnauthorized: false,
             signal,
           },
         ),
@@ -2680,6 +3229,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'POST',
             idempotencyKey,
             body: JSON.stringify(input),
+            retryOnUnauthorized: false,
             signal,
           },
         ),
@@ -2694,6 +3244,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'POST',
             idempotencyKey,
             body: JSON.stringify({ declaredByteSize }),
+            retryOnUnauthorized: false,
             signal,
           },
         ),
@@ -2731,6 +3282,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'PUT',
             idempotencyKey,
             body: JSON.stringify({ throughSequence }),
+            retryOnUnauthorized: false,
             signal,
           },
         ),
@@ -2745,6 +3297,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             method: 'PUT',
             idempotencyKey,
             body: JSON.stringify(update),
+            retryOnUnauthorized: false,
             signal,
           },
         ),
@@ -2819,14 +3372,22 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async logout() {
-      if (nativeClient) {
-        // Invalidate account reads before waiting for native revocation/recovery.
-        principalGeneration += 1;
-        currentUserId = undefined;
-        currentTenantId = undefined;
-        client.clearAccessToken();
-        if (options.nativeSessionTransport) await client.revokeSession();
-      } else await client.revokeSession();
+      tournamentLogoutStarted = true;
+      tournamentSessionEpoch += 1;
+      tournamentLogoutPending += 1;
+      try {
+        if (nativeClient) {
+          // Invalidate account reads before waiting for native revocation/recovery.
+          principalGeneration += 1;
+          currentUserId = undefined;
+          currentTenantId = undefined;
+          client.clearAccessToken();
+          if (options.nativeSessionTransport) await client.revokeSession();
+        } else await client.revokeSession();
+      } finally {
+        tournamentLogoutPending -= 1;
+        if (tournamentLogoutPending === 0) quarterClosing = false;
+      }
       vivaAccessToken = undefined;
       vivaProfilePhotoGrant = undefined;
       vivaProfilePhotoCommandIdempotencyKey = undefined;

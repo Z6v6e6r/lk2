@@ -1,3 +1,46 @@
+import {
+  TournamentChatError,
+  parseTournamentChatReadRequest,
+  parseTournamentChatReadPosition,
+  parseTournamentChatReadReceipt,
+  tournamentChatReadHash,
+  type TournamentChatReadPosition,
+  type TournamentChatReadRequest,
+  type TournamentChatReadReceipt,
+  parseTournamentChatRequest,
+  parseTournamentChatReceipt,
+  parseTournamentChatPage,
+  tournamentChatRequestHash,
+  type TournamentChatRequest,
+  type TournamentChatReceipt,
+  type TournamentChatPage,
+} from './tournament-chat.js';
+export * from './tournament-chat.js';
+import {
+  parseStationReadReceipt,
+  parseStationStreamPage,
+  parseStationStreamSummaries,
+  validateStationReadRequest,
+} from './station-stream.js';
+import type {
+  StationStreamPage,
+  StationStreamSummaries,
+  StationReadRequest,
+  StationReadReceipt,
+} from './station-stream.js';
+export * from './station-stream.js';
+import { parseStationMessageReceipt } from './station-message.js';
+export { parseStationMessageReceipt } from './station-message.js';
+export type StationMessageRequest = components['schemas']['StationMessageRequest'];
+export type StationMessageReceipt = components['schemas']['StationMessageReceipt'];
+import type { QuarterCreateInput, QuarterCreateResult } from '@phub/api-contracts';
+import type {
+  TournamentLocalInput,
+  TournamentLocalResult,
+  TournamentLocalStatus,
+} from '@phub/api-contracts';
+import type { TrainingRegistrationResult } from '@phub/api-contracts';
+export type { TrainingRegistrationResult } from '@phub/api-contracts';
 import type { components, PublicApiComponents, UserApiV2Components } from '@phub/api-contracts';
 
 export type AuthChallengeRequest = components['schemas']['AuthChallengeRequest'];
@@ -652,6 +695,9 @@ export class PadlHubApiClient {
   private readonly adminApiRoot: string;
   private accessToken: string | undefined;
   private refreshInFlight: Promise<AuthenticatedSession> | undefined;
+  private sessionGeneration = 0;
+  private authenticatedPrincipal: string | undefined;
+  private sessionRetired = false;
 
   public constructor(private readonly options: ApiClientOptions) {
     this.fetchImplementation =
@@ -663,9 +709,23 @@ export class PadlHubApiClient {
     this.accessToken = options.initialAccessToken?.trim() || undefined;
   }
 
+  private get ownsBrowserSession(): boolean {
+    // Native cookie transport is owned by its native session lifecycle, not this SDK.
+    return (
+      this.options.sessionMode !== 'memory' &&
+      (this.options.platform === 'web' || this.options.platform === 'cup-admin')
+    );
+  }
+
   public setAccessToken(accessToken: string | undefined): void {
+    if (this.ownsBrowserSession) {
+      this.sessionGeneration += 1;
+      this.refreshInFlight = undefined;
+      this.authenticatedPrincipal = undefined;
+    }
     const normalized = accessToken?.trim();
     this.accessToken = normalized ? normalized : undefined;
+    this.sessionRetired = !this.accessToken;
   }
 
   public clearAccessToken(): void {
@@ -700,6 +760,18 @@ export class PadlHubApiClient {
     return this.requestWithPolicy<TResponse>(path, policy, createCorrelationId(), true);
   }
 
+  public requestAdmin<TResponse>(path: string, init: ApiRequestInit = {}): Promise<TResponse> {
+    const method = (init.method ?? 'GET').toUpperCase();
+    return this.requestFromRoot<TResponse>(this.adminApiRoot, path, {
+      ...init,
+      auth: 'required',
+      credentials: 'same-origin',
+      // Commands, including binary uploads and read-only POSTs, require an explicit retry.
+      retryOnUnauthorized:
+        (method === 'GET' || method === 'HEAD') && init.retryOnUnauthorized !== false,
+    });
+  }
+
   public createAuthChallenge(input: AuthChallengeRequest): Promise<AuthChallenge> {
     const idempotencyKey = createCorrelationId();
     return this.retryOnceOnNetworkFailure(() =>
@@ -714,17 +786,21 @@ export class PadlHubApiClient {
   }
 
   public async loginWithPassword(input: PasswordLoginRequest): Promise<AuthenticatedSession> {
+    if (this.ownsBrowserSession) this.clearAccessToken();
+    const generation = this.sessionGeneration;
     const idempotencyKey = createCorrelationId();
-    const session = await this.retryOnceOnNetworkFailure(() =>
-      this.request<AuthenticatedSession>('/auth/password/login', {
+    const session = await this.retryOnceOnNetworkFailure(() => {
+      this.assertSessionGeneration(generation);
+      return this.request<AuthenticatedSession>('/auth/password/login', {
         method: 'POST',
         auth: 'none',
         credentials: 'include',
         idempotencyKey,
         sessionIntent: 'password-login',
         body: jsonRequestBody(input),
-      }),
-    );
+      });
+    });
+    this.assertSessionGeneration(generation);
     this.applyAuthenticatedSession(session);
     return session;
   }
@@ -733,9 +809,12 @@ export class PadlHubApiClient {
     challengeId: string,
     input: VerifyAuthChallengeRequest,
   ): Promise<AuthenticatedSession> {
+    if (this.ownsBrowserSession) this.clearAccessToken();
+    const generation = this.sessionGeneration;
     const idempotencyKey = createCorrelationId();
-    const session = await this.retryOnceOnNetworkFailure(() =>
-      this.request<AuthenticatedSession>(
+    const session = await this.retryOnceOnNetworkFailure(() => {
+      this.assertSessionGeneration(generation);
+      return this.request<AuthenticatedSession>(
         `/auth/challenges/${encodeURIComponent(challengeId)}/verify`,
         {
           method: 'POST',
@@ -744,8 +823,9 @@ export class PadlHubApiClient {
           idempotencyKey,
           body: jsonRequestBody(input),
         },
-      ),
-    );
+      );
+    });
+    this.assertSessionGeneration(generation);
     this.applyAuthenticatedSession(session);
     return session;
   }
@@ -821,6 +901,10 @@ export class PadlHubApiClient {
   }
 
   public refreshSession(): Promise<AuthenticatedSession> {
+    return this.startSessionRefresh(false);
+  }
+
+  private startSessionRefresh(automatic: boolean): Promise<AuthenticatedSession> {
     if (this.options.sessionMode === 'memory') {
       this.clearAccessToken();
       return Promise.reject(
@@ -829,7 +913,7 @@ export class PadlHubApiClient {
     }
     if (this.refreshInFlight) return this.refreshInFlight;
 
-    const refresh = this.performSessionRefresh().finally(() => {
+    const refresh = this.performSessionRefresh(automatic).finally(() => {
       if (this.refreshInFlight === refresh) this.refreshInFlight = undefined;
     });
     this.refreshInFlight = refresh;
@@ -839,10 +923,12 @@ export class PadlHubApiClient {
   private waitForSessionRefresh(
     signal: AbortSignal | null | undefined,
   ): Promise<AuthenticatedSession> {
-    if (!signal) return this.refreshSession();
+    if (this.ownsBrowserSession && this.sessionRetired)
+      return Promise.reject(this.sessionChangedError());
+    if (!signal) return this.startSessionRefresh(true);
     if (signal.aborted) return Promise.reject(abortReason(signal));
 
-    const refresh = this.refreshSession();
+    const refresh = this.startSessionRefresh(true);
     let onAbort = (): void => undefined;
     const callerAbort = new Promise<never>((_resolve, reject) => {
       onAbort = () => reject(abortReason(signal));
@@ -856,22 +942,26 @@ export class PadlHubApiClient {
   }
 
   public async revokeSession(): Promise<void> {
+    if (this.ownsBrowserSession) this.clearAccessToken();
+    const generation = this.sessionGeneration;
     if (this.options.sessionMode === 'memory') {
       this.clearAccessToken();
       return;
     }
     const idempotencyKey = createCorrelationId();
-    await this.retryOnceOnNetworkFailure(() =>
-      this.request<void>('/auth/session', {
+    await this.retryOnceOnNetworkFailure(() => {
+      this.assertSessionGeneration(generation);
+      return this.request<void>('/auth/session', {
         method: 'DELETE',
         auth: 'none',
         credentials: 'include',
         retryOnUnauthorized: false,
         sessionIntent: 'logout',
         idempotencyKey,
-      }),
-    );
-    this.clearAccessToken();
+      });
+    });
+    this.assertSessionGeneration(generation);
+    if (!this.ownsBrowserSession) this.clearAccessToken();
   }
 
   public getUserContext(): Promise<UserContext> {
@@ -1376,6 +1466,129 @@ export class PadlHubApiClient {
     );
   }
 
+  public async getTournamentChatReadPosition(
+    tournamentId: string,
+  ): Promise<TournamentChatReadPosition> {
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/read-position`,
+      { cache: 'no-store', retryOnUnauthorized: false },
+    );
+    return parseTournamentChatReadPosition(value, tournamentId);
+  }
+  public async advanceTournamentChatRead(
+    tournamentId: string,
+    input: TournamentChatReadRequest,
+    assertCurrent?: () => void,
+  ): Promise<TournamentChatReadReceipt> {
+    const token = this.getAccessToken();
+    if (!token) throw new TournamentChatError('TOURNAMENT_CHAT_FORBIDDEN', 403);
+    const request = parseTournamentChatReadRequest(input);
+    const hash = await tournamentChatReadHash(tournamentId, request);
+    assertCurrent?.();
+    if (this.getAccessToken() !== token)
+      throw new TournamentChatError('TOURNAMENT_CHAT_FORBIDDEN', 403);
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/read-requests`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+        idempotencyKey: request.requestId,
+        retryOnUnauthorized: false,
+      },
+    );
+    assertCurrent?.();
+    return parseTournamentChatReadReceipt(value, tournamentId, request.requestId, hash);
+  }
+  public async getTournamentChatReadRequest(
+    tournamentId: string,
+    requestId: string,
+  ): Promise<TournamentChatReadReceipt> {
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/read-requests/${encodeURIComponent(requestId)}`,
+      { cache: 'no-store', retryOnUnauthorized: false },
+    );
+    return parseTournamentChatReadReceipt(value, tournamentId, requestId);
+  }
+  public async sendTournamentChatMessage(
+    tournamentId: string,
+    input: TournamentChatRequest,
+    assertCurrent?: () => void,
+  ): Promise<TournamentChatReceipt> {
+    const token = this.getAccessToken();
+    if (!token) throw new TournamentChatError('TOURNAMENT_CHAT_FORBIDDEN', 403);
+    const request = parseTournamentChatRequest(input);
+    const hash = await tournamentChatRequestHash(tournamentId, request);
+    assertCurrent?.();
+    if (this.getAccessToken() !== token)
+      throw new TournamentChatError('TOURNAMENT_CHAT_FORBIDDEN', 403);
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/message-requests`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+        idempotencyKey: request.requestId,
+        retryOnUnauthorized: false,
+      },
+    );
+    assertCurrent?.();
+    return parseTournamentChatReceipt(value, tournamentId, request.requestId, hash);
+  }
+  public async getTournamentChatRequest(
+    tournamentId: string,
+    requestId: string,
+  ): Promise<TournamentChatReceipt> {
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/message-requests/${encodeURIComponent(requestId)}`,
+      { cache: 'no-store', retryOnUnauthorized: false },
+    );
+    return parseTournamentChatReceipt(value, tournamentId, requestId);
+  }
+  public async getTournamentChatHistory(
+    tournamentId: string,
+    limit = 50,
+    cursor?: string,
+  ): Promise<TournamentChatPage> {
+    const query = new URLSearchParams({ limit: String(limit), ...(cursor ? { cursor } : {}) });
+    const value = await this.request<unknown>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/chat/messages?${query}`,
+      { cache: 'no-store', retryOnUnauthorized: false },
+    );
+    return parseTournamentChatPage(value, tournamentId, limit, cursor);
+  }
+  public commandTournament(
+    tournamentId: string,
+    input: TournamentLocalInput,
+    idempotencyKey: string,
+  ): Promise<TournamentLocalResult> {
+    return this.request<TournamentLocalResult>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/registrations`,
+      { method: 'POST', body: JSON.stringify(input), idempotencyKey, retryOnUnauthorized: false },
+    );
+  }
+  public retryTournament(
+    tournamentId: string,
+    operationId: string,
+    idempotencyKey: string,
+  ): Promise<TournamentLocalResult> {
+    return this.request<TournamentLocalResult>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/registration-operations/${encodeURIComponent(operationId)}/retry`,
+      { method: 'POST', idempotencyKey, retryOnUnauthorized: false },
+    );
+  }
+  public getTournamentRegistration(
+    tournamentId: string,
+    selector: { operationId?: string; idempotencyKey?: string } = {},
+  ): Promise<TournamentLocalStatus> {
+    return this.request<TournamentLocalStatus>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/registration-operation${selector.operationId ? '?operationId=' + encodeURIComponent(selector.operationId) : ''}`,
+      {
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        ...(selector.idempotencyKey ? { idempotencyKey: selector.idempotencyKey } : {}),
+      },
+    );
+  }
+
   public getTournamentParticipants(tournamentId: string): Promise<TournamentParticipantRoster> {
     return this.request<TournamentParticipantRoster>(
       `/tournaments/${encodeURIComponent(tournamentId)}/participants`,
@@ -1578,6 +1791,49 @@ export class PadlHubApiClient {
    * while the managed contour is enabled; with the contour disabled the legacy strict body applies
    * and a paid create keeps the existing `GAME_PAYMENT_REQUIRED` refusal.
    */
+  public getQuarterCreateLocations(): Promise<{
+    items: { stationId: string; courtId: string; stationTitle: string; courtName: string }[];
+  }> {
+    return this.request('/game-create-operations/locations', {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public getQuarterCreateCapability(): Promise<{ contractVersion: 1; available: boolean }> {
+    return this.request('/game-create-operations/capability', {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public createQuarterGame(input: QuarterCreateInput, key: string): Promise<QuarterCreateResult> {
+    return this.request('/game-create-operations', {
+      method: 'POST',
+      idempotencyKey: key,
+      body: jsonRequestBody(input),
+      retryOnUnauthorized: false,
+      cache: 'no-store',
+    });
+  }
+  public getQuarterCreateOperation(key: string): Promise<QuarterCreateResult> {
+    return this.request('/game-create-operations/by-key', {
+      headers: { 'Idempotency-Key': key },
+      retryOnUnauthorized: false,
+      cache: 'no-store',
+    });
+  }
+  public reconcileQuarterCreateOperation(
+    id: string,
+    input: QuarterCreateInput,
+    key: string,
+  ): Promise<QuarterCreateResult> {
+    return this.request('/game-create-operations/' + encodeURIComponent(id) + '/reconcile', {
+      method: 'POST',
+      idempotencyKey: key,
+      body: jsonRequestBody(input),
+      retryOnUnauthorized: false,
+      cache: 'no-store',
+    });
+  }
   public createPaidGame(
     input: CreateGameRequest,
     idempotencyKey: string,
@@ -1647,8 +1903,89 @@ export class PadlHubApiClient {
     });
   }
 
-  public leaveGame(gameId: string): Promise<GameCommandResult> {
+  public listTrainingCatalogue(query: EventCatalogQuery): Promise<EventCatalogPage> {
+    if (query.surface !== 'TRAININGS')
+      return Promise.reject(new Error('TRAINING_CATALOGUE_INPUT_INVALID'));
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (key === 'surface' || value === undefined) continue;
+      params.set(key, Array.isArray(value) ? value.join(',') : String(value));
+    }
+    return this.request<EventCatalogPage>(`/trainings/catalog?${params.toString()}`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+
+  public continueTrainingCatalogue(cursor: string, limit = 20): Promise<EventCatalogPage> {
+    const params = new URLSearchParams({ cursor, limit: String(limit) });
+    return this.request<EventCatalogPage>(`/trainings/catalog?${params.toString()}`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+
+  public registerTraining(
+    trainingId: string,
+    input: { dateHint: string; subscriptionId: string },
+    idempotencyKey: string,
+  ): Promise<TrainingRegistrationResult> {
+    return this.request<TrainingRegistrationResult>(
+      `/trainings/${encodeURIComponent(trainingId)}/registrations`,
+      { method: 'POST', body: JSON.stringify(input), idempotencyKey, retryOnUnauthorized: false },
+    );
+  }
+  public getTrainingRegistration(
+    trainingId: string,
+    idempotencyKey: string,
+  ): Promise<TrainingRegistrationResult> {
+    return this.request<TrainingRegistrationResult>(
+      `/trainings/${encodeURIComponent(trainingId)}/registration-operation`,
+      { cache: 'no-store', idempotencyKey, retryOnUnauthorized: false },
+    );
+  }
+
+  public leaveGame(
+    gameId: string,
+    options?: { readonly idempotencyKey?: string },
+  ): Promise<GameCommandResult> {
+    if (options?.idempotencyKey !== undefined)
+      return this.request<GameCommandResult>(
+        `/games/${encodeURIComponent(gameId)}/participants/me`,
+        {
+          method: 'DELETE',
+          idempotencyKey: options.idempotencyKey,
+          retryOnUnauthorized: false,
+        },
+      );
     return this.gameCommand(gameId, '/participants/me', 'DELETE');
+  }
+
+  /** Read-only recovery. A missing response/404 never authorizes a replacement leave key. */
+  public getManagedLeaveOperation(
+    gameId: string,
+    idempotencyKey: string,
+  ): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(`/games/${encodeURIComponent(gameId)}/leave-operation`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+      idempotencyKey,
+    });
+  }
+
+  /** Restrictive recovery: this route cannot start a new SELF LEAVE, including on an older API. */
+  public reconcileManagedLeaveOperation(
+    gameId: string,
+    idempotencyKey: string,
+  ): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(
+      `/games/${encodeURIComponent(gameId)}/leave-operation/reconcile`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        retryOnUnauthorized: false,
+      },
+    );
   }
 
   public joinGameWaitlist(gameId: string, invitationId?: string): Promise<GameCommandResult> {
@@ -2363,6 +2700,134 @@ export class PadlHubApiClient {
     );
   }
 
+  public async listStationStreamSummaries(
+    communityIds: readonly string[],
+  ): Promise<StationStreamSummaries> {
+    if (
+      communityIds.length < 1 ||
+      communityIds.length > 50 ||
+      new Set(communityIds).size !== communityIds.length ||
+      communityIds.some(
+        (id) =>
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id),
+      )
+    )
+      throw new Error('STATION_STREAM_REQUEST_INVALID');
+    const query = new URLSearchParams({ communityIds: communityIds.join(',') });
+    return parseStationStreamSummaries(
+      await this.request<unknown>(`/community-views/station-stream-summaries?${query}`, {
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        signal: AbortSignal.timeout(15_000),
+      }),
+      communityIds,
+    );
+  }
+  public async getStationCommunityStream(
+    communityId: string,
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<StationStreamPage> {
+    const limit = input.limit ?? 50;
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        communityId,
+      ) ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 50 ||
+      (input.cursor !== undefined && !/^[A-Za-z0-9_-]{16,1024}$/.test(input.cursor))
+    )
+      throw new Error('STATION_STREAM_REQUEST_INVALID');
+    const query = new URLSearchParams({
+      limit: String(limit),
+      ...(input.cursor ? { cursor: input.cursor } : {}),
+    });
+    return parseStationStreamPage(
+      await this.request<unknown>(`/community-views/${communityId}/station-stream?${query}`, {
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        signal: AbortSignal.timeout(15_000),
+      }),
+      limit,
+      input.cursor === undefined,
+    );
+  }
+  public async requestStationCommunityRead(
+    communityId: string,
+    input: StationReadRequest,
+  ): Promise<StationReadReceipt> {
+    validateStationReadRequest({
+      requestId: communityId,
+      streamId: communityId,
+      membershipEpoch: 0,
+      throughSequence: 0,
+    });
+    const original = validateStationReadRequest(input);
+    const value = await this.request<unknown>(
+      `/community-views/${encodeURIComponent(communityId)}/read-requests`,
+      {
+        method: 'POST',
+        idempotencyKey: original.requestId,
+        body: jsonRequestBody(original),
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    return parseStationReadReceipt(value, original.requestId, original);
+  }
+  public async getStationCommunityReadRequest(
+    communityId: string,
+    requestId: string,
+  ): Promise<StationReadReceipt> {
+    validateStationReadRequest({
+      requestId,
+      streamId: communityId,
+      membershipEpoch: 0,
+      throughSequence: 0,
+    });
+    return parseStationReadReceipt(
+      await this.request<unknown>(
+        `/community-views/${encodeURIComponent(communityId)}/read-requests/${requestId}`,
+        {
+          cache: 'no-store',
+          retryOnUnauthorized: false,
+          signal: AbortSignal.timeout(15_000),
+        },
+      ),
+      requestId,
+    );
+  }
+
+  public async sendStationCommunityMessage(
+    communityId: string,
+    input: StationMessageRequest,
+  ): Promise<StationMessageReceipt> {
+    const value = await this.request<unknown>(
+      `/community-views/${encodeURIComponent(communityId)}/message-requests`,
+      {
+        method: 'POST',
+        idempotencyKey: input.requestId,
+        body: jsonRequestBody(input),
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    return parseStationMessageReceipt(value, input.requestId, input.text);
+  }
+
+  public async getStationCommunityMessageRequest(
+    communityId: string,
+    requestId: string,
+  ): Promise<StationMessageReceipt> {
+    const value = await this.request<unknown>(
+      `/community-views/${encodeURIComponent(communityId)}/message-requests/${encodeURIComponent(requestId)}`,
+      { cache: 'no-store', retryOnUnauthorized: false, signal: AbortSignal.timeout(15_000) },
+    );
+    return parseStationMessageReceipt(value, requestId);
+  }
+
   public getCommunityReadExperienceRating(
     communityId: string,
     input: {
@@ -2495,15 +2960,12 @@ export class PadlHubApiClient {
   ): Promise<SupportTicketPage> {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(input)) if (v) q.set(k, v);
-    return this.requestFromRoot<SupportTicketPage>(
-      this.adminApiRoot,
-      `/support/tickets${q.size ? `?${q}` : ''}`,
-      { cache: 'no-store' },
-    );
+    return this.requestAdmin<SupportTicketPage>(`/support/tickets${q.size ? `?${q}` : ''}`, {
+      cache: 'no-store',
+    });
   }
   public getAdminSupportTicket(id: string, before?: string): Promise<SupportTicket> {
-    return this.requestFromRoot<SupportTicket>(
-      this.adminApiRoot,
+    return this.requestAdmin<SupportTicket>(
       `/support/tickets/${encodeURIComponent(id)}${before ? `?before=${encodeURIComponent(before)}` : ''}`,
       { cache: 'no-store' },
     );
@@ -2520,22 +2982,22 @@ export class PadlHubApiClient {
     },
     idempotencyKey: string,
   ): Promise<SupportTicket> {
-    return this.requestFromRoot<SupportTicket>(
-      this.adminApiRoot,
-      `/support/tickets/${encodeURIComponent(id)}`,
-      { method: 'PATCH', idempotencyKey, body: jsonRequestBody(input) },
-    );
+    return this.requestAdmin<SupportTicket>(`/support/tickets/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      idempotencyKey,
+      body: jsonRequestBody(input),
+    });
   }
   public sendAdminSupportTicketMessage(
     id: string,
     input: { readonly body: string; readonly internal: boolean; readonly expectedVersion: number },
     idempotencyKey: string,
   ): Promise<SupportTicket> {
-    return this.requestFromRoot<SupportTicket>(
-      this.adminApiRoot,
-      `/support/tickets/${encodeURIComponent(id)}/messages`,
-      { method: 'POST', idempotencyKey, body: jsonRequestBody(input) },
-    );
+    return this.requestAdmin<SupportTicket>(`/support/tickets/${encodeURIComponent(id)}/messages`, {
+      method: 'POST',
+      idempotencyKey,
+      body: jsonRequestBody(input),
+    });
   }
 
   public markNotificationsRead(throughId: string): Promise<NotificationReadCursorResult> {
@@ -2607,6 +3069,7 @@ export class PadlHubApiClient {
       `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}/bytes`,
       {
         method: 'PUT',
+        retryOnUnauthorized: false,
         idempotencyKey,
         headers: { 'Content-Type': 'application/octet-stream' },
         body: bytes,
@@ -2673,24 +3136,60 @@ export class PadlHubApiClient {
     );
   }
 
-  private async performSessionRefresh(): Promise<AuthenticatedSession> {
+  private sessionChangedError(): ApiClientError {
+    return new ApiClientError(
+      'AUTH_PRINCIPAL_CHANGED',
+      401,
+      'AUTH_PRINCIPAL_CHANGED',
+      createCorrelationId(),
+    );
+  }
+
+  private assertSessionGeneration(generation: number): void {
+    if (this.ownsBrowserSession && generation !== this.sessionGeneration)
+      throw this.sessionChangedError();
+  }
+
+  private async performSessionRefresh(automatic: boolean): Promise<AuthenticatedSession> {
+    const generation = this.sessionGeneration;
+    const principal = this.authenticatedPrincipal;
+    const request = () => {
+      this.assertSessionGeneration(generation);
+      return this.requestSessionRefresh(idempotencyKey);
+    };
+    const idempotencyKey = createCorrelationId();
     try {
-      const idempotencyKey = createCorrelationId();
       let session: AuthenticatedSession;
       try {
-        session = await this.retryOnceOnNetworkFailure(() =>
-          this.requestSessionRefresh(idempotencyKey),
-        );
+        session = await this.retryOnceOnNetworkFailure(request);
       } catch (error) {
+        this.assertSessionGeneration(generation);
         if (!(error instanceof ApiClientError) || error.code !== 'AUTH_REFRESH_RACE') throw error;
         await new Promise((resolve) => setTimeout(resolve, 150));
-        session = await this.retryOnceOnNetworkFailure(() =>
-          this.requestSessionRefresh(idempotencyKey),
-        );
+        session = await this.retryOnceOnNetworkFailure(request);
       }
-      this.applyAuthenticatedSession(session);
+      this.assertSessionGeneration(generation);
+      if (!isAuthenticatedSession(session))
+        throw new Error('PadlHub authentication response is invalid');
+      const refreshedPrincipal = `${session.context.tenantId}:${session.context.userId}`;
+      if (
+        this.ownsBrowserSession &&
+        (session.user.id !== session.context.userId ||
+          (automatic && principal && principal !== refreshedPrincipal))
+      )
+        throw this.sessionChangedError();
+      if (this.ownsBrowserSession && principal && principal !== refreshedPrincipal) {
+        // An explicit restore can adopt a new cookie identity; previous reads cannot.
+        this.sessionGeneration += 1;
+        this.refreshInFlight = undefined;
+      }
+      // Same-principal refresh does not retire other callers sharing this generation.
+      this.accessToken = session.accessToken.trim();
+      this.authenticatedPrincipal = refreshedPrincipal;
+      this.sessionRetired = false;
       return session;
     } catch (error) {
+      this.assertSessionGeneration(generation);
       this.clearAccessToken();
       throw error;
     }
@@ -2739,7 +3238,12 @@ export class PadlHubApiClient {
       this.clearAccessToken();
       throw new Error('PadlHub authentication response is invalid');
     }
+    if (this.ownsBrowserSession && session.user.id !== session.context.userId) {
+      this.clearAccessToken();
+      throw this.sessionChangedError();
+    }
     this.setAccessToken(session.accessToken);
+    this.authenticatedPrincipal = `${session.context.tenantId}:${session.context.userId}`;
   }
 
   private async requestWithPolicy<TResponse>(
@@ -2771,6 +3275,7 @@ export class PadlHubApiClient {
 
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const requestAccessToken = this.accessToken;
+    const requestGeneration = this.sessionGeneration;
     const response = await this.fetchImplementation(`${apiRoot}${normalizedPath}`, {
       ...policy.requestInit,
       credentials:
@@ -2779,6 +3284,7 @@ export class PadlHubApiClient {
           : (policy.requestInit.credentials ?? 'same-origin'),
       headers,
     });
+    if (policy.auth === 'required') this.assertSessionGeneration(requestGeneration);
 
     if (
       response.status === 401 &&
@@ -2789,15 +3295,22 @@ export class PadlHubApiClient {
     ) {
       const signal = policy.requestInit.signal;
       await this.waitForSessionRefresh(signal);
+      this.assertSessionGeneration(requestGeneration);
       if (signal?.aborted) throw abortReason(signal);
       return this.requestWithPolicy<TResponse>(path, policy, correlationId, false, apiRoot);
     }
 
     if (response.status === 401 && policy.auth === 'required')
       this.expireMemorySession(requestAccessToken);
-    if (!response.ok) throw await this.toApiClientError(response, correlationId);
+    if (!response.ok) {
+      const error = await this.toApiClientError(response, correlationId);
+      if (policy.auth === 'required') this.assertSessionGeneration(requestGeneration);
+      throw error;
+    }
     if (response.status === 204) return undefined as TResponse;
-    return (await response.json()) as TResponse;
+    const result = (await response.json()) as TResponse;
+    if (policy.auth === 'required') this.assertSessionGeneration(requestGeneration);
+    return result;
   }
 
   private requestFromRoot<TResponse>(
@@ -2841,24 +3354,33 @@ export class PadlHubApiClient {
       setHeader(headers, 'Authorization', `Bearer ${this.accessToken}`);
     }
     const requestAccessToken = this.accessToken;
+    const requestGeneration = this.sessionGeneration;
     const response = await this.fetchImplementation(`${apiRoot}${path}`, {
       method: 'GET',
       credentials: this.options.sessionMode === 'memory' ? 'omit' : credentials,
       headers,
     });
+    if (auth === 'required') this.assertSessionGeneration(requestGeneration);
     if (
       response.status === 401 &&
       auth === 'required' &&
       this.options.sessionMode !== 'memory' &&
       allowRefresh
     ) {
-      await this.refreshSession();
+      await this.waitForSessionRefresh(undefined);
+      this.assertSessionGeneration(requestGeneration);
       return this.downloadFromRoot(apiRoot, path, auth, credentials, correlationId, false, accept);
     }
     if (response.status === 401 && auth === 'required')
       this.expireMemorySession(requestAccessToken);
-    if (!response.ok) throw await this.toApiClientError(response, correlationId);
-    return response.blob();
+    if (!response.ok) {
+      const error = await this.toApiClientError(response, correlationId);
+      if (auth === 'required') this.assertSessionGeneration(requestGeneration);
+      throw error;
+    }
+    const result = await response.blob();
+    if (auth === 'required') this.assertSessionGeneration(requestGeneration);
+    return result;
   }
 
   private expireMemorySession(requestAccessToken: string | undefined): void {

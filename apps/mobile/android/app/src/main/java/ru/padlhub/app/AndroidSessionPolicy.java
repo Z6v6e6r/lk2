@@ -13,6 +13,7 @@ import org.json.JSONObject;
 
 /** The native bundle owns the destination. JavaScript cannot choose a host or tenant. */
 final class AndroidSessionPolicy {
+    private static final String TRAINING_UUID = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}";
     final String origin;
     final String tenant;
     final String version;
@@ -77,10 +78,28 @@ final class AndroidSessionPolicy {
         String cleanPath = uri.getRawPath();
         if (uri.isAbsolute() || uri.getRawAuthority() != null || cleanPath == null
             || cleanPath.contains("%") || cleanPath.contains("..") || cleanPath.contains("//")) throw rejected();
+        if (cleanPath.startsWith("/public/api/v1/" + tenant + "/games")) {
+            if (binaryBody != null) throw rejected();
+            return AndroidGameJoinRequest.catalogue(this,cleanPath,uri.getRawQuery(),method,inputHeaders,textBody);
+        }
+        if ((cleanPath.startsWith(userRoot + "/tournaments") && !cleanPath.substring(userRoot.length()).matches("/tournaments/[^/]+/chat(?:/.*)?")) || cleanPath.startsWith("/public/api/v1/" + tenant + "/tournaments")) {
+            if (binaryBody != null) throw rejected();
+            return tournamentRequest(cleanPath, uri.getRawQuery(), method, inputHeaders, textBody);
+        }
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
         String relativePath = cleanPath.substring(userRoot.length());
-        if (!validQuery(relativePath, method, relativePath.startsWith("/games") ? uri.getRawQuery() : uri.getQuery())) throw rejected();
+        if (!method.equals("GET") && AndroidProfileSettingsRequest.matches(relativePath)) return AndroidProfileSettingsRequest.request(this,relativePath,uri.getRawQuery(),method,inputHeaders,textBody,binaryBody);
+        if (AndroidGameJoinRequest.matches(relativePath)) return AndroidGameJoinRequest.request(this,relativePath,uri.getRawQuery(),method,inputHeaders,textBody,binaryBody);
+        if (AndroidSelfLeaveRequest.matches(relativePath)) return AndroidSelfLeaveRequest.request(this,relativePath,uri.getRawQuery(),method,inputHeaders,textBody,binaryBody);
+        boolean tournamentChat = relativePath.matches("/tournaments/[^/]+/chat(?:/.*)?");
+        boolean stationStream = AndroidStationStreamRequest.matches(relativePath);
+        boolean station = stationStream || AndroidStationMessageRequest.matches(relativePath);
+        if (!station && !tournamentChat && !validQuery(relativePath, method, (relativePath.startsWith("/games") || relativePath.startsWith("/trainings/")) ? uri.getRawQuery() : uri.getQuery())) throw rejected();
         String gameUuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        boolean quarter = relativePath.startsWith("/game-create-operations");
+        boolean gameCancel = "POST".equals(method) && relativePath.matches("/games/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/cancel");
+        boolean trainingRegistration = "POST".equals(method) && relativePath.matches("/trainings/" + TRAINING_UUID + "/registrations");
+        boolean trainingRecovery = "GET".equals(method) && relativePath.matches("/trainings/" + TRAINING_UUID + "/registration-operation");
         boolean gameJoin = "POST".equals(method) && relativePath.matches("/games/" + gameUuid + "/join");
         // Canonical receipt reconciliation (merged main #455): GET-only recovery advanced the
         // operation; this POST asks the owner for the trusted receipt on the same idempotency key.
@@ -101,7 +120,7 @@ final class AndroidSessionPolicy {
             boolean notificationWrite = "PUT".equals(method) && (cleanPath.equals(userRoot + "/notifications/read-cursor")
                 || cleanPath.equals(userRoot + "/notifications/preferences"));
             if (!("GET".equals(method) && allowedRead(relativePath))
-                && !notificationWrite && !gameJoin && !gameReconcile && !allowedMessagingWrite(relativePath, method)) throw rejected();
+                && !station && !tournamentChat && !gameCancel && !quarter && !notificationWrite && !gameJoin && !gameReconcile && !trainingRegistration && !allowedMessagingWrite(relativePath, method)) throw rejected();
             operation = Operation.API;
         }
         boolean auth = operation != Operation.API && operation != Operation.PUBLIC;
@@ -120,7 +139,15 @@ final class AndroidSessionPolicy {
         if (operation == Operation.PUBLIC) headers.remove("authorization");
         if (operation == Operation.API && !headers.getOrDefault("authorization", "").matches("Bearer [A-Za-z0-9._-]{8,8192}")) throw rejected();
         if (!"GET".equals(method) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9._:-]{16,128}")) throw rejected();
-        if ((gameJoin || gameReconcile || gameRecovery) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}")) throw rejected();
+        if ((gameJoin || gameReconcile || gameRecovery || trainingRegistration || trainingRecovery) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}")) throw rejected();
+        if (gameCancel && (uri.getRawQuery() != null || textBody == null || textBody.length() > 256
+            || !textBody.matches("\\s*\\{\\s*\"reasonCode\"\\s*:\\s*\"ORGANIZER_REQUEST\"\\s*\\}\\s*")
+            || (headers.containsKey("content-type") && !"application/json".equals(headers.get("content-type")))
+            || !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}"))) throw rejected();
+        if (tournamentChat) AndroidTournamentChatRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
+        if (stationStream) AndroidStationStreamRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
+        else if (station) AndroidStationMessageRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
+        if (quarter) AndroidQuarterCreateRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody);
         String intent = operation == Operation.REFRESH ? "refresh" : operation == Operation.LOGOUT ? "logout" : null;
         if (!java.util.Objects.equals(intent, headers.get("x-session-intent"))) throw rejected();
         headers.put("accept", isBinaryContentRead(relativePath, method) ? "*/*" : "application/json");
@@ -135,6 +162,7 @@ final class AndroidSessionPolicy {
             return new Request(path, method, headers, binaryBody, "application/octet-stream", operation);
         }
         if (textBody != null && textBody.getBytes(StandardCharsets.UTF_8).length > maxJsonBodyBytes(relativePath, method)) throw rejected();
+        if (trainingRegistration) validateTrainingBody(textBody);
         if (operation == Operation.CHALLENGE || operation == Operation.VERIFY) validateAuthBody(operation, textBody);
         else if (("GET".equals(method) || auth) && textBody != null) throw rejected();
         if (textBody != null) headers.put("content-type", "application/json");
@@ -151,6 +179,7 @@ final class AndroidSessionPolicy {
             "/notifications", "/notifications/preferences", "/support/stations", "/support/dialogs",
             "/notification-endpoints/android/config", "/games").contains(path)) return true;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.equals("/trainings/catalog") || path.matches("/trainings/" + TRAINING_UUID + "/registration-operation")) return true;
         if (path.matches("/games/" + uuid + "(?:/join-conditions|/join-operation)?")) return true;
         if (path.matches("/conversations/" + uuid + "/messages")
             || path.matches("/conversations/" + uuid + "/media/" + uuid)
@@ -185,12 +214,15 @@ final class AndroidSessionPolicy {
     }
 
     private int maxJsonBodyBytes(String path, String method) {
+        if (AndroidStationMessageRequest.send(path, method) || AndroidTournamentChatRequest.send(path, method)) return 65_536;
         return "POST".equals(method) && "/support/attachments".equals(path) ? 11_188_907 : 16_384;
     }
 
     private boolean validQuery(String path, String method, String query) {
         if (!"GET".equals(method)) return query == null;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.equals("/trainings/catalog")) return validTrainingCatalogueQuery(query, TRAINING_UUID);
+        if (path.matches("/trainings/" + TRAINING_UUID + "/registration-operation")) return query == null;
         if (path.equals("/games")) {
             if (query == null) return true;
             Set<String> seen = new HashSet<>();
@@ -224,6 +256,116 @@ final class AndroidSessionPolicy {
         if (path.matches("/conversations/" + uuid + "/media/" + uuid + "(?:/content)?")
             || path.matches("/support/attachments/[A-Za-z0-9_-]{43}/content")) return query == null;
         return true;
+    }
+
+    private boolean validTrainingDate(String value) {
+        if (value == null || !value.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}")) return false;
+        java.text.SimpleDateFormat format = new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.ROOT);
+        format.setLenient(false);
+        format.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        java.text.ParsePosition position = new java.text.ParsePosition(0);
+        return format.parse(value, position) != null && position.getIndex() == value.length();
+    }
+
+    private boolean validTrainingCatalogueQuery(String query, String uuid) {
+        if (query == null || query.length() > 8192) return false;
+        Map<String, String> values = new HashMap<>();
+        try {
+            for (String part : query.split("&", -1)) {
+                String[] pair = part.split("=", -1);
+                if (pair.length != 2 || !pair[0].matches("[A-Za-z]+")) return false;
+                String value = java.net.URLDecoder.decode(pair[1], "UTF-8");
+                if (values.put(pair[0], value) != null) return false;
+            }
+        } catch (Exception ignored) { return false; }
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            String key = entry.getKey(), value = entry.getValue();
+            if (key.equals("limit")) { if (!value.matches("[1-9]|[1-4][0-9]|50")) return false; }
+            else if (key.equals("cursor")) { if (!value.matches(uuid)) return false; }
+            else if (key.equals("localDates")) {
+                String[] dates = value.split(",", -1);
+                if (dates.length < 1 || dates.length > 7 || new HashSet<>(Arrays.asList(dates)).size() != dates.length) return false;
+                for (String date : dates) if (!validTrainingDate(date)) return false;
+            } else if (key.equals("kinds")) {
+                if (!value.matches("(?:COACH_GAME|GROUP_TRAINING|SPLIT)(?:,(?:COACH_GAME|GROUP_TRAINING|SPLIT)){0,2}")) return false;
+            } else if (key.equals("categoryIds") || key.equals("stationIds")) {
+                if (!value.matches(uuid + "(?:," + uuid + "){0,49}")) return false;
+            } else if (key.equals("availability")) { if (!value.matches("INCLUDE_FULL|EXCLUDE_FULL")) return false; }
+            else if (key.equals("levelFrom") || key.equals("levelTo")) { if (!value.matches("D\\+?|C\\+?|B\\+?|A")) return false; }
+            else if (key.equals("startsAfterLocal")) { if (!value.matches("(?:[01][0-9]|2[0-3]):[0-5][0-9]")) return false; }
+            else return false;
+        }
+        if (values.containsKey("cursor")) return values.size() == (values.containsKey("limit") ? 2 : 1);
+        return values.containsKey("localDates") && values.containsKey("kinds") && values.containsKey("availability");
+    }
+
+    private void validateTrainingBody(String body) throws Failure {
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[1-8][a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}";
+        String date = "\\\"dateHint\\\"\\s*:\\s*\\\"[0-9]{4}-[0-9]{2}-[0-9]{2}\\\"";
+        String sub = "\\\"subscriptionId\\\"\\s*:\\s*\\\"" + uuid + "\\\"";
+        if (body == null || body.length() > 256 || !body.matches("\\s*\\{\\s*(?:" + date + "\\s*,\\s*" + sub + "|" + sub + "\\s*,\\s*" + date + ")\\s*\\}\\s*")) throw rejected();
+        try {
+            JSONObject parsed = new JSONObject(body);
+            if (parsed.length() != 2 || !validTrainingDate(parsed.getString("dateHint"))) throw rejected();
+        } catch (Failure error) { throw error; }
+        catch (Exception ignored) { throw rejected(); }
+    }
+
+    private static final String TOURNAMENT_UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
+    private static final String TOURNAMENT_KEY = "[A-Za-z0-9][A-Za-z0-9._:-]{15,127}";
+    private Request tournamentRequest(String path, String query, String method, Map<String,String> input, String body) throws Failure {
+        String publicRoot = "/public/api/v1/" + tenant + "/tournaments";
+        boolean publicRead = path.startsWith(publicRoot);
+        String suffix = path.substring((publicRead ? publicRoot : userRoot + "/tournaments").length());
+        Map<String,String> values = new HashMap<>(), headers = new HashMap<>();
+        if (query != null) for (String part : query.split("&", -1)) {
+            String[] pair=part.split("=",2);
+            if (pair.length!=2 || pair[1].isEmpty() || pair[0].contains("%") || pair[1].contains("%") || values.put(pair[0],pair[1])!=null) throw rejected();
+        }
+        Set<String> allowed=new HashSet<>(Arrays.asList("accept","content-type","authorization","idempotency-key","x-correlation-id","x-app-platform","x-app-version","x-app-build"));
+        for(Map.Entry<String,String> entry:input.entrySet()) {
+            String name=entry.getKey().toLowerCase(Locale.ROOT),value=entry.getValue();
+            if(!allowed.contains(name)||headers.containsKey(name)||value==null||value.length()>8192||value.contains("\r")||value.contains("\n"))throw rejected();
+            headers.put(name,value);
+        }
+        if(publicRead) {
+            if(!"GET".equals(method)||body!=null||headers.containsKey("authorization")||headers.containsKey("idempotency-key")||!(suffix.isEmpty()||suffix.matches("/"+TOURNAMENT_UUID)))throw rejected();
+            for(String key:values.keySet()) if(!(suffix.isEmpty()?Arrays.asList("dateFrom","dateTo","availability","limit"):Arrays.asList("dateFrom","dateTo")).contains(key))throw rejected();
+            long delta=tournamentDate(values.get("dateTo"))-tournamentDate(values.get("dateFrom"));
+            if(delta<=0||delta>15L*86400000L)throw rejected();
+            if(values.containsKey("availability")&&!values.get("availability").matches("JOINABLE|INCLUDE_FULL"))throw rejected();
+            if(values.containsKey("limit")&&!values.get("limit").matches("[1-9]|[1-4][0-9]|50"))throw rejected();
+        } else {
+            if(!headers.getOrDefault("authorization","").matches("Bearer [A-Za-z0-9._-]{8,8192}"))throw rejected();
+            if("GET".equals(method)&&suffix.matches("/"+TOURNAMENT_UUID+"/(?:participants|registration-operation)")) {
+                if(body!=null||(suffix.endsWith("/participants")&&!values.isEmpty()))throw rejected();
+                for(Map.Entry<String,String> entry:values.entrySet())if(!entry.getKey().equals("operationId")||!entry.getValue().matches(TOURNAMENT_UUID))throw rejected();
+                if(headers.containsKey("idempotency-key")&&!headers.get("idempotency-key").matches(TOURNAMENT_KEY))throw rejected();
+            } else {
+                if(!"POST".equals(method)||query!=null||!headers.getOrDefault("idempotency-key","").matches(TOURNAMENT_KEY))throw rejected();
+                if(suffix.matches("/"+TOURNAMENT_UUID+"/registration-operations/"+TOURNAMENT_UUID+"/retry")) {
+                    if(body!=null)throw rejected();
+                    // Android adds form Content-Type to an empty POST unless explicitly set.
+                    // This remains a bodyless original-operation retry, never a form command.
+                    headers.put("content-type","text/plain");
+                }
+                else {
+                    if(!suffix.matches("/"+TOURNAMENT_UUID+"/registrations")||body==null||body.length()>256)throw rejected();
+                    String action="\"action\"\\s*:\\s*\"LEAVE\"",original="\"originalJoinOperationId\"\\s*:\\s*\""+TOURNAMENT_UUID+"\"";
+                    if(!body.matches("\\s*\\{\\s*(?:\"action\"\\s*:\\s*\"JOIN\"|"+action+"\\s*,\\s*"+original+"|"+original+"\\s*,\\s*"+action+")\\s*\\}\\s*"))throw rejected();
+                }
+            }
+        }
+        headers.put("accept","application/json");headers.put("x-app-platform","android");headers.put("x-app-version",version);headers.put("x-app-build",build);
+        if(!headers.containsKey("x-correlation-id"))headers.put("x-correlation-id",UUID.randomUUID().toString());
+        if(body!=null)headers.put("content-type","application/json");
+        return new Request(path+(query==null?"":"?"+query),method,headers,body,publicRead?Operation.PUBLIC:Operation.API);
+    }
+    private long tournamentDate(String value) throws Failure {
+        if(value==null||!value.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}"))throw rejected();
+        java.text.SimpleDateFormat format=new java.text.SimpleDateFormat("yyyy-MM-dd",Locale.ROOT);format.setLenient(false);format.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        try {java.util.Date parsed=format.parse(value);if(parsed==null||!format.format(parsed).equals(value))throw rejected();return parsed.getTime();}
+        catch(java.text.ParseException error){throw rejected();}
     }
 
     private void validateAuthBody(Operation operation, String body) throws Failure {

@@ -13,6 +13,11 @@ afterEach(() => {
 });
 
 describe('bottom navigation communications entries', () => {
+  it('exposes an independently enabled chat destination while CREATE remains read-only', () => {
+    render(<MainBottomNavigation readOnly chatsAvailable active="chats" />);
+    expect(screen.getByRole('link', { name: 'Чаты' })).toHaveAttribute('href', '/chats');
+    expect(screen.queryByRole('link', { name: 'Создать игру' })).toBeNull();
+  });
   it('exposes Chats without a separate Notifications entry', () => {
     render(<MainBottomNavigation active="home" />);
 

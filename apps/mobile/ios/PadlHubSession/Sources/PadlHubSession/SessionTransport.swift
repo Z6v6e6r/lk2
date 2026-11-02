@@ -100,7 +100,7 @@ public actor SessionTransport {
         try acceptCookie(response, previous: nil, accountHash:accountHash)
       }
       return try bridgeResponse(data, response)
-    case .context, .read, .notification:
+    case .context, .read, .notification, .quarterCreate, .gameCancel, .stationMessage, .stationStream, .tournamentChat, .tournament, .messaging, .training, .selfLeave, .gameJoin, .profileSettings:
       guard let credential = try currentCredential(), credential.logoutKey == nil else {
         return .signedOut
       }
@@ -216,7 +216,10 @@ public actor SessionTransport {
 
   private func checkedSend(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     let (data, response) = try await send(request)
-    guard response.url == request.url, data.count <= 1_048_576 else {
+    let streamPath = "/user/api/v1/" + configuration.tenant + "/community-views/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/station-stream"
+    let tournamentPath = "/user/api/v1/" + configuration.tenant + "/tournaments/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/chat/messages"
+    let history = request.httpMethod == "GET" && request.url?.path.range(of:"\\A(?:" + streamPath + "|" + tournamentPath + ")\\z",options:.regularExpression) != nil
+    guard response.url == request.url, data.count <= (history ? 3 * 1_048_576 : 1_048_576) else {
       throw SessionFailure.response
     }
     guard !(300..<400).contains(response.statusCode) else { throw SessionFailure.redirect }

@@ -1377,14 +1377,14 @@ describe('PadlHubApiClient authentication boundary', () => {
     expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBe(firstKey);
   });
 
-  it('keeps the in-memory access token when logout does not reach the server', async () => {
+  it('retires local credentials when logout cannot confirm server revocation', async () => {
     const fetchImplementation: typeof fetch = () => Promise.reject(new TypeError('offline'));
     const client = createClient(fetchImplementation, {
       initialAccessToken: authenticatedSession.accessToken,
     });
 
     await expect(client.revokeSession()).rejects.toThrow('offline');
-    expect(client.getAccessToken()).toBe(authenticatedSession.accessToken);
+    expect(client.getAccessToken()).toBeUndefined();
   });
 
   it('does not try to refresh a rejected public authentication request', async () => {
@@ -2659,4 +2659,172 @@ describe('PadlHubApiClient notification boundary', () => {
       expectedRevision: 3,
     });
   });
+});
+
+describe('managed SELF leave stable-key recovery', () => {
+  it('never automatically retries a stable-key DELETE after response loss; read-by-key keeps original custody', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    let first = true;
+    const fetcher: typeof fetch = (url, init) =>
+      Promise.resolve().then(() => {
+        requests.push({ url: requestUrl(url), ...(init ? { init } : {}) });
+        if (first) {
+          first = false;
+          throw new TypeError('lost response');
+        }
+        return jsonResponse({ commandId: 'synthetic-operation', operation: { status: 'UNKNOWN' } });
+      });
+    const client = createClient(fetcher);
+    const key = 'synthetic-self-leave-original';
+    await expect(client.leaveGame('public-game', { idempotencyKey: key })).rejects.toThrow(
+      'lost response',
+    );
+    expect(requests).toHaveLength(1);
+    await client.getManagedLeaveOperation('public-game', key);
+    expect(requests.map((r) => r.url)).toEqual([
+      'https://api.padlhub.test/user/api/v1/local-padel/games/public-game/participants/me',
+      'https://api.padlhub.test/user/api/v1/local-padel/games/public-game/leave-operation',
+    ]);
+    for (const request of requests)
+      expect(new Headers(request.init?.headers).get('Idempotency-Key')).toBe(key);
+    expect(requests[0]?.init?.body).toBeUndefined();
+    expect(requests[1]?.init?.method ?? 'GET').toBe('GET');
+  });
+});
+
+it('does not refresh or retry a stable-key SELF DELETE on 401 after session replacement', async () => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+    jsonResponse(
+      {
+        error: {
+          code: 'AUTH_REQUIRED',
+          message: 'synthetic expired',
+          correlationId: 'synthetic',
+        },
+      },
+      401,
+    ),
+  );
+  const client = createClient(fetcher, { initialAccessToken: authenticatedSession.accessToken });
+  await expect(
+    client.leaveGame('public-game', { idempotencyKey: 'synthetic-original-self-key' }),
+  ).rejects.toThrow();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(requestUrl(fetcher.mock.calls[0]![0])).toContain('/participants/me');
+});
+
+it.each([401, 404, 409, 503])(
+  'SELF restrictive recovery never retries HTTP %s or falls back to DELETE',
+  async (status) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: { code: 'AUTH_REQUIRED', message: 'synthetic', correlationId: 'synthetic' } },
+          status,
+        ),
+      );
+    const client = createClient(fetcher, { initialAccessToken: authenticatedSession.accessToken });
+    await expect(
+      client.reconcileManagedLeaveOperation('public-game', 'synthetic-original-self-key'),
+    ).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(requestUrl(fetcher.mock.calls[0]![0])).toContain('/leave-operation/reconcile');
+    expect(fetcher.mock.calls[0]![1]?.method).toBe('POST');
+    expect(fetcher.mock.calls[0]![1]?.body).toBeUndefined();
+    expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get('Idempotency-Key')).toBe(
+      'synthetic-original-self-key',
+    );
+  },
+);
+
+describe('training stable-key boundary', () => {
+  it('sends only the original public request/key once after network loss, then reads without a mutation', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError('synthetic lost response'))
+      .mockResolvedValueOnce(
+        jsonResponse({ operation: { status: 'UNKNOWN' }, registration: { status: 'UNKNOWN' } }),
+      );
+    const client = createClient(fetcher),
+      key = 'synthetic-training-original';
+    const input = {
+      dateHint: '2035-04-02',
+      subscriptionId: '80000000-0000-4000-8000-000000000001',
+    };
+    await expect(client.registerTraining('public-training', input, key)).rejects.toThrow(
+      'synthetic lost response',
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await client.getTrainingRegistration('public-training', key);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(stringRequestBody(fetcher.mock.calls[0]![1]?.body))).toEqual(input);
+    expect(fetcher.mock.calls[1]![1]?.method ?? 'GET').toBe('GET');
+    expect(fetcher.mock.calls[1]![1]?.body).toBeUndefined();
+    for (const call of fetcher.mock.calls)
+      expect(new Headers(call[1]?.headers).get('Idempotency-Key')).toBe(key);
+  });
+  it('does not refresh or retry either training route on 401', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            code: 'AUTH_REQUIRED',
+            message: 'synthetic expired',
+            correlationId: 'synthetic',
+          },
+        },
+        401,
+      ),
+    );
+    const client = createClient(fetcher, { initialAccessToken: authenticatedSession.accessToken });
+    await expect(
+      client.registerTraining(
+        'public-training',
+        { dateHint: '2035-04-02', subscriptionId: 'public-subscription' },
+        'synthetic-training-original',
+      ),
+    ).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await expect(
+      client.getTrainingRegistration('public-training', 'synthetic-training-original'),
+    ).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
+
+it('uses PadlHub-only training catalogue GETs and preserves original registration key without 401 replay', async () => {
+  const fetcher = vi.fn<typeof fetch>(() =>
+    Promise.resolve(jsonResponse({ state: 'READY', items: [] })),
+  );
+  const client = createClient(fetcher, { initialAccessToken: authenticatedSession.accessToken });
+  await client.listTrainingCatalogue({
+    surface: 'TRAININGS',
+    localDates: ['2035-04-02'],
+    kinds: ['GROUP_TRAINING'],
+    availability: 'INCLUDE_FULL',
+    levelFrom: 'D+',
+    limit: 20,
+  });
+  const initial = new URL(requestUrl(fetcher.mock.calls[0]![0]));
+  expect(initial.pathname).toBe('/user/api/v1/local-padel/trainings/catalog');
+  expect(initial.searchParams.get('levelFrom')).toBe('D+');
+  await client.continueTrainingCatalogue('11111111-1111-4111-8111-111111111111', 20);
+  expect(new URL(requestUrl(fetcher.mock.calls[1]![0])).searchParams.has('localDates')).toBe(false);
+  fetcher.mockResolvedValue(
+    jsonResponse({ code: 'AUTH_REQUIRED', message: 'Synthetic failure' }, 401),
+  );
+  const key = 'synthetic-training-original-key';
+  await expect(
+    client.registerTraining(
+      '22222222-2222-4222-8222-222222222222',
+      { dateHint: '2035-04-02', subscriptionId: '33333333-3333-4333-8333-333333333333' },
+      key,
+    ),
+  ).rejects.toThrow();
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(new Headers(fetcher.mock.calls[2]![1]?.headers).get('idempotency-key')).toBe(key);
+  expect(fetcher.mock.calls.map((call) => requestUrl(call[0])).join(' ')).not.toMatch(
+    /auth\/session\/refresh|booking-screen-read-jobs|viva/,
+  );
 });

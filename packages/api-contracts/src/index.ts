@@ -26,3 +26,57 @@ export type InternalGameCommand = InternalGeneratedComponents['schemas']['GameIn
 export type InternalGameEvent = InternalGeneratedComponents['schemas']['GameDomainEvent'];
 
 export const CURRENT_CONTRACT_VERSION = '1.12.0-stable-media-delivery' as const;
+
+/** Public training command state is separate from fresh attendance observation. */
+export interface TrainingRegistrationResult {
+  readonly trainingId: string;
+  readonly subscriptionId: string;
+  readonly dateHint: string;
+  readonly operation: {
+    readonly id: string;
+    readonly status:
+      'PENDING' | 'UNKNOWN' | 'CONFIRMED' | 'EXPIRED_NOT_DISPATCHED' | 'REJECTED_NOT_DISPATCHED';
+  };
+  readonly registration: { readonly status: 'UNKNOWN' | 'CONFIRMED'; readonly asOf: string | null };
+  readonly retryAfterSeconds: number | null;
+}
+
+export type {
+  TournamentLocalResult,
+  TournamentLocalInput,
+  TournamentLocalStatus,
+} from '@phub/domain';
+
+/** Quarter CREATE custody is distinct from imported game/attendance state. */
+export interface QuarterCreateInput {
+  stationId: string;
+  courtId: string;
+  startsAt: string;
+  subscriptionId: string;
+}
+export interface QuarterCreateResult {
+  contractVersion: 1;
+  request: QuarterCreateInput;
+  keySha256: string;
+  operation: {
+    id: string;
+    draftId: string;
+    status:
+      | 'PENDING'
+      | 'UNKNOWN'
+      | 'CONFIRMED'
+      | 'REJECTED'
+      | 'EXPIRED_NOT_DISPATCHED'
+      | 'REFUSED_NOT_DISPATCHED';
+  };
+  gameProjection: { status: 'PENDING' | 'AVAILABLE'; gameId: string | null };
+  registration: { status: 'CONFIRMED' | 'UNKNOWN'; asOf: string | null };
+  reason: string | null;
+}
+
+export type {
+  TournamentChatRequest,
+  TournamentChatReceipt,
+  TournamentChatPage,
+  TournamentChatMessage,
+} from '@phub/domain';

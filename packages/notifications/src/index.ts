@@ -616,7 +616,31 @@ export const androidFcmTokenSchema = z
   .max(MAX_ANDROID_FCM_TOKEN_LENGTH)
   .regex(/^[A-Za-z0-9_:-]+$/, 'Invalid FCM registration token');
 
+export const STATION_MESSAGE_NOTIFICATION = {
+  eventType: 'communities.station.message.published.v1',
+  templateKey: 'station.message.v1',
+  ruleKey: 'station.message.default.v1',
+  version: 1,
+  category: 'MESSAGING',
+  title: 'Новое сообщение',
+  body: 'В сообществе станции есть новое сообщение.',
+  deepLink: '/notifications',
+} as const;
+
+export const TOURNAMENT_MESSAGE_NOTIFICATION = {
+  eventType: 'tournaments.chat.message.published.v1',
+  templateKey: 'tournament.message.v1',
+  ruleKey: 'tournament.message.default.v1',
+  version: 1,
+  category: 'MESSAGING',
+  title: 'Новое сообщение',
+  body: 'В чате турнира есть новое сообщение.',
+  deepLink: '/notifications',
+} as const;
+
 export interface PushDeliveryRequest {
+  /** Deadline gate for station/tournament contexts at actual transport submission. Legacy field name retained for compatibility. */
+  readonly stationCanSubmit?: () => boolean;
   readonly tenantId: string;
   readonly deliveryId: string;
   readonly providerAccountId: string;

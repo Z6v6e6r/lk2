@@ -1,3 +1,4 @@
+export * from './station-membership.js';
 export * from './booked-operation-read.js';
 export * from './booked-operation-admission.js';
 export * from './policy-usage-binding.js';
@@ -718,3 +719,15 @@ export class ManagedSubscriptionRuntimeQuoteClient {
     }
   }
 }
+
+export * from './managed-join.js';
+
+export * from './managed-self-leave.js';
+
+export * from './training-registration.js';
+
+export * from './training-station-membership.js';
+
+export { QuarterCreateOwnerClient, QuarterPreparationRefused } from './quarter-create.js';
+
+export * from './quarter-create-station-membership.js';

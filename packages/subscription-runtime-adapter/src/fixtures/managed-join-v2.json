@@ -1,0 +1,140 @@
+{
+  "fixtureVersion": 1,
+  "purpose": "Synthetic cross-repository managed JOIN v2 wire fixture; no runtime or activation authority",
+  "identity": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "userId": "22222222-2222-4222-8222-222222222222",
+    "idempotencyKeySha256": "sha256:7736f4841296589a6663995b202dedecd94054e563dc83de3fb77d621cfd93bf",
+    "operationId": "3568928f-f5c5-8bc1-9370-06af857cd429"
+  },
+  "paths": {
+    "preflight": "/lk/integrations/v2/booked-operation-preflights",
+    "admission": "/lk/integrations/v2/booked-operation-admissions",
+    "read": "/lk/integrations/v2/booked-operations/3568928f-f5c5-8bc1-9370-06af857cd429"
+  },
+  "preflight": {
+    "request": {
+      "contractVersion": 2,
+      "action": "JOIN_GAME",
+      "target": {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "expectedRevision": 7
+      },
+      "paymentIntent": "USE_SUBSCRIPTION"
+    },
+    "requestSha256": "sha256:66c7e96606c327cb3faabec4e8e7b268d13f38a8861f5f21bdbb515b06b0aaa7",
+    "response": {
+      "contractVersion": 2,
+      "nonBinding": true,
+      "operationId": "3568928f-f5c5-8bc1-9370-06af857cd429",
+      "action": "JOIN_GAME",
+      "target": {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "expectedRevision": 7
+      },
+      "entitlement": {
+        "subscriptionInstanceId": "subscription:r1-managed-v2",
+        "expectations": {
+          "schemaVersion": 1,
+          "policyVersion": 3,
+          "policyDigest": "sha256:a31c56cef33c012bf5ce0ecd98b63cceb8aef62a72a9544854f223fc141701c7",
+          "targetSnapshot": {
+            "snapshotId": "snapshot:r1-join-v2",
+            "revision": 5,
+            "evidenceRef": "evidence:r1-join-v2"
+          }
+        }
+      }
+    }
+  },
+  "admission": {
+    "request": {
+      "contractVersion": 2,
+      "action": "JOIN_GAME",
+      "target": {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "expectedRevision": 7
+      },
+      "paymentIntent": "USE_SUBSCRIPTION",
+      "entitlement": {
+        "subscriptionInstanceId": "subscription:r1-managed-v2",
+        "expectations": {
+          "schemaVersion": 1,
+          "policyVersion": 3,
+          "policyDigest": "sha256:a31c56cef33c012bf5ce0ecd98b63cceb8aef62a72a9544854f223fc141701c7",
+          "targetSnapshot": {
+            "snapshotId": "snapshot:r1-join-v2",
+            "revision": 5,
+            "evidenceRef": "evidence:r1-join-v2"
+          }
+        }
+      }
+    },
+    "requestSha256": "sha256:562bb431f460f54425369444c54da267e1848ed65a7b029916cb29acb109390b"
+  },
+  "cupPreflight": {
+    "request": {
+      "subscriptionInstanceId": "subscription:r1-managed-v2",
+      "action": "JOIN_GAME",
+      "target": {
+        "targetId": "fixture-exercise"
+      }
+    },
+    "response": {
+      "schemaVersion": 1,
+      "nonBinding": true,
+      "subscriptionInstanceId": "subscription:r1-managed-v2",
+      "action": "JOIN_GAME",
+      "target": {
+        "targetId": "fixture-exercise"
+      },
+      "expectations": {
+        "schemaVersion": 1,
+        "policyVersion": 3,
+        "policyDigest": "sha256:a31c56cef33c012bf5ce0ecd98b63cceb8aef62a72a9544854f223fc141701c7",
+        "targetSnapshot": {
+          "snapshotId": "snapshot:r1-join-v2",
+          "revision": 5,
+          "evidenceRef": "evidence:r1-join-v2"
+        }
+      }
+    }
+  },
+  "confirmed": {
+    "contractVersion": 2,
+    "operationId": "3568928f-f5c5-8bc1-9370-06af857cd429",
+    "status": "CONFIRMED",
+    "asOf": "2026-10-31T12:00:00.000Z",
+    "reason": "OWNER_BOOKING_CONFIRMED",
+    "receipt": {
+      "contractVersion": 2,
+      "source": "LK1_SUBSCRIPTION_BOOKING_OWNER",
+      "operationId": "3568928f-f5c5-8bc1-9370-06af857cd429",
+      "tenantId": "11111111-1111-4111-8111-111111111111",
+      "userId": "22222222-2222-4222-8222-222222222222",
+      "gameId": "33333333-3333-4333-8333-333333333333",
+      "reservationId": "44444444-4444-4444-8444-444444444444",
+      "providerClientId": "fixture-client",
+      "providerClientSubscriptionId": "fixture-client-subscription",
+      "providerExerciseId": "fixture-exercise",
+      "providerMappingId": "55555555-5555-4555-8555-555555555555",
+      "targetMappingId": "66666666-6666-4666-8666-666666666666",
+      "targetVersion": "fixture-target-v11",
+      "requestSha256": "sha256:562bb431f460f54425369444c54da267e1848ed65a7b029916cb29acb109390b",
+      "idempotencyKeySha256": "sha256:7736f4841296589a6663995b202dedecd94054e563dc83de3fb77d621cfd93bf",
+      "bookingId": "fixture-booking",
+      "verifiedAt": "2026-10-31T12:00:00.000Z",
+      "entitlement": {
+        "subscriptionInstanceId": "subscription:r1-managed-v2",
+        "policyRef": {
+          "policyVersion": 3,
+          "policyDigest": "sha256:a31c56cef33c012bf5ce0ecd98b63cceb8aef62a72a9544854f223fc141701c7"
+        },
+        "usageRef": {
+          "usageRef": "booking:64bfc8bb48b881ca34a645da62b75b011399604807968c9b",
+          "reservationUnits": 1
+        }
+      }
+    }
+  }
+}

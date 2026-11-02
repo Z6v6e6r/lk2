@@ -440,50 +440,15 @@ export function createNotificationAdminClient(
     ...(options.appBuild ? { appBuild: options.appBuild } : {}),
     fetchImplementation,
   });
-  const adminRoot = `${options.baseUrl.replace(/\/$/, '')}/admin/api/v1/${encodeURIComponent(
-    options.tenantKey,
-  )}`;
-
-  async function toError(response: Response, correlationId: string): Promise<ApiClientError> {
-    const body = (await response.json().catch(() => undefined)) as
-      { code?: string; message?: string; correlationId?: string } | undefined;
-    return new ApiClientError(
-      body?.message ?? 'Запрос не выполнен.',
-      response.status,
-      body?.code ?? 'UNEXPECTED_API_ERROR',
-      body?.correlationId ?? response.headers.get('X-Correlation-ID') ?? correlationId,
-    );
-  }
-
-  async function adminRequest<T>(
+  function adminRequest<T>(
     path: string,
     init: RequestInit = {},
     idempotencyKey?: string,
-    allowRefresh = true,
   ): Promise<T> {
-    const correlationId = operationId();
-    const headers = new Headers(init.headers);
-    headers.set('Accept', 'application/json');
-    headers.set('X-Correlation-ID', correlationId);
-    headers.set('X-App-Platform', 'cup-admin');
-    headers.set('X-App-Version', options.appVersion);
-    if (options.appBuild) headers.set('X-App-Build', options.appBuild);
-    if (idempotencyKey) headers.set('Idempotency-Key', idempotencyKey);
-    if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    const accessToken = userClient.getAccessToken();
-    if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-
-    const response = await fetchImplementation(`${adminRoot}${path}`, {
+    return userClient.requestAdmin<T>(path, {
       ...init,
-      credentials: 'same-origin',
-      headers,
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
     });
-    if (response.status === 401 && allowRefresh) {
-      await userClient.refreshSession();
-      return adminRequest<T>(path, init, idempotencyKey, false);
-    }
-    if (!response.ok) throw await toError(response, correlationId);
-    return (await response.json()) as T;
   }
 
   return {

@@ -1,3 +1,18 @@
+import { createTournamentChatOwner } from './tournaments/tournament-chat-owner-client.js';
+import { createOrganizerProfileLookup } from './tournaments/organizer-profile-lookup-runtime.js';
+import { createCommunityActorToken } from './communities/community-actor-token.js';
+import { createQuarterCreateRepository } from '@phub/database/quarter-create';
+import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
+import { createQuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
+import { createTournamentLocalRepository } from '@phub/database';
+import { TournamentLocalOwnerClient } from '@phub/legacy-games-adapter';
+import { createTournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';
+import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
+import { createTrainingCatalogueSource } from './bookings/training-catalogue-source.js';
+import { createTrainingRegistrationRepository } from '@phub/database/training-registration';
+import { TrainingRegistrationOwnerClient } from '@phub/subscription-runtime-adapter';
+import { createTrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
+import { createManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { createNotificationScenarioRepository } from '@phub/database/notification-scenarios';
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
 import { RedisPasswordLoginLimiter } from './auth/password-login-limiter.js';
@@ -63,7 +78,11 @@ import {
 import { notificationReceiptSecret } from '@phub/notifications';
 import { createRuntimeNotificationEndpointCipher } from './notifications/runtime-endpoint-cipher.js';
 import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
-import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
+import {
+  VivaHomeSourceAdapter,
+  VivaIdentityProvider,
+  VivaExerciseRecommendationSourceAdapter,
+} from '@phub/viva-adapter';
 import {
   ManagedSubscriptionRuntimeQuoteClient,
   SubscriptionPolicyRegistryClient,
@@ -112,6 +131,8 @@ import {
   createCommunityMembershipPinRuntime,
   createCommunityOwnershipTransferRuntime,
   createCommunityReadExperienceRuntime,
+  createStationMessageRuntime,
+  createStationStreamRuntime,
   createCommunityReadRuntime,
 } from './communities/community-runtime.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
@@ -252,6 +273,30 @@ const authService = new AuthService({
     ),
   ...(legacyViewerIdentityLink ? { legacyViewerIdentityLink } : {}),
 });
+// Trusted tenant bindings only; keep circuit state across requests and bound cache cardinality.
+const trainingCatalogueAdapters = new Map<string, VivaExerciseRecommendationSourceAdapter>();
+const trainingCatalogueSource =
+  config.GAMES_READ_ENABLED && ['sandbox', 'production'].includes(config.VIVA_MODE)
+    ? createTrainingCatalogueSource({
+        access: (actor) => authService.issueTrainingCatalogueAccess(actor),
+        adapter: (providerTenantKey) => {
+          const existing = trainingCatalogueAdapters.get(providerTenantKey);
+          if (existing) return existing;
+          if (trainingCatalogueAdapters.size >= 64)
+            throw new Error('TRAINING_CATALOGUE_UNAVAILABLE');
+          const adapter = new VivaExerciseRecommendationSourceAdapter({
+            mode: config.VIVA_MODE,
+            apiBaseUrl: config.VIVA_END_USER_API_URL,
+            providerTenantKey,
+            timeoutMs: Math.min(config.VIVA_TIMEOUT_MS, 2_500),
+            maxAttempts: 1,
+            onMetric: (metric) => logger.info({ metric }, 'training catalogue provider read'),
+          });
+          trainingCatalogueAdapters.set(providerTenantKey, adapter);
+          return adapter;
+        },
+      })
+    : undefined;
 const phoneSubjectLinkService = new PhoneSubjectLinkService({
   config,
   repository: createPhoneSubjectLinkRepository(pool),
@@ -552,7 +597,23 @@ const giftCertificateArtifactStore = config.GIFT_CERTIFICATE_ISSUANCE_ENABLED
       timeoutMs: config.GIFT_CERTIFICATE_ARTIFACT_STORAGE_TIMEOUT_MS,
     })
   : undefined;
+const communityActorToken = createCommunityActorToken(
+  async (actor) => (await authService.issueVivaAccessToken(actor)).accessToken,
+);
+const stationStreamOwner = createStationStreamRuntime({
+  config,
+  pool,
+  token: communityActorToken,
+  logger,
+});
+const tournamentChatOwner = createTournamentChatOwner(config, pool);
+const stationMessageOwner = createStationMessageRuntime({
+  config,
+  pool,
+  token: communityActorToken,
+});
 const communityReadExperienceService = createCommunityReadExperienceRuntime({
+  token: communityActorToken,
   config,
   pool,
   logger,
@@ -597,6 +658,63 @@ const communityMediaObjectStore = config.COMMUNITY_MEDIA_ENABLED
 const communityMediaRuntime = communityMediaObjectStore
   ? createCommunityMediaRuntime({ config, pool, objectStore: communityMediaObjectStore })
   : undefined;
+// Independent concrete TRAINING gate: never activates or widens WARN quote/game paths.
+const tournamentLocal = createTournamentLocalRuntime({
+  enabled: config.TOURNAMENT_LOCAL_COMMANDS_ENABLED,
+  repository: createTournamentLocalRepository(pool),
+  ...(config.TOURNAMENT_LOCAL_COMMANDS_ENABLED
+    ? {
+        client: new TournamentLocalOwnerClient({
+          identityUrl: config.LEGACY_GAME_IDENTITY_VERIFY_URL!,
+          integrationToken: config.LEGACY_GAME_IDENTITY_VERIFY_TOKEN!,
+          timeoutMs: config.LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS,
+          onMetric: (metric) => logger.info({ metric }, 'CUP local tournament owner operation'),
+        }),
+        token: async (actor: Parameters<typeof authService.issueVivaAccessToken>[0]) =>
+          (await authService.issueVivaAccessToken(actor)).accessToken,
+        date: (id: string) => tournamentSummarySource!.resolveRegistrationDate(id),
+      }
+    : {}),
+});
+const trainingRegistration = (() => {
+  const repository = createTrainingRegistrationRepository(pool, {
+    stationMembershipEnabled:
+      config.TRAINING_REGISTRATION_ENABLED && config.LK_STATION_MEMBERSHIP_LIFETIME_ENABLED,
+  });
+  if (!config.TRAINING_REGISTRATION_ENABLED)
+    return createTrainingRegistrationRuntime({ enabled: false, repository });
+  const keys = JSON.parse(config.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!) as Record<
+      string,
+      string
+    >,
+    keyId = config.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID!;
+  const issuer = new SubscriptionRuntimeActorDelegationIssuer({
+    privateKeyPem: keys[keyId]!,
+    keyId,
+    issuer: config.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER!,
+    audience: config.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE!,
+    ttlSeconds: config.SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS,
+  });
+  return createTrainingRegistrationRuntime({
+    enabled: true,
+    repository,
+    issuer,
+    client: new TrainingRegistrationOwnerClient({
+      baseUrl: config.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL!,
+      timeoutMs: config.GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS,
+      environment: ['local', 'ci'].includes(config.APP_ENV) ? 'development' : 'production',
+    }),
+    token: async (actor) => {
+      const issued = await authService.issueVivaAccessToken(actor);
+      return { token: issued.accessToken, expiresAt: issued.expiresAt };
+    },
+    stationMembership:
+      createStationMembershipTransport(config, (outcome) =>
+        logger.info({ outcome }, 'training station membership boundary'),
+      ) ?? undefined,
+    metric: (outcome) => logger.info({ outcome }, 'training registration boundary'),
+  });
+})();
 const subscriptionRuntimeWarnBoundary = (() => {
   if (config.SUBSCRIPTION_RUNTIME_WARN_MODE !== 'WARN') return undefined;
   const privateKeys = JSON.parse(
@@ -638,6 +756,16 @@ const subscriptionPolicyRegistryClient = config.SUBSCRIPTION_POLICY_REGISTRY_ENA
 const gameJoinConditionsOwner = createGameJoinConditionsRuntime({ config, pool, authService });
 // Paid JOIN reaches the existing owner only when the flag, the join-conditions owner and the
 // existing actor-delegation material are all composed; otherwise the route keeps GAME_PAYMENT_REQUIRED.
+const gameManagedSelfLeave = createManagedSelfLeaveRuntime({
+  config,
+  pool,
+  ...(subscriptionRuntimeWarnBoundary ? { boundary: subscriptionRuntimeWarnBoundary } : {}),
+  issueActorToken: async (actor) => {
+    const issued = await authService.issueVivaAccessToken(actor);
+    return { token: issued.accessToken, expiresAt: issued.expiresAt };
+  },
+  onMetric: (outcome) => logger.info({ outcome }, 'managed self leave boundary'),
+});
 const gameCommercialJoin = gameRosterRepository
   ? createGameCommercialJoinRuntime({
       config,
@@ -692,7 +820,51 @@ const gameCommercialCreate =
         onMetric: (metric) => logger.info({ metric }, 'commercial CREATE boundary operation'),
       })
     : undefined;
+const gameQuarterCreate = (() => {
+  if (
+    !config.GAME_COMMERCIAL_CREATE_ENABLED ||
+    config.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT !== 'QUARTER_OWNER'
+  )
+    return createQuarterCreateRuntime({
+      enabled: false,
+      repository: createQuarterCreateRepository(pool),
+    });
+  const keys = JSON.parse(config.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!) as Record<
+      string,
+      string
+    >,
+    keyId = config.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID!;
+  return createQuarterCreateRuntime({
+    enabled: true,
+    repository: createQuarterCreateRepository(pool, {
+      stationMembershipEnabled: config.LK_STATION_MEMBERSHIP_LIFETIME_ENABLED,
+    }),
+    stationMembership:
+      createStationMembershipTransport(config, (outcome) =>
+        logger.info({ outcome }, 'quarter CREATE station membership'),
+      ) ?? undefined,
+    issuer: new SubscriptionRuntimeActorDelegationIssuer({
+      privateKeyPem: keys[keyId]!,
+      keyId,
+      issuer: config.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER!,
+      audience: config.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE!,
+      ttlSeconds: config.SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS,
+    }),
+    client: new QuarterCreateOwnerClient({
+      onMetric: (metric) => logger.info({ metric }, 'quarter CREATE owner operation'),
+      baseUrl: config.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL!,
+      timeoutMs: config.GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS,
+      environment: ['local', 'ci'].includes(config.APP_ENV) ? 'development' : 'production',
+    }),
+    token: async (actor) => {
+      const issued = await authService.issueVivaAccessToken(actor);
+      return { token: issued.accessToken, expiresAt: issued.expiresAt };
+    },
+  });
+})();
+const organizerProfileLookup = createOrganizerProfileLookup(config, pool, redis);
 const app = await buildApp({
+  ...(gameQuarterCreate ? { gameQuarterCreate } : {}),
   config,
   logger,
   pool,
@@ -701,6 +873,9 @@ const app = await buildApp({
   phoneSubjectLinkService,
   ...(subscriptionPolicyRegistryClient ? { subscriptionPolicyRegistryClient } : {}),
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
+  trainingRegistration,
+  tournamentLocal,
+  gameManagedSelfLeave,
   ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
   ...(gameCommercialCreate ? { gameCommercialCreate } : {}),
   ...(subscriptionRuntimeWarnBoundary
@@ -711,7 +886,15 @@ const app = await buildApp({
         subscriptionRuntimeQuoteClient: subscriptionRuntimeWarnBoundary.quoteClient,
       }
     : {}),
-  communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
+  communityDirectory: createCommunityDirectoryRuntime({
+    config,
+    pool,
+    logger,
+    token: communityActorToken,
+  }),
+  ...(stationMessageOwner ? { stationMessageOwner } : {}),
+  ...(tournamentChatOwner ? { tournamentChatOwner } : {}),
+  ...(stationStreamOwner ? { stationStreamOwner } : {}),
   ...(communityReadExperienceService ? { communityReadExperienceService } : {}),
   ...(communityCreateService ? { communityCreateService } : {}),
   ...(communityMembershipPinService ? { communityMembershipPinService } : {}),
@@ -770,6 +953,7 @@ const app = await buildApp({
   levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),
   playerLevelRepository: createPlayerLevelRepository(pool),
   cupPlayerLevelProjectionRepository: createCupPlayerLevelProjectionRepository(pool),
+  ...(organizerProfileLookup ? { organizerProfileLookup } : {}),
   participationCommandRepository,
   locationMediaRepository: createLocationMediaRepository(pool),
   giftCertificateCatalogRepository: createGiftCertificateCatalogRepository(pool),
@@ -804,6 +988,7 @@ const app = await buildApp({
         promotionEngagementSink,
       }
     : {}),
+  ...(trainingCatalogueSource ? { trainingCatalogueSource } : {}),
   bookingPreferencesRepository: createBookingPreferencesRepository(pool),
   upcomingBookingsRepository: createUpcomingBookingsRepository(pool),
   ...(config.VIVA_DIRECT_READ_ENABLED || config.GAMES_READ_ENABLED

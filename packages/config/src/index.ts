@@ -146,6 +146,7 @@ const environmentSchema = z.object({
   GAMES_READ_ENABLED: booleanFromEnvironment,
   GAMES_COMMANDS_ENABLED: booleanFromEnvironment,
   GAMES_TEST_COURTS_ENABLED: booleanFromEnvironment,
+  TRAINING_REGISTRATION_ENABLED: booleanFromEnvironment,
   SUBSCRIPTION_RUNTIME_WARN_MODE: z.enum(['OFF', 'WARN']).default('OFF'),
   SUBSCRIPTION_RUNTIME_BASE_URL: z.string().url().optional(),
   SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: z.string().min(32).optional(),
@@ -223,6 +224,11 @@ const environmentSchema = z.object({
   // otherwise the runtime factory returns undefined and the route stays fail-closed.
   // Removal/review condition: replace when a dedicated booked-operation owner adapter lands, and
   // review this flag no later than the next delivery batch.
+  GAME_MANAGED_SELF_LEAVE_ENABLED: booleanFromEnvironment,
+  // Owner: R1 station communities. Coherent owner/writers/producer/delivery acceptance before activation;
+  // review/remove after full migration. No live flag or signer is provisioned by source defaults.
+  LK_STATION_MEMBERSHIP_LIFETIME_ENABLED: booleanFromEnvironment,
+  LK2_STATION_MEMBERSHIP_DELEGATION_AUDIENCE: z.string().min(1).max(256).optional(),
   GAME_COMMERCIAL_JOIN_ENABLED: booleanFromEnvironment,
   GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: z.string().url().optional(),
   GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(5_000).default(3_000),
@@ -231,7 +237,8 @@ const environmentSchema = z.object({
   // with a server-owned quote, a local PROVISIONING create and an advisory owner, without a charge,
   // booking or provider call. Activation: local/ci/staging only; production is rejected until the
   // LK1 reserve/confirm/release contract has its own approval. BOOKED_OPERATION transport stays
-  // rejected until then; the WARN advisory owner is the only activatable transport.
+  // rejected until then. ADVISORY remains the WARN path; explicit QUARTER_OWNER supports
+  // the reviewed quarter owner in non-production environments with all existing gates.
   // Removal/review condition: replace or extend when the ENFORCE owner transport is approved, and
   // review this flag no later than the next delivery batch.
   GAME_COMMERCIAL_CREATE_ENABLED: booleanFromEnvironment,
@@ -243,7 +250,7 @@ const environmentSchema = z.object({
     .max(5_000)
     .default(3_000),
   GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: z
-    .enum(['ADVISORY', 'BOOKED_OPERATION'])
+    .enum(['ADVISORY', 'BOOKED_OPERATION', 'QUARTER_OWNER'])
     .default('ADVISORY'),
   ACTIVITY_HISTORY_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_SYNC_ENABLED: booleanFromEnvironment,
@@ -252,8 +259,37 @@ const environmentSchema = z.object({
   ACTIVITY_HISTORY_PROVIDER_PAGE_SIZE: z.coerce.number().int().min(1).max(100).default(50),
   // The old LK can supply roster changes through either a safe local public clone or the staged
   // Mongo migration mirror. Source selection is process-only and is never exposed to clients.
+  // Dedicated CREATE identity evidence only. Never enables roster writes or CREATE commands.
+  GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED: booleanFromEnvironment,
+  GAME_CREATE_LOCATION_BINDING_TENANT_ID: z.string().uuid().optional(),
+  GAME_CREATE_LOCATION_BINDING_ADMIN_CREDENTIAL_FILE: z.string().min(1).optional(),
   LEGACY_GAMES_ROSTER_SYNC_ENABLED: booleanFromEnvironment,
   LEGACY_GAME_COMMAND_BRIDGE_ENABLED: booleanFromEnvironment,
+  TOURNAMENT_LOCAL_COMMANDS_ENABLED: booleanFromEnvironment,
+  TOURNAMENT_CHAT_ENABLED: booleanFromEnvironment,
+  TOURNAMENT_CHAT_OWNER_BASE_URL: z.string().url().optional(),
+  TOURNAMENT_CHAT_TENANT_ID: z.string().uuid().optional(),
+  TOURNAMENT_CHAT_TENANT_KEY: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]{0,62}$/)
+    .optional(),
+  TOURNAMENT_CHAT_ACTOR_ISSUER: z.string().min(1).max(200).optional(),
+  TOURNAMENT_CHAT_ACTOR_KEY_ID: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,64}$/)
+    .optional(),
+  TOURNAMENT_CHAT_ACTOR_PRIVATE_KEY_FILE: z.string().min(1).optional(),
+  // Dedicated readonly CUP profile lookup; never reuses subscription or client credentials.
+  TOURNAMENT_ORGANIZER_LOOKUP_ENABLED: booleanFromEnvironment,
+  TOURNAMENT_ORGANIZER_LOOKUP_PUBLIC_KEYS_FILE: z.string().min(1).optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_ISSUER: z.string().min(1).max(200).optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_AUDIENCE: z.string().min(1).max(200).optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_SUBJECT: z.string().min(1).max(200).optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_TENANT_ID: z.string().uuid().optional(),
+  TOURNAMENT_ORGANIZER_LOOKUP_TENANT_KEY: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]{0,62}$/)
+    .optional(),
   LEGACY_GAME_COMMAND_BRIDGE_TOKEN: z.string().min(32).optional(),
   LEGACY_GAME_IDENTITY_VERIFY_URL: z.string().url().optional(),
   LEGACY_GAME_IDENTITY_VERIFY_TOKEN: z.string().min(32).optional(),
@@ -551,6 +587,16 @@ const environmentSchema = z.object({
   WEB_PUSH_ENDPOINTS_PER_USER_MAX: z.coerce.number().int().min(1).max(20).default(5),
   WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
   WEB_PUSH_CIRCUIT_RESET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
+  // Owner: Engagement/R1. Activate only with enrolled sources, query purpose, 0114 and provider/device acceptance.
+  // Review/remove after the R1 controlled rollout; never auto-enroll sources.
+  TOURNAMENT_CHAT_NOTIFICATION_DELIVERY_ENABLED: booleanFromEnvironment,
+  STATION_NOTIFICATIONS_ENABLED: booleanFromEnvironment,
+  STATION_NOTIFICATION_OWNER_ORIGIN: z.string().url().optional(),
+  STATION_NOTIFICATION_TENANT_ID: z.string().uuid().optional(),
+  STATION_NOTIFICATION_ISSUER: z.string().min(1).max(300).optional(),
+  STATION_NOTIFICATION_AUDIENCE: z.string().min(1).max(300).optional(),
+  STATION_NOTIFICATION_KEY_ID: z.string().min(1).max(100).optional(),
+  STATION_NOTIFICATION_PRIVATE_KEY_FILE: z.string().min(1).max(1024).optional(),
   FCM_ENABLED: booleanFromEnvironment,
   FCM_APP_ID: z.string().min(1).max(300).default('ru.padlhub.app'),
   FCM_PROJECT_ID: z.string().min(1).max(300).optional(),
@@ -854,6 +900,95 @@ export function loadConfig(
       );
     }
   }
+  if (parsed.data.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT === 'QUARTER_OWNER') {
+    if (
+      !parsed.data.GAME_COMMERCIAL_CREATE_ENABLED ||
+      !parsed.data.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL ||
+      !parsed.data.VIVA_OAUTH_ENABLED ||
+      parsed.data.VIVA_AUTH_TENANT_KEY !== 'iSkq6G' ||
+      !['sandbox', 'production'].includes(parsed.data.VIVA_MODE) ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE
+    )
+      throw new Error(
+        'GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT=QUARTER_OWNER requires complete owner and actor signing configuration',
+      );
+    const owner = new URL(parsed.data.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL);
+    if (
+      owner.username ||
+      owner.password ||
+      owner.search ||
+      owner.hash ||
+      owner.pathname !== '/' ||
+      (parsed.data.APP_ENV === 'production'
+        ? owner.href !== 'https://padlhub.su/'
+        : owner.protocol !== 'https:' &&
+          !(
+            owner.protocol === 'http:' &&
+            ['localhost', '127.0.0.1', '[::1]'].includes(owner.hostname)
+          ))
+    )
+      throw new Error('GAME_QUARTER_CREATE_OWNER_URL_INVALID');
+    let keys: Record<string, unknown>;
+    try {
+      const raw: unknown = JSON.parse(parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error();
+      keys = raw as Record<string, unknown>;
+    } catch {
+      throw new Error('SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS must be a JSON object');
+    }
+    const key = keys[parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID];
+    if (typeof key !== 'string' || !key.startsWith(pkcs8PrivateKeyHeader))
+      throw new Error(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID must select a PKCS8 private key',
+      );
+  }
+  if (parsed.data.TRAINING_REGISTRATION_ENABLED) {
+    if (
+      !parsed.data.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL ||
+      !parsed.data.VIVA_OAUTH_ENABLED ||
+      parsed.data.VIVA_AUTH_TENANT_KEY !== 'iSkq6G' ||
+      !['sandbox', 'production'].includes(parsed.data.VIVA_MODE) ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE
+    )
+      throw new Error(
+        'TRAINING_REGISTRATION_ENABLED requires complete owner and actor signing configuration',
+      );
+    const owner = new URL(parsed.data.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL);
+    if (
+      owner.username ||
+      owner.password ||
+      owner.search ||
+      owner.hash ||
+      owner.pathname !== '/' ||
+      (parsed.data.APP_ENV === 'production'
+        ? owner.href !== 'https://padlhub.su/'
+        : owner.protocol !== 'https:' &&
+          !(
+            owner.protocol === 'http:' &&
+            ['localhost', '127.0.0.1', '[::1]'].includes(owner.hostname)
+          ))
+    )
+      throw new Error('TRAINING_REGISTRATION_OWNER_URL_INVALID');
+    let keys: Record<string, unknown>;
+    try {
+      const raw: unknown = JSON.parse(parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error();
+      keys = raw as Record<string, unknown>;
+    } catch {
+      throw new Error('SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS must be a JSON object');
+    }
+    const key = keys[parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID];
+    if (typeof key !== 'string' || !key.startsWith(pkcs8PrivateKeyHeader))
+      throw new Error(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID must select a PKCS8 private key',
+      );
+  }
   if (parsed.data.SUBSCRIPTION_POLICY_REGISTRY_ENABLED) {
     if (parsed.data.APP_ENV === 'production') {
       throw new Error('SUBSCRIPTION_POLICY_REGISTRY_ENABLED is not activated for production');
@@ -886,6 +1021,28 @@ export function loadConfig(
       );
     }
   }
+  if (
+    parsed.data.TOURNAMENT_CHAT_ENABLED &&
+    (!parsed.data.TOURNAMENT_CHAT_OWNER_BASE_URL ||
+      !parsed.data.TOURNAMENT_CHAT_TENANT_ID ||
+      !parsed.data.TOURNAMENT_CHAT_TENANT_KEY ||
+      !parsed.data.TOURNAMENT_CHAT_ACTOR_ISSUER ||
+      !parsed.data.TOURNAMENT_CHAT_ACTOR_KEY_ID ||
+      !parsed.data.TOURNAMENT_CHAT_ACTOR_PRIVATE_KEY_FILE)
+  )
+    throw new Error(
+      'TOURNAMENT_CHAT_ENABLED requires dedicated owner and actor signing configuration',
+    );
+  if (
+    parsed.data.TOURNAMENT_LOCAL_COMMANDS_ENABLED &&
+    (!parsed.data.LEGACY_GAME_IDENTITY_VERIFY_URL ||
+      !parsed.data.LEGACY_GAME_IDENTITY_VERIFY_TOKEN ||
+      !parsed.data.GAMES_READ_ENABLED ||
+      !parsed.data.VIVA_OAUTH_ENABLED)
+  )
+    throw new Error(
+      'TOURNAMENT_LOCAL_COMMANDS_ENABLED requires discovery and trusted actor identity',
+    );
   if (
     parsed.data.GAMES_RESULTS_WRITE_MODE === 'local_primary' &&
     !parsed.data.GAMES_COMMANDS_ENABLED
@@ -1461,6 +1618,27 @@ export function loadConfig(
     throw new Error(
       'Notification attendance requires lifecycle and explicit training type/studio allowlists',
     );
+  if (parsed.data.STATION_NOTIFICATIONS_ENABLED) {
+    for (const key of [
+      'STATION_NOTIFICATION_OWNER_ORIGIN',
+      'STATION_NOTIFICATION_TENANT_ID',
+      'STATION_NOTIFICATION_ISSUER',
+      'STATION_NOTIFICATION_AUDIENCE',
+      'STATION_NOTIFICATION_KEY_ID',
+      'STATION_NOTIFICATION_PRIVATE_KEY_FILE',
+    ] as const)
+      if (!parsed.data[key]) throw new Error('STATION_NOTIFICATION_CONFIGURATION_REQUIRED');
+    const origin = new URL(parsed.data.STATION_NOTIFICATION_OWNER_ORIGIN!);
+    if (
+      origin.protocol !== 'https:' ||
+      origin.username ||
+      origin.password ||
+      origin.search ||
+      origin.hash ||
+      origin.pathname !== '/'
+    )
+      throw new Error('STATION_NOTIFICATION_ORIGIN_INVALID');
+  }
   if (parsed.data.FCM_ENABLED) {
     const missingFcm = [
       ['FCM_PROJECT_ID', parsed.data.FCM_PROJECT_ID],
@@ -1727,6 +1905,16 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env): 
     },
     { profilePhotoStorage: true },
   );
+  if (
+    config.GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED &&
+    (!config.GAME_CREATE_LOCATION_BINDING_TENANT_ID ||
+      !config.LEGACY_GAMES_MONGODB_URI ||
+      !config.GAME_CREATE_LOCATION_BINDING_ADMIN_CREDENTIAL_FILE?.startsWith('/'))
+  ) {
+    throw new Error(
+      'CREATE location binding worker requires tenant, Mongo source and absolute dedicated credential reference',
+    );
+  }
   const { JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, ...workerConfig } = config;
   void JWT_ACCESS_SECRET;
   void JWT_REFRESH_SECRET;

@@ -1,3 +1,4 @@
+import { ordinaryPolicyRow } from './ordinary-push-policy.test-helper.js';
 import type { NotificationEndpointCipher, NotificationPushDeliveryPort } from '@phub/notifications';
 import type { Logger } from 'pino';
 import type { Pool, QueryResult } from 'pg';
@@ -116,6 +117,11 @@ describe('Web Push delivery state machine', () => {
     const deliveryId = '22222222-2222-4222-8222-222222222222';
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
       void values;
+      if (text.includes('live_lease'))
+        return Promise.resolve(
+          result([ordinaryPolicyRow('WEB_PUSH', { endpoint_status: 'REVOKED' })]),
+        );
+      if (text.startsWith('select id from')) return Promise.resolve(result([], 1));
       if (text.includes('for update of d skip locked')) {
         return Promise.resolve(
           result([
@@ -174,8 +180,8 @@ describe('Web Push delivery state machine', () => {
     expect(outbox?.[1]).toContain(
       JSON.stringify({
         deliveryId,
-        state: 'DEAD',
-        errorCode: 'WEB_PUSH_ENDPOINT_INACTIVE',
+        state: 'SUPPRESSED',
+        errorCode: 'WEB_PUSH_DELIVERY_NOT_ELIGIBLE',
       }),
     );
   });
@@ -186,6 +192,9 @@ describe('Web Push delivery state machine', () => {
     const queries: { readonly text: string; readonly values: readonly unknown[] }[] = [];
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
       queries.push({ text, values });
+      if (text.includes('live_lease'))
+        return Promise.resolve(result([ordinaryPolicyRow('WEB_PUSH')]));
+      if (text.startsWith('select id from')) return Promise.resolve(result([], 1));
       if (text.includes('for update of d skip locked')) {
         return Promise.resolve(
           result([
@@ -292,6 +301,11 @@ describe('Web Push delivery state machine', () => {
     const queries: { readonly text: string; readonly values: readonly unknown[] }[] = [];
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
       queries.push({ text, values });
+      if (text.includes('live_lease'))
+        return Promise.resolve(
+          result([ordinaryPolicyRow('WEB_PUSH', { provider_account_id: providerAccountId })]),
+        );
+      if (text.startsWith('select id from')) return Promise.resolve(result([], 1));
       if (text.includes('for update of d skip locked')) {
         return Promise.resolve(
           result(

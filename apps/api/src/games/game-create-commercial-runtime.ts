@@ -857,7 +857,11 @@ export function createGameCommercialCreateRuntime(
   options: GameCommercialCreateRuntimeOptions,
 ): GameCommercialCreateOptions | undefined {
   const { config } = options;
-  if (!config.GAME_COMMERCIAL_CREATE_ENABLED) return undefined;
+  if (
+    !config.GAME_COMMERCIAL_CREATE_ENABLED ||
+    config.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT === 'QUARTER_OWNER'
+  )
+    return undefined;
   if (config.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT === 'BOOKED_OPERATION') {
     const baseUrl = config.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL;
     const boundary = options.bookedOperationBoundary;

@@ -13,10 +13,18 @@
     "./notification-scenarios": {
       "types": "./src/notification-scenarios.ts",
       "import": "./dist/notification-scenarios.js"
+    },
+    "./training-registration": {
+      "types": "./src/training-registration.ts",
+      "import": "./dist/training-registration.js"
+    },
+    "./quarter-create": {
+      "types": "./src/quarter-create.ts",
+      "import": "./dist/quarter-create.js"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/notification-scenarios.ts --format esm --dts --sourcemap --clean",
+    "build": "tsup src/index.ts src/notification-scenarios.ts src/training-registration.ts src/quarter-create.ts --format esm --dts --sourcemap --clean",
     "test": "vitest run src"
   }
 }

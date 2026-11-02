@@ -1,3 +1,13 @@
+import { nativeProfileSettingsRequest } from './native-profile-settings-request.js';
+import { nativePublicGamesRequest } from './native-public-games-request.js';
+import { nativeJoinRequest } from './native-game-join-request.js';
+import { selfLeaveRequest } from './native-self-leave-request.js';
+import { tournamentChatRequest } from './native-tournament-chat-request.js';
+import { stationStreamRequest } from './native-station-stream-request.js';
+import { stationRequest } from './native-station-message-request.js';
+import { gameCancelRequest } from './native-game-cancel-request.js';
+import { quarterRequest } from './native-quarter-request.js';
+import { nativeTournamentRequest } from './native-tournament-request.js';
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError } from '@phub/api-sdk';
 import type { MobileRuntimeConfig } from './runtime-config.js';
@@ -176,11 +186,34 @@ export function createNativeApiFetch(
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
     const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}/`;
     // Check before URL normalization, which would hide traversal or encoded delimiters.
-    if (!value.startsWith(root) || /[%#\\]|\.\./.test(value.split('?')[0] ?? '')) throw rejected();
+    const publicGames = nativePublicGamesRequest(value, init, config);
+    const tournament = value.includes('/chat/') ? tournamentChatRequest(value, init, config) : null;
+    const tournamentRegistration = tournament
+      ? null
+      : nativeTournamentRequest(
+          value,
+          init?.method ?? 'GET',
+          init?.body,
+          Object.fromEntries(new Headers(init?.headers).entries()),
+          config,
+        );
+    if (
+      (!value.startsWith(root) && tournamentRegistration !== 'PUBLIC' && !publicGames) ||
+      /[%#\\]|\.\./.test(value.split('?')[0] ?? '')
+    )
+      throw rejected();
     const url = new URL(value);
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();
     const method = init?.method ?? 'GET';
+    const settings = nativeProfileSettingsRequest(value, init, config);
+    const join = nativeJoinRequest(value, init, config);
+    const selfLeave = selfLeaveRequest(value, init, config);
+    const cancel = gameCancelRequest(value, init, config);
+    const stream = stationStreamRequest(value, init, config);
+    if (!stream) stationRequest(value, init, config);
+    if (url.pathname.startsWith(`/user/api/v1/${config.tenantKey}/game-create-operations`))
+      quarterRequest(value, init, config);
     const relay = isBinaryRelay(url.pathname, method);
     const body = init?.body;
     if (body != null && typeof body !== 'string' && (!relay || !isBinaryBody(body)))
@@ -194,6 +227,8 @@ export function createNativeApiFetch(
       generation += 1;
       displayedReads.clear();
     }
+    if ((selfLeave || join || cancel || settings) && !active)
+      throw new DOMException('Session changed', 'AbortError');
     const requestGeneration = generation;
     const section =
       !onReadObservation || method !== 'GET'
@@ -278,6 +313,11 @@ export function createNativeApiFetch(
         }
       }
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
+      if (
+        (selfLeave || join || cancel || settings) &&
+        (!active || requestGeneration !== generation)
+      )
+        throw new DOMException('Session changed', 'AbortError');
       if (result.status === 200 && (refresh || url.pathname.endsWith('/verify'))) active = true;
       if (result.status === 401 && refresh && active) {
         active = false;
@@ -295,6 +335,14 @@ export function createNativeApiFetch(
         } else {
           unavailable();
         }
+      }
+      if (stream || tournament) {
+        const limit =
+          (stream?.resource === 'stream' || tournament?.resource === 'history' ? 3 : 1) *
+          1024 *
+          1024;
+        if (result.body.length > Math.ceil(limit / 3) * 4 || atob(result.body).length > limit)
+          throw new Error('NATIVE_RESPONSE_REJECTED');
       }
       const safeHeaders = Object.fromEntries(
         Object.entries(result.headers).filter(([name]) =>

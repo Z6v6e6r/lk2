@@ -656,3 +656,114 @@ The target contour is accepted when:
 - shadow comparison and migration reconciliation meet the agreed thresholds;
 - OpenAPI, migrations, RLS, tests, `npm run check`, Compose validation and smoke checks are green;
 - dashboards, alerts, runbooks, rollback and ownership documentation are complete.
+
+### Managed FREE SELF LEAVE consumer (R1, default off)
+
+`GAME_MANAGED_SELF_LEAVE_ENABLED=false` preserves existing NO_PAYMENT commands and blocks new
+managed dispatch. Owner: R1 Core/Booking. Enable only after the compatible LK managed SELF owner
+packet, canonical CUP compensation, authoritative profile/game mapping and provider acceptance
+are separately approved. Review/remove this rollout flag when the bounded SELF return has accepted
+production evidence; it is not a generic refund switch. Money, SPLIT, organizer CANCEL, late/NONE
+returns and native allowlist activation remain outside this packet.
+
+The bodyless DELETE `/games/:gameId/participants/me` may return 202/UNKNOWN. It freezes the exact
+original participation → APPLIED evidence → confirmed reservation → eligibility snapshot and
+managed FREE JOIN receipt, with actor/provider and legacy-game mapping provenance. Only that
+backend-owned lineage can authorize the canonical owner SELF ingress. No provider IDs, usage
+receipt or credentials enter the public response or browser storage. Owner requests use the frozen
+`managed-self-leave-v1-contract.json`; an explicit actor delegation pins method/path, original
+request/key digest, identity and mapping. Existing short-lived actor credentials are never persisted.
+
+Migration0106 adds empty tenant-scoped `games.managed_self_leave_attempts` and concrete
+`games.managed_self_leave_command_links`, both with tenant FKs and FORCE RLS. Integration order is
+frozen CREATE0105 → SELF0106; this branch does not modify0105. The journal references the existing
+legal IN_PROGRESS command envelope. Different keys observed for the same active participation
+converge through FK-backed links; all linked actor/game/type commands complete atomically with the
+original result. A new key without an active original participation is not evidence for a historical
+return. Same-key and previously linked-key replay run before current membership lookup, so a later
+rejoin cannot retarget the original operation. No parallel entitlement or money ledger is created.
+
+A durable DISPATCH_STARTED fence precedes the first owner POST. Leases serialize foreground
+attempts, but lease expiry never resets the fence. An explicit same-key DELETE first reads the
+original owner operation, then may send only the original body with a fresh actor token and signed
+`recovery_only:true`. Missing owner/canonical state remains UNKNOWN: a crash after the local fence
+but before owner insertion has no automatic fresh-admission recovery. No background actor
+impersonation, new quote, new reservation, refreshed entitlement proof or replacement key is allowed.
+Revoked/changed current actor mapping denies further external action. Completed local receipts
+remain readable by their original authenticated actor even after mapping drift or rejoin.
+
+Only a strict matching owner receipt proving COMPENSATED/APPLIED/BOOKING_CANCELLED can finalize.
+The transaction locks game → journal → original participation, validates every original binding
+and receipt hash, changes exactly that ACTIVE PLAYER to LEFT, increments revision and writes the
+existing audit/outbox/reopen/promotion effects. Any outbox or alias validation failure rolls back
+all local changes. Historical paid JOIN evidence, CONFIRMED reservation, eligibility and snapshot
+remain intact; CUP owns compensation. Replayed completion emits no events and does not touch the
+new participation. A changed receipt is rejected even after completion.
+
+GET `/game-operations/:operationId` checks this journal before ordinary operation lookup; GET
+`/games/:gameId/leave-operation` resolves the original Idempotency-Key. Both are local read-only and
+no-store: they never finalize or dispatch. A genuinely absent journal table (`to_regclass`) permits
+old behavior during a default-off application rollout; database/authorization/corruption errors are
+not treated as absence. Rollback disables new dispatch and retains both tables, links and receipts;
+do not drop or rewrite unfinished attempts. Re-enable recovery only with the compatible owner.
+
+Web keeps public account/game IDs and the original key under browser custody. UNKNOWN, offline and
+404 readback never mean success or authorize a new key. Reload reads the saved key; manual retry
+uses it; account replacement/unmount fences queued locks, pre-dispatch execution and response/storage updates. Stable-key SDK DELETE disables automatic transport/401 retry so it cannot reread a replacement account token; legacy callers without a supplied key retain their existing behavior. Existing native DELETE restrictions
+remain unchanged. LOCAL fixtures and CI disposable PostgreSQL exercise these boundaries; neither
+proves real provider cancellation/return, operational mapping freshness or production activation.
+
+### SELF refusal recovery without a new cancellation
+
+POST `/games/:gameId/leave-operation/reconcile` takes the original Idempotency-Key, no body or
+query parameters. It never creates a managed attempt, selects a new membership for cancellation,
+or calls the ordinary LEAVE writer. A separate route is required: older APIs ignore DELETE bodies;
+an optional recovery marker on that route would permit an old process to dispatch a new leave.
+An old API returns404 for the new route and Web retains custody. Existing direct/old-client DELETE
+semantics remain unchanged; the restrictive retry guarantee applies to the updated Web/SDK path.
+Native route support remains a separate companion dependency.
+
+The existing command journal stores exact `GAME_SELF_LEAVE_NOT_DISPATCHED_V1` evidence in
+FAILED.result_payload; no new migration is required. The same tenant/actor/key advisory lock and
+game row lock serialize this proof against both managed begin and ordinary LEAVE. If recovery wins
+before the first DELETE arrives, its FAILED command prevents that late request from dispatching.
+If admission wins, recovery observes the original managed link/attempt and cannot manufacture a
+refusal. PREPARED remains pending for its original caller; DISPATCH_STARTED may only use existing
+owner read/recovery-only admission, never a new cancellation. Other unresolved attempts for the
+actor/game also prevent certification. No provider/business call occurs for an absent command.
+
+A historical generic FAILED is not proof. The only narrowly certifiable old case is exact
+`game.leave.v1` / FAILED / GAME_PAYMENT_REQUIRED / NULL result / valid completed timestamp, with
+exact tenant, actor, principal, game, key and request hash and no managed attempt or link in either
+direction. All20 relevant source commits through59c1f0ee have only two distinct ordinary LEAVE
+bodies: `71d1d86371f29d2537d124bb6984dc6d1e2ceff6e711857689dc5930e36582da` contains this refusal
+before any participation write and no provider call; predecessor
+`567d58e5ae970b770f742ea4b009c45ab3392bd77d95b0d617b9395860611d60` has no such refusal. The guard
+was introduced at2c67620c. This certification preserves the original command ID, key/hash, code and
+timestamps; it is not a generic legacy-state conversion. Unknown/corrupt scope, other refusal codes,
+missing schema or ambiguous state remain unresolved. Direct edits/imports outside these canonical
+writers do not gain authority from a matching error string.
+
+Proof, audit and `audit.game_self_leave_not_dispatched.v1` outbox row commit atomically. The event
+contains only command/user public IDs and uses the audit namespace: no roster, attendance or
+notification fact is asserted. Current consumers use explicit bindings; in particular `game.#`
+projection does not receive this control event. Proof replay emits no additional events and never
+rebinds a later participation. Rollback retains the existing FAILED row: old writers replay its
+original refusal, old clients conservatively keep their key, and no migration rollback is needed.
+
+Read-by-key also recovers a canonical ordinary NO_PAYMENT success after lost response. A local
+NO_PAYMENT lookup precedes external actor resolution; the ordinary writer rechecks mode under its
+own lock. No Viva mapping is required to leave an ordinary local game. GET remains nonmutating.
+
+Public NOT_DISPATCHED evidence contains only schemaVersion1, the fixed outcome and original key
+SHA256, attached to a FAILED/LEAVE_GAME operation. It describes only this command, never current
+attendance. Web persists custody before first HTTP, routes every existing-key retry to restrictive
+reconciliation, and removes only matching custody after strict proof or original success. Generic
+FAILED/404/409, offline, missing endpoint and malformed/foreign proof never clear it. A late response
+cannot update a replaced account or key. Clearing a proven refusal refreshes the game and offers a
+new explicit choice; it never automatically joins, leaves, chooses a replacement key or refreshes
+and retries a mutation on401. A confirmed historical operation is not current membership evidence.
+
+LOCAL tests and CI-only disposable PostgreSQL cover these transitions and rollback. No local DB
+provisioning, provider calls or activation are part of this correction; provider/native/runtime
+acceptance remains separate.

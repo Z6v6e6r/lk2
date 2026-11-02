@@ -392,62 +392,151 @@ describe('GamesPage discovery', () => {
     expect(getGame).toHaveBeenCalledTimes(2);
   });
 
-  it('lets the organizer cancel a free game and refreshes the persisted status', async () => {
-    const organizerGame: ViewerGameCard = {
-      ...game,
-      surface: 'MY_UPCOMING',
-      startsAt: '2099-07-20T15:00:00.000Z',
-      endsAt: '2099-07-20T16:00:00.000Z',
-      levelRange: game.levelRange ?? null,
-      priceSummary: null,
-      capacity: { ...game.capacity, total: 4 },
-      participants: game.participants.map((participant, index) => ({
-        ...participant,
-        userId: `00000000-0000-4000-8000-00000000000${index}`,
-      })),
-      viewerRelation: 'ORGANIZER',
-      viewerPaymentState: 'NOT_REQUIRED',
-      resultSummary: null,
-      allowedActions: ['OPEN_DETAILS', 'CANCEL'],
-      conversation: null,
-    };
-    const cancelledGame: ViewerGameCard = {
-      ...organizerGame,
-      revision: organizerGame.revision + 1,
-      displayState: 'CANCELLED',
-      allowedActions: ['OPEN_DETAILS'],
-    };
-    const cancelGame = vi.fn<AuthGateway['cancelGame']>().mockResolvedValue({
-      commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
-      operation: {
-        id: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
-        type: 'CANCEL_GAME',
-        status: 'SUCCEEDED',
-        gameId: game.id,
-        aggregateRevision: cancelledGame.revision,
-        createdAt: '2026-08-26T10:00:00.000Z',
-        updatedAt: '2026-08-26T10:00:00.000Z',
-        nextAction: { type: 'NONE' },
-        error: null,
-      },
-      game: cancelledGame,
-      replayed: false,
-    });
-    const getGame = vi.fn().mockResolvedValueOnce(organizerGame).mockResolvedValue(cancelledGame);
-    const api: AuthGateway = { ...gateway(), getGame, cancelGame };
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const user = userEvent.setup();
+  it.each([false, true])(
+    'lets the organizer cancel a free game and refreshes persisted status (lost ACK=%s)',
+    async (lostAck) => {
+      const organizerGame: ViewerGameCard = {
+        ...game,
+        surface: 'MY_UPCOMING',
+        startsAt: '2099-07-20T15:00:00.000Z',
+        endsAt: '2099-07-20T16:00:00.000Z',
+        levelRange: game.levelRange ?? null,
+        priceSummary: null,
+        capacity: { ...game.capacity, total: 4 },
+        participants: game.participants.map((participant, index) => ({
+          ...participant,
+          userId: `00000000-0000-4000-8000-00000000000${index}`,
+        })),
+        viewerRelation: 'ORGANIZER',
+        viewerPaymentState: 'NOT_REQUIRED',
+        resultSummary: null,
+        allowedActions: ['OPEN_DETAILS', 'CANCEL'],
+        conversation: null,
+      };
+      const cancelledGame: ViewerGameCard = {
+        ...organizerGame,
+        revision: organizerGame.revision + 1,
+        displayState: 'CANCELLED',
+        allowedActions: ['OPEN_DETAILS'],
+      };
+      const cancelGame = vi.fn<AuthGateway['cancelGame']>().mockResolvedValue({
+        commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+        operation: {
+          id: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+          type: 'CANCEL_GAME',
+          status: 'SUCCEEDED',
+          gameId: game.id,
+          aggregateRevision: cancelledGame.revision,
+          createdAt: '2026-08-26T10:00:00.000Z',
+          updatedAt: '2026-08-26T10:00:00.000Z',
+          nextAction: { type: 'NONE' },
+          error: null,
+        },
+        game: cancelledGame,
+        replayed: false,
+      });
+      if (lostAck) cancelGame.mockRejectedValue(new TypeError('Synthetic lost ACK'));
+      const getGame = vi.fn().mockResolvedValueOnce(organizerGame).mockResolvedValue(cancelledGame);
+      const api: AuthGateway = {
+        ...gateway(),
+        getGame,
+        cancelGame,
+        gameCancelPrincipal: () => 'synthetic-principal',
+      };
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const user = userEvent.setup();
 
-    render(<GamesPage gateway={api} gameId={organizerGame.id} />);
-    await user.click(await screen.findByRole('button', { name: 'Отменить игру' }));
+      render(<GamesPage gateway={api} gameId={organizerGame.id} />);
+      await user.click(await screen.findByRole('button', { name: 'Отменить игру' }));
 
-    expect(window.confirm).toHaveBeenCalledWith('Отменить игру для всех участников?');
-    expect(cancelGame).toHaveBeenCalledWith(organizerGame.id, {
-      reasonCode: 'ORGANIZER_REQUEST',
-    });
-    expect(await screen.findByText('Игра отменена. Статус и состав обновлены.')).toBeVisible();
-    expect(await screen.findByText('Игра отменена')).toBeVisible();
-  });
+      expect(window.confirm).toHaveBeenCalledWith('Отменить игру для всех участников?');
+      expect(cancelGame).toHaveBeenCalledWith(organizerGame.id, {
+        reasonCode: 'ORGANIZER_REQUEST',
+      });
+      expect(await screen.findByText('Игра отменена. Статус и состав обновлены.')).toBeVisible();
+      expect(await screen.findByText('Игра отменена')).toBeVisible();
+    },
+  );
+
+  it.each(['confirmed', 'scheduled', 'error', 'logout', 'unmount'] as const)(
+    'manually reads a pending cancellation without another command (%s)',
+    async (outcome) => {
+      const organizerGame: ViewerGameCard = {
+        ...game,
+        surface: 'MY_UPCOMING',
+        startsAt: '2099-07-20T15:00:00.000Z',
+        endsAt: '2099-07-20T16:00:00.000Z',
+        levelRange: game.levelRange ?? null,
+        priceSummary: null,
+        capacity: { ...game.capacity, total: 4 },
+        participants: [],
+        viewerRelation: 'ORGANIZER',
+        viewerPaymentState: 'NOT_REQUIRED',
+        resultSummary: null,
+        allowedActions: ['OPEN_DETAILS', 'CANCEL'],
+        conversation: null,
+      };
+      const cancelledGame: ViewerGameCard = {
+        ...organizerGame,
+        revision: organizerGame.revision + 1,
+        displayState: 'CANCELLED',
+        allowedActions: ['OPEN_DETAILS'],
+      };
+      let principal: string | null = 'original-cancellation-principal';
+      let resolveRead!: (value: ViewerGameCard) => void;
+      let rejectRead!: (reason: Error) => void;
+      const readback = new Promise<ViewerGameCard>((resolve, reject) => {
+        resolveRead = resolve;
+        rejectRead = reject;
+      });
+      const getGame = vi
+        .fn<AuthGateway['getGame']>()
+        .mockResolvedValueOnce(organizerGame)
+        .mockResolvedValueOnce(organizerGame)
+        .mockReturnValueOnce(readback);
+      const cancelGame = vi
+        .fn<AuthGateway['cancelGame']>()
+        .mockRejectedValue(new TypeError('Synthetic lost ACK'));
+      const api: AuthGateway = {
+        ...gateway(),
+        getGame,
+        cancelGame,
+        gameCancelPrincipal: () => principal,
+      };
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const user = userEvent.setup();
+      const view = render(<GamesPage gateway={api} gameId={game.id} />);
+      await user.click(await screen.findByRole('button', { name: 'Отменить игру' }));
+      const refresh = await screen.findByRole('button', { name: 'Обновить статус отмены' });
+      expect(getGame).toHaveBeenCalledTimes(2);
+      await user.dblClick(refresh);
+      expect(getGame).toHaveBeenCalledTimes(3);
+      if (outcome === 'logout') principal = null;
+      if (outcome === 'unmount') view.unmount();
+      await act(async () => {
+        if (outcome === 'error') rejectRead(new TypeError('Synthetic offline'));
+        else resolveRead(outcome === 'scheduled' ? organizerGame : cancelledGame);
+        await readback.catch(() => undefined);
+      });
+      expect(cancelGame).toHaveBeenCalledTimes(1);
+      expect(getGame).toHaveBeenCalledTimes(3);
+      if (outcome === 'confirmed') {
+        expect(await screen.findByText('Игра отменена. Статус и состав обновлены.')).toBeVisible();
+        expect(screen.queryByRole('button', { name: 'Обновить статус отмены' })).toBeNull();
+      } else {
+        expect(screen.queryByText('Игра отменена. Статус и состав обновлены.')).toBeNull();
+        if (outcome === 'error' || outcome === 'scheduled') {
+          expect(refresh).toBeEnabled();
+          expect(
+            screen.getByText('Отмена пока не подтверждена. Обновите статус игры позже.'),
+          ).toBeVisible();
+          principal = null;
+          await user.click(refresh);
+          expect(getGame).toHaveBeenCalledTimes(3);
+        }
+      }
+    },
+  );
 
   it('requests the game chat with the canonical detail id and no user-entered identifier', async () => {
     const participantGame: ViewerGameCard = {
@@ -2274,5 +2363,190 @@ describe('GamesPage paid JOIN', () => {
       loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)?.idempotencyKey,
     ).toBe(newer.attempt.idempotencyKey);
     expect(api.joinPaidGame).not.toHaveBeenCalled();
+  });
+});
+
+describe('GamesPage managed SELF leave recovery', () => {
+  const originalLocks = Object.getOwnPropertyDescriptor(window.navigator, 'locks');
+  beforeEach(() => {
+    window.localStorage.clear();
+    Object.defineProperty(window.navigator, 'locks', {
+      configurable: true,
+      value: {
+        request: (_n: string, _o: unknown, fn: () => unknown) => Promise.resolve().then(() => fn()),
+      },
+    });
+  });
+  afterEach(() => {
+    window.localStorage.clear();
+    if (originalLocks) Object.defineProperty(window.navigator, 'locks', originalLocks);
+    else Reflect.deleteProperty(window.navigator, 'locks');
+  });
+  it('shows a typed unsupported refusal without claiming owner acceptance or erasing the key', async () => {
+    const api: AuthGateway = {
+      ...gateway(),
+      leaveGame: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('unsupported'), { code: 'GAME_PAYMENT_REQUIRED' }),
+        ),
+      getManagedLeaveOperation: vi.fn(),
+    };
+    const userId = '00000000-0000-4000-8000-000000000001';
+    vi.mocked(api.getGame).mockResolvedValue({
+      ...(await api.getGame(game.id)),
+      startsAt: new Date(Date.now() + 172800000).toISOString(),
+      endsAt: new Date(Date.now() + 176400000).toISOString(),
+      allowedActions: ['OPEN_DETAILS', 'LEAVE'],
+    });
+    render(
+      <GamesPage
+        gateway={api}
+        gameId={game.id}
+        joinPrincipal={{ tenantId: 'tenant', userId }}
+        chatNavigationScope={{ tenantKey: 'local-padel', userId }}
+      />,
+    );
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Покинуть игру' }));
+    await screen.findByText('Сервер отклонил выход: возврат по подписке сейчас недоступен.');
+    expect(screen.queryByText('Выход из игры подтверждён.')).not.toBeInTheDocument();
+    expect(window.localStorage.length).toBeGreaterThan(0);
+    expect(api.leaveGame).toHaveBeenCalledOnce();
+  });
+  it('clears a retained refusal only after exact server proof, without claiming successful leave or auto JOIN', async () => {
+    const user = userEvent.setup();
+    const operation = '22222222-2222-4222-8222-222222222222';
+    const api: AuthGateway = {
+      ...gateway(),
+      leaveGame: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('unsupported'), { code: 'GAME_PAYMENT_REQUIRED' }),
+        ),
+      getManagedLeaveOperation: vi.fn(),
+      reconcileManagedLeaveOperation: vi.fn<
+        NonNullable<AuthGateway['reconcileManagedLeaveOperation']>
+      >(async (_gameId: string, key: string) => {
+        const { createHash } = await import('node:crypto');
+        return {
+          commandId: operation,
+          operation: {
+            id: operation,
+            type: 'LEAVE_GAME',
+            status: 'FAILED',
+            gameId: game.id,
+            aggregateRevision: 8,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            nextAction: { type: 'NONE' },
+            error: { code: 'GAME_NOT_LEAVABLE', message: 'synthetic' },
+            noDispatch: {
+              schemaVersion: 1,
+              outcome: 'NOT_DISPATCHED',
+              idempotencyKeySha256: 'sha256:' + createHash('sha256').update(key).digest('hex'),
+            },
+          },
+          game: null,
+          replayed: true,
+        };
+      }),
+    };
+    vi.mocked(api.getGame).mockResolvedValue({
+      ...(await api.getGame(game.id)),
+      startsAt: new Date(Date.now() + 172800000).toISOString(),
+      endsAt: new Date(Date.now() + 176400000).toISOString(),
+      allowedActions: ['OPEN_DETAILS', 'LEAVE'],
+    });
+    render(
+      <GamesPage
+        gateway={api}
+        gameId={game.id}
+        joinPrincipal={{ tenantId: 'tenant', userId: '00000000-0000-4000-8000-000000000001' }}
+        chatNavigationScope={{
+          tenantKey: 'local-padel',
+          userId: '00000000-0000-4000-8000-000000000001',
+        }}
+      />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Покинуть игру' }));
+    await screen.findByText('Сервер отклонил выход: возврат по подписке сейчас недоступен.');
+    await user.click(screen.getByRole('button', { name: 'Повторить исходный запрос' }));
+    await screen.findByText('Исходный выход не отправлялся. Можно выбрать новое действие.');
+    expect(screen.queryByText('Выход из игры подтверждён.')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Повторить исходный запрос' }),
+    ).not.toBeInTheDocument();
+    expect(api.leaveGame).toHaveBeenCalledTimes(1);
+    expect(api.joinGame).not.toHaveBeenCalled();
+    expect(
+      Array.from({ length: window.localStorage.length })
+        .map((_, i) => window.localStorage.key(i))
+        .some((k) => k?.startsWith('phub.self-leave.v1:')),
+    ).toBe(false);
+  });
+  it('renders UNKNOWN as pending, preserves key across reload and manual retry, clears view on account change', async () => {
+    const user = userEvent.setup();
+    const operationId = '22222222-2222-4222-8222-222222222222';
+    const result = {
+      commandId: operationId,
+      operation: {
+        id: operationId,
+        type: 'LEAVE_GAME',
+        status: 'UNKNOWN',
+        gameId: game.id,
+        aggregateRevision: 8,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        nextAction: { type: 'WAIT_FOR_RECONCILIATION', retryAfterSeconds: 15 },
+        error: null,
+      },
+      game: null,
+      replayed: true,
+    };
+    const api: AuthGateway = {
+      ...gateway(),
+      leaveGame: vi.fn().mockResolvedValue(result),
+      getManagedLeaveOperation: vi.fn().mockResolvedValue(result),
+      reconcileManagedLeaveOperation: vi.fn().mockResolvedValue(result),
+    };
+    const detail: ViewerGameCard = {
+      ...(await api.getGame(game.id)),
+      startsAt: new Date(Date.now() + 172800000).toISOString(),
+      endsAt: new Date(Date.now() + 176400000).toISOString(),
+      allowedActions: ['OPEN_DETAILS', 'LEAVE'],
+    };
+    vi.mocked(api.getGame).mockResolvedValue(detail);
+    const principal = { tenantId: 'tenant', userId: '00000000-0000-4000-8000-000000000001' };
+    const view = render(
+      <GamesPage
+        gateway={api}
+        gameId={game.id}
+        joinPrincipal={principal}
+        chatNavigationScope={{ tenantKey: 'local-padel', userId: principal.userId }}
+      />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Покинуть игру' }));
+    await screen.findByRole('button', { name: 'Повторить исходный запрос' });
+    expect(screen.queryByText('Выход из игры подтверждён.')).not.toBeInTheDocument();
+    const key = vi.mocked(api.leaveGame).mock.calls[0]?.[1]?.idempotencyKey;
+    expect(key).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Повторить исходный запрос' }));
+    expect(api.reconcileManagedLeaveOperation).toHaveBeenCalledWith(game.id, key);
+    view.unmount();
+    const next = render(<GamesPage gateway={api} gameId={game.id} joinPrincipal={principal} />);
+    await waitFor(() => expect(api.getManagedLeaveOperation).toHaveBeenCalledWith(game.id, key));
+    expect(api.leaveGame).toHaveBeenCalledTimes(1);
+    next.rerender(
+      <GamesPage
+        gateway={api}
+        gameId={game.id}
+        joinPrincipal={{ ...principal, userId: 'other-account' }}
+      />,
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: 'Повторить исходный запрос' }),
+      ).not.toBeInTheDocument(),
+    );
   });
 });
