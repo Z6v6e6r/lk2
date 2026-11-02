@@ -1,5 +1,17 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## Дополнение подготовки — 2026-11-02
+
+Coherent source tuple LK2 terminal native564→558, LK288, CUP76 завершён с зелёными combined checks. Следующий отдельный implementation scope — guarded native counter checkout, без изменения production payment configuration. Точные источники: [READINESS](R1-READINESS.md). Никакой leaf head автоматически не становится release candidate.
+
+Перед source-main переходом сверить current main/head/tree/mergeability, checks и поведение standard-delivery workflows. Исторические циклы флагов508/511 не доказывают текущий flag state. LK Draft и критический scope исключены trusted frontend auto-merge policy; не менять Draft/flags для обхода gates.
+
+До release package закрыть payment/refund/training contracts и actual owner/config composition. Публикация должна дать один immutable manifest с digest всех компонентов; PR no-push Docker build не является публикацией. Затем current backup/restore/rollback custody, STAGING/PROVIDER journeys, signed iOS/Android и APNs/FCM acceptance. Release/store target и конкретные артефакты фиксируются до исполнения.
+
+Источник LK1 собирается только существующим source-driven процессом. Старые Git metadata восстановлены новым isolated clone; это не live Node-RED preimage. Не выполнять quarantined sync-games-source/prepare-147/exports и не генерировать productionflow из истории.
+
+Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Владелец подтвердил интеграции и продолжение: повторное общее разрешение не требуется. Отсутствующие контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
+
 ## Дополнение подготовки — 2026-11-01
 
 Текущий общий native source551 и leaf552/553/554 green на точных heads. Не выбирать отдельный leaf PR как полный release candidate: catalogue/registration531, iOS DIRECT/GAME518 и новое messaging principal fence должны войти в согласованную native интеграцию, затем notification/native исходники — в один проверенный source. Exact heads/runs: [READINESS](R1-READINESS.md).

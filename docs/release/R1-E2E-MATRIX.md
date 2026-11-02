@@ -1,5 +1,24 @@
 # LK2 R1 — E2E и acceptance matrix
 
+## Текущая E2E acceptance matrix — 2026-11-02
+
+| Journey                                  | LOCAL/CI                                                                                                                                    | Обязательное оставшееся evidence                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Auth/session/profile                     | 564 original principal/token, duplicate,401/409/network, JSON-late-ACK, A/B attempt overlap; actual shared native forms и self-only history | Signed-device logout/relogin/recovery; full/native CI564 SUCCESS                        |
+| Subscription views/usage                 | 563 canonical list/detail/refresh/uncertain-zero; server entitlement/release proofs inherited                                               | Реальная purchase/return, consumption, refund outcome                                   |
+| Quarter CREATE                           | LK/CUP/LK2 owner proofs, exact1/4court, races/expiry/recovery                                                                               | Actual provider/owner binding; combined companion CI SUCCESS                            |
+| Free/subscription JOIN→LEAVE→JOIN→LEAVE  | 561/560 full/native CI; paid recovery GET/reconcile без повторного POST, originalkey/body, monotonic projections                            | Реальный concurrency, process death/offline recovery, monetary attribution              |
+| Organizer CANCEL                         | 562 full/native CI; one-shotPOST, manualcanonical refresh, tokenfence/staleGET rejection                                                    | Реальный cancel/refund и organizer/roster outcomes                                      |
+| Training catalogue/register/status       | 559 green,561 postJSON tokenfence                                                                                                           | LEAVE/visitreturn contract и provider/device acceptance                                 |
+| Tournament signup/leave/eligibility/chat | Native chain+owner contracts, gender and organizer rules, capacity/retry/ACL synthetic cases                                                | Трёхрепозиторная runtime composition и physical clients                                 |
+| Station/community/personal/game chat     | SOURCE/CI ordering, ownership, unread/epoch/reconnect, dispatch policy                                                                      | Реальные reconnect/delivery/offline and revoke races                                    |
+| Push/trigger campaigns                   | Outbox/retries/dedup/quiet/optout source; station/tournament pipeline                                                                       | APNs/FCM physical receipt, optout/revocation/quiet hours underactual runtime            |
+| Rollback/restore/store                   | Source guards/unsigned CI artifacts                                                                                                         | Immutable candidate/previous artifacts, backups, real rehearsal/signing/store readiness |
+
+Группы LOCAL тестов пересекаются: не складывать их как уникальное покрытие. HTTP200, UI mock, CI Mongo и unsigned simulator имеют разные acceptance boundaries. Точные counts/runs: [READINESS](R1-READINESS.md).
+
+Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Владелец подтвердил интеграции и продолжение: повторное общее разрешение не требуется. Отсутствующие контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
+
 ## Текущие новые сценарии — 2026-11-01
 
 | Контур                           | Фактическое evidence                                                                                                                                                                                                                                                | Остаток                                                                                                                                |

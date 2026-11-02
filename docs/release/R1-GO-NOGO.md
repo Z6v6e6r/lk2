@@ -1,5 +1,15 @@
 # LK2 R1 — GO / NO-GO
 
+## Текущее решение — 2026-11-02
+
+**NO-GO для production.** Source559–564 full/Android/iOS CI verified. Terminal564 интегрирован в558, обе specialist reviews CLEAR; final full/native CI SUCCESS. Исправлен controlled RED2 immediate SELF race, GREEN42 и final8978CI tests. LK288 full/physicalMongo CI green; CUP76 full/physicalMongo и все4workflows green. Трёхрепозиторный source tuple зафиксирован. Точные SHA/runs: [READINESS](R1-READINESS.md).
+
+До GO нужны: завершение canonical/native consumer существующего counter purchase (source implementation продолжается); Viva attributable CURRENCY/DEPOSIT settlement и training leave/visit-return contracts; actual STAGING/PROVIDER journeys; signed devices и physical APNs/FCM; verified backup/restore/rollback, immutable artifact/signing/store custody. Permissions подтверждены, но отсутствие технических условий не превращается в готовность.
+
+Не заявлять завершение R1 или production verification по source implementation, cancelledbooking, initialPAID, greenCI либо unsigned build. Исполненных production/provider/store операций нет.
+
+Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Владелец подтвердил интеграции и продолжение: повторное общее разрешение не требуется. Отсутствующие контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
+
 ## Текущее решение — 2026-11-01
 
 **NO-GO для production.** Approved native551 VERIFIED SOURCE/CI;552 tournament durable delivery,553 station delivery safety и554 native tournament chat VERIFIED SOURCE/CI. Native catalogue/registration531 и iOS DIRECT/GAME518 готовы отдельно; нужна согласованная интеграция с конечным messaging principal fence. Точные версии и пределы: [READINESS](R1-READINESS.md).

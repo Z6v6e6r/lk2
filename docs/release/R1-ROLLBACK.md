@@ -1,5 +1,17 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Дополнение recovery — 2026-11-02
+
+Изменения находятся в task/integration branches и Draft PR; production rollback не выполнялся. Источники: [READINESS](R1-READINESS.md).
+
+Native participation recovery сохраняет original account/key/body. UNKNOWN не допускает fresh JOIN key; paid JOIN толькоstatus/reconcile; SELF LEAVE использует исходную операцию. CANCEL — одинPOST и canonicalGET, поздняя revision не воскрешает активную карточку. Profile explicit same-version/body retry восстанавливает тот же key; obsolete account/token response не меняет текущие настройки. Серверные receipts/CAS остаются authority.
+
+Реальный rollback требует previous immutable manifest, backup custody, совместимости expand/migrate/contract, сохранения operation/outbox/receipts и конкретного rehearsed плана. Не удалять и не переигрывать ambiguous payment/booking/notification attempts. До attributable settlement нельзя автоматически выполнять monetary compensation. Restore/rollback rehearsal и physical device recovery остаются UNKNOWN.
+
+Source rollback profile/consumers — reversion capability/UI; migrations/config отсутствуют. Companion integration не меняет исторические source preimage pins и не является live rollback packet. Удалённые старые Git metadata не восстанавливались поверх существующих файлов.
+
+Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Владелец подтвердил интеграции и продолжение: повторное общее разрешение не требуется. Отсутствующие контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
+
 ## Дополнение recovery — 2026-11-01
 
 552: сохранять immutable sources/facts/recipient witnesses, раздельные after/completed sequence, глобальную message/user identity и TOURNAMENT_PENDING/SENDING. После provider attempt/dispatch marker неопределённый исход остаётся UNKNOWN, без обычного sender fallback или нового intent. Отмена source не стирает ledger и не доказывает отсутствие доставки. Реальные drain/disable/rollback требуют exact-target approval.
