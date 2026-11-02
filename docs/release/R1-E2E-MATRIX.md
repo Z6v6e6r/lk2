@@ -1,5 +1,11 @@
 # LK2 R1 — E2E и acceptance matrix
 
+## Post119 audit correction — 2026-11-03 (MSK)
+
+This supplement takes precedence over conflicting historical readiness or execution claims below.
+
+Required runtime cases added to the acceptance boundary: actual API/Worker role reads/writes plus cross-tenant refusals on new119 relations; row-lock privileges on existing parents; owned disposable rehearsals of each partial four-service activation, lost-ACK recovery and old-image/secret restoration with119 retained; Rabbit consumer readiness and reconnect canonical-HTTP recovery. Existing synthetic/CI suites are mapped in [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md); the required disposable rehearsals and actual runtime acceptance remain separate, unverified evidence levels and were not run in this audit.
+
 ## Актуальный срез — 2026-11-03 (MSK)
 
 Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.

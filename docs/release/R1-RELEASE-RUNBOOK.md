@@ -1,5 +1,11 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## Post119 audit correction — 2026-11-03 (MSK)
+
+This supplement takes precedence over conflicting historical readiness or execution claims below.
+
+Execution correction: do not use the initial-beta renderer as the existing-beta upgrade executor. It only supports previousReleaseId=NONE and stop-candidate rollback. Retain b88 for closed migrations; after cleaned119 separately prove actual application privileges and complete a fixed four-service profile in the existing critical executor. The bounded scope and prerequisites are in [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md). No executable application rollout is admitted by this document.
+
 ## Актуальный срез — 2026-11-03 (MSK)
 
 Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.

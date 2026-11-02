@@ -1,5 +1,11 @@
 # LK2 R1 — аудит готовности к production release
 
+## Post119 audit correction — 2026-11-03 (MSK)
+
+This supplement takes precedence over conflicting historical readiness or execution claims below.
+
+PR569 merged as `b1c32748451af4e79e73421d98db35eec076ba38`: the quarter CREATE link now matches `/games/new`. Exact PR full/Android/iOS CI41544085369/41544085364/41544085269 passed. A later source audit found two explicit activation prerequisites: runtime-role grants after119 and a fixed four-service upgrade/recovery executor. Initial-beta rendering is not sufficient for an already running beta. See [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md). This adds no production acceptance claim.
+
 ## Актуальный срез — 2026-11-03 (MSK)
 
 Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.

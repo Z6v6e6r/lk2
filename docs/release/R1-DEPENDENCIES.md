@@ -1,5 +1,11 @@
 # LK2 R1 — зависимости и критический путь
 
+## Post119 audit correction — 2026-11-03 (MSK)
+
+This supplement takes precedence over conflicting historical readiness or execution claims below.
+
+The dependency order now explicitly includes **b88 migration success119 → exact runtime-role acceptance → fixed four-service upgrade/recovery admission → final application publication → runtime journeys**. Publication is deferred while executor admission is unresolved. Source-only main advancement remains separate from the retained b88 migration tuple. See [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md).
+
 ## Актуальный срез — 2026-11-03 (MSK)
 
 Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.

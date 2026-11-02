@@ -1,5 +1,11 @@
 # LK2 R1 — приоритетные блокеры
 
+## Post119 audit correction — 2026-11-03 (MSK)
+
+This supplement takes precedence over conflicting historical readiness or execution claims below.
+
+Additional **P0 / BLOCKED** activation gates: the admitted migration tail does not provision runtime DML for14 new tables; the existing initial-beta renderer has no previous-release restoration, while pair executors do not cover a single API/Web/Worker/Realtime rollback. Required source/runtime evidence and the critical path are recorded in [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md). Do not interpret119 migration success as application readiness.
+
 ## Актуальный срез — 2026-11-03 (MSK)
 
 Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.
