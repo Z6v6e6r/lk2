@@ -51,6 +51,8 @@ export const CLOSED_R1_CONTROLLER_FILES = Object.freeze([
   'scripts/test-timeweb-database-backup.py',
   'scripts/r1-tail-migration-runtime.js',
   'scripts/r1-tail-migration-source.js',
+  'scripts/r1-tail-migration-catalog.js',
+  'scripts/r1-tail-migration-catalog.test.ts',
   'docs/runbooks/closed-application-migrations-0103-0104.md',
   'docs/runbooks/r1-tail108-119-migration.md',
 ]);

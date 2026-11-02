@@ -50,7 +50,7 @@ const semantic = NOTIFICATION_CATALOG_SQL.replace(
 ).replace(
   oldFunctions,
   `where exists(select 1 from pg_catalog.pg_trigger tr
-    where tr.tgfoid=p.oid and tr.tgrelid in(select oid from targets) and not tr.tgisinternal))`,
+    where tr.tgfoid=p.oid and tr.tgrelid in(select oid from targets) and not tr.tgisinternal)`,
 );
 
 // Reuse the independently established storage/rules/index-storage/lineage serializer too.
