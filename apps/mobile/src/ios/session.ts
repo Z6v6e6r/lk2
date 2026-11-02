@@ -1,4 +1,9 @@
 import {
+  selfLeaveRequest,
+  selfLeaveRequestKey,
+  type NativeSelfLeaveRequest,
+} from '../native-self-leave-request.js';
+import {
   trainingRequest,
   trainingRequestKey,
   type NativeTrainingRequest,
@@ -45,7 +50,8 @@ interface NativeRequest {
     | 'tournamentChat'
     | 'tournament'
     | 'messaging'
-    | 'training';
+    | 'training'
+    | 'selfLeave';
   readonly requestId?: string;
   readonly challengeId?: string;
   readonly operationId?: string;
@@ -77,12 +83,14 @@ export function createIOSFetch(
   canDispatchTournamentChat?: (request: NativeTournamentChatRequest) => boolean,
   canDispatchGameChat?: (gameId: string) => boolean,
   canDispatchTraining?: (request: NativeTrainingRequest, key?: string, body?: string) => boolean,
+  canDispatchSelfLeave?: (request: NativeSelfLeaveRequest, key: string) => boolean,
 ): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   let cancellationClosed = false;
   let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
+    const selfLeave = selfLeaveRequest(value, init, config);
     const training = trainingRequest(value, init, config);
     const tournamentChat = value.includes('/chat/')
       ? tournamentChatRequest(value, init, config)
@@ -101,6 +109,7 @@ export function createIOSFetch(
           config,
         );
     const read =
+      !selfLeave &&
       !training &&
       !station &&
       !tournamentChat &&
@@ -111,6 +120,7 @@ export function createIOSFetch(
         : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
     if (
+      !selfLeave &&
       !training &&
       !station &&
       !tournamentChat &&
@@ -124,7 +134,8 @@ export function createIOSFetch(
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (training) operation = 'training';
+    if (selfLeave) operation = 'selfLeave';
+    else if (training) operation = 'training';
     else if (tournamentChat) operation = 'tournamentChat';
     else if (station) operation = stream ? 'stationStream' : 'stationMessage';
     else if (cancel) operation = 'gameCancel';
@@ -164,6 +175,12 @@ export function createIOSFetch(
       cancellationEpoch++;
     }
     const originalCancellationEpoch = cancellationEpoch;
+    const selfLeaveKey = new Headers(init?.headers).get('idempotency-key') ?? '';
+    if (
+      selfLeave &&
+      (cancellationClosed || canDispatchSelfLeave?.(selfLeave, selfLeaveKey) !== true)
+    )
+      throw new DOMException('Session changed', 'AbortError');
     const trainingKey = new Headers(init?.headers).get('idempotency-key') ?? undefined;
     const trainingBody = typeof init?.body === 'string' ? init.body : undefined;
     if (
@@ -194,6 +211,7 @@ export function createIOSFetch(
         operation,
         ...(read ?? {}),
         ...(training ?? {}),
+        ...(selfLeave ?? {}),
         ...(tournament ?? {}),
         ...(notification ?? {}),
         ...(quarter ?? {}),
@@ -204,6 +222,13 @@ export function createIOSFetch(
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (
+        selfLeave &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchSelfLeave?.(selfLeave, selfLeaveKey) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
       if (
         training &&
         (cancellationClosed ||
@@ -298,6 +323,10 @@ export class IOSSession {
   private tournamentClosed = false;
   private tournamentEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
+  private readonly selfLeaveRequests = new Map<
+    string,
+    { principal: string; count: number; token: string }
+  >();
   private readonly trainingRequests = new Map<string, { principal: string; count: number }>();
   private readonly gameChatRequests = new Map<string, string>();
   private readonly cancellations = new Map<string, string>();
@@ -348,6 +377,50 @@ export class IOSSession {
     if (p !== this.quarterCreatePrincipal())
       throw new DOMException('Session changed', 'AbortError');
     return v;
+  }
+  public canDispatchSelfLeave(request: NativeSelfLeaveRequest, key: string): boolean {
+    const original = this.selfLeaveRequests.get(selfLeaveRequestKey(request, key));
+    return (
+      original !== undefined &&
+      original.count > 0 &&
+      original.principal === this.quarterCreatePrincipal() &&
+      original.token === this.api.getAccessToken()
+    );
+  }
+  public async selfLeave(
+    resource: NativeSelfLeaveRequest['resource'],
+    gameId: string,
+    key: string,
+  ): ReturnType<PadlHubApiClient['leaveGame']> {
+    const principal = this.quarterCreatePrincipal(),
+      token = this.api.getAccessToken(),
+      identity = selfLeaveRequestKey({ resource, resourceId: gameId }, key),
+      existing = this.selfLeaveRequests.get(identity);
+    if (
+      !principal ||
+      !token ||
+      (existing &&
+        (existing.principal !== principal || existing.token !== token || resource !== 'status'))
+    )
+      throw rejectedRequest();
+    const custody = existing ?? { principal, count: 0, token };
+    custody.count++;
+    this.selfLeaveRequests.set(identity, custody);
+    try {
+      const result = await this.quarterCall((api) =>
+        resource === 'leave'
+          ? api.leaveGame(gameId, { idempotencyKey: key })
+          : resource === 'status'
+            ? api.getManagedLeaveOperation(gameId, key)
+            : api.reconcileManagedLeaveOperation(gameId, key),
+      );
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return result;
+    } finally {
+      custody.count--;
+      if (custody.count === 0) this.selfLeaveRequests.delete(identity);
+    }
   }
   public canDispatchTraining(request: NativeTrainingRequest, key?: string, body?: string): boolean {
     const original = this.trainingRequests.get(trainingRequestKey(request, key, body));
@@ -789,6 +862,7 @@ export function getIOSSession(): Promise<IOSSession> {
         (request) => session?.canDispatchTournamentChat(request) === true,
         (id) => session?.canDispatchGameChat(id) === true,
         (request, key, body) => session?.canDispatchTraining(request, key, body) === true,
+        (request, key) => session?.canDispatchSelfLeave(request, key) === true,
       ),
     });
     const session: IOSSession = new IOSSession(configuration, api);

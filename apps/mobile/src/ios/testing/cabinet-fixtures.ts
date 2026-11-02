@@ -93,6 +93,7 @@ export function syntheticSession(
         (request) => session?.canDispatchTournamentChat(request) === true,
         (id) => session?.canDispatchGameChat(id) === true,
         (request, key, body) => session?.canDispatchTraining(request, key, body) === true,
+        (request, key) => session?.canDispatchSelfLeave(request, key) === true,
       ),
     }),
   );

@@ -76,6 +76,7 @@ jobs:
               'ru.padlhub.app.AndroidTournamentChatSessionTest': 6,
               'ru.padlhub.app.AndroidTournamentSessionTest': 5,
               'ru.padlhub.app.AndroidTrainingRegistrationSessionTest': 5,
+              'ru.padlhub.app.AndroidSelfLeaveSessionTest': 3,
               'ru.padlhub.app.AndroidYandexLoginCallbackUrlTest': 3,
               'com.getcapacitor.myapp.ExampleUnitTest': 1,
           }

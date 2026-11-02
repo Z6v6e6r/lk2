@@ -186,11 +186,17 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       else {call.reject("Native training request is unavailable",SessionFailure.request.rawValue);return}
       training=TrainingRequest(resource:resource,id:call.getString("resourceId"),query:query)
     }
+    var selfLeave:SelfLeaveRequest?
+    if operation == .selfLeave {
+      let allowed:Set<String>=["operation","resource","resourceId","headers"]
+      guard Set(call.options.keys).isSubset(of:allowed),let resource=call.getString("resource"),let id=call.getString("resourceId") else {call.reject("Native self-leave unavailable",SessionFailure.request.rawValue);return}
+      selfLeave=SelfLeaveRequest(resource:resource,gameID:id)
+    }
     let notification = operation == .notification ? NotificationCommand(resource:call.getString("resource") ?? "",id:call.getString("resourceId")) : nil
     let messaging = operation == .messaging ? MessagingCommand(resource: call.getString("resource") ?? "", id: call.getString("resourceId")) : nil
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat, tournament: tournament, messaging: messaging, training: training)
+      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat, tournament: tournament, messaging: messaging, training: training, selfLeave: selfLeave)
     Task {
       do {
         let response = try await transport.request(request)
