@@ -235,6 +235,35 @@ class ClosedApplicationSourcePrelaunchTests(unittest.TestCase):
             self.assertNotIn('NODE_OPTIONS',environment)
             self.assertNotIn('DOCKER_HOST',environment)
 
+class R1TailBackupPrefixTests(unittest.TestCase):
+    def operation(self,count=108):
+        op=closed_application_operation('subject_link_0104')
+        op['schema']=f'PHUB_TIMEWEB_R1_TAIL_PRE{count}_BACKUP_NAMESPACE_V1'
+        op['expectedLedgerSha256']=m.R1_TAIL_PREFIX_LEDGERS[count]
+        op['confirmation']='BACKUP_RESTORE_R1_TAIL108_119_PRIVATE_NAMESPACE_KEEP_RUNTIME'
+        intent=op['migrationIntent'];intent['schema']='PHUB_R1_TAIL108_119_OPERATION_V1'
+        intent['migrationProfile']='r1_tail108_119';intent['fromCount']=count
+        intent['attemptId']='00000000-0000-4000-8000-000000000001'
+        intent['backup']={'pending':'synthetic binding is filled after the dump'}
+        return op
+    def test_exact_prefixes_keep_attempt_scoped_backup_and_no_foreign_ledger(self):
+        for count in range(108,119):
+            op=self.operation(count)
+            self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+            self.assertEqual(m.operation_mode(op)[0],f'r1-tail-pre{count}-00000000-0000-4000-8000-000000000001')
+            for bad in ({**op,'expectedLedgerSha256':'f'*64},
+                        {**op,'migrationIntent':{**op['migrationIntent'],'fromCount':count+1}},
+                        {**op,'migrationIntent':{**op['migrationIntent'],'attemptId':'../../foreign'}}):
+                with self.assertRaises(m.Stop):m.validate_operation(bad,NOW,'2'*64)
+    def test_binding_excludes_only_deferred_backup_and_renewable_authority(self):
+        op=self.operation();first=m.closed_application_binding_sha(op)
+        for key,value in [('backup',{'pending':'another exact sealed receipt'}),('expiresAt','2099-01-01T00:00:00.000Z'),('confirmation','renewed')]:
+            changed=copy.deepcopy(op);changed['migrationIntent'][key]=value
+            self.assertEqual(m.closed_application_binding_sha(changed),first)
+        changed=copy.deepcopy(op);changed['migrationIntent']['attemptId']='00000000-0000-4000-8000-000000000002'
+        self.assertNotEqual(m.closed_application_binding_sha(changed),first)
+
+
 class ClosedApplicationRetainedEntryTests(unittest.TestCase):
     def test_retained_entry_reads_only_canonical_first_stage_and_terminal_verifier(self):
         op=closed_application_operation('game_start_0103');raw=m.encoded(op)

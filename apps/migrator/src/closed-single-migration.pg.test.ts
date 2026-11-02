@@ -1,3 +1,4 @@
+import './r1-tail-migration.pg.test.js';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
