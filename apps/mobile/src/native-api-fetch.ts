@@ -1,3 +1,4 @@
+import { selfLeaveRequest } from './native-self-leave-request.js';
 import { tournamentChatRequest } from './native-tournament-chat-request.js';
 import { stationStreamRequest } from './native-station-stream-request.js';
 import { stationRequest } from './native-station-message-request.js';
@@ -201,6 +202,7 @@ export function createNativeApiFetch(
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();
     const method = init?.method ?? 'GET';
+    const selfLeave = selfLeaveRequest(value, init, config);
     gameCancelRequest(value, init, config);
     const stream = stationStreamRequest(value, init, config);
     if (!stream) stationRequest(value, init, config);
@@ -219,6 +221,7 @@ export function createNativeApiFetch(
       generation += 1;
       displayedReads.clear();
     }
+    if (selfLeave && !active) throw new DOMException('Session changed', 'AbortError');
     const requestGeneration = generation;
     const section =
       !onReadObservation || method !== 'GET'
@@ -303,6 +306,8 @@ export function createNativeApiFetch(
         }
       }
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
+      if (selfLeave && (!active || requestGeneration !== generation))
+        throw new DOMException('Session changed', 'AbortError');
       if (result.status === 200 && (refresh || url.pathname.endsWith('/verify'))) active = true;
       if (result.status === 401 && refresh && active) {
         active = false;

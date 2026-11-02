@@ -1,11 +1,24 @@
+import { NativeSelfLeave } from '../../../web/src/NativeSelfLeave.js';
 import { NativeGameChat } from '../../../web/src/NativeGameChat.js';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { GameCard as Game } from '@phub/api-sdk';
 import { GameCard } from '../../../web/src/GameCard.js';
 import { cancelGameAndRead } from '../../../web/src/game-cancel-readback.js';
 import type { IOSSession } from './session.js';
 
 export function IOSGameCancel({ game, session }: { game: Game; session: IOSSession }) {
+  const leaveGateway = useMemo(
+    () => ({
+      principal: () => session.quarterCreatePrincipal(),
+      leaveGame: (id: string, options?: { idempotencyKey?: string }) =>
+        session.selfLeave('leave', id, options?.idempotencyKey ?? ''),
+      getManagedLeaveOperation: (id: string, key: string) => session.selfLeave('status', id, key),
+      reconcileManagedLeaveOperation: (id: string, key: string) =>
+        session.selfLeave('reconcile', id, key),
+    }),
+    [session],
+  );
+  const snapshot = session.getSnapshot();
   const [currentGame, setGame] = useState(game);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -62,6 +75,17 @@ export function IOSGameCancel({ game, session }: { game: Game; session: IOSSessi
   return (
     <>
       <GameCard game={currentGame} readOnly />
+      {snapshot.status === 'signed-in' && (
+        <NativeSelfLeave
+          key={`${snapshot.session.context.tenantId}:${snapshot.session.context.userId}:${game.id}`}
+          game={currentGame}
+          gateway={leaveGateway}
+          scope={{
+            tenantId: snapshot.session.context.tenantId,
+            userId: snapshot.session.context.userId,
+          }}
+        />
+      )}
       <NativeGameChat
         key={currentGame.id}
         game={currentGame}

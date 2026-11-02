@@ -1011,7 +1011,13 @@ export function registerGameRoutes(
       const id = gameId(request, reply);
       if (!id) return reply;
       // No marker on the ordinary DELETE: older servers ignore its body and could start a new leave.
-      if (request.body !== undefined || Object.keys(request.query as object).length)
+      const emptyNativeBody =
+        request.body === '' &&
+        /^text\/plain(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '');
+      if (
+        (request.body !== undefined && !emptyNativeBody) ||
+        Object.keys(request.query as object).length
+      )
         return sendApiError(
           request,
           reply,

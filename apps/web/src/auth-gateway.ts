@@ -1013,7 +1013,28 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       const principal = cancelId === null ? undefined : cancellationPrincipals.get(cancelId);
       if (cancel && principal === undefined) throw new Error('AUTH_PRINCIPAL_CHANGED');
       if (principal !== undefined) requireQuarterPrincipal(principal);
+      const selfPath = url.slice(
+        `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${options.tenantKey}`.length,
+      );
+      const selfKey = new Headers(init?.headers).get('idempotency-key') ?? '';
+      const isSelfLeave =
+        options.platform === 'android' &&
+        /^\/games\/[^/]+\/(?:participants\/me|leave-operation(?:\/reconcile)?)$/.test(selfPath);
+      const leaveCustody = isSelfLeave
+        ? selfLeavePrincipals.get(JSON.stringify([init?.method ?? 'GET', selfPath, selfKey]))
+        : undefined;
+      if (isSelfLeave) {
+        if (!leaveCustody) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(leaveCustody.principal);
+        if (client.getAccessToken() !== leaveCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       const result = await (options.fetchImplementation ?? globalThis.fetch)(input, init);
+      if (leaveCustody) {
+        requireQuarterPrincipal(leaveCustody.principal);
+        if (client.getAccessToken() !== leaveCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       if (principal !== undefined) requireQuarterPrincipal(principal);
       return result;
     }) as typeof fetch,
@@ -1056,6 +1077,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   const subjectLinkStartKeys = new Map<string, string>();
   const subjectLinkVerifyKeys = new Map<string, string>();
   const cancellationPrincipals = new Map<string, string>();
+  const selfLeavePrincipals = new Map<
+    string,
+    { principal: string; count: number; token: string }
+  >();
   let principalGeneration = 0;
   let tournamentLogoutStarted = false;
   let quarterClosed = false;
@@ -1072,6 +1097,40 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     if (!current || (original !== undefined && original !== current))
       throw new Error('AUTH_PRINCIPAL_CHANGED');
     return current;
+  }
+  async function nativeSelfLeave(
+    gameId: string,
+    key: string,
+    resource: 'leave' | 'status' | 'reconcile',
+  ): Promise<GameCommandResult> {
+    const principal = requireQuarterPrincipal(),
+      token = client.getAccessToken(),
+      method = resource === 'leave' ? 'DELETE' : resource === 'status' ? 'GET' : 'POST';
+    const path = `/games/${encodeURIComponent(gameId)}/${resource === 'leave' ? 'participants/me' : resource === 'status' ? 'leave-operation' : 'leave-operation/reconcile'}`;
+    const identity = JSON.stringify([method, path, key]),
+      existing = selfLeavePrincipals.get(identity);
+    if (
+      !token ||
+      (existing &&
+        (existing.principal !== principal || existing.token !== token || resource !== 'status'))
+    )
+      throw new Error('AUTH_PRINCIPAL_CHANGED');
+    const custody = existing ?? { principal, count: 0, token };
+    custody.count++;
+    selfLeavePrincipals.set(identity, custody);
+    try {
+      const result = await client.request<GameCommandResult>(path, {
+        method,
+        idempotencyKey: key,
+        retryOnUnauthorized: false,
+      });
+      requireQuarterPrincipal(principal);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    } finally {
+      custody.count--;
+      if (custody.count === 0) selfLeavePrincipals.delete(identity);
+    }
   }
   function stationMessagePrincipal(): string {
     if (quarterClosed || tournamentLogoutStarted || !currentUserId || !currentTenantId)
@@ -2508,10 +2567,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     leaveGame(gameId, options) {
+      if (nativeClient) {
+        if (!options?.idempotencyKey) return nativeUnavailable();
+        return nativeSelfLeave(gameId, options.idempotencyKey, 'leave');
+      }
       return client.leaveGame(gameId, options);
     },
     reconcileManagedLeaveOperation(gameId, key) {
-      return client.reconcileManagedLeaveOperation(gameId, key);
+      return nativeClient
+        ? nativeSelfLeave(gameId, key, 'reconcile')
+        : client.reconcileManagedLeaveOperation(gameId, key);
     },
     tournamentChatPrincipal() {
       return quarterCreatePrincipal();
@@ -2583,7 +2648,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getTrainingRegistration(trainingId, key);
     },
     getManagedLeaveOperation(gameId, key) {
-      return client.getManagedLeaveOperation(gameId, key);
+      return nativeClient
+        ? nativeSelfLeave(gameId, key, 'status')
+        : client.getManagedLeaveOperation(gameId, key);
     },
 
     joinGameWaitlist(gameId, invitationId) {

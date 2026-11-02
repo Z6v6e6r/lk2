@@ -84,6 +84,7 @@ final class AndroidSessionPolicy {
         }
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
         String relativePath = cleanPath.substring(userRoot.length());
+        if (AndroidSelfLeaveRequest.matches(relativePath)) return AndroidSelfLeaveRequest.request(this,relativePath,uri.getRawQuery(),method,inputHeaders,textBody,binaryBody);
         boolean tournamentChat = relativePath.matches("/tournaments/[^/]+/chat(?:/.*)?");
         boolean stationStream = AndroidStationStreamRequest.matches(relativePath);
         boolean station = stationStream || AndroidStationMessageRequest.matches(relativePath);

@@ -1,3 +1,4 @@
+import { NativeSelfLeave } from './NativeSelfLeave.js';
 import { NativeGameChat } from './NativeGameChat.js';
 import { TournamentChatPage } from './TournamentChatPage.js';
 import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
@@ -698,7 +699,28 @@ const HOME_INITIAL_RETRY_DELAYS_MS = [
   400, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000,
 ] as const;
 
-function NativeCreatedGame({ gateway, gameId }: { gateway: AuthGateway; gameId: string }) {
+function NativeCreatedGame({
+  gateway,
+  gameId,
+  scope,
+}: {
+  gateway: AuthGateway;
+  gameId: string;
+  scope: { tenantId: string; userId: string };
+}) {
+  const leaveGateway = useMemo(
+    () => ({
+      leaveGame: gateway.leaveGame,
+      ...(gateway.getManagedLeaveOperation
+        ? { getManagedLeaveOperation: gateway.getManagedLeaveOperation }
+        : {}),
+      ...(gateway.reconcileManagedLeaveOperation
+        ? { reconcileManagedLeaveOperation: gateway.reconcileManagedLeaveOperation }
+        : {}),
+      principal: () => gateway.quarterCreatePrincipal?.() ?? null,
+    }),
+    [gateway],
+  );
   const [game, setGame] = useState<Awaited<ReturnType<AuthGateway['getGame']>> | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -722,6 +744,7 @@ function NativeCreatedGame({ gateway, gameId }: { gateway: AuthGateway; gameId: 
       {game ? (
         <>
           <GameCard game={game} readOnly />
+          <NativeSelfLeave key={game.id} game={game} gateway={leaveGateway} scope={scope} />
           <NativeGameChat
             key={game.id}
             game={game}
@@ -3039,6 +3062,7 @@ export function App({
           key={`${context.tenant.id}:${context.user.id}:${protectedRoute.gameId}`}
           gateway={gateway}
           gameId={protectedRoute.gameId}
+          scope={{ tenantId: context.tenant.id, userId: context.user.id }}
         />
       );
     }

@@ -1456,7 +1456,36 @@ describe('managed SELF leave route projection', () => {
         ).statusCode,
       ).toBe(400);
     }
-    expect(managed.reconcile).toHaveBeenCalledTimes(1);
+    for (const contentType of ['text/plain', 'text/plain; charset=UTF-8']) {
+      const native = await app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+        headers: { ...headers, 'content-type': contentType },
+        payload: '',
+      });
+      expect(native.statusCode).toBe(202);
+    }
+    for (const [contentType, payload] of [
+      ['text/plain', ' '],
+      ['text/plain', '{}'],
+      ['text/plain; charset=ascii', ''],
+    ]) {
+      const rejected = await app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/games/${gameId}/leave-operation/reconcile`,
+        headers: { ...headers, 'content-type': contentType! },
+        payload: payload!,
+      });
+      expect(rejected.statusCode).toBe(400);
+    }
+    const nativeDelete = await app.inject({
+      method: 'DELETE',
+      url: `/user/api/v1/local-padel/games/${gameId}/participants/me`,
+      headers: { ...headers, 'content-type': 'text/plain' },
+      payload: '',
+    });
+    expect(nativeDelete.statusCode).toBe(202);
+    expect(managed.reconcile).toHaveBeenCalledTimes(3);
     expect(
       (
         await app.inject({
