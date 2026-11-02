@@ -148,7 +148,7 @@ for (const validator of ['closed', 'tail'] as const) {
       expect(() => validate(r1Entries)).not.toThrow();
       expect(() => validate([...r1Entries, ...nativeJoinPair])).not.toThrow();
     });
-    it.each([
+    it.each<[string, unknown[]]>([
       ['partial component', [nativeJoinPair[0]!]],
       ['partial test', [nativeJoinPair[1]!]],
       ['duplicate component', [nativeJoinPair[0]!, nativeJoinPair[0]!]],
@@ -167,11 +167,11 @@ for (const validator of ['closed', 'tail'] as const) {
           [
             JSON.stringify(mutation),
             [{ ...nativeJoinPair[0]!, ...mutation }, nativeJoinPair[1]!],
-          ] as const,
+          ] as [string, unknown[]],
       ),
     ])('rejects %s', (label, rows) => {
       const code =
-        validator === 'tail' && typeof label === 'string' && label.startsWith('duplicate')
+        validator === 'tail' && label.startsWith('duplicate')
           ? 'R1_TAIL_SOURCE_DELTA'
           : 'R1_NATIVE_JOIN';
       expect(() => validate([...r1Entries, ...rows])).toThrow(code);
