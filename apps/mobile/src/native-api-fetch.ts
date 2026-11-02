@@ -1,3 +1,7 @@
+import { nativeProfileSettingsRequest } from './native-profile-settings-request.js';
+import { nativePublicGamesRequest } from './native-public-games-request.js';
+import { nativeJoinRequest } from './native-game-join-request.js';
+import { selfLeaveRequest } from './native-self-leave-request.js';
 import { tournamentChatRequest } from './native-tournament-chat-request.js';
 import { stationStreamRequest } from './native-station-stream-request.js';
 import { stationRequest } from './native-station-message-request.js';
@@ -182,6 +186,7 @@ export function createNativeApiFetch(
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
     const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}/`;
     // Check before URL normalization, which would hide traversal or encoded delimiters.
+    const publicGames = nativePublicGamesRequest(value, init, config);
     const tournament = value.includes('/chat/') ? tournamentChatRequest(value, init, config) : null;
     const tournamentRegistration = tournament
       ? null
@@ -193,7 +198,7 @@ export function createNativeApiFetch(
           config,
         );
     if (
-      (!value.startsWith(root) && tournamentRegistration !== 'PUBLIC') ||
+      (!value.startsWith(root) && tournamentRegistration !== 'PUBLIC' && !publicGames) ||
       /[%#\\]|\.\./.test(value.split('?')[0] ?? '')
     )
       throw rejected();
@@ -201,7 +206,10 @@ export function createNativeApiFetch(
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();
     const method = init?.method ?? 'GET';
-    gameCancelRequest(value, init, config);
+    const settings = nativeProfileSettingsRequest(value, init, config);
+    const join = nativeJoinRequest(value, init, config);
+    const selfLeave = selfLeaveRequest(value, init, config);
+    const cancel = gameCancelRequest(value, init, config);
     const stream = stationStreamRequest(value, init, config);
     if (!stream) stationRequest(value, init, config);
     if (url.pathname.startsWith(`/user/api/v1/${config.tenantKey}/game-create-operations`))
@@ -219,6 +227,8 @@ export function createNativeApiFetch(
       generation += 1;
       displayedReads.clear();
     }
+    if ((selfLeave || join || cancel || settings) && !active)
+      throw new DOMException('Session changed', 'AbortError');
     const requestGeneration = generation;
     const section =
       !onReadObservation || method !== 'GET'
@@ -303,6 +313,11 @@ export function createNativeApiFetch(
         }
       }
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
+      if (
+        (selfLeave || join || cancel || settings) &&
+        (!active || requestGeneration !== generation)
+      )
+        throw new DOMException('Session changed', 'AbortError');
       if (result.status === 200 && (refresh || url.pathname.endsWith('/verify'))) active = true;
       if (result.status === 401 && refresh && active) {
         active = false;

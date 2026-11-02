@@ -1,3 +1,8 @@
+import { cancelGameAndRead } from './game-cancel-readback.js';
+import type { NativeJoinRequest } from './native-game-join-attempt.js';
+import { NativeGames } from './NativeGames.js';
+import { NativeGameJoin } from './NativeGameJoin.js';
+import { NativeSelfLeave } from './NativeSelfLeave.js';
 import { NativeGameChat } from './NativeGameChat.js';
 import { TournamentChatPage } from './TournamentChatPage.js';
 import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
@@ -6,7 +11,7 @@ import { QuarterCreatePanel } from './QuarterCreatePanel.js';
 import { GameCard } from './GameCard.js';
 import { normalizePhoneE164 } from '@phub/auth';
 import { PrimaryButton } from '@phub/ui';
-import { lazy, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
@@ -698,30 +703,153 @@ const HOME_INITIAL_RETRY_DELAYS_MS = [
   400, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000,
 ] as const;
 
-function NativeCreatedGame({ gateway, gameId }: { gateway: AuthGateway; gameId: string }) {
+function NativeCreatedGame({
+  gateway,
+  gameId,
+  scope,
+}: {
+  gateway: AuthGateway;
+  gameId: string;
+  scope: { tenantId: string; userId: string };
+}) {
+  const joinGateway = useMemo(
+    () => ({
+      principal: () => gateway.quarterCreatePrincipal?.() ?? null,
+      getGame: gateway.getGame,
+      getHomeDashboard: gateway.getHomeDashboard,
+      request: (request: NativeJoinRequest) => {
+        if (!gateway.nativeGameJoin) return Promise.reject(new Error('NATIVE_JOIN_UNAVAILABLE'));
+        return gateway.nativeGameJoin(request);
+      },
+    }),
+    [gateway],
+  );
+  const leaveGateway = useMemo(
+    () => ({
+      leaveGame: gateway.leaveGame,
+      ...(gateway.getManagedLeaveOperation
+        ? { getManagedLeaveOperation: gateway.getManagedLeaveOperation }
+        : {}),
+      ...(gateway.reconcileManagedLeaveOperation
+        ? { reconcileManagedLeaveOperation: gateway.reconcileManagedLeaveOperation }
+        : {}),
+      principal: () => gateway.quarterCreatePrincipal?.() ?? null,
+    }),
+    [gateway],
+  );
   const [game, setGame] = useState<Awaited<ReturnType<AuthGateway['getGame']>> | null>(null);
+  const adoptGame = useCallback(
+    (next: Awaited<ReturnType<AuthGateway['getGame']>>) => {
+      if (next.id !== gameId || !Number.isSafeInteger(next.revision)) return;
+      setGame((previous) =>
+        previous &&
+        (next.revision < previous.revision ||
+          (previous.displayState === 'CANCELLED' && next.displayState !== 'CANCELLED'))
+          ? previous
+          : next,
+      );
+    },
+    [gameId],
+  );
   const [failed, setFailed] = useState(false);
+  const [notice, setNotice] = useState(''),
+    [busy, setBusy] = useState(false);
+  const active = useRef(false),
+    inFlight = useRef(false),
+    cancellationAttempted = useRef(false);
   useEffect(() => {
-    let active = true;
+    let retired = false;
+    active.current = true;
     const principal = gateway.quarterCreatePrincipal?.();
     void gateway.getGame(gameId).then(
       (v) => {
-        if (active && principal && gateway.quarterCreatePrincipal?.() === principal) setGame(v);
+        if (
+          !retired &&
+          active.current &&
+          principal &&
+          gateway.quarterCreatePrincipal?.() === principal
+        )
+          adoptGame(v);
       },
       () => {
-        if (active) setFailed(true);
+        if (!retired && active.current) setFailed(true);
       },
     );
     return () => {
-      active = false;
+      retired = true;
+      active.current = false;
     };
-  }, [gateway, gameId]);
+  }, [gateway, gameId, adoptGame]);
+  async function run(cancel: boolean) {
+    const principal = gateway.gameCancelPrincipal?.();
+    if (!principal || inFlight.current || !active.current) return;
+    if (
+      cancel &&
+      (!game ||
+        game.viewerRelation !== 'ORGANIZER' ||
+        !game.allowedActions.includes('CANCEL') ||
+        !window.confirm('Отменить игру для всех участников?'))
+    )
+      return;
+    const current = () => active.current && gateway.gameCancelPrincipal?.() === principal;
+    if (!current()) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      if (cancel) cancellationAttempted.current = true;
+      const observed = cancel
+        ? await cancelGameAndRead({
+            gameId,
+            cancel: gateway.cancelGame,
+            read: gateway.getGame,
+            isCurrent: current,
+          })
+        : await gateway.getGame(gameId);
+      if (!current()) return;
+      if (observed?.id === gameId) {
+        adoptGame(observed);
+        setFailed(false);
+      }
+      setNotice(
+        observed?.id === gameId && observed.displayState === 'CANCELLED'
+          ? 'Игра отменена.'
+          : cancellationAttempted.current
+            ? 'Отмена пока не подтверждена. Обновите статус позже.'
+            : 'Статус игры обновлён.',
+      );
+    } catch {
+      if (current()) setNotice('Статус временно недоступен. Повторите обновление.');
+    } finally {
+      inFlight.current = false;
+      if (current()) setBusy(false);
+    }
+  }
   return (
     <main>
-      <a href="/games/new?quarterCreate=1">К созданию игры</a>
+      <a href="/games">К списку игр</a>
+      <button type="button" disabled={busy} onClick={() => void run(false)}>
+        Обновить статус игры
+      </button>
       {game ? (
         <>
           <GameCard game={game} readOnly />
+          {game.viewerRelation === 'ORGANIZER' && game.allowedActions.includes('CANCEL') && (
+            <button type="button" disabled={busy} onClick={() => void run(true)}>
+              Отменить игру
+            </button>
+          )}
+          <NativeGameJoin
+            game={game}
+            gateway={joinGateway}
+            scope={scope}
+            onCanonicalGame={adoptGame}
+          />
+          <NativeSelfLeave
+            key={`${game.id}:${game.viewerRelation}`}
+            game={game}
+            gateway={leaveGateway}
+            scope={scope}
+          />
           <NativeGameChat
             key={game.id}
             game={game}
@@ -732,6 +860,7 @@ function NativeCreatedGame({ gateway, gameId }: { gateway: AuthGateway; gameId: 
       ) : (
         <p role="status">{failed ? 'Игра пока недоступна.' : 'Загружаем игру…'}</p>
       )}
+      {notice && <p role="status">{notice}</p>}
     </main>
   );
 }
@@ -884,6 +1013,15 @@ export function App({
   const [locationsError, setLocationsError] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<PlayerProfileView | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const profileSettingsPending = useRef(new Map<string, object>());
+  const profileSettingsAlive = useRef(false);
+  useEffect(() => {
+    profileSettingsAlive.current = true;
+    return () => {
+      profileSettingsAlive.current = false;
+    };
+  }, []);
+
   const [profilePrivacy, setProfilePrivacy] = useState<ProfilePrivacySettings | null>(null);
   const [profilePrivacyBusy, setProfilePrivacyBusy] = useState(false);
   const [profilePrivacyError, setProfilePrivacyError] = useState<string | null>(null);
@@ -893,6 +1031,18 @@ export function App({
   const [bookingPreferencesBusy, setBookingPreferencesBusy] = useState(false);
   const [bookingPreferencesError, setBookingPreferencesError] = useState<string | null>(null);
   const [bookingPreferencesNotice, setBookingPreferencesNotice] = useState<string | null>(null);
+  const settingsScope =
+    gateway.quarterCreatePrincipal?.() ?? state.session?.context.user.id ?? state.view;
+  useEffect(() => {
+    profileSettingsPending.current.clear();
+    setProfilePrivacyBusy(false);
+    setBookingPreferencesBusy(false);
+    setProfilePrivacyNotice(null);
+    setBookingPreferencesNotice(null);
+    setProfilePrivacyError(null);
+    setBookingPreferencesError(null);
+  }, [settingsScope]);
+
   const [bookingPreferenceStations, setBookingPreferenceStations] = useState<
     readonly { readonly id: string; readonly name: string }[]
   >([]);
@@ -980,6 +1130,8 @@ export function App({
   // The first native increment exposes canonical API screens. Browser-only provider, payment
   // and upload routes stay unavailable until their native handoff contracts are implemented.
   const nativeSections = new Set([
+    'subscriptions',
+    'games',
     'trainings',
     'tournaments',
     'home',
@@ -2537,17 +2689,28 @@ export function App({
   }
 
   function handleSaveProfilePrivacy(input: ProfilePrivacyUpdateRequest): void {
-    if (realAccountPreview) return;
+    if (realAccountPreview || profileSettingsPending.current.has('privacy')) return;
+    const principal = gateway.quarterCreatePrincipal?.();
+    const attempt = {};
+    const current = () =>
+      profileSettingsAlive.current &&
+      gateway.quarterCreatePrincipal?.() === principal &&
+      profileSettingsPending.current.get('privacy') === attempt;
+    profileSettingsPending.current.set('privacy', attempt);
     setProfilePrivacyBusy(true);
     setProfilePrivacyError(null);
     setProfilePrivacyNotice(null);
     void gateway.updateProfilePrivacy(input).then(
       (settings) => {
+        if (!current()) return;
+        profileSettingsPending.current.delete('privacy');
         setProfilePrivacy(settings);
         setProfilePrivacyBusy(false);
         setProfilePrivacyNotice('Настройки сохранены');
       },
       () => {
+        if (!current()) return;
+        profileSettingsPending.current.delete('privacy');
         setProfilePrivacyBusy(false);
         setProfilePrivacyError('Не удалось сохранить. Обновите профиль и повторите.');
       },
@@ -2555,17 +2718,28 @@ export function App({
   }
 
   function handleSaveBookingPreferences(input: BookingPreferencesUpdateRequest): void {
-    if (realAccountPreview) return;
+    if (realAccountPreview || profileSettingsPending.current.has('preferences')) return;
+    const principal = gateway.quarterCreatePrincipal?.();
+    const attempt = {};
+    const current = () =>
+      profileSettingsAlive.current &&
+      gateway.quarterCreatePrincipal?.() === principal &&
+      profileSettingsPending.current.get('preferences') === attempt;
+    profileSettingsPending.current.set('preferences', attempt);
     setBookingPreferencesBusy(true);
     setBookingPreferencesError(null);
     setBookingPreferencesNotice(null);
     void gateway.updateBookingPreferences(input).then(
       (settings) => {
+        if (!current()) return;
+        profileSettingsPending.current.delete('preferences');
         setBookingPreferences(settings);
         setBookingPreferencesBusy(false);
         setBookingPreferencesNotice('Предпочтения сохранены');
       },
       () => {
+        if (!current()) return;
+        profileSettingsPending.current.delete('preferences');
         setBookingPreferencesBusy(false);
         setBookingPreferencesError('Не удалось сохранить. Обновите профиль и повторите.');
       },
@@ -3033,12 +3207,15 @@ export function App({
       }
       return <LocationDetailPage location={locationDetail} />;
     }
+    if (clientPlatform === 'android' && protectedRoute.kind === 'games')
+      return <NativeGames gateway={gateway} />;
     if (clientPlatform === 'android' && protectedRoute.kind === 'game') {
       return (
         <NativeCreatedGame
           key={`${context.tenant.id}:${context.user.id}:${protectedRoute.gameId}`}
           gateway={gateway}
           gameId={protectedRoute.gameId}
+          scope={{ tenantId: context.tenant.id, userId: context.user.id }}
         />
       );
     }

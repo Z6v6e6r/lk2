@@ -1,3 +1,12 @@
+import { ProfileLevelHistoryPage } from '../../../web/src/ProfileLevelHistoryPage.js';
+import type {
+  ProfileSettingsInputs,
+  ProfileSettingsResults,
+  ProfileSettingsResource,
+} from '../../../web/src/native-profile-settings.js';
+import { SubscriptionsPage } from '../../../web/src/SubscriptionsPage.js';
+import { TrainingsPage } from '../../../web/src/TrainingsPage.js';
+import { createIOSTrainingGateway } from './training-gateway.js';
 import { TournamentChatPage } from '../../../web/src/TournamentChatPage.js';
 import { createIOSTournamentChatGateway } from './tournament-chat-gateway.js';
 import { IOSStationChats } from './IOSStationChats.js';
@@ -29,7 +38,7 @@ import {
   setChatsUnreadCount,
   totalUnreadConversations,
 } from '../../../web/src/chats-unread.js';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthenticatedSession, PublicGameCardPage } from '@phub/api-sdk';
 import {
@@ -270,11 +279,27 @@ function OtherProfile({
   );
 }
 
+function LevelHistory({ data }: { readonly data: CabinetData }): React.JSX.Element {
+  const history = useQuery(data.levelHistory);
+  return (
+    <>
+      <ProfileLevelHistoryPage history={history.value} error={history.error} />
+      {history.error ? (
+        <button type="button" onClick={history.retry}>
+          Повторить загрузку
+        </button>
+      ) : null}
+    </>
+  );
+}
+
 function Profile({
+  session,
   data,
   origin,
   onLogout,
 }: {
+  readonly session: IOSSession;
   readonly data: CabinetData;
   readonly origin: string;
   readonly onLogout: () => void;
@@ -283,6 +308,48 @@ function Profile({
   const dashboard = useQuery(data.dashboard);
   const preferences = useQuery(data.preferences);
   const privacy = useQuery(data.privacy);
+  const [saved, setSaved] = useState<Partial<ProfileSettingsResults>>({});
+  const [busy, setBusy] = useState<Partial<Record<ProfileSettingsResource, boolean>>>({});
+  const [errors, setErrors] = useState<Partial<Record<ProfileSettingsResource, string>>>({});
+  const pending = useRef(new Set<ProfileSettingsResource>());
+  const alive = useRef(false);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  function save<R extends ProfileSettingsResource>(
+    resource: R,
+    input: ProfileSettingsInputs[R],
+  ): void {
+    if (pending.current.has(resource)) return;
+    const principal = session.quarterCreatePrincipal();
+    if (!principal) return;
+    pending.current.add(resource);
+    setBusy((v) => ({ ...v, [resource]: true }));
+    setErrors((v) => ({ ...v, [resource]: '' }));
+    const current = () => alive.current && session.quarterCreatePrincipal() === principal;
+    void session
+      .updateProfileSettings(resource, input)
+      .then(
+        (value) => {
+          if (current()) setSaved((v) => ({ ...v, [resource]: value }));
+        },
+        () => {
+          if (current())
+            setErrors((v) => ({
+              ...v,
+              [resource]: 'Не удалось сохранить. Обновите профиль и повторите.',
+            }));
+        },
+      )
+      .finally(() => {
+        pending.current.delete(resource);
+        if (current()) setBusy((v) => ({ ...v, [resource]: false }));
+      });
+  }
+
   if (profile.value === null)
     return (
       <Page title="Профиль" active="profile">
@@ -308,12 +375,14 @@ function Profile({
           subscriptionsError={dashboard.error}
           communities={dashboard.value ? { items: dashboard.value.communities } : null}
           communitiesError={dashboard.error}
-          bookingPreferences={preferences.value}
-          bookingPreferencesBusy={preferences.loading}
-          bookingPreferencesError={preferences.error}
-          privacySettings={privacy.value}
-          privacyBusy={privacy.loading}
-          privacyError={privacy.error}
+          bookingPreferences={saved.preferences ?? preferences.value}
+          bookingPreferencesBusy={busy.preferences || preferences.loading}
+          bookingPreferencesError={errors.preferences || preferences.error}
+          onSaveBookingPreferences={(input) => save('preferences', input)}
+          privacySettings={saved.privacy ?? privacy.value}
+          privacyBusy={busy.privacy || privacy.loading}
+          privacyError={errors.privacy || privacy.error}
+          onSavePrivacy={(input) => save('privacy', input)}
           stationChoices={
             dashboard.value?.locations.map((location) => ({
               id: location.id,
@@ -395,9 +464,7 @@ function Games({ data }: { readonly data: CabinetData }): React.JSX.Element {
   }
   return (
     <Page title="Игры" active="games">
-      <p className="ios-cabinet-note">
-        Пока доступен просмотр игр. Запись и оплата появятся в следующей версии.
-      </p>
+      <p className="ios-cabinet-note">Откройте игру, чтобы проверить доступные условия записи.</p>
       <label className="ios-cabinet-filter">
         Тип игры
         <select
@@ -440,48 +507,21 @@ function Games({ data }: { readonly data: CabinetData }): React.JSX.Element {
   );
 }
 
-function Subscriptions({ data }: { readonly data: CabinetData }): React.JSX.Element {
-  const query = useQuery(data.dashboard);
+function Subscriptions({
+  data,
+  subscriptionId,
+}: {
+  readonly data: CabinetData;
+  readonly subscriptionId?: string;
+}): React.JSX.Element {
   return (
-    <Page title="Мои абонементы" active="profile">
-      <QueryResult query={query}>
-        {(dashboard) => (
-          <>
-            {dashboard.subscriptions.length ? (
-              <div className="ios-cabinet-cards">
-                {dashboard.subscriptions.map((subscription) => (
-                  <article className="ios-cabinet-subscription" key={subscription.id}>
-                    <h2>{subscription.title}</h2>
-                    <p>
-                      {
-                        {
-                          active: 'Активен',
-                          scheduled: 'Ещё не начался',
-                          paused: 'Приостановлен',
-                          exhausted: 'Занятия закончились',
-                          expired: 'Истёк',
-                        }[subscription.status]
-                      }
-                    </p>
-                    <p>Осталось занятий: {subscription.remainingUnits}</p>
-                    {subscription.validUntil ? (
-                      <p>
-                        Действует до{' '}
-                        {new Date(subscription.validUntil).toLocaleDateString('ru-RU', {
-                          timeZone: 'Europe/Moscow',
-                        })}
-                      </p>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p role="status">Абонементов пока нет.</p>
-            )}
-          </>
-        )}
-      </QueryResult>
-    </Page>
+    <>
+      <SubscriptionsPage
+        loadDashboard={data.dashboard}
+        {...(subscriptionId ? { subscriptionId } : {})}
+      />
+      <Navigation active="profile" />
+    </>
   );
 }
 
@@ -495,6 +535,7 @@ export function IOSCabinet({
   const route = useCabinetRoute();
   const tournamentChatGateway = useMemo(() => createIOSTournamentChatGateway(session), [session]);
   const quarterGateway = useMemo(() => createIOSQuarterGateway(session), [session]);
+  const trainingGateway = useMemo(() => createIOSTrainingGateway(session), [session]);
   const tournamentGateway = useMemo(() => createIOSTournamentGateway(session), [session]);
   const directController = useMemo(
     () => new IOSDirectController(session, auth.user.id),
@@ -610,8 +651,16 @@ export function IOSCabinet({
         {...(chat ? { conversationId: chat[1]! } : {})}
       />
     );
+  else if (route === '/profile/level-history') content = <LevelHistory data={data} />;
   else if (path === '/profile' || path === `/profile/${auth.user.id}`)
-    content = <Profile data={data} origin={session.configuration.apiBaseUrl} onLogout={logout} />;
+    content = (
+      <Profile
+        session={session}
+        data={data}
+        origin={session.configuration.apiBaseUrl}
+        onLogout={logout}
+      />
+    );
   else if (
     route === path &&
     path.startsWith('/profile/') &&
@@ -634,7 +683,16 @@ export function IOSCabinet({
         onDisable={() => void controller.disable().catch(() => undefined)}
       />
     );
-  else if (path === '/tournaments') {
+  else if (path === '/trainings') {
+    const eventId = new URLSearchParams(route.split('?')[1] ?? '').get('event') ?? undefined;
+    content = (
+      <TrainingsPage
+        gateway={trainingGateway}
+        principal={{ tenantId: auth.context.tenantId, userId: auth.context.userId }}
+        {...(eventId ? { eventId } : {})}
+      />
+    );
+  } else if (path === '/tournaments') {
     const id = new URLSearchParams(route.split('?')[1] ?? '').get('event');
     content = id ? (
       <TournamentDetailPage
@@ -654,8 +712,20 @@ export function IOSCabinet({
         <ActivityHistoryPanel active loadHistory={data.history} />
       </Page>
     );
-  else if (path === '/subscriptions' || /^\/subscriptions\/[a-f0-9-]{36}$/i.test(path))
-    content = <Subscriptions data={data} />;
+  else if (
+    path === '/subscriptions' ||
+    /^\/subscriptions\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    )
+  )
+    content = (
+      <Subscriptions
+        data={data}
+        {...(path === '/subscriptions'
+          ? {}
+          : { subscriptionId: path.slice('/subscriptions/'.length).toLowerCase() })}
+      />
+    );
   else if (path === '/locations')
     content = (
       <Load title="Локации" load={data.locations}>
@@ -693,6 +763,7 @@ export function IOSCabinet({
         <a href="/chats">Личные и игровые чаты</a>
         <a href="/games/new?quarterCreate=1">Игра по подписке</a>
         <a href="/tournaments">Турниры</a>
+        <a href="/trainings">Тренировки</a>
       </nav>
       {logoutError ? <p role="alert">{logoutError}</p> : null}
       <div key={path}>{content}</div>

@@ -127,7 +127,7 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     expect(
       within(dialog)
         .getAllByRole('checkbox')
-        .every((input) => (input as HTMLInputElement).disabled),
+        .every((input) => !(input as HTMLInputElement).disabled),
     ).toBe(true);
     fireEvent.keyDown(window, { key: 'Escape' });
     // Route away also unmounts any open settings sheet.

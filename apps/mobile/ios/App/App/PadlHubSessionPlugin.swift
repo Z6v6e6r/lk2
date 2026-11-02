@@ -177,11 +177,38 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       else { call.reject("Native tournament request is unavailable", SessionFailure.request.rawValue); return }
       tournament = TournamentRequest(resource: resource, id: call.getString("resourceId"), operationID: call.getString("operationId"), query: query)
     }
+    var training:TrainingRequest?
+    if operation == .training {
+      let allowed:Set<String>=["operation","resource","resourceId","query","headers","body"]
+      guard Set(call.options.keys).isSubset(of:allowed),let resource=call.getString("resource"),let query=call.getObject("query") as? [String:String],
+        call.options["resourceId"] == nil || call.getString("resourceId") != nil,
+        call.options["body"] == nil || call.getString("body") != nil
+      else {call.reject("Native training request is unavailable",SessionFailure.request.rawValue);return}
+      training=TrainingRequest(resource:resource,id:call.getString("resourceId"),query:query)
+    }
+    var profileSettings:ProfileSettingsRequest?
+    if operation == .profileSettings {
+      let allowed:Set<String>=["operation","resource","headers","body"]
+      guard Set(call.options.keys).isSubset(of:allowed),let resource=call.getString("resource"),call.getString("body") != nil else {call.reject("Native profile settings unavailable",SessionFailure.request.rawValue);return}
+      profileSettings=ProfileSettingsRequest(resource:resource)
+    }
+    var gameJoin:GameJoinRequest?
+    if operation == .gameJoin {
+      let allowed:Set<String>=["operation","resource","resourceId","query","headers","body"]
+      guard Set(call.options.keys).isSubset(of:allowed),let resource=call.getString("resource"),let id=call.getString("resourceId"),let query=call.getObject("query") as? [String:String],call.options["body"]==nil||call.getString("body") != nil else{call.reject("Native game JOIN unavailable",SessionFailure.request.rawValue);return}
+      gameJoin=GameJoinRequest(resource:resource,id:id,query:query)
+    }
+    var selfLeave:SelfLeaveRequest?
+    if operation == .selfLeave {
+      let allowed:Set<String>=["operation","resource","resourceId","headers"]
+      guard Set(call.options.keys).isSubset(of:allowed),let resource=call.getString("resource"),let id=call.getString("resourceId") else {call.reject("Native self-leave unavailable",SessionFailure.request.rawValue);return}
+      selfLeave=SelfLeaveRequest(resource:resource,gameID:id)
+    }
     let notification = operation == .notification ? NotificationCommand(resource:call.getString("resource") ?? "",id:call.getString("resourceId")) : nil
     let messaging = operation == .messaging ? MessagingCommand(resource: call.getString("resource") ?? "", id: call.getString("resourceId")) : nil
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat, tournament: tournament, messaging: messaging)
+      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat, tournament: tournament, messaging: messaging, training: training, selfLeave: selfLeave, gameJoin: gameJoin, profileSettings: profileSettings)
     Task {
       do {
         let response = try await transport.request(request)

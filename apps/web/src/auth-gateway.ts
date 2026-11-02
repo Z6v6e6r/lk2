@@ -1,3 +1,15 @@
+import {
+  profileSettingsCommand,
+  profileSettingsIdentity,
+  profileSettingsPath,
+  profileSettingsResult,
+  type NativeProfileSettingsRequest,
+  type ProfileSettingsResource,
+  type ProfileSettingsInputs,
+  type ProfileSettingsResults,
+} from './native-profile-settings.js';
+import { nativeJoinTarget } from './native-game-join-wire.js';
+import type { NativeJoinRequest } from './native-game-join-attempt.js';
 import type {
   StationStreamPage,
   StationStreamSummaries,
@@ -619,6 +631,7 @@ export interface AuthGateway {
    * owns the idempotency key: a lost response is recovered by `getPaidJoinOperation`, never by a new
    * POST. Optional capability: a gateway without it keeps the fail-closed free-join path.
    */
+  readonly nativeGameJoin?: (request: NativeJoinRequest) => Promise<unknown>;
   readonly joinPaidGame?: PadlHubApiClient['joinPaidGame'];
   /** Readback of the same commercial operation by its original idempotency key. */
   readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
@@ -1012,9 +1025,89 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       const cancelId = cancel ? url.slice(url.lastIndexOf('/games/') + 7, -'/cancel'.length) : null;
       const principal = cancelId === null ? undefined : cancellationPrincipals.get(cancelId);
       if (cancel && principal === undefined) throw new Error('AUTH_PRINCIPAL_CHANGED');
-      if (principal !== undefined) requireQuarterPrincipal(principal);
+      if (principal !== undefined) {
+        requireQuarterPrincipal(principal.principal);
+        if (principal.token !== undefined && client.getAccessToken() !== principal.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      const selfPath = url.slice(
+        `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${options.tenantKey}`.length,
+      );
+      const selfKey = new Headers(init?.headers).get('idempotency-key') ?? '';
+      const isSelfLeave =
+        options.platform === 'android' &&
+        /^\/games\/[^/]+\/(?:participants\/me|leave-operation(?:\/reconcile)?)$/.test(selfPath);
+      const leaveCustody = isSelfLeave
+        ? selfLeavePrincipals.get(JSON.stringify([init?.method ?? 'GET', selfPath, selfKey]))
+        : undefined;
+      if (isSelfLeave) {
+        if (!leaveCustody) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(leaveCustody.principal);
+        if (client.getAccessToken() !== leaveCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      const isJoin =
+        options.platform === 'android' &&
+        (/^\/games\/[^/]+\/join(?:-conditions|-operation)?(?:\?|$)/.test(selfPath) ||
+          selfPath.startsWith('/game-operations/'));
+      const joinIdentity = JSON.stringify([
+        init?.method ?? 'GET',
+        selfPath,
+        selfKey,
+        init?.body ?? null,
+      ]);
+      const joinCustody = isJoin ? nativeJoinPrincipals.get(joinIdentity) : undefined;
+      if (isJoin) {
+        if (!joinCustody) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(joinCustody.principal);
+        if (client.getAccessToken() !== joinCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      const settingsResource =
+        options.platform === 'android' && (init?.method ?? 'GET') === 'PUT'
+          ? selfPath === '/profile/privacy'
+            ? 'privacy'
+            : selfPath === '/profile/booking-preferences'
+              ? 'preferences'
+              : null
+          : null;
+      const settingsCustody = settingsResource
+        ? profileSettingsRequests.get(settingsResource)
+        : undefined;
+      if (settingsResource) {
+        if (
+          !settingsCustody?.request ||
+          typeof init?.body !== 'string' ||
+          profileSettingsIdentity(settingsCustody.request) !==
+            profileSettingsIdentity({ resource: settingsResource, key: selfKey, body: init.body })
+        )
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(settingsCustody.principal);
+        if (client.getAccessToken() !== settingsCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       const result = await (options.fetchImplementation ?? globalThis.fetch)(input, init);
-      if (principal !== undefined) requireQuarterPrincipal(principal);
+      if (settingsCustody) {
+        requireQuarterPrincipal(settingsCustody.principal);
+        if (client.getAccessToken() !== settingsCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+
+      if (joinCustody) {
+        requireQuarterPrincipal(joinCustody.principal);
+        if (client.getAccessToken() !== joinCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      if (leaveCustody) {
+        requireQuarterPrincipal(leaveCustody.principal);
+        if (client.getAccessToken() !== leaveCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      if (principal !== undefined) {
+        requireQuarterPrincipal(principal.principal);
+        if (principal.token !== undefined && client.getAccessToken() !== principal.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       return result;
     }) as typeof fetch,
   };
@@ -1055,13 +1148,66 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let currentTenantId: string | undefined;
   const subjectLinkStartKeys = new Map<string, string>();
   const subjectLinkVerifyKeys = new Map<string, string>();
-  const cancellationPrincipals = new Map<string, string>();
+  const cancellationPrincipals = new Map<
+    string,
+    { principal: string; token: string | undefined }
+  >();
+  const nativeJoinPrincipals = new Map<
+    string,
+    { principal: string; token: string; count: number }
+  >();
+  const selfLeavePrincipals = new Map<
+    string,
+    { principal: string; count: number; token: string }
+  >();
   let principalGeneration = 0;
   let tournamentLogoutStarted = false;
   let quarterClosed = false;
   let quarterClosing = false;
   let tournamentLogoutPending = 0;
   let tournamentSessionEpoch = 0;
+  const profileSettingsRequests = new Map<
+    ProfileSettingsResource,
+    { principal: string; token: string; request?: NativeProfileSettingsRequest }
+  >();
+  async function nativeProfileSettings<R extends ProfileSettingsResource>(
+    resource: R,
+    input: ProfileSettingsInputs[R],
+  ): Promise<ProfileSettingsResults[R]> {
+    if (!options.nativeSessionTransport) return nativeUnavailable();
+    const principal = requireQuarterPrincipal(),
+      token = client.getAccessToken();
+    const existing = profileSettingsRequests.get(resource);
+    if (!token || (existing?.principal === principal && existing.token === token))
+      throw new Error('PROFILE_SETTINGS_IN_PROGRESS');
+    const custody: { principal: string; token: string; request?: NativeProfileSettingsRequest } = {
+      principal,
+      token,
+    };
+    profileSettingsRequests.set(resource, custody);
+    try {
+      const request = await profileSettingsCommand(resource, input);
+      requireQuarterPrincipal(principal);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      custody.request = request;
+      const result = await client.request<ProfileSettingsResults[R]>(
+        profileSettingsPath(resource),
+        {
+          method: 'PUT',
+          idempotencyKey: request.key,
+          body: request.body,
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        },
+      );
+      requireQuarterPrincipal(principal);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return profileSettingsResult(resource, result);
+    } finally {
+      if (profileSettingsRequests.get(resource) === custody)
+        profileSettingsRequests.delete(resource);
+    }
+  }
   function quarterCreatePrincipal(): string | null {
     return !quarterClosed && !tournamentLogoutStarted && currentUserId && currentTenantId
       ? `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`
@@ -1072,6 +1218,40 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     if (!current || (original !== undefined && original !== current))
       throw new Error('AUTH_PRINCIPAL_CHANGED');
     return current;
+  }
+  async function nativeSelfLeave(
+    gameId: string,
+    key: string,
+    resource: 'leave' | 'status' | 'reconcile',
+  ): Promise<GameCommandResult> {
+    const principal = requireQuarterPrincipal(),
+      token = client.getAccessToken(),
+      method = resource === 'leave' ? 'DELETE' : resource === 'status' ? 'GET' : 'POST';
+    const path = `/games/${encodeURIComponent(gameId)}/${resource === 'leave' ? 'participants/me' : resource === 'status' ? 'leave-operation' : 'leave-operation/reconcile'}`;
+    const identity = JSON.stringify([method, path, key]),
+      existing = selfLeavePrincipals.get(identity);
+    if (
+      !token ||
+      (existing &&
+        (existing.principal !== principal || existing.token !== token || resource !== 'status'))
+    )
+      throw new Error('AUTH_PRINCIPAL_CHANGED');
+    const custody = existing ?? { principal, count: 0, token };
+    custody.count++;
+    selfLeavePrincipals.set(identity, custody);
+    try {
+      const result = await client.request<GameCommandResult>(path, {
+        method,
+        idempotencyKey: key,
+        retryOnUnauthorized: false,
+      });
+      requireQuarterPrincipal(principal);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    } finally {
+      custody.count--;
+      if (custody.count === 0) selfLeavePrincipals.delete(identity);
+    }
   }
   function stationMessagePrincipal(): string {
     if (quarterClosed || tournamentLogoutStarted || !currentUserId || !currentTenantId)
@@ -2124,6 +2304,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getProfilePrivacy() {
+      if (nativeClient) return client.getProfilePrivacySettings();
       profilePrivacyPromise ??= client.getProfilePrivacySettings().catch((error: unknown) => {
         profilePrivacyPromise = undefined;
         throw error;
@@ -2132,7 +2313,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async updateProfilePrivacy(input) {
-      const settings = await client.updateProfilePrivacySettings(input);
+      const original = nativeClient
+        ? { principal: requireQuarterPrincipal(), token: client.getAccessToken() }
+        : undefined;
+      const settings = nativeClient
+        ? await nativeProfileSettings('privacy', input)
+        : await client.updateProfilePrivacySettings(input);
+      if (original) {
+        requireQuarterPrincipal(original.principal);
+        if (client.getAccessToken() !== original.token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       profilePrivacyPromise = Promise.resolve(settings);
       return settings;
     },
@@ -2166,6 +2356,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getBookingPreferences() {
+      if (nativeClient) return client.getBookingPreferences();
       bookingPreferencesPromise ??= client.getBookingPreferences().catch((error: unknown) => {
         bookingPreferencesPromise = undefined;
         throw error;
@@ -2174,7 +2365,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async updateBookingPreferences(input) {
-      const settings = await client.updateBookingPreferences(input);
+      const original = nativeClient
+        ? { principal: requireQuarterPrincipal(), token: client.getAccessToken() }
+        : undefined;
+      const settings = nativeClient
+        ? await nativeProfileSettings('preferences', input)
+        : await client.updateBookingPreferences(input);
+      if (original) {
+        requireQuarterPrincipal(original.principal);
+        if (client.getAccessToken() !== original.token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       bookingPreferencesPromise = Promise.resolve(settings);
       return settings;
     },
@@ -2485,10 +2685,22 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       const original = requireQuarterPrincipal();
       const id = encodeURIComponent(gameId);
       if (cancellationPrincipals.has(id)) throw new Error('GAME_CANCEL_IN_PROGRESS');
-      cancellationPrincipals.set(id, original);
+      const token = nativeClient ? client.getAccessToken() : undefined;
+      if (nativeClient && !token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      cancellationPrincipals.set(id, { principal: original, token });
       try {
-        const result = await client.cancelGame(gameId, input);
+        const result = nativeClient
+          ? await client.request<GameCommandResult>(`/games/${id}/cancel`, {
+              method: 'POST',
+              idempotencyKey: crypto.randomUUID(),
+              body: JSON.stringify(input),
+              retryOnUnauthorized: false,
+              cache: 'no-store',
+            })
+          : await client.cancelGame(gameId, input);
         requireQuarterPrincipal(original);
+        if (nativeClient && client.getAccessToken() !== token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
         return result;
       } finally {
         cancellationPrincipals.delete(id);
@@ -2499,6 +2711,45 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.joinGame(gameId, expectedRevision, invitationId);
     },
 
+    async nativeGameJoin(request) {
+      if (!nativeClient || !options.nativeSessionTransport) return nativeUnavailable();
+      const principal = requireQuarterPrincipal(),
+        token = client.getAccessToken(),
+        target = nativeJoinTarget(request),
+        identity = JSON.stringify([
+          target.method,
+          target.path,
+          request.key ?? '',
+          request.body ?? null,
+        ]),
+        existing = nativeJoinPrincipals.get(identity);
+      if (
+        !token ||
+        (existing &&
+          (existing.principal !== principal ||
+            existing.token !== token ||
+            target.method === 'POST'))
+      )
+        throw new Error('AUTH_PRINCIPAL_CHANGED');
+      const custody = existing ?? { principal, token, count: 0 };
+      custody.count++;
+      nativeJoinPrincipals.set(identity, custody);
+      try {
+        const result = await client.request(target.path, {
+          method: target.method,
+          ...(request.key ? { idempotencyKey: request.key } : {}),
+          ...(request.body !== undefined ? { body: request.body } : {}),
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        });
+        requireQuarterPrincipal(principal);
+        if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        return result;
+      } finally {
+        custody.count--;
+        if (custody.count === 0) nativeJoinPrincipals.delete(identity);
+      }
+    },
     joinPaidGame(gameId, input, idempotencyKey) {
       return client.joinPaidGame(gameId, input, idempotencyKey);
     },
@@ -2508,10 +2759,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     leaveGame(gameId, options) {
+      if (nativeClient) {
+        if (!options?.idempotencyKey) return nativeUnavailable();
+        return nativeSelfLeave(gameId, options.idempotencyKey, 'leave');
+      }
       return client.leaveGame(gameId, options);
     },
     reconcileManagedLeaveOperation(gameId, key) {
-      return client.reconcileManagedLeaveOperation(gameId, key);
+      return nativeClient
+        ? nativeSelfLeave(gameId, key, 'reconcile')
+        : client.reconcileManagedLeaveOperation(gameId, key);
     },
     tournamentChatPrincipal() {
       return quarterCreatePrincipal();
@@ -2583,7 +2840,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getTrainingRegistration(trainingId, key);
     },
     getManagedLeaveOperation(gameId, key) {
-      return client.getManagedLeaveOperation(gameId, key);
+      return nativeClient
+        ? nativeSelfLeave(gameId, key, 'status')
+        : client.getManagedLeaveOperation(gameId, key);
     },
 
     joinGameWaitlist(gameId, invitationId) {

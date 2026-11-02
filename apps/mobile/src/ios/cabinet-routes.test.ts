@@ -14,6 +14,7 @@ describe('iOS cabinet request boundary', () => {
     ['/profile', 'profile'],
     [`/profiles/${viewerId}`, 'playerProfile'],
     ['/profile/privacy', 'privacy'],
+    ['/profile/level-history?limit=100', 'levelHistory'],
     ['/profile/booking-preferences', 'preferences'],
     ['/bookings/upcoming', 'bookings'],
     ['/bookings/history?kind=GAME&status=COMPLETED&limit=20', 'history'],
@@ -41,6 +42,9 @@ describe('iOS cabinet request boundary', () => {
   it.each([
     ['/home', 'POST'],
     ['/profile', 'PATCH'],
+    ['/profile/level-history?limit=101', 'GET'],
+    ['/profile/level-history?limit=100&userId=other', 'GET'],
+    ['/profile/level-history?limit=100', 'PUT'],
     ['/profile?userId=other', 'GET'],
     [`/profiles/${viewerId}?tenant=other`, 'GET'],
     [`/profiles/${viewerId}`, 'POST'],

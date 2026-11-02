@@ -72,10 +72,12 @@ jobs:
           import xml.etree.ElementTree as ET
           root = Path('apps/mobile/android/app/build/test-results/testDebugUnitTest')
           expected = {
-              'ru.padlhub.app.AndroidGameJoinSessionTest': 7,
+              'ru.padlhub.app.AndroidProfileSettingsSessionTest': 3,
+              'ru.padlhub.app.AndroidGameJoinSessionTest': 9,
               'ru.padlhub.app.AndroidTournamentChatSessionTest': 6,
               'ru.padlhub.app.AndroidTournamentSessionTest': 5,
               'ru.padlhub.app.AndroidTrainingRegistrationSessionTest': 5,
+              'ru.padlhub.app.AndroidSelfLeaveSessionTest': 3,
               'ru.padlhub.app.AndroidYandexLoginCallbackUrlTest': 3,
               'com.getcapacitor.myapp.ExampleUnitTest': 1,
           }

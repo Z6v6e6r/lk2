@@ -163,3 +163,26 @@ must not fall back to direct Viva. An unresolved registration key remains retain
 endpoint is unavailable. No schema, migration, provider configuration, signing, store publication,
 iOS capability or production activation is part of this packet. Source/host-JVM/synthetic UI/CI
 checks do not replace device, real authenticated provider, or production acceptance.
+
+## iOS catalogue and registration companion
+
+The iOS cabinet reuses the same training catalogue and durable registration view through a
+narrow gateway. Its native bridge has three closed resources: catalogue, registration POST,
+and original-operation GET. Swift constructs the configured tenant URL; callers cannot supply
+another origin, method or provider identifier. Query validation retains the seven-date window,
+exclusive cursor form and canonical dates. Literal plus levels are encoded as `%2B` on the wire.
+
+The existing authenticated session owns each exact request tuple (resource, public ID, query,
+original key and body). Dispatch and completion both require its original principal; logout
+closes that authority before its network acknowledgement. A second identical in-flight POST is
+rejected. Native credential absence or pending logout prevents HTTP. Neither 401, 503 nor a
+network failure refreshes and replays a mutation. The shared durable controller retains UNKNOWN
+and the original key across remount; restoration reads status without issuing a second POST.
+Missing storage or browser locks disables submission. Training leave remains unsupported.
+
+The browser and Android runtime gateway behavior is unchanged; only the shared view's TypeScript
+input type is narrowed to the methods it consumes. This source change introduces no new provider
+owner, migration, flag, entitlement rule or signing material. Rollback removes the iOS navigation
+and bridge capability while preserving server journals and original-key custody; it does not
+cancel or compensate an existing registration. Synthetic bridge/UI tests and native CI do not
+establish real provider, signed-device, push delivery or store acceptance.

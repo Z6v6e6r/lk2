@@ -1,3 +1,29 @@
+import { nativeProfileSettingsRequest } from '../native-profile-settings-request.js';
+import {
+  profileSettingsCommand,
+  profileSettingsIdentity,
+  profileSettingsPath,
+  profileSettingsResult,
+  type NativeProfileSettingsRequest,
+  type ProfileSettingsResource,
+  type ProfileSettingsInputs,
+  type ProfileSettingsResults,
+} from '../../../web/src/native-profile-settings.js';
+import type { GameCommandResult } from '@phub/api-sdk';
+import { nativeJoinRequest, nativeJoinIdentity } from '../native-game-join-request.js';
+import { nativeJoinTarget } from '../../../web/src/native-game-join-wire.js';
+import type { NativeJoinRequest } from '../../../web/src/native-game-join-attempt.js';
+import {
+  selfLeaveRequest,
+  selfLeaveRequestKey,
+  type NativeSelfLeaveRequest,
+} from '../native-self-leave-request.js';
+import {
+  trainingRequest,
+  trainingRequestKey,
+  type NativeTrainingRequest,
+} from './training-routes.js';
+import type { EventCatalogQuery } from '@phub/api-sdk';
 import {
   tournamentChatRequest,
   type NativeTournamentChatRequest,
@@ -38,7 +64,11 @@ interface NativeRequest {
     | 'stationStream'
     | 'tournamentChat'
     | 'tournament'
-    | 'messaging';
+    | 'messaging'
+    | 'training'
+    | 'selfLeave'
+    | 'gameJoin'
+    | 'profileSettings';
   readonly requestId?: string;
   readonly challengeId?: string;
   readonly operationId?: string;
@@ -69,12 +99,20 @@ export function createIOSFetch(
   canDispatchStation?: (request: NativeStationRequest | NativeStationStreamRequest) => boolean,
   canDispatchTournamentChat?: (request: NativeTournamentChatRequest) => boolean,
   canDispatchGameChat?: (gameId: string) => boolean,
+  canDispatchTraining?: (request: NativeTrainingRequest, key?: string, body?: string) => boolean,
+  canDispatchSelfLeave?: (request: NativeSelfLeaveRequest, key: string) => boolean,
+  canDispatchJoin?: (request: NativeJoinRequest) => boolean,
+  canDispatchProfileSettings?: (request: NativeProfileSettingsRequest) => boolean,
 ): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   let cancellationClosed = false;
   let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
+    const settings = nativeProfileSettingsRequest(value, init, config);
+    const join = nativeJoinRequest(value, init, config);
+    const selfLeave = selfLeaveRequest(value, init, config);
+    const training = trainingRequest(value, init, config);
     const tournamentChat = value.includes('/chat/')
       ? tournamentChatRequest(value, init, config)
       : null;
@@ -92,11 +130,23 @@ export function createIOSFetch(
           config,
         );
     const read =
-      !station && !tournamentChat && !tournament && !quarter && (init?.method ?? 'GET') === 'GET'
+      !settings &&
+      !join &&
+      !selfLeave &&
+      !training &&
+      !station &&
+      !tournamentChat &&
+      !tournament &&
+      !quarter &&
+      (init?.method ?? 'GET') === 'GET'
         ? cabinetReadRequest(value, config)
         : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
     if (
+      !settings &&
+      !join &&
+      !selfLeave &&
+      !training &&
       !station &&
       !tournamentChat &&
       !tournament &&
@@ -109,7 +159,11 @@ export function createIOSFetch(
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (tournamentChat) operation = 'tournamentChat';
+    if (settings) operation = 'profileSettings';
+    else if (join) operation = 'gameJoin';
+    else if (selfLeave) operation = 'selfLeave';
+    else if (training) operation = 'training';
+    else if (tournamentChat) operation = 'tournamentChat';
     else if (station) operation = stream ? 'stationStream' : 'stationMessage';
     else if (cancel) operation = 'gameCancel';
     else if (quarter) operation = 'quarterCreate';
@@ -148,6 +202,21 @@ export function createIOSFetch(
       cancellationEpoch++;
     }
     const originalCancellationEpoch = cancellationEpoch;
+    if (join && (cancellationClosed || canDispatchJoin?.(join) !== true))
+      throw new DOMException('Session changed', 'AbortError');
+    const selfLeaveKey = new Headers(init?.headers).get('idempotency-key') ?? '';
+    if (
+      selfLeave &&
+      (cancellationClosed || canDispatchSelfLeave?.(selfLeave, selfLeaveKey) !== true)
+    )
+      throw new DOMException('Session changed', 'AbortError');
+    const trainingKey = new Headers(init?.headers).get('idempotency-key') ?? undefined;
+    const trainingBody = typeof init?.body === 'string' ? init.body : undefined;
+    if (
+      training &&
+      (cancellationClosed || canDispatchTraining?.(training, trainingKey, trainingBody) !== true)
+    )
+      throw new DOMException('Session changed', 'AbortError');
     const gameChatId =
       notification?.resource === 'createGame'
         ? (JSON.parse(init?.body as string) as { gameId: string }).gameId
@@ -165,11 +234,19 @@ export function createIOSFetch(
       throw new DOMException('Session changed', 'AbortError');
     if (init?.body != null && typeof init.body !== 'string') throw rejectedRequest();
     if (read && init?.body != null) throw rejectedRequest();
+    if (settings && (cancellationClosed || canDispatchProfileSettings?.(settings) !== true))
+      throw rejectedRequest();
     if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
     try {
       const result = await plugin.request({
         operation,
+        ...(settings ? { resource: settings.resource } : {}),
         ...(read ?? {}),
+        ...(training ?? {}),
+        ...(selfLeave ?? {}),
+        ...(join
+          ? { resource: join.resource, resourceId: join.resourceId, query: join.query ?? {} }
+          : {}),
         ...(tournament ?? {}),
         ...(notification ?? {}),
         ...(quarter ?? {}),
@@ -180,6 +257,35 @@ export function createIOSFetch(
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (
+        settings &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchProfileSettings?.(settings) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
+      if (
+        join &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchJoin?.(join) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
+      if (
+        selfLeave &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchSelfLeave?.(selfLeave, selfLeaveKey) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
+      if (
+        training &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchTraining?.(training, trainingKey, trainingBody) !== true ||
+          new TextEncoder().encode(result.body).length > 1024 * 1024)
+      )
+        throw new DOMException('Session changed', 'AbortError');
       if (
         gameChatId &&
         (cancellationClosed ||
@@ -266,8 +372,20 @@ export class IOSSession {
   private tournamentClosed = false;
   private tournamentEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
+  private readonly joinRequests = new Map<
+    string,
+    { principal: string; token: string; count: number }
+  >();
+  private readonly selfLeaveRequests = new Map<
+    string,
+    { principal: string; count: number; token: string }
+  >();
+  private readonly trainingRequests = new Map<
+    string,
+    { principal: string; count: number; token: string }
+  >();
   private readonly gameChatRequests = new Map<string, string>();
-  private readonly cancellations = new Map<string, string>();
+  private readonly cancellations = new Map<string, { principal: string; token: string }>();
   private readonly stationRequests = new Map<string, string>();
   private readonly tournamentChatRequests = new Map<string, string>();
 
@@ -316,6 +434,233 @@ export class IOSSession {
       throw new DOMException('Session changed', 'AbortError');
     return v;
   }
+  public canDispatchJoin(request: NativeJoinRequest): boolean {
+    const value = this.joinRequests.get(nativeJoinIdentity(request));
+    return (
+      value !== undefined &&
+      value.count > 0 &&
+      value.principal === this.quarterCreatePrincipal() &&
+      value.token === this.api.getAccessToken()
+    );
+  }
+  public async gameJoin(request: NativeJoinRequest): Promise<unknown> {
+    const principal = this.quarterCreatePrincipal(),
+      token = this.api.getAccessToken(),
+      identity = nativeJoinIdentity(request),
+      existing = this.joinRequests.get(identity);
+    if (
+      !principal ||
+      !token ||
+      (existing &&
+        (existing.principal !== principal ||
+          existing.token !== token ||
+          request.resource === 'join' ||
+          request.resource === 'reconcile'))
+    )
+      throw rejectedRequest();
+    const custody = existing ?? { principal, token, count: 0 };
+    custody.count++;
+    this.joinRequests.set(identity, custody);
+    try {
+      const target = nativeJoinTarget(request);
+      const result = await this.quarterCall((api) =>
+        api.request(target.path, {
+          method: target.method,
+          ...(request.key ? { idempotencyKey: request.key } : {}),
+          ...(request.body !== undefined ? { body: request.body } : {}),
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        }),
+      );
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return result;
+    } finally {
+      custody.count--;
+      if (custody.count === 0) this.joinRequests.delete(identity);
+    }
+  }
+  private readonly profileSettingsRequests = new Map<
+    ProfileSettingsResource,
+    { principal: string; token: string; request?: NativeProfileSettingsRequest }
+  >();
+  public canDispatchProfileSettings(request: NativeProfileSettingsRequest): boolean {
+    const v = this.profileSettingsRequests.get(request.resource);
+    return (
+      v?.request !== undefined &&
+      v.principal === this.quarterCreatePrincipal() &&
+      v.token === this.api.getAccessToken() &&
+      profileSettingsIdentity(v.request) === profileSettingsIdentity(request)
+    );
+  }
+  public async updateProfileSettings<R extends ProfileSettingsResource>(
+    resource: R,
+    input: ProfileSettingsInputs[R],
+  ): Promise<ProfileSettingsResults[R]> {
+    const principal = this.quarterCreatePrincipal(),
+      token = this.api.getAccessToken();
+    const existing = this.profileSettingsRequests.get(resource);
+    if (!principal || !token || (existing?.principal === principal && existing.token === token))
+      throw rejectedRequest();
+    const custody: { principal: string; token: string; request?: NativeProfileSettingsRequest } = {
+      principal,
+      token,
+    };
+    this.profileSettingsRequests.set(resource, custody);
+    try {
+      const request = await profileSettingsCommand(resource, input);
+      if (this.quarterCreatePrincipal() !== principal || this.api.getAccessToken() !== token)
+        throw rejectedRequest();
+      custody.request = request;
+      const result = await this.quarterCall((api) =>
+        api.request<ProfileSettingsResults[R]>(profileSettingsPath(resource), {
+          method: 'PUT',
+          idempotencyKey: request.key,
+          body: request.body,
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        }),
+      );
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return profileSettingsResult(resource, result);
+    } finally {
+      if (this.profileSettingsRequests.get(resource) === custody)
+        this.profileSettingsRequests.delete(resource);
+    }
+  }
+  public canDispatchSelfLeave(request: NativeSelfLeaveRequest, key: string): boolean {
+    const original = this.selfLeaveRequests.get(selfLeaveRequestKey(request, key));
+    return (
+      original !== undefined &&
+      original.count > 0 &&
+      original.principal === this.quarterCreatePrincipal() &&
+      original.token === this.api.getAccessToken()
+    );
+  }
+  public async selfLeave(
+    resource: NativeSelfLeaveRequest['resource'],
+    gameId: string,
+    key: string,
+  ): ReturnType<PadlHubApiClient['leaveGame']> {
+    const principal = this.quarterCreatePrincipal(),
+      token = this.api.getAccessToken(),
+      identity = selfLeaveRequestKey({ resource, resourceId: gameId }, key),
+      existing = this.selfLeaveRequests.get(identity);
+    if (
+      !principal ||
+      !token ||
+      (existing &&
+        (existing.principal !== principal || existing.token !== token || resource !== 'status'))
+    )
+      throw rejectedRequest();
+    const custody = existing ?? { principal, count: 0, token };
+    custody.count++;
+    this.selfLeaveRequests.set(identity, custody);
+    try {
+      const result = await this.quarterCall((api) =>
+        resource === 'leave'
+          ? api.leaveGame(gameId, { idempotencyKey: key })
+          : resource === 'status'
+            ? api.getManagedLeaveOperation(gameId, key)
+            : api.reconcileManagedLeaveOperation(gameId, key),
+      );
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return result;
+    } finally {
+      custody.count--;
+      if (custody.count === 0) this.selfLeaveRequests.delete(identity);
+    }
+  }
+  public canDispatchTraining(request: NativeTrainingRequest, key?: string, body?: string): boolean {
+    const original = this.trainingRequests.get(trainingRequestKey(request, key, body));
+    return (
+      original !== undefined &&
+      original.count > 0 &&
+      original.principal === this.quarterCreatePrincipal() &&
+      original.token === this.api.getAccessToken()
+    );
+  }
+  private async withTraining<T>(
+    request: NativeTrainingRequest,
+    key: string | undefined,
+    body: string | undefined,
+    load: (api: PadlHubApiClient) => Promise<T>,
+  ): Promise<T> {
+    const principal = this.quarterCreatePrincipal(),
+      token = this.api.getAccessToken();
+    if (!principal || !token) throw rejectedRequest();
+    const identity = trainingRequestKey(request, key, body),
+      existing = this.trainingRequests.get(identity);
+    if (
+      existing &&
+      (existing.principal !== principal ||
+        existing.token !== token ||
+        request.resource === 'register')
+    )
+      throw rejectedRequest();
+    const custody = existing ?? { principal, count: 0, token };
+    custody.count++;
+    this.trainingRequests.set(identity, custody);
+    try {
+      const result = await this.quarterCall(load);
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return result;
+    } finally {
+      custody.count--;
+      if (custody.count === 0) this.trainingRequests.delete(identity);
+    }
+  }
+  public trainingCatalogue(
+    query: EventCatalogQuery,
+  ): ReturnType<PadlHubApiClient['listTrainingCatalogue']> {
+    const nativeQuery: Record<string, string> = {};
+    for (const [name, value] of Object.entries(query))
+      if (name !== 'surface' && value !== undefined)
+        nativeQuery[name] = Array.isArray(value) ? value.join(',') : String(value);
+    return this.withTraining(
+      { resource: 'catalog', query: nativeQuery },
+      undefined,
+      undefined,
+      (api) => api.listTrainingCatalogue(query),
+    );
+  }
+  public continueTrainingCatalogue(
+    cursor: string,
+    limit = 20,
+  ): ReturnType<PadlHubApiClient['continueTrainingCatalogue']> {
+    return this.withTraining(
+      { resource: 'catalog', query: { cursor, limit: String(limit) } },
+      undefined,
+      undefined,
+      (api) => api.continueTrainingCatalogue(cursor, limit),
+    );
+  }
+  public registerTraining(
+    id: string,
+    input: { dateHint: string; subscriptionId: string },
+    key: string,
+  ): ReturnType<PadlHubApiClient['registerTraining']> {
+    return this.withTraining(
+      { resource: 'register', resourceId: id, query: {} },
+      key,
+      JSON.stringify(input),
+      (api) => api.registerTraining(id, input, key),
+    );
+  }
+  public getTrainingRegistration(
+    id: string,
+    key: string,
+  ): ReturnType<PadlHubApiClient['getTrainingRegistration']> {
+    return this.withTraining(
+      { resource: 'status', resourceId: id, query: {} },
+      key,
+      undefined,
+      (api) => api.getTrainingRegistration(id, key),
+    );
+  }
   public canDispatchGameChat(gameId: string): boolean {
     const original = this.gameChatRequests.get(gameId);
     return original !== undefined && original === this.quarterCreatePrincipal();
@@ -344,16 +689,30 @@ export class IOSSession {
   }
   public canDispatchGameCancellation(gameId: string): boolean {
     const original = this.cancellations.get(gameId);
-    return original !== undefined && original === this.gameCancelPrincipal();
+    return (
+      original !== undefined &&
+      original.principal === this.gameCancelPrincipal() &&
+      original.token === this.api.getAccessToken()
+    );
   }
   public async cancelGame(gameId: string): ReturnType<PadlHubApiClient['cancelGame']> {
-    const original = this.gameCancelPrincipal();
-    if (!original || this.cancellations.has(gameId)) throw rejectedRequest();
-    this.cancellations.set(gameId, original);
+    const original = this.gameCancelPrincipal(),
+      token = this.api.getAccessToken();
+    if (!original || !token || this.cancellations.has(gameId)) throw rejectedRequest();
+    this.cancellations.set(gameId, { principal: original, token });
     try {
-      return await this.quarterCall((api) =>
-        api.cancelGame(gameId, { reasonCode: 'ORGANIZER_REQUEST' }),
+      const result = await this.quarterCall((api) =>
+        api.request<GameCommandResult>(`/games/${encodeURIComponent(gameId)}/cancel`, {
+          method: 'POST',
+          idempotencyKey: crypto.randomUUID(),
+          body: JSON.stringify({ reasonCode: 'ORGANIZER_REQUEST' }),
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        }),
       );
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return result;
     } finally {
       this.cancellations.delete(gameId);
     }
@@ -677,6 +1036,10 @@ export function getIOSSession(): Promise<IOSSession> {
         (request) => session?.canDispatchStation(request) === true,
         (request) => session?.canDispatchTournamentChat(request) === true,
         (id) => session?.canDispatchGameChat(id) === true,
+        (request, key, body) => session?.canDispatchTraining(request, key, body) === true,
+        (request, key) => session?.canDispatchSelfLeave(request, key) === true,
+        (request) => session?.canDispatchJoin(request) === true,
+        (request) => session?.canDispatchProfileSettings(request) === true,
       ),
     });
     const session: IOSSession = new IOSSession(configuration, api);

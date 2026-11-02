@@ -2,7 +2,7 @@ import Foundation
 
 /// Reviewed first-party reads only. The WebView cannot choose a URL, tenant or HTTP method.
 public enum CabinetResource: String, Sendable {
-  case home, homeBase, profile, preferences, privacy, bookings, history, recommendations
+  case home, homeBase, profile, preferences, privacy, levelHistory, bookings, history, recommendations
   case locations, location, game, publicGames, communities, playerProfile
   case pushConfig, notifications, notificationPreferences
   case conversations, conversationMessages
@@ -45,6 +45,7 @@ public struct CabinetRead: Sendable {
       suffix = "/profiles/\(id)"
     case .preferences: suffix = "/profile/booking-preferences"
     case .privacy: suffix = "/profile/privacy"
+    case .levelHistory: suffix = "/profile/level-history"; allowed = ["limit"]
     case .bookings: suffix = "/bookings/upcoming"
     case .history:
       suffix = "/bookings/history"
@@ -79,7 +80,7 @@ public struct CabinetRead: Sendable {
         guard ["true", "false"].contains(value) else { throw SessionFailure.request }
       case "limit":
         guard value.range(of: "^[1-9][0-9]{0,2}$", options: .regularExpression) != nil,
-          let limit = Int(value), limit <= (resource == .recommendations ? 20 : (resource == .conversations || resource == .conversationMessages) ? 100 : 50)
+          let limit = Int(value), limit <= (resource == .recommendations ? 20 : (resource == .conversations || resource == .conversationMessages || resource == .levelHistory) ? 100 : 50)
         else { throw SessionFailure.request }
       case "cursor":
         guard (16...512).contains(value.count) else { throw SessionFailure.request }

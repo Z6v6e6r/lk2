@@ -1,4 +1,7 @@
-import { TrainingRegistrationPanel } from './TrainingRegistrationPanel.js';
+import {
+  TrainingRegistrationPanel,
+  type TrainingRegistrationGateway,
+} from './TrainingRegistrationPanel.js';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { BookingActivityCard } from './BookingRecommendations.js';
@@ -162,7 +165,8 @@ function MultiSelectFilter({
 }
 
 export interface TrainingsPageProps {
-  readonly gateway: AuthGateway;
+  readonly gateway: TrainingRegistrationGateway &
+    Pick<AuthGateway, 'listEventCatalog' | 'continueEventCatalog'>;
   readonly principal?: { tenantId: string; userId: string };
   readonly eventId?: string;
   readonly individualTrainingRoute?: string;
