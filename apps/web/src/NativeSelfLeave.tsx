@@ -1,5 +1,5 @@
 import { nativeJoinLeaveAdmission } from './native-game-join-attempt.js';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GameCard, GameCommandResult } from '@phub/api-sdk';
 import type { AuthGateway } from './auth-gateway.js';
 import { GameSelfLeaveAttempts } from './game-self-leave-attempt.js';
@@ -78,7 +78,8 @@ export function NativeSelfLeave({
     },
     [lifetime, game.id],
   );
-  useEffect(() => {
+  // Activate and retire the command lifetime before a visible action can receive a click.
+  useLayoutEffect(() => {
     lifetime.activate();
     const attempts = lifetime.attempts;
     void (async () => {
