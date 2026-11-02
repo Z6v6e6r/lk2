@@ -23,6 +23,7 @@ export interface ClaimedNotificationDelivery {
   readonly attemptNo: number;
   readonly startedAt: string;
   readonly scenarioDelivery?: boolean;
+  readonly tournament?: { readonly contextId: string; readonly generation: number };
   readonly station?: { readonly contextId: string; readonly generation: number };
   /** Fence late ordinary push invalidation against token rotation and account transfer. */
   readonly dispatchedEndpoint?: {
@@ -93,7 +94,9 @@ export function resolveNotificationIntentState(states: readonly string[]): {
         state === 'PENDING' ||
         state === 'SENDING' ||
         state === 'STATION_PENDING' ||
-        state === 'STATION_SENDING',
+        state === 'STATION_SENDING' ||
+        state === 'TOURNAMENT_PENDING' ||
+        state === 'TOURNAMENT_SENDING',
     )
   ) {
     return { state: 'PROCESSING', completed: false };
@@ -182,9 +185,19 @@ export async function finalizeNotificationDelivery(options: {
 }): Promise<NotificationDeliveryFinalization> {
   return withTenantTransaction(options.pool, options.job.tenantId, async (client) => {
     const now = new Date().toISOString();
-    const station = options.job.station;
-    const sending = station ? 'STATION_SENDING' : 'SENDING';
-    const pending = station ? 'STATION_PENDING' : 'PENDING';
+    if (options.job.station && options.job.tournament) return 'stale';
+    const station = options.job.station ?? options.job.tournament;
+    const kind = options.job.tournament ? 'tournament' : 'station';
+    const sending = station
+      ? options.job.tournament
+        ? 'TOURNAMENT_SENDING'
+        : 'STATION_SENDING'
+      : 'SENDING';
+    const pending = station
+      ? options.job.tournament
+        ? 'TOURNAMENT_PENDING'
+        : 'STATION_PENDING'
+      : 'PENDING';
     const result =
       station &&
       options.result.outcome === 'retryable_failure' &&
@@ -200,13 +213,15 @@ export async function finalizeNotificationDelivery(options: {
       ].includes(options.result.errorCode)
         ? {
             outcome: 'terminal_failure' as const,
-            errorCode: 'STATION_PROVIDER_OUTCOME_UNKNOWN',
+            errorCode: options.job.tournament
+              ? 'TOURNAMENT_PROVIDER_OUTCOME_UNKNOWN'
+              : 'STATION_PROVIDER_OUTCOME_UNKNOWN',
             invalidate: false,
           }
         : options.result;
     if (station) {
       const bound = await client.query(
-        `select id from notifications.deliveries where tenant_id=$1 and id=$2 and intent_id=$3 and endpoint_id=$4 and station_notification_context_id=$5 and station_claim_generation=$6 and state='STATION_SENDING' and attempt_count=$7 and station_dispatch_started_at is not null and lease_expires_at>clock_timestamp() for update`,
+        `select id from notifications.deliveries where tenant_id=$1 and id=$2 and intent_id=$3 and endpoint_id=$4 and ${kind}_notification_context_id=$5 and ${kind}_claim_generation=$6 and state='${sending}' and attempt_count=$7 and ${kind}_dispatch_started_at is not null and lease_expires_at>clock_timestamp() for update`,
         [
           options.job.tenantId,
           options.job.deliveryId,
@@ -222,7 +237,7 @@ export async function finalizeNotificationDelivery(options: {
     let terminalState: Exclude<NotificationDeliveryFinalization, 'stale'>;
     let attemptOutcome: 'SENT' | 'RETRYABLE_FAILURE' | 'TERMINAL_FAILURE';
     let errorCode: string | null = null;
-    let deliveryState: 'SENT' | 'PENDING' | 'STATION_PENDING' | 'DEAD';
+    let deliveryState: 'SENT' | 'PENDING' | 'STATION_PENDING' | 'TOURNAMENT_PENDING' | 'DEAD';
     let updatedRows: number;
 
     if (result.outcome === 'accepted') {
@@ -257,7 +272,7 @@ export async function finalizeNotificationDelivery(options: {
         const updated = await client.query(
           `update notifications.deliveries
               set state = '${pending}',
-                  ${station ? 'station_dispatch_started_at=null,' : ''}
+                  ${station ? `${kind}_dispatch_started_at=null,` : ''}
                   scenario_dispatch_started_at = null,
                   ${options.job.scenarioDelivery ? "scenario_available_at = case when scenario_v2_available_at is null then now() + ($4::integer * interval '1 millisecond') else null end, scenario_v2_available_at = case when scenario_v2_available_at is not null then now() + ($4::integer * interval '1 millisecond') else null end, next_attempt_at='infinity'::timestamptz" : "next_attempt_at=now() + ($4::integer * interval '1 millisecond')"},
                   lease_expires_at = null,
@@ -392,7 +407,10 @@ export async function finalizeNotificationDelivery(options: {
         `${options.transport.toLowerCase()}-delivery-${options.job.deliveryId}`,
         JSON.stringify({
           deliveryId: options.job.deliveryId,
-          state: deliveryState === 'STATION_PENDING' ? 'PENDING' : deliveryState,
+          state:
+            deliveryState === 'STATION_PENDING' || deliveryState === 'TOURNAMENT_PENDING'
+              ? 'PENDING'
+              : deliveryState,
           ...(errorCode ? { errorCode } : {}),
         }),
       ],

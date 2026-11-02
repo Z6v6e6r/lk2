@@ -1,3 +1,8 @@
+import { TournamentMessageNotificationRepository } from '@phub/database/tournament-message-notifications';
+import { createTournamentNotificationRecipientResolver } from '@phub/database/tournament-notifications';
+import { tournamentNotificationOwnerFromEnvironment } from './tournament-chat-notification-owner.js';
+import { runTournamentImportCycle } from './tournament-notification-importer.js';
+import { runTournamentDelivery } from './tournament-notification-delivery.js';
 import { createQuarterStationFactRepository } from '../../../packages/database/src/game-quarter-create-repository.js';
 import { createTrainingStationFactRepository } from '../../../packages/database/src/training-registration-repository.js';
 import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
@@ -431,6 +436,24 @@ const smtpRuntime = config.SMTP_ENABLED
       timeoutMs: 5000,
       onOutcome: (code) => workerMetrics.recordExtendedNotificationOutcome('YANDEX_SMTP', code),
     })
+  : undefined;
+const tournamentNotificationTenant = process.env.TOURNAMENT_CHAT_NOTIFICATION_TENANT_ID ?? '';
+const tournamentNotificationOwner = config.TOURNAMENT_CHAT_NOTIFICATION_DELIVERY_ENABLED
+  ? (() => {
+      if (process.env.TOURNAMENT_CHAT_NOTIFICATION_ENABLED !== 'true')
+        throw Error('TOURNAMENT_NOTIFICATION_QUERY_REQUIRED');
+      return tournamentNotificationOwnerFromEnvironment(
+        process.env,
+        createTournamentNotificationRecipientResolver(pool, {
+          tenantId: tournamentNotificationTenant,
+          tenantKey: process.env.TOURNAMENT_CHAT_NOTIFICATION_TENANT_KEY ?? '',
+          ownerTenantKey: process.env.TOURNAMENT_CHAT_NOTIFICATION_OWNER_TENANT_KEY ?? '',
+        }),
+      );
+    })()
+  : null;
+const tournamentNotificationRepository = tournamentNotificationOwner
+  ? new TournamentMessageNotificationRepository(pool)
   : undefined;
 const stationOwner = config.STATION_NOTIFICATIONS_ENABLED
   ? new StationNotificationClient({
@@ -1753,6 +1776,35 @@ async function runStationNotifications(): Promise<void> {
     if (!shuttingDown) setTimeout(() => void runStationNotifications(), 2000).unref();
   }
 }
+async function runTournamentNotifications(): Promise<void> {
+  if (shuttingDown || !tournamentNotificationOwner || !tournamentNotificationRepository) return;
+  try {
+    const outcomes = await runTournamentImportCycle(
+      tournamentNotificationRepository,
+      tournamentNotificationOwner,
+      tournamentNotificationTenant,
+      stationTransports,
+    );
+    if (Object.values(outcomes).some((x) => x !== 'IDLE'))
+      logger.info(outcomes, 'tournament notification durable work');
+    for (const transport of stationTransports)
+      if (!shuttingDown)
+        await runTournamentDelivery(
+          tournamentNotificationRepository,
+          tournamentNotificationOwner,
+          tournamentNotificationTenant,
+          transport,
+        );
+  } catch {
+    logger.error(
+      { code: 'TOURNAMENT_NOTIFICATION_CYCLE_FAILED' },
+      'tournament notification cycle held',
+    );
+  } finally {
+    if (!shuttingDown) setTimeout(() => void runTournamentNotifications(), 2000).unref();
+  }
+}
+void runTournamentNotifications();
 void runStationNotifications();
 void runCreateLocationBindings();
 void runLegacyGamesRosterSync();
