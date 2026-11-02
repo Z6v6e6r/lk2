@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { webcrypto } from 'node:crypto';
+import { useLayoutEffect } from 'react';
 import type { GameCard, HomeDashboard } from '@phub/api-sdk';
 import { NativeGameJoin } from './NativeGameJoin.js';
 import { NativeSelfLeave } from './NativeSelfLeave.js';
@@ -59,6 +60,24 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+it('accepts the first enabled JOIN before passive effects have run', async () => {
+  const s = setup();
+  function ClickOnCommit() {
+    useLayoutEffect(() => {
+      const button = screen.getByRole('button', { name: 'Присоединиться к игре' });
+      expect(button.hasAttribute('disabled')).toBe(false);
+      button.click();
+    }, []);
+    return <NativeGameJoin {...s} scope={scope} />;
+  }
+  await act(async () => {
+    render(<ClickOnCommit />);
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(s.request).toHaveBeenCalledTimes(1));
+  expect(s.request.mock.calls[0]![0].resource).toBe('join');
+  await screen.findByRole('button', { name: 'Повторить исходный запрос записи' });
 });
 it('free lost ACK survives remount; no automatic replay; explicit retry uses exact body/key', async () => {
   const s = setup();

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GameCard } from '@phub/api-sdk';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
 import {
@@ -59,7 +59,8 @@ export function NativeGameJoin({
     [conditions, setConditions] = useState<GameJoinConditionsView | undefined>(),
     [consent, setConsent] = useState(false);
   const inFlight = useRef(false);
-  useEffect(() => {
+  // Activate and retire before the visible JOIN action can receive input.
+  useLayoutEffect(() => {
     lifetime.activate();
     void (async () => {
       try {
