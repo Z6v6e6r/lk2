@@ -307,7 +307,7 @@ export function validateClosedApplicationManifest(operation, manifest, bytes) {
     manifest.gitCommit !== image.sourceSha ||
     manifest.gitTree !== image.sourceTree ||
     String(manifest.publication?.runId) !== image.publicationRunId ||
-    manifest.publication?.runAttempt !== 1 ||
+    manifest.publication?.runAttempt !== '1' ||
     matches.length !== 1 ||
     `ghcr.io/z6v6e6r/phub-migrator@${matches[0].digest}` !== image.image ||
     matches[0].runtimeDigest !== image.imageId ||

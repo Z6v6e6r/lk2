@@ -245,8 +245,10 @@ async function authority(op) {
   )
     r1Stop('PUBLICATION_AUTHORITY');
   const path = `${ROOT}/releases/${op.controllerSha}-${op.publishedMigrator.publicationRunId}-1/release-manifest.json`;
-  const bytes = read(path),
-    manifest = parseStrictJson(bytes),
+  validateR1TailPublicationManifest(op, read(path));
+}
+export function validateR1TailPublicationManifest(op, bytes) {
+  const manifest = parseStrictJson(bytes),
     matches = manifest.images?.filter((row) => row.component === 'migrator') ?? [];
   if (
     r1Hash(bytes) !== op.publishedMigrator.manifestSha256 ||
@@ -254,13 +256,14 @@ async function authority(op) {
     manifest.gitCommit !== op.controllerSha ||
     manifest.gitTree !== op.controllerTree ||
     String(manifest.publication?.runId) !== op.publishedMigrator.publicationRunId ||
-    manifest.publication?.runAttempt !== 1 ||
+    manifest.publication?.runAttempt !== '1' ||
     matches.length !== 1 ||
     matches[0].revision !== op.controllerSha ||
     `ghcr.io/z6v6e6r/phub-migrator@${matches[0].digest}` !== op.publishedMigrator.image ||
     matches[0].runtimeDigest !== op.publishedMigrator.imageId
   )
     r1Stop('MANIFEST');
+  return manifest;
 }
 function previousCapsule(tail, kind = 'subject_link_0104', dependencies = deps) {
   const root = tail.previousMigrationSuccess.path.slice(0, -'/migration-success.json'.length);

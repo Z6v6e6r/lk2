@@ -142,3 +142,11 @@ After these migrations, all new runtime ACL, application rollout, safe phone lin
 scenario creation/activation and the one authorized self-test notification still require
 their own concrete packages. No success receipt from this controller proves a delivered
 notification or authenticated photo-editor acceptance.
+
+### Canonical publication attempt representation
+
+The V2 release manifest records `publication.runAttempt` as the exact string `"1"`,
+matching the publication workflow and manifest schema. Closed 0103/0104 and R1 tail
+migration admission validate that string without coercion or rewriting the immutable
+manifest. GitHub run metadata and migration operation `publicationRunAttempt` remain
+numeric `1`; later attempts and noncanonical representations are rejected.

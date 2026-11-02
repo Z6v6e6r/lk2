@@ -1,3 +1,6 @@
+import releaseSchema from '../deploy/timeweb/release-manifest.schema.json';
+import { closedApplicationOperationFixture } from './timeweb-closed-application.fixture.js';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -81,5 +84,96 @@ describe('fixed R1 tail inventory and admission', () => {
     expect(R1_TAIL_CATALOG_SQL).toContain('tr.tgfoid=p.oid');
     expect(R1_TAIL_CATALOG_SQL).toContain('securityDefiner');
     expect(R1_TAIL_CATALOG_SQL).toContain('nullsNotDistinct');
+  });
+});
+
+describe('R1 tail publication manifest contract', () => {
+  const operation = closedApplicationOperationFixture('game_start_0103');
+  const image = operation.publishedMigrator;
+  const manifest = {
+    schemaVersion: 'PHUB_TIMEWEB_RELEASE_MANIFEST_V2',
+    gitCommit: operation.controllerSha,
+    gitTree: operation.controllerTree,
+    publication: {
+      runId: image.publicationRunId,
+      runAttempt: releaseSchema.properties.publication.properties.runAttempt.const,
+    },
+    images: [
+      {
+        component: 'migrator',
+        digest: image.image.split('@')[1],
+        runtimeDigest: image.imageId,
+        revision: operation.controllerSha,
+      },
+    ],
+  };
+  function validateBytes(op: unknown, bytes: Buffer): unknown {
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `
+      import { readFileSync } from 'node:fs';
+      import { validateR1TailPublicationManifest } from './scripts/r1-tail-migration-runtime.js';
+      const { operation, text } = JSON.parse(readFileSync(0, 'utf8'));
+      try { console.log(JSON.stringify({ value: validateR1TailPublicationManifest(operation, Buffer.from(text)) })); }
+      catch { console.log(JSON.stringify({ error: 'MANIFEST' })); }
+    `,
+      ],
+      {
+        input: JSON.stringify({ operation: op, text: bytes.toString('utf8') }),
+        encoding: 'utf8',
+        timeout: 10000,
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    const parsed = JSON.parse(result.stdout) as { value?: unknown; error?: string };
+    if (parsed.error) throw Error(parsed.error);
+    return parsed.value;
+  }
+  function validate(value: unknown) {
+    const bytes = Buffer.from(JSON.stringify(value));
+    return validateBytes(
+      {
+        ...operation,
+        publishedMigrator: {
+          ...image,
+          manifestSha256: createHash('sha256').update(bytes).digest('hex'),
+        },
+      },
+      bytes,
+    );
+  }
+  it('accepts the canonical V2 first-attempt string without changing artifact bytes', () => {
+    expect(manifest.publication.runAttempt).toBe('1');
+    expect(validate(manifest)).toEqual(manifest);
+  });
+  it.each([1, 2, '2', '01', '1.0', true, null, ['1']])(
+    'rejects noncanonical attempt %j',
+    (runAttempt) => {
+      expect(() =>
+        validate({ ...manifest, publication: { ...manifest.publication, runAttempt } }),
+      ).toThrow('MANIFEST');
+    },
+  );
+  it('retains source, digest and artifact-byte integrity checks', () => {
+    for (const invalid of [
+      { ...manifest, gitCommit: 'f'.repeat(40) },
+      { ...manifest, gitTree: 'f'.repeat(40) },
+      { ...manifest, publication: { ...manifest.publication, runId: '999' } },
+      { ...manifest, images: [] },
+      { ...manifest, images: [...manifest.images, ...manifest.images] },
+      {
+        ...manifest,
+        images: [{ ...manifest.images[0], runtimeDigest: 'sha256:' + 'f'.repeat(64) }],
+      },
+    ])
+      expect(() => validate(invalid)).toThrow('MANIFEST');
+    expect(() => validateBytes(operation, Buffer.from(JSON.stringify(manifest)))).toThrow(
+      'MANIFEST',
+    );
   });
 });
