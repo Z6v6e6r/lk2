@@ -1,3 +1,5 @@
+import { TrainingsPage } from '../../../web/src/TrainingsPage.js';
+import { createIOSTrainingGateway } from './training-gateway.js';
 import { TournamentChatPage } from '../../../web/src/TournamentChatPage.js';
 import { createIOSTournamentChatGateway } from './tournament-chat-gateway.js';
 import { IOSStationChats } from './IOSStationChats.js';
@@ -495,6 +497,7 @@ export function IOSCabinet({
   const route = useCabinetRoute();
   const tournamentChatGateway = useMemo(() => createIOSTournamentChatGateway(session), [session]);
   const quarterGateway = useMemo(() => createIOSQuarterGateway(session), [session]);
+  const trainingGateway = useMemo(() => createIOSTrainingGateway(session), [session]);
   const tournamentGateway = useMemo(() => createIOSTournamentGateway(session), [session]);
   const directController = useMemo(
     () => new IOSDirectController(session, auth.user.id),
@@ -634,7 +637,16 @@ export function IOSCabinet({
         onDisable={() => void controller.disable().catch(() => undefined)}
       />
     );
-  else if (path === '/tournaments') {
+  else if (path === '/trainings') {
+    const eventId = new URLSearchParams(route.split('?')[1] ?? '').get('event') ?? undefined;
+    content = (
+      <TrainingsPage
+        gateway={trainingGateway}
+        principal={{ tenantId: auth.context.tenantId, userId: auth.context.userId }}
+        {...(eventId ? { eventId } : {})}
+      />
+    );
+  } else if (path === '/tournaments') {
     const id = new URLSearchParams(route.split('?')[1] ?? '').get('event');
     content = id ? (
       <TournamentDetailPage
@@ -693,6 +705,7 @@ export function IOSCabinet({
         <a href="/chats">Личные и игровые чаты</a>
         <a href="/games/new?quarterCreate=1">Игра по подписке</a>
         <a href="/tournaments">Турниры</a>
+        <a href="/trainings">Тренировки</a>
       </nav>
       {logoutError ? <p role="alert">{logoutError}</p> : null}
       <div key={path}>{content}</div>

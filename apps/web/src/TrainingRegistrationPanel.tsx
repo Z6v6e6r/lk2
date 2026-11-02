@@ -3,21 +3,25 @@ import type { TrainingRegistrationResult } from '@phub/api-contracts';
 import type { AuthGateway } from './auth-gateway.js';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
 import { TrainingRegistrationAttempts } from './training-registration-attempt.js';
+export type TrainingRegistrationGateway = Pick<
+  AuthGateway,
+  'registerTraining' | 'getTrainingRegistration' | 'getHomeDashboard'
+>;
 class TrainingPanelLifetime {
   private active = true;
-  constructor(private readonly gateway: AuthGateway) {}
+  constructor(private readonly gateway: TrainingRegistrationGateway) {}
   start() {
     this.active = true;
   }
   stop() {
     this.active = false;
   }
-  current(gateway: AuthGateway) {
+  current(gateway: TrainingRegistrationGateway) {
     return this.active && this.gateway === gateway;
   }
 }
 type TrainingPanelProps = {
-  gateway: AuthGateway;
+  gateway: TrainingRegistrationGateway;
   principal: { tenantId: string; userId: string };
   training: { id: string; title: string; startsAt: string };
   onClose: () => void;
@@ -36,7 +40,7 @@ function TrainingRegistrationSession({
   training,
   onClose,
 }: {
-  gateway: AuthGateway;
+  gateway: TrainingRegistrationGateway;
   principal: { tenantId: string; userId: string };
   training: { id: string; title: string; startsAt: string };
   onClose: () => void;
