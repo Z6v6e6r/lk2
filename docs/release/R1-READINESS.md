@@ -1,5 +1,43 @@
 # LK2 R1 — аудит готовности к production release
 
+## Актуальный срез — 2026-11-03 (MSK)
+
+Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.
+
+Статус: **NO-GO для завершения production release**. Это текущий операционный срез, заменяющий устаревшие выводы исторических отчётов. Android/iOS signing и store release вынесены владельцем в отдельную ветку; они не выполнены и не являются целью текущего серверного rollout. Native CI продолжает проверять изменяемые общие client paths, без signing/publication.
+
+| Область                                      | Классификация      | Доказательства и остаток                                                                                                                                                                                                                  |
+| -------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth / Profile                               | PARTIAL            | Реализация и source/CI существуют; полная приёмка на согласованной runtime-версии не подтверждена.                                                                                                                                        |
+| Подписки / entitlements / usage              | PARTIAL            | Monthly source LK2/LK интегрирован; effective monthly binding, storage/admission и provider acceptance открыты. CREATE по подписке — только1/4 корта.                                                                                     |
+| Game CREATE / JOIN / LEAVE / CANCEL          | PARTIAL            | Source/physical CI существуют. Потеря первого JOIN исправлена PR571, merged main b88f2100: main CI9144 PASS/133 SKIP, PG16 7/7; full/Android/iOS CI и независимые reviews прошли. Денежная компенсация требует отдельного доказательства. |
+| Viva payments / refunds                      | BLOCKED            | Команды CURRENCY/DEPOSIT и отмена подтверждены исходниками LK1, но нет attributable terminal settlement read contract. Swagger недоступен. UNKNOWN не превращается в повторную денежную запись.                                           |
+| Training / tournament registration           | PARTIAL            | Source/CI существуют; training LEAVE/visit-return attribution и coherent runtime acceptance не закрыты. Проверка пола MALE/FEMALE, MIXED без баланса; организатор явно назначается в CUP.                                                 |
+| Game / tournament / community / direct chats | PARTIAL            | Интегрированный source и tests; реальные ACL, reconnect, delivery и device acceptance на целевой версии не подтверждены полностью.                                                                                                        |
+| Station communities                          | PARTIAL            | Одно официальное сообщество; автоматическое членство после записи; новая запись возвращает добровольно вышедшего, ban/admin removal сохраняются. Source/CI не доказывают live adoption.                                                   |
+| Push / campaigns                             | PARTIAL            | Producer/outbox/recipient/dispatch safeguards в source; фактическая APNs/FCM доставка, opt-out/quiet hours и recovery на устройствах открыты.                                                                                             |
+| Server release / rollback                    | BLOCKED            | Миграционная цепочка106→107→108→119 не выполнена; enrollment и verified backup/independent restore ещё впереди. CUP in-memory queue требует сохранения перед restart.                                                                     |
+| Mobile signing / stores                      | UNKNOWN / DEFERRED | По решению владельца отдельная ветка; не объявлять mobile release выполненным.                                                                                                                                                            |
+
+Подтверждённые операции: source merges; временные циклы delivery flag с восстановлением true; очистка14,574,268,416байт; публикация b88f2100 через41506910421 с проверенным canonical V2 manifest. Нового service deploy/restart, DB migration, provider payment/refund или store activation не было.
+
+Текущий frozen main: b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd, tree c51fff9a16380ed8ec72b2872a457d97cdfecb25. Main CI41491347884 SUCCESS, delivery41494088418 SKIPPED; flag true restored. Matching publication41506910421 SUCCESS: пять образов, canonical V2 SHA256 ff3cf75fe52824142ef148e4c02371838671eedcaa0c121089703273180a61ab; canonical verifier и повторная сборка manifest из custody inputs PASS. LOCAL:34 synthetic +5 physical Linux tests, independent review CLEAR. Enrollment остаётся неисполненным.
+
+### Актуальные источники и подтверждения
+
+- LK2 main `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`; [CI41491347884](https://github.com/Z6v6e6r/lk2/actions/runs/41491347884) SUCCESS; [publication41506910421](https://github.com/Z6v6e6r/lk2/actions/runs/41506910421) SUCCESS.
+- LK main `c0bbff523069685eb01d74de51ffbbbdc7b34fac` проверен read-only; source не означает применённый Node-RED flow.
+- CUP main `5d764e35e4f0ce991e6b6f13818d98d52d4bb69e`: [PR78](https://github.com/Z6v6e6r/ph-admin/pull/78) и [PR79](https://github.com/Z6v6e6r/ph-admin/pull/79) merged. Для PR78 main fullCI41534627629/runtimeCI41534627725 SUCCESS; artifact13183776269 проверен по ZIP/internal hashes и10061 runtime files +3 recovery modules. Архивы PR/main различаются, содержимое файлов/размер/права совпадают.
+- PR79 offline snapshot normalizer:9/9 LOCAL; independent review CLEAR; fullCI41535737302/MAXCI41535737276 SUCCESS. Main CI41536963813 SUCCESS.
+- [CUP PR80](https://github.com/Z6v6e6r/ph-admin/pull/80) `4bc839b15a0e79063e917a1dcf2054e7d863c17d`: offline recovery-tree preparation,9/9 LOCAL synthetic +actual reviewed overlay3 +workflow identity2 PASS; review CLEAR; PR fullCI41537313551/runtimeCI41537313550 SUCCESS. Merged as5d764e35; main fullCI41538734530/runtimeCI41538734715 SUCCESS. Production executor не изменён.
+- Staff CUP diagnostics `2026-11-02T21:47:50.183Z`:4308 Map rows, initial/periodic sync off, interval0. Это число не доказывает drain, custody или отсутствие поздних записей.
+
+CI отчётов41537759159:9143 PASS/1 FAIL/133 SKIP. Единственный сбой — TrainingsPage test вычислял «завтра» в timezone runner вместо Moscow. Воспроизведён в UTC; исправление только теста задаёт два фиксированных UTC момента до/после московской полуночи и точные ожидаемые даты. LOCAL6/6 PASS в UTC и6/6 в Pacific/Auckland, stale-response assertions сохранены. Corrected PR CI pending; runtime приложения не изменён.
+
+---
+
+Исторические контрольные точки сохранены ниже; их прежние формулировки «текущий» не описывают состояние на дату раздела выше.
+
 ## Текущая проверка — 2026-11-02, monthly checkout
 
 **Production: NO-GO.** Ordinary monthly Friendship purchase теперь реализована в LK2/LK и проверена в CI. Она больше не отсутствующая source-задача. Текущий coherent source tuple приведён ниже; это Draft PR heads, не опубликованный release manifest.

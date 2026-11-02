@@ -14,3 +14,5 @@ export function attestClosedApplicationControllerSource(
 export const CLOSED_R1_CONTROLLER_BASE: Readonly<{ sha: string; tree: string }>;
 export const CLOSED_R1_CONTROLLER_FILES: readonly string[];
 export function validateClosedR1ControllerClosure(entries: unknown): unknown;
+
+export function validateClosedR1NativeJoinPrerequisite(entries: unknown): ReadonlySet<string>;
