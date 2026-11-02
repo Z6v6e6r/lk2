@@ -232,10 +232,10 @@ jobs:
           CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK: CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1
         run: npm run db:migrate
       - name: Unit and integration tests
-        timeout-minutes: 12
+        timeout-minutes: 14
         env:
-          # Leave bounded time for the full suite and reporters, plus supervisor cleanup.
-          CI_TEST_WATCHDOG_SECONDS: '600'
+          # The full suite measured 609s before coverage/reporting; retain bounded cleanup.
+          CI_TEST_WATCHDOG_SECONDS: '720'
         run: scripts/run-ci-tests-with-diagnostics.sh
       - name: Verify closed 0103 and 0104 migration modes on PostgreSQL 16
         timeout-minutes: 3
