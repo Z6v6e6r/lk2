@@ -297,6 +297,59 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             expect(r1Hash(r1Encode(closedRows))).toBe(
               closed.checkpoints['108'].catalogs[variant].sha256,
             );
+            // The historical catalog records intents only as a parent, without its ACL.
+            // Keep the null-ACL guard, then reconstruct the independently observed split-owner
+            // shape using synthetic grants, issued by the original owner to preserve grantors.
+            const missingIntentsAcl = await acl(client);
+            expect(() => r1TailPreparationPlan(missingIntentsAcl)).toThrow(
+              'R1_TAIL_ACL_NULL_OWNER_RECOVERY_UNSUPPORTED',
+            );
+            await client.query('set role phub_beta');
+            try {
+              await client.query(`grant select,insert,update,delete on notifications.intents to phub_runtime;
+                grant references(tenant_id,id)on notifications.intents to phub_migrator`);
+            } finally {
+              await client.query('reset role');
+            }
+            const tailAcl = await acl(client);
+            for (const [table, owner] of [
+              ['notifications.intents', 'phub_beta'],
+              ['notifications.deliveries', 'phub_migrator'],
+            ])
+              expect(tailAcl.find((row) => row.key === 'table:' + table)).toEqual({
+                key: 'table:' + table,
+                owner,
+                aclIsNull: false,
+                props: { rls: true, force: true },
+                acl: [
+                  ...[
+                    'DELETE',
+                    'INSERT',
+                    'REFERENCES',
+                    'SELECT',
+                    'TRIGGER',
+                    'TRUNCATE',
+                    'UPDATE',
+                  ].map((privilege) => [owner, owner, privilege, false]),
+                  ...['DELETE', 'INSERT', 'SELECT', 'UPDATE'].map((privilege) => [
+                    owner,
+                    'phub_runtime',
+                    privilege,
+                    false,
+                  ]),
+                ],
+              });
+            expect(
+              tailAcl.filter((row) => row.key.startsWith('column:notifications.intents:')),
+            ).toEqual(
+              ['id', 'tenant_id'].map((column) => ({
+                key: 'column:notifications.intents:' + column,
+                owner: 'phub_beta',
+                aclIsNull: false,
+                props: { REFERENCES: true },
+                acl: [['phub_beta', 'phub_migrator', 'REFERENCES', false]],
+              })),
+            );
           } finally {
             client.release();
           }
