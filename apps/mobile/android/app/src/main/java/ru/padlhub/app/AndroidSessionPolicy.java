@@ -88,6 +88,7 @@ final class AndroidSessionPolicy {
         }
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
         String relativePath = cleanPath.substring(userRoot.length());
+        if (!method.equals("GET") && AndroidProfileSettingsRequest.matches(relativePath)) return AndroidProfileSettingsRequest.request(this,relativePath,uri.getRawQuery(),method,inputHeaders,textBody,binaryBody);
         if (AndroidGameJoinRequest.matches(relativePath)) return AndroidGameJoinRequest.request(this,relativePath,uri.getRawQuery(),method,inputHeaders,textBody,binaryBody);
         if (AndroidSelfLeaveRequest.matches(relativePath)) return AndroidSelfLeaveRequest.request(this,relativePath,uri.getRawQuery(),method,inputHeaders,textBody,binaryBody);
         boolean tournamentChat = relativePath.matches("/tournaments/[^/]+/chat(?:/.*)?");

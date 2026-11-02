@@ -18,6 +18,7 @@ const reads: Readonly<Record<string, readonly [string, readonly string[]]>> = {
   '/profile': ['profile', []],
   '/profile/booking-preferences': ['preferences', []],
   '/profile/privacy': ['privacy', []],
+  '/profile/level-history': ['levelHistory', ['limit']],
   '/bookings/upcoming': ['bookings', []],
   '/bookings/history': ['history', ['kind', 'status', 'cursor', 'limit']],
   '/recommendations/bookings': ['recommendations', ['cursor', 'limit']],
@@ -104,7 +105,9 @@ export function cabinetReadRequest(
         Number(entry) >
           (resource === 'recommendations'
             ? 20
-            : resource === 'conversations' || resource === 'conversationMessages'
+            : resource === 'conversations' ||
+                resource === 'conversationMessages' ||
+                resource === 'levelHistory'
               ? 100
               : 50))
     )

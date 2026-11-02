@@ -1,3 +1,4 @@
+import { nativeProfileSettingsRequest } from './native-profile-settings-request.js';
 import { nativePublicGamesRequest } from './native-public-games-request.js';
 import { nativeJoinRequest } from './native-game-join-request.js';
 import { selfLeaveRequest } from './native-self-leave-request.js';
@@ -205,6 +206,7 @@ export function createNativeApiFetch(
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();
     const method = init?.method ?? 'GET';
+    const settings = nativeProfileSettingsRequest(value, init, config);
     const join = nativeJoinRequest(value, init, config);
     const selfLeave = selfLeaveRequest(value, init, config);
     const cancel = gameCancelRequest(value, init, config);
@@ -225,7 +227,7 @@ export function createNativeApiFetch(
       generation += 1;
       displayedReads.clear();
     }
-    if ((selfLeave || join || cancel) && !active)
+    if ((selfLeave || join || cancel || settings) && !active)
       throw new DOMException('Session changed', 'AbortError');
     const requestGeneration = generation;
     const section =
@@ -311,7 +313,10 @@ export function createNativeApiFetch(
         }
       }
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
-      if ((selfLeave || join || cancel) && (!active || requestGeneration !== generation))
+      if (
+        (selfLeave || join || cancel || settings) &&
+        (!active || requestGeneration !== generation)
+      )
         throw new DOMException('Session changed', 'AbortError');
       if (result.status === 200 && (refresh || url.pathname.endsWith('/verify'))) active = true;
       if (result.status === 401 && refresh && active) {

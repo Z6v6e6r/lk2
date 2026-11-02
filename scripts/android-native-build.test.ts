@@ -33,6 +33,7 @@ const verify = job.steps.find(
 )?.run as string;
 const reportCheck = verify.match(/python3 - <<'PYTEST'\n([\s\S]*?)\nPYTEST/)?.[1];
 const classes = [
+  'ru.padlhub.app.AndroidProfileSettingsSessionTest',
   'ru.padlhub.app.AndroidGameJoinSessionTest',
   'ru.padlhub.app.AndroidTournamentChatSessionTest',
   'ru.padlhub.app.AndroidTournamentSessionTest',
@@ -114,7 +115,7 @@ describe('Android native CI boundary', () => {
       mkdirSync(directory, { recursive: true });
       for (const [index, name] of classes.entries()) {
         if (variant === 'missing' && index === 0) continue;
-        const count = variant === 'empty' ? 0 : [9, 6, 5, 5, 3, 3, 1][index];
+        const count = variant === 'empty' ? 0 : [3, 9, 6, 5, 5, 3, 3, 1][index];
         writeFileSync(
           join(directory, `TEST-${name}.xml`),
           variant === 'malformed'
@@ -131,7 +132,7 @@ describe('Android native CI boundary', () => {
       expect(result.error).toBeUndefined();
       expect(result.status === 0).toBe(variant === 'valid');
       if (variant === 'valid')
-        expect(result.stdout).toContain('32 passed, zero failures/errors/skips');
+        expect(result.stdout).toContain('35 passed, zero failures/errors/skips');
     } finally {
       rmSync(own, { recursive: true, force: true });
     }

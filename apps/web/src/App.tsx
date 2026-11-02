@@ -1013,6 +1013,15 @@ export function App({
   const [locationsError, setLocationsError] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<PlayerProfileView | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const profileSettingsPending = useRef(new Map<string, object>());
+  const profileSettingsAlive = useRef(false);
+  useEffect(() => {
+    profileSettingsAlive.current = true;
+    return () => {
+      profileSettingsAlive.current = false;
+    };
+  }, []);
+
   const [profilePrivacy, setProfilePrivacy] = useState<ProfilePrivacySettings | null>(null);
   const [profilePrivacyBusy, setProfilePrivacyBusy] = useState(false);
   const [profilePrivacyError, setProfilePrivacyError] = useState<string | null>(null);
@@ -1022,6 +1031,18 @@ export function App({
   const [bookingPreferencesBusy, setBookingPreferencesBusy] = useState(false);
   const [bookingPreferencesError, setBookingPreferencesError] = useState<string | null>(null);
   const [bookingPreferencesNotice, setBookingPreferencesNotice] = useState<string | null>(null);
+  const settingsScope =
+    gateway.quarterCreatePrincipal?.() ?? state.session?.context.user.id ?? state.view;
+  useEffect(() => {
+    profileSettingsPending.current.clear();
+    setProfilePrivacyBusy(false);
+    setBookingPreferencesBusy(false);
+    setProfilePrivacyNotice(null);
+    setBookingPreferencesNotice(null);
+    setProfilePrivacyError(null);
+    setBookingPreferencesError(null);
+  }, [settingsScope]);
+
   const [bookingPreferenceStations, setBookingPreferenceStations] = useState<
     readonly { readonly id: string; readonly name: string }[]
   >([]);
@@ -2668,17 +2689,28 @@ export function App({
   }
 
   function handleSaveProfilePrivacy(input: ProfilePrivacyUpdateRequest): void {
-    if (realAccountPreview) return;
+    if (realAccountPreview || profileSettingsPending.current.has('privacy')) return;
+    const principal = gateway.quarterCreatePrincipal?.();
+    const attempt = {};
+    const current = () =>
+      profileSettingsAlive.current &&
+      gateway.quarterCreatePrincipal?.() === principal &&
+      profileSettingsPending.current.get('privacy') === attempt;
+    profileSettingsPending.current.set('privacy', attempt);
     setProfilePrivacyBusy(true);
     setProfilePrivacyError(null);
     setProfilePrivacyNotice(null);
     void gateway.updateProfilePrivacy(input).then(
       (settings) => {
+        if (!current()) return;
+        profileSettingsPending.current.delete('privacy');
         setProfilePrivacy(settings);
         setProfilePrivacyBusy(false);
         setProfilePrivacyNotice('Настройки сохранены');
       },
       () => {
+        if (!current()) return;
+        profileSettingsPending.current.delete('privacy');
         setProfilePrivacyBusy(false);
         setProfilePrivacyError('Не удалось сохранить. Обновите профиль и повторите.');
       },
@@ -2686,17 +2718,28 @@ export function App({
   }
 
   function handleSaveBookingPreferences(input: BookingPreferencesUpdateRequest): void {
-    if (realAccountPreview) return;
+    if (realAccountPreview || profileSettingsPending.current.has('preferences')) return;
+    const principal = gateway.quarterCreatePrincipal?.();
+    const attempt = {};
+    const current = () =>
+      profileSettingsAlive.current &&
+      gateway.quarterCreatePrincipal?.() === principal &&
+      profileSettingsPending.current.get('preferences') === attempt;
+    profileSettingsPending.current.set('preferences', attempt);
     setBookingPreferencesBusy(true);
     setBookingPreferencesError(null);
     setBookingPreferencesNotice(null);
     void gateway.updateBookingPreferences(input).then(
       (settings) => {
+        if (!current()) return;
+        profileSettingsPending.current.delete('preferences');
         setBookingPreferences(settings);
         setBookingPreferencesBusy(false);
         setBookingPreferencesNotice('Предпочтения сохранены');
       },
       () => {
+        if (!current()) return;
+        profileSettingsPending.current.delete('preferences');
         setBookingPreferencesBusy(false);
         setBookingPreferencesError('Не удалось сохранить. Обновите профиль и повторите.');
       },

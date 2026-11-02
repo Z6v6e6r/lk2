@@ -34,7 +34,7 @@ public struct SessionConfiguration: Sendable {
 }
 
 public enum SessionOperation: String, Sendable {
-  case challenge, verify, refresh, logout, context, read, notification, quarterCreate, gameCancel, stationMessage, stationStream, tournamentChat, tournament, messaging, training, selfLeave, gameJoin
+  case challenge, verify, refresh, logout, context, read, notification, quarterCreate, gameCancel, stationMessage, stationStream, tournamentChat, tournament, messaging, training, selfLeave, gameJoin, profileSettings
 }
 
 public struct SessionRequest: Sendable {
@@ -44,6 +44,7 @@ public struct SessionRequest: Sendable {
   public let body: String?
   public let read: CabinetRead?
   public let notification: NotificationCommand?
+  public let profileSettings:ProfileSettingsRequest?
   public let gameJoin:GameJoinRequest?
   public let selfLeave: SelfLeaveRequest?
   public let training: TrainingRequest?
@@ -57,7 +58,7 @@ public struct SessionRequest: Sendable {
 
   public init(
     operation: SessionOperation, challengeID: String? = nil,
-    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil, quarterCreate: QuarterCreateRequest? = nil, gameCancel: GameCancelRequest? = nil, stationMessage: StationMessageRequest? = nil, stationStream: StationStreamRequest? = nil, tournamentChat: TournamentChatRequest? = nil, tournament: TournamentRequest? = nil, messaging: MessagingCommand? = nil, training: TrainingRequest? = nil, selfLeave: SelfLeaveRequest? = nil, gameJoin:GameJoinRequest? = nil
+    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil, quarterCreate: QuarterCreateRequest? = nil, gameCancel: GameCancelRequest? = nil, stationMessage: StationMessageRequest? = nil, stationStream: StationStreamRequest? = nil, tournamentChat: TournamentChatRequest? = nil, tournament: TournamentRequest? = nil, messaging: MessagingCommand? = nil, training: TrainingRequest? = nil, selfLeave: SelfLeaveRequest? = nil, gameJoin:GameJoinRequest? = nil, profileSettings:ProfileSettingsRequest? = nil
   ) {
     self.operation = operation
     self.challengeID = challengeID
@@ -75,10 +76,16 @@ public struct SessionRequest: Sendable {
     self.training = training
     self.selfLeave = selfLeave
     self.gameJoin = gameJoin
+    self.profileSettings = profileSettings
   }
 
   func urlRequest(configuration: SessionConfiguration) throws -> URLRequest {
     guard messaging == nil || operation == .messaging else { throw SessionFailure.request }
+    if operation == .profileSettings {
+      guard let profileSettings,challengeID==nil,read==nil,notification==nil,quarterCreate==nil,gameCancel==nil,stationMessage==nil,stationStream==nil,tournamentChat==nil,tournament==nil,training==nil,selfLeave==nil,gameJoin==nil else {throw SessionFailure.request}
+      return try profileSettings.urlRequest(configuration:configuration,headers:headers,body:body)
+    }
+    guard profileSettings==nil else {throw SessionFailure.request}
     if operation == .gameJoin {
       guard let gameJoin,challengeID==nil,read==nil,notification==nil,quarterCreate==nil,gameCancel==nil,stationMessage==nil,stationStream==nil,tournamentChat==nil,tournament==nil,training==nil,selfLeave==nil else{throw SessionFailure.request}
       return try gameJoin.urlRequest(configuration:configuration,headers:headers,body:body)
@@ -127,7 +134,7 @@ public struct SessionRequest: Sendable {
     var path = configuration.authPath
     let method: String
     switch operation {
-    case .quarterCreate, .gameCancel, .stationMessage, .stationStream, .tournamentChat, .tournament, .training, .selfLeave, .gameJoin: throw SessionFailure.request
+    case .quarterCreate, .gameCancel, .stationMessage, .stationStream, .tournamentChat, .tournament, .training, .selfLeave, .gameJoin, .profileSettings: throw SessionFailure.request
     case .challenge:
       path += "/challenges"
       method = "POST"
