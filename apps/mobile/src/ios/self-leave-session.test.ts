@@ -97,6 +97,7 @@ it('iOS rejects ACK after token rotation during SDK JSON decoding', async () => 
   );
   const session = syntheticSession(request);
   await session.restore();
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- The spy invokes this saved method with original.call(this).
   const original = Response.prototype.json;
   let release!: (v: unknown) => void;
   const spy = vi.spyOn(Response.prototype, 'json').mockImplementation(function (this: Response) {
