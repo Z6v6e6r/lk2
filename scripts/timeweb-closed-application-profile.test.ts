@@ -89,7 +89,7 @@ describe('closed host migration operation building blocks', () => {
       schemaVersion: 'PHUB_TIMEWEB_RELEASE_MANIFEST_V2',
       gitCommit: image.sourceSha,
       gitTree: image.sourceTree,
-      publication: { runId: image.publicationRunId, runAttempt: 1 },
+      publication: { runId: image.publicationRunId, runAttempt: '1' },
       images: [
         {
           component: 'migrator',
@@ -108,6 +108,20 @@ describe('closed host migration operation building blocks', () => {
       },
     };
     expect(validateClosedApplicationManifest(op, manifest, bytes)).toBe(manifest);
+    for (const runAttempt of [1, 2, '2', '01', '1.0', true, null, ['1']]) {
+      const invalid = { ...manifest, publication: { ...manifest.publication, runAttempt } };
+      const invalidBytes = Buffer.from(JSON.stringify(invalid));
+      const invalidOperation = {
+        ...op,
+        publishedMigrator: {
+          ...image,
+          manifestSha256: createHash('sha256').update(invalidBytes).digest('hex'),
+        },
+      };
+      expect(() =>
+        validateClosedApplicationManifest(invalidOperation, invalid, invalidBytes),
+      ).toThrow('MANIFEST');
+    }
     expect(() =>
       validateClosedApplicationManifest(op, { ...manifest, gitTree: 'f'.repeat(40) }, bytes),
     ).toThrow('MANIFEST');
