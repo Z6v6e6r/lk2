@@ -1,14 +1,14 @@
 # LK2 R1 — GO / NO-GO
 
-## Текущее решение — 2026-11-02
+## Текущее решение — 2026-11-02, monthly checkout
 
-**NO-GO для production.** Source559–564 full/Android/iOS CI verified. Terminal564 интегрирован в558, обе specialist reviews CLEAR; final full/native CI SUCCESS. Исправлен controlled RED2 immediate SELF race, GREEN42 и final8978CI tests. LK288 full/physicalMongo CI green; CUP76 full/physicalMongo и все4workflows green. Трёхрепозиторный source tuple зафиксирован. Точные SHA/runs: [READINESS](R1-READINESS.md).
+**NO-GO для production.** Source-gap ordinary monthly native purchase закрыт: LK2#565 и paired LK#289 имеют reviewed source, full/native/physical CI. Они наследуют подготовленные интеграции#558/#288; CUP#76 остаётся совместимым source head. Точные SHA/runs и ограничения в [READINESS](R1-READINESS.md).
 
-До GO нужны: завершение canonical/native consumer существующего counter purchase (source implementation продолжается); Viva attributable CURRENCY/DEPOSIT settlement и training leave/visit-return contracts; actual STAGING/PROVIDER journeys; signed devices и physical APNs/FCM; verified backup/restore/rollback, immutable artifact/signing/store custody. Permissions подтверждены, но отсутствие технических условий не превращается в готовность.
+До GO остаются attributable Viva CURRENCY/DEPOSIT settlement и training LEAVE/visit-return contracts; actual STAGING/PROVIDER journeys на единой версии; signed devices и physical APNs/FCM; immutable manifest/signing/store custody и verified backup/restore/rollback. Это открытые release acceptance задачи, не новый запрос общего разрешения.
 
-Не заявлять завершение R1 или production verification по source implementation, cancelledbooking, initialPAID, greenCI либо unsigned build. Исполненных production/provider/store операций нет.
+Не объявлять R1 завершённым по Draft PR, зелёному CI, cancelledbooking, historicalPAID, DOM/JVM/Swift tests или unsigned builds. Main merge, публикация, deploy, realDB/provider/signing/store операции в этой контрольной точке не выполнялись.
 
-Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Владелец подтвердил интеграции и продолжение: повторное общее разрешение не требуется. Отсутствующие контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
+Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Интеграции и продолжение подтверждены владельцем. Технические контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
 
 ## Текущее решение — 2026-11-01
 

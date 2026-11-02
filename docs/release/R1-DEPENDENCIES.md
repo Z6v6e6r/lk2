@@ -1,17 +1,17 @@
 # LK2 R1 — зависимости и критический путь
 
-## Текущий dependency-aware critical path — 2026-11-02
+## Текущий dependency-aware critical path — 2026-11-02, monthly checkout
 
-1. VERIFIED SOURCE/CI: native559–564 включены в558 c8e10631ebb66b9a9ec223ea0ac35662a72fef87; full41385425398:8978PASS/127SKIP и Android/iOS SUCCESS. Merge107paths exact-parent плюс reviewed2-file lifecycle fix; integration owner/root.
-2. Параллельно LK288: currentmain +287/280/281/286; standalone268 не добавлять, kernel fix patch-equivalent во всех входах. CUP76:75+73+69;57–60 exact ancestors,65 runtime/test fixes semantically present. LK288 и CUP76 full/physicalMongo CI SUCCESS. CUP первый combined run исправлен только форматированием YAML; parsed semantics unchanged,5guards PASS, final4workflows SUCCESS.
-3. Зафиксирован совместимый трёхрепозиторный source tuple558c8e10631/LK288046f29b6/CUP76b581eba1. Leaf CI не подтверждает integrated runtime. Сохранить migration ledger, legacy contracts и historical source preimages; не генерировать live Node-RED export из старого snapshot.
-4. Продолжить feasible SOURCE native counter checkout через существующий owner: catalog/actor-bound pre-POST monthly journal/status/strict transaction-linked issuance, first-party launch и manual return/reconcile; сначала ordinary monthly Friendship. Не переносить annual-only guarantees на monthly. Это собственная реализация, не внешний contract blocker. Отдельные provider gates: attributable Viva refund/DEPOSIT outcome и training leave/visit-return.
-5. На согласованном immutable кандидате провести STAGING/PROVIDER и signed-device acceptance: все обязательные journeys, отрицательные/конкурентные/retry/offline/recovery cases, APNs/FCM; подтвердить current flags, owner bindings и роли.
-6. Immutable manifest/signing custody + verified backup/restore/rollback + observability → конкретное release/deploy/store решение. Без этих inputs GO не выдавать. Ни publication, ни migration, ни live payment/replay автоматически не следуют из source integration.
+1. VERIFIED SOURCE/CI: LK2#565 включает#558 и native559–564; LK#289 включает#288; CUP#76 включает интегрированный CUP owner. Точные immutable heads/runs в [READINESS](R1-READINESS.md). Нет необходимости повторять уже включённые local merges.
+2. Закрыт source-gap ordinary monthly checkout: LK owner journal/CAS перед provider dispatch и строгая выдача; LK2 migration0115, canonical API, native original-key custody, exact consent, one-use first-party launch, read-only foreground/manual reconcile. Full/native/physical CI зелёные; активации не было.
+3. Независимые contract gates: Viva attributable CURRENCY/DEPOSIT read proof; training LEAVE/visit-return ownership. До контракта нельзя объявить cancellation/compensation завершёнными либо разрешить повтор неизвестного денежного действия.
+4. Заморозить immutable operational candidate: component images/manifest, совместимая expand-only migration chain, текущие owner bindings/roles/flags и signer custody. Source SHA не равен image digest. Node-RED live preimage нельзя заменять историческим export.
+5. STAGING/PROVIDER acceptance на единой версии: все обязательные journeys, concurrency, retry, timeout, offline/process death/recovery, actual issuance/usage/refund; совместимость LK1. Параллельно signed iOS/Android и APNs/FCM device acceptance.
+6. Verified backup/restore/rollback и observability + store custody → конкретное GO/NO-GO по тем же артефактам. Публикация, migration, replay, payment и store activation не следуют автоматически из source integration.
 
-Точные состояния и commits: [READINESS](R1-READINESS.md). До закрытия пунктов4–6 production NO-GO независимо от CI.
+Пункты3–6 остаются открытыми. Смена только документации не инвалидирует успешно проверенный runtime source; результаты повторно не запускались без изменения inputs.
 
-Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Владелец подтвердил интеграции и продолжение: повторное общее разрешение не требуется. Отсутствующие контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
+Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Интеграции и продолжение подтверждены владельцем. Технические контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
 
 ## Текущий dependency-aware путь — 2026-11-01
 

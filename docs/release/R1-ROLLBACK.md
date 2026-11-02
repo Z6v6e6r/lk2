@@ -1,16 +1,16 @@
 # LK2 R1 — rollback и recovery readiness
 
-## Дополнение recovery — 2026-11-02
+## Дополнение recovery — 2026-11-02, monthly checkout
 
-Изменения находятся в task/integration branches и Draft PR; production rollback не выполнялся. Источники: [READINESS](R1-READINESS.md).
+Изменения находятся в task/integration branches и Draft PR; production rollback не выполнялся. Точные sources: [READINESS](R1-READINESS.md).
 
-Native participation recovery сохраняет original account/key/body. UNKNOWN не допускает fresh JOIN key; paid JOIN толькоstatus/reconcile; SELF LEAVE использует исходную операцию. CANCEL — одинPOST и canonicalGET, поздняя revision не воскрешает активную карточку. Profile explicit same-version/body retry восстанавливает тот же key; obsolete account/token response не меняет текущие настройки. Серверные receipts/CAS остаются authority.
+Monthly rollback закрывает новый admission и bank launch. Сохранить expand-only0115, original keys, dispatch stamps, owner custody/observations, receipts, audit и outbox. Не удалять UNKNOWN и не возвращаться к unjournaled provider POST. Journal reads остаются доступны при admission off; для reconciliation нужен совместимый API/owner recovery code в конкретном operational плане. Expired launch или отсутствие browser return не доказывают payment failure. Только недиспетчеризованный QUOTED может обновить цену под прежним ключом; started/UNKNOWN не сбрасываются. PAID receipt не заменяет current entitlement.
 
-Реальный rollback требует previous immutable manifest, backup custody, совместимости expand/migrate/contract, сохранения operation/outbox/receipts и конкретного rehearsed плана. Не удалять и не переигрывать ambiguous payment/booking/notification attempts. До attributable settlement нельзя автоматически выполнять monetary compensation. Restore/rollback rehearsal и physical device recovery остаются UNKNOWN.
+Native game recovery сохраняет original account/key/body. Paid JOIN — только status/reconcile после неоднозначного ответа; SELF использует исходную операцию. CANCEL — одинPOST/canonicalGET, поздняя revision не воскрешает карточку. Profile retry сохраняет same-version/body/key; obsolete principal response не меняет текущие настройки.
 
-Source rollback profile/consumers — reversion capability/UI; migrations/config отсутствуют. Companion integration не меняет исторические source preimage pins и не является live rollback packet. Удалённые старые Git metadata не восстанавливались поверх существующих файлов.
+Live rollback требует previous immutable manifest, свежего backup, совместимости expand/migrate/contract и rehearsed recovery. До attributable settlement нельзя автоматически компенсировать денежные операции. Restore/rollback и physical-device recovery остаются UNKNOWN. Source revert UI не удаляет durable journals или owner history; historical source pins не являются live preimage.
 
-Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Владелец подтвердил интеграции и продолжение: повторное общее разрешение не требуется. Отсутствующие контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
+Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Интеграции и продолжение подтверждены владельцем. Технические контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
 
 ## Дополнение recovery — 2026-11-01
 

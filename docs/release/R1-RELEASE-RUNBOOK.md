@@ -1,16 +1,18 @@
 # LK2 R1 — release preparation и controlled handoff
 
-## Дополнение подготовки — 2026-11-02
+## Дополнение подготовки — 2026-11-02, monthly checkout
 
-Coherent source tuple LK2 terminal native564→558, LK288, CUP76 завершён с зелёными combined checks. Следующий отдельный implementation scope — guarded native counter checkout, без изменения production payment configuration. Точные источники: [READINESS](R1-READINESS.md). Никакой leaf head автоматически не становится release candidate.
+Coherent source tuple: LK2#565, LK#289, CUP#76; exact heads/runs в [READINESS](R1-READINESS.md). Все исходники находятся в Draft PR; это не immutable release manifest.
 
-Перед source-main переходом сверить current main/head/tree/mergeability, checks и поведение standard-delivery workflows. Исторические циклы флагов508/511 не доказывают текущий flag state. LK Draft и критический scope исключены trusted frontend auto-merge policy; не менять Draft/flags для обхода gates.
+Перед source-main переходом заново проверить head/tree/main/checks и автоматические delivery workflows. Исторические циклы флагов508/511 не доказывают текущую конфигурацию. Не менять Draft/flags для обхода gates.
 
-До release package закрыть payment/refund/training contracts и actual owner/config composition. Публикация должна дать один immutable manifest с digest всех компонентов; PR no-push Docker build не является публикацией. Затем current backup/restore/rollback custody, STAGING/PROVIDER journeys, signed iOS/Android и APNs/FCM acceptance. Release/store target и конкретные артефакты фиксируются до исполнения.
+Monthly activation prerequisites: paired LK/LK2 source; expand-only0115; существующая server-only actor signing configuration; current unique provider mappings; default-off owner binding и API flag; actual provider strict receipt/issued-instance proof, single dispatch/recovery и device acceptance. Три новых env-параметра разрешены только API. WARN/JOIN контракты сохранены. Production owner origin фиксирован; payment return игнорирует банковские query поля. Не создавать signing keys и не включать флаги как побочный эффект подготовки.
 
-Источник LK1 собирается только существующим source-driven процессом. Старые Git metadata восстановлены новым isolated clone; это не live Node-RED preimage. Не выполнять quarantined sync-games-source/prepare-147/exports и не генерировать productionflow из истории.
+Сначала закрыть refund/training contracts и подтвердить actual owner/config composition. Release publication должна дать один immutable manifest; PR no-push Docker build не является публикацией. Далее backup/restore/rollback custody, STAGING/PROVIDER и signed-device/APNs/FCM acceptance. Артефакты и целевой runtime фиксируются до исполнения.
 
-Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Владелец подтвердил интеграции и продолжение: повторное общее разрешение не требуется. Отсутствующие контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
+LK1 собирается существующим source-driven процессом. Не выполнять quarantined sync-games-source/prepare-147 и не генерировать production flow из исторического export. Последовательный rollout/rollback проводится только по существующим runbooks и свежим preconditions.
+
+Эта контрольная точка заменяет противоречащие ей статусы ниже; старые разделы сохранены как история. LOCAL, CI, STAGING, PROVIDER и PRODUCTION — разные уровни доказательств. Интеграции и продолжение подтверждены владельцем. Технические контракты, immutable inputs и runtime evidence не заменяются разрешением. Main, publication, deploy, реальные БД/provider, signing и stores в этой контрольной точке не изменялись.
 
 ## Дополнение подготовки — 2026-11-01
 
