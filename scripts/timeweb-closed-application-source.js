@@ -53,6 +53,7 @@ export const CLOSED_R1_CONTROLLER_FILES = Object.freeze([
   'scripts/r1-tail-migration-source.js',
   'scripts/r1-tail-migration-catalog.js',
   'scripts/r1-tail-migration-catalog.test.ts',
+  'scripts/r1-tail-migration-profile.test.ts',
   'docs/runbooks/closed-application-migrations-0103-0104.md',
   'docs/runbooks/r1-tail108-119-migration.md',
 ]);

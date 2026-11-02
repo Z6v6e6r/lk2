@@ -3,7 +3,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import descriptor from '../deploy/timeweb/r1-tail108-119.v1.json';
-import unreviewed from '../deploy/timeweb/r1-tail108-119-catalogs.v1.json';
+import reviewed from '../deploy/timeweb/r1-tail108-119-catalogs.v1.json';
 import { R1_TAIL_CATALOG_SQL, R1_TAIL_TABLES } from './r1-tail-migration-catalog.js';
 import {
   parseR1TailTarget,
@@ -62,9 +62,16 @@ describe('fixed R1 tail inventory and admission', () => {
       { ...target, catalogVariant: 'AUTO' },
     ])
       expect(() => parseR1TailTarget(bad)).toThrow();
-    expect(() =>
-      validateR1TailCatalogs(unreviewed, r1Encode(unreviewed), r1Hash(r1Encode(unreviewed))),
-    ).toThrow('R1_TAIL_CATALOGS_NOT_ADMITTED');
+    expect(
+      validateR1TailCatalogs(reviewed, r1Encode(reviewed), r1Hash(r1Encode(reviewed))),
+    ).toEqual(reviewed);
+    expect(reviewed.builderSha256).toBe(r1Hash(R1_TAIL_CATALOG_SQL));
+    for (const status of ['UNREHEARSED', 'REHEARSED_UNREVIEWED']) {
+      const unreviewed = { ...reviewed, status };
+      expect(() =>
+        validateR1TailCatalogs(unreviewed, r1Encode(unreviewed), r1Hash(r1Encode(unreviewed))),
+      ).toThrow('R1_TAIL_CATALOGS_NOT_ADMITTED');
+    }
   });
   it('serializes exact changed relations, parent ACLs and attached trigger definitions', () => {
     expect(R1_TAIL_TABLES).toContain('notifications.intents');

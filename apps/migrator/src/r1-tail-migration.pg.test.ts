@@ -13,6 +13,7 @@ import { Pool } from 'pg';
 import type { PoolClient } from 'pg';
 import { describe, expect, it } from 'vitest';
 import original from '../../../deploy/timeweb/notification-migration-catalogs.v1.json';
+import reviewed from '../../../deploy/timeweb/r1-tail108-119-catalogs.v1.json';
 import closed from '../../../deploy/timeweb/closed-application-migrations-0103-0104.v1.json';
 import {
   CLOSED_APPLICATION_CATALOG_SQL,
@@ -523,6 +524,8 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
         builderSha256: r1Hash(R1_TAIL_CATALOG_SQL),
         variants: exported,
       };
+      // Regeneration must reproduce the independently reviewed source checkpoints exactly.
+      expect({ ...value, status: 'REHEARSED_REVIEWED' }).toEqual(reviewed);
       // Never rewrite an admitted source file or export a URL, credential, dump or business row.
       const directory = resolve('.ci-artifacts/test-and-coverage');
       await mkdir(directory, { recursive: true });

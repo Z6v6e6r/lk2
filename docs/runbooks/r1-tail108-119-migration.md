@@ -13,15 +13,20 @@ destructive down migration is a separately reviewed operation.
 and conservative5s advisory/5s lock/30s statement/8min process budgets. Unknown inventory,
 non-prefix ledger, altered checksum or wrong target is refused.
 
-The checked-in semantic catalog initially has `UNREHEARSED` status. **No forward entry accepts
-it.** The existing explicitly owned PostgreSQL16 CI contour registers the additional R1 suite
-through one test-only import in `closed-single-migration.pg.test.ts`. Its synthetic artifact is
-`.ci-artifacts/test-and-coverage/r1-tail108-119-catalogs.v1.json` within the existing diagnostic
-upload. It contains only source-derived catalog fingerprint/count checkpoints, never a live
-URL, password, dump, business row or copied production preimage. The export is
-`REHEARSED_UNREVIEWED`; independently review it and commit the exact approved catalog as
-`REHEARSED_REVIEWED` before source/package admission. CI does not automatically edit trusted
-source or grant live authority.
+The checked-in semantic catalog is `REHEARSED_REVIEWED`, promoted from the independently
+reviewed PostgreSQL16 artifact of CI [41444019765](https://github.com/Z6v6e6r/lk2/actions/runs/41444019765),
+source `ab4e2344eb9fc2a6bf9738bf97e4960ab3fe67e6`, artifact13142861008.
+Archive SHA256: `de699d205937f27f9d746d65e455bfd14a49fb245d26e3f3e49210c7d712aade`;
+export SHA256: `518d046c52bad1cdb16863a934ef737e3fa14ccef4da41858aaaccdc5dd157c8`.
+Only the status changed on promotion. The existing explicitly owned CI contour generates
+`.ci-artifacts/test-and-coverage/r1-tail108-119-catalogs.v1.json` and now compares every
+checkpoint to the admitted source. The export remains `REHEARSED_UNREVIEWED`; CI never
+updates trusted source or grants live authority. It contains only synthetic source-derived
+fingerprints/counts, never a live URL, password, dump, business row or production preimage.
+
+The two variants have identical tail fingerprints because this serializer does not include
+the nine scenario-editor grants. Their distinction is checked by the original closed108
+fixture; these tail fingerprints alone are not a complete live ACL inventory.
 
 Both `DORMANT` and `SCENARIO_EDITOR_V1` variants have prepared and cleaned owner/ACL states for
 every prefix. The serializer reuses existing semantics plus storage, rules, dropped attributes,
