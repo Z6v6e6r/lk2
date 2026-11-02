@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.27.0
+  version: 1.28.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -30,8 +30,26 @@ tags:
   - name: realtime
     description: Short-lived one-time tickets for the PadlHub WebSocket gateway.
   - name: subscriptions
-    description: Non-binding WARN-only subscription-runtime checks through a server-owned actor delegation.
+    description: Authenticated subscription checks and actor-bound original monthly purchase custody.
 paths:
+  /{tenantKey}/subscription-purchase-operations/capability:
+    $ref: ./monthly-purchase.yaml#/paths/~1{tenantKey}~1subscription-purchase-operations~1capability
+  /{tenantKey}/subscription-purchase-operations/quote:
+    $ref: ./monthly-purchase.yaml#/paths/~1{tenantKey}~1subscription-purchase-operations~1quote
+  /{tenantKey}/subscription-purchase-operations:
+    $ref: ./monthly-purchase.yaml#/paths/~1{tenantKey}~1subscription-purchase-operations
+  /{tenantKey}/subscription-purchase-operations/by-key:
+    $ref: ./monthly-purchase.yaml#/paths/~1{tenantKey}~1subscription-purchase-operations~1by-key
+  /{tenantKey}/subscription-purchase-operations/{operationId}/reconcile:
+    $ref: ./monthly-purchase.yaml#/paths/~1{tenantKey}~1subscription-purchase-operations~1{operationId}~1reconcile
+  /{tenantKey}/subscription-purchase-operations/{operationId}/payment-launch:
+    $ref: ./monthly-purchase.yaml#/paths/~1{tenantKey}~1subscription-purchase-operations~1{operationId}~1payment-launch
+  /subscription-payment-launch:
+    $ref: ./monthly-purchase.yaml#/paths/~1subscription-payment-launch
+  /subscription-payment-return:
+    $ref: ./monthly-purchase.yaml#/paths/~1subscription-payment-return
+  /subscription-payment-launch/consume:
+    $ref: ./monthly-purchase.yaml#/paths/~1subscription-payment-launch~1consume
   /{tenantKey}/game-create-operations/capability:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey

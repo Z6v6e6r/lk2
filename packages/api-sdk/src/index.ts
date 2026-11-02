@@ -1,3 +1,15 @@
+import type {
+  SubscriptionPurchaseConsent,
+  SubscriptionPurchaseQuote,
+  SubscriptionPurchaseResult,
+  SubscriptionPaymentLaunch,
+} from '@phub/api-contracts';
+export type {
+  SubscriptionPurchaseConsent,
+  SubscriptionPurchaseQuote,
+  SubscriptionPurchaseResult,
+  SubscriptionPaymentLaunch,
+} from '@phub/api-contracts';
 import {
   TournamentChatError,
   parseTournamentChatReadRequest,
@@ -1791,6 +1803,74 @@ export class PadlHubApiClient {
    * while the managed contour is enabled; with the contour disabled the legacy strict body applies
    * and a paid create keeps the existing `GAME_PAYMENT_REQUIRED` refusal.
    */
+  public getSubscriptionPurchaseCapability(): Promise<{
+    contractVersion: 1;
+    available: boolean;
+    offers: { id: string; title: string }[];
+  }> {
+    return this.request('/subscription-purchase-operations/capability', {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public quoteSubscriptionPurchase(
+    offerId: string,
+    key: string,
+  ): Promise<SubscriptionPurchaseQuote> {
+    return this.request('/subscription-purchase-operations/quote', {
+      method: 'POST',
+      idempotencyKey: key,
+      body: jsonRequestBody({ offerId }),
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public purchaseSubscription(
+    input: SubscriptionPurchaseConsent,
+    key: string,
+  ): Promise<SubscriptionPurchaseResult> {
+    return this.request('/subscription-purchase-operations', {
+      method: 'POST',
+      idempotencyKey: key,
+      body: jsonRequestBody(input),
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public getSubscriptionPurchase(key: string): Promise<SubscriptionPurchaseResult> {
+    return this.request('/subscription-purchase-operations/by-key', {
+      headers: { 'Idempotency-Key': key },
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public reconcileSubscriptionPurchase(
+    id: string,
+    key: string,
+  ): Promise<SubscriptionPurchaseResult> {
+    return this.request(
+      '/subscription-purchase-operations/' + encodeURIComponent(id) + '/reconcile',
+      {
+        method: 'POST',
+        idempotencyKey: key,
+        body: jsonRequestBody({}),
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+      },
+    );
+  }
+  public launchSubscriptionPayment(id: string, key: string): Promise<SubscriptionPaymentLaunch> {
+    return this.request(
+      '/subscription-purchase-operations/' + encodeURIComponent(id) + '/payment-launch',
+      {
+        method: 'POST',
+        idempotencyKey: key,
+        body: jsonRequestBody({}),
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+      },
+    );
+  }
   public getQuarterCreateLocations(): Promise<{
     items: { stationId: string; courtId: string; stationTitle: string; courtName: string }[];
   }> {

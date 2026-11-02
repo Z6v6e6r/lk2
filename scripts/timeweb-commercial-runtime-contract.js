@@ -48,6 +48,12 @@ export function validateTimewebCommercialRuntime(api, fail) {
     !['false', 'true'].includes(api.GAME_COMMERCIAL_JOIN_ENABLED)
   )
     fail('commercial_join_flag');
+  if (
+    api.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED !== undefined &&
+    !['false', 'true'].includes(api.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED)
+  )
+    fail('monthly_purchase_flag');
+  const monthly = api.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED === 'true';
   const active = api.GAME_COMMERCIAL_JOIN_ENABLED === 'true';
   if (active && mode !== 'WARN') fail('commercial_join_boundary_required');
   const secureBase = (value) => {
@@ -65,6 +71,13 @@ export function validateTimewebCommercialRuntime(api, fail) {
       return false;
     }
   };
+  if (api.MONTHLY_SUBSCRIPTION_OWNER_BASE_URL !== undefined) {
+    if (
+      !secureBase(api.MONTHLY_SUBSCRIPTION_OWNER_BASE_URL) ||
+      new URL(api.MONTHLY_SUBSCRIPTION_OWNER_BASE_URL).href !== 'https://padlhub.su/'
+    )
+      fail('monthly_purchase_owner_invalid');
+  }
   for (const key of ['SUBSCRIPTION_RUNTIME_BASE_URL', 'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL']) {
     if (api[key] !== undefined && !secureBase(api[key]))
       fail('subscription_runtime_boundary_invalid');
@@ -79,22 +92,23 @@ export function validateTimewebCommercialRuntime(api, fail) {
       fail('subscription_runtime_boundary_invalid');
   }
   if (mode === 'WARN') {
+    if (!api.SUBSCRIPTION_RUNTIME_BASE_URL || !api.SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN)
+      fail('subscription_runtime_boundary_incomplete');
+    if (
+      !secureBase(api.SUBSCRIPTION_RUNTIME_BASE_URL) ||
+      !/^[!-~]{32,4096}$/u.test(api.SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN)
+    )
+      fail('subscription_runtime_boundary_invalid');
+  }
+  if (mode === 'WARN' || monthly) {
     const required = [
-      'SUBSCRIPTION_RUNTIME_BASE_URL',
-      'SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN',
       'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
       'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
       'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER',
       'SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE',
+      ...(monthly ? ['MONTHLY_SUBSCRIPTION_OWNER_BASE_URL'] : []),
     ];
     if (required.some((key) => !api[key])) fail('subscription_runtime_boundary_incomplete');
-    if (
-      !secureBase(api.SUBSCRIPTION_RUNTIME_BASE_URL) ||
-      !/^[!-~]{32,4096}$/u.test(api.SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN) ||
-      !/^[!-~]{1,512}$/u.test(api.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER) ||
-      !/^[!-~]{1,256}$/u.test(api.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE)
-    )
-      fail('subscription_runtime_boundary_invalid');
     const entries = parseTimewebDelegationKeyring(
       api.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS,
       fail,
@@ -110,6 +124,7 @@ export function validateTimewebCommercialRuntime(api, fail) {
   )
     fail('commercial_join_owner_unavailable');
   const bounds = {
+    MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS: [100, 10000],
     GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS: [100, 5000],
     SUBSCRIPTION_RUNTIME_TIMEOUT_MS: [100, 10000],
     SUBSCRIPTION_RUNTIME_CIRCUIT_FAILURE_THRESHOLD: [1, 100],

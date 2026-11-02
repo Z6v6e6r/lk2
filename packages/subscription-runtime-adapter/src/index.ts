@@ -731,3 +731,4 @@ export * from './training-station-membership.js';
 export { QuarterCreateOwnerClient, QuarterPreparationRefused } from './quarter-create.js';
 
 export * from './quarter-create-station-membership.js';
+export { MonthlyPurchaseOwnerClient, type MonthlyOwnerEnvelope } from './monthly-purchase.js';

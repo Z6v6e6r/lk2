@@ -1,3 +1,5 @@
+import type { MonthlyPurchaseGateway } from '../../../web/src/monthly-purchase-attempt.js';
+import { monthlyRequest } from '../native-monthly-purchase-request.js';
 import { nativeProfileSettingsRequest } from '../native-profile-settings-request.js';
 import {
   profileSettingsCommand,
@@ -58,6 +60,7 @@ interface NativeRequest {
     | 'context'
     | 'read'
     | 'notification'
+    | 'monthlyPurchase'
     | 'quarterCreate'
     | 'gameCancel'
     | 'stationMessage'
@@ -81,6 +84,10 @@ interface NativeRequest {
 
 export interface IOSSessionPlugin {
   configuration(): Promise<IOSConfiguration>;
+  openSubscriptionPayment?(input: {
+    operationId: string;
+    launchCode: string;
+  }): Promise<{ opened: true }>;
   request(input: NativeRequest): Promise<{
     readonly status: number;
     readonly headers: Record<string, string>;
@@ -103,6 +110,7 @@ export function createIOSFetch(
   canDispatchSelfLeave?: (request: NativeSelfLeaveRequest, key: string) => boolean,
   canDispatchJoin?: (request: NativeJoinRequest) => boolean,
   canDispatchProfileSettings?: (request: NativeProfileSettingsRequest) => boolean,
+  canDispatchMonthly?: () => boolean,
 ): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   let cancellationClosed = false;
@@ -119,6 +127,7 @@ export function createIOSFetch(
     const stream = stationStreamRequest(value, init, config);
     const station = stream ?? stationRequest(value, init, config);
     const cancel = gameCancelRequest(value, init, config);
+    const monthly = monthlyRequest(value, init, config);
     const quarter = quarterRequest(value, init, config);
     const tournament = tournamentChat
       ? null
@@ -137,6 +146,7 @@ export function createIOSFetch(
       !station &&
       !tournamentChat &&
       !tournament &&
+      !monthly &&
       !quarter &&
       (init?.method ?? 'GET') === 'GET'
         ? cabinetReadRequest(value, config)
@@ -166,6 +176,7 @@ export function createIOSFetch(
     else if (tournamentChat) operation = 'tournamentChat';
     else if (station) operation = stream ? 'stationStream' : 'stationMessage';
     else if (cancel) operation = 'gameCancel';
+    else if (monthly) operation = 'monthlyPurchase';
     else if (quarter) operation = 'quarterCreate';
     else if (tournament) operation = 'tournament';
     else if (read) operation = 'read';
@@ -236,6 +247,7 @@ export function createIOSFetch(
     if (read && init?.body != null) throw rejectedRequest();
     if (settings && (cancellationClosed || canDispatchProfileSettings?.(settings) !== true))
       throw rejectedRequest();
+    if (monthly && (cancellationClosed || canDispatchMonthly?.() !== true)) throw rejectedRequest();
     if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
     try {
       const result = await plugin.request({
@@ -250,6 +262,7 @@ export function createIOSFetch(
         ...(tournament ?? {}),
         ...(notification ?? {}),
         ...(quarter ?? {}),
+        ...(monthly ?? {}),
         ...(cancel ?? {}),
         ...(station ?? {}),
         ...(tournamentChat ?? {}),
@@ -257,6 +270,8 @@ export function createIOSFetch(
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (monthly && (cancellationClosed || originalCancellationEpoch !== cancellationEpoch))
+        throw new DOMException('Session changed', 'AbortError');
       if (
         settings &&
         (cancellationClosed ||
@@ -392,6 +407,7 @@ export class IOSSession {
   public constructor(
     public readonly configuration: IOSConfiguration,
     private readonly api: PadlHubApiClient,
+    private readonly paymentPlugin?: IOSSessionPlugin,
   ) {}
 
   public getSnapshot = (): IOSSessionState => this.state;
@@ -416,6 +432,50 @@ export class IOSSession {
     }
   }
 
+  private readonly monthlyPending = new Set<{ principal: string; token: string }>();
+  public canDispatchMonthly(): boolean {
+    return [...this.monthlyPending].some(
+      (x) => x.principal === this.quarterCreatePrincipal() && x.token === this.api.getAccessToken(),
+    );
+  }
+  private async monthlyCall<T>(load: () => Promise<T>): Promise<T> {
+    const principal = this.quarterCreatePrincipal(),
+      token = this.api.getAccessToken();
+    if (!principal || !token) throw rejectedRequest();
+    const entry = { principal, token };
+    this.monthlyPending.add(entry);
+    try {
+      const value = await load();
+      if (principal !== this.quarterCreatePrincipal() || token !== this.api.getAccessToken())
+        throw rejectedRequest();
+      return value;
+    } finally {
+      this.monthlyPending.delete(entry);
+    }
+  }
+  public monthlyPurchaseGateway(): MonthlyPurchaseGateway {
+    return {
+      monthlyPurchasePrincipal: () => this.quarterCreatePrincipal(),
+      getSubscriptionPurchaseCapability: () =>
+        this.monthlyCall(() => this.api.getSubscriptionPurchaseCapability()),
+      quoteSubscriptionPurchase: (offer, key) =>
+        this.monthlyCall(() => this.api.quoteSubscriptionPurchase(offer, key)),
+      purchaseSubscription: (input, key) =>
+        this.monthlyCall(() => this.api.purchaseSubscription(input, key)),
+      getSubscriptionPurchase: (key) =>
+        this.monthlyCall(() => this.api.getSubscriptionPurchase(key)),
+      reconcileSubscriptionPurchase: (id, key) =>
+        this.monthlyCall(() => this.api.reconcileSubscriptionPurchase(id, key)),
+      launchSubscriptionPayment: (id, key) =>
+        this.monthlyCall(() => this.api.launchSubscriptionPayment(id, key)),
+      openSubscriptionPayment: (input) =>
+        this.monthlyCall(async () => {
+          if (!this.paymentPlugin?.openSubscriptionPayment) throw rejectedRequest();
+          const r = await this.paymentPlugin.openSubscriptionPayment(input);
+          if (r.opened !== true || Object.keys(r).length !== 1) throw rejectedRequest();
+        }),
+    };
+  }
   public closeQuarterCreate(): void {
     this.quarterClosed = true;
     this.quarterEpoch++;
@@ -1040,9 +1100,10 @@ export function getIOSSession(): Promise<IOSSession> {
         (request, key) => session?.canDispatchSelfLeave(request, key) === true,
         (request) => session?.canDispatchJoin(request) === true,
         (request) => session?.canDispatchProfileSettings(request) === true,
+        () => session?.canDispatchMonthly() === true,
       ),
     });
-    const session: IOSSession = new IOSSession(configuration, api);
+    const session: IOSSession = new IOSSession(configuration, api, plugin);
     await session.restore();
     return session;
   })();

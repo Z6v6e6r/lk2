@@ -34,7 +34,7 @@ public struct SessionConfiguration: Sendable {
 }
 
 public enum SessionOperation: String, Sendable {
-  case challenge, verify, refresh, logout, context, read, notification, quarterCreate, gameCancel, stationMessage, stationStream, tournamentChat, tournament, messaging, training, selfLeave, gameJoin, profileSettings
+  case challenge, verify, refresh, logout, context, read, notification, monthlyPurchase, quarterCreate, gameCancel, stationMessage, stationStream, tournamentChat, tournament, messaging, training, selfLeave, gameJoin, profileSettings
 }
 
 public struct SessionRequest: Sendable {
@@ -54,11 +54,12 @@ public struct SessionRequest: Sendable {
   public let stationStream: StationStreamRequest?
   public let stationMessage: StationMessageRequest?
   public let gameCancel: GameCancelRequest?
+  public let monthlyPurchase: MonthlyPurchaseRequest?
   public let quarterCreate: QuarterCreateRequest?
 
   public init(
     operation: SessionOperation, challengeID: String? = nil,
-    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil, quarterCreate: QuarterCreateRequest? = nil, gameCancel: GameCancelRequest? = nil, stationMessage: StationMessageRequest? = nil, stationStream: StationStreamRequest? = nil, tournamentChat: TournamentChatRequest? = nil, tournament: TournamentRequest? = nil, messaging: MessagingCommand? = nil, training: TrainingRequest? = nil, selfLeave: SelfLeaveRequest? = nil, gameJoin:GameJoinRequest? = nil, profileSettings:ProfileSettingsRequest? = nil
+    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil, monthlyPurchase: MonthlyPurchaseRequest? = nil, quarterCreate: QuarterCreateRequest? = nil, gameCancel: GameCancelRequest? = nil, stationMessage: StationMessageRequest? = nil, stationStream: StationStreamRequest? = nil, tournamentChat: TournamentChatRequest? = nil, tournament: TournamentRequest? = nil, messaging: MessagingCommand? = nil, training: TrainingRequest? = nil, selfLeave: SelfLeaveRequest? = nil, gameJoin:GameJoinRequest? = nil, profileSettings:ProfileSettingsRequest? = nil
   ) {
     self.operation = operation
     self.challengeID = challengeID
@@ -67,6 +68,7 @@ public struct SessionRequest: Sendable {
     self.read = read
     self.notification = notification
     self.tournament = tournament
+    self.monthlyPurchase = monthlyPurchase
     self.quarterCreate = quarterCreate
     self.gameCancel = gameCancel
     self.stationMessage = stationMessage
@@ -80,6 +82,11 @@ public struct SessionRequest: Sendable {
   }
 
   func urlRequest(configuration: SessionConfiguration) throws -> URLRequest {
+    if operation == .monthlyPurchase {
+      guard let monthlyPurchase,challengeID==nil,read==nil,notification==nil,quarterCreate==nil,gameCancel==nil,stationMessage==nil,stationStream==nil,tournamentChat==nil,tournament==nil,messaging==nil,training==nil,selfLeave==nil,gameJoin==nil,profileSettings==nil else {throw SessionFailure.request}
+      return try monthlyPurchase.urlRequest(configuration:configuration,headers:headers,body:body)
+    }
+    guard monthlyPurchase == nil else {throw SessionFailure.request}
     guard messaging == nil || operation == .messaging else { throw SessionFailure.request }
     if operation == .profileSettings {
       guard let profileSettings,challengeID==nil,read==nil,notification==nil,quarterCreate==nil,gameCancel==nil,stationMessage==nil,stationStream==nil,tournamentChat==nil,tournament==nil,training==nil,selfLeave==nil,gameJoin==nil else {throw SessionFailure.request}
@@ -134,7 +141,7 @@ public struct SessionRequest: Sendable {
     var path = configuration.authPath
     let method: String
     switch operation {
-    case .quarterCreate, .gameCancel, .stationMessage, .stationStream, .tournamentChat, .tournament, .training, .selfLeave, .gameJoin, .profileSettings: throw SessionFailure.request
+    case .monthlyPurchase, .quarterCreate, .gameCancel, .stationMessage, .stationStream, .tournamentChat, .tournament, .training, .selfLeave, .gameJoin, .profileSettings: throw SessionFailure.request
     case .challenge:
       path += "/challenges"
       method = "POST"

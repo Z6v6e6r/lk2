@@ -67,6 +67,18 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
         });
     }
 
+    @PluginMethod public void openSubscriptionPayment(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            try {
+                if (!trustedPage() || policy == null || engine == null || call.getData().length() != 2) throw AndroidSessionPolicy.rejected();
+                String url = AndroidMonthlyPurchaseRequest.launchUrl(policy.origin, call.getString("operationId"), call.getString("launchCode"));
+                // A one-use, session-bound server capability is consumed only in the external browser.
+                getActivity().startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE));
+                call.resolve(new JSObject().put("opened", true));
+            } catch (Exception ignored) { call.reject("Payment unavailable", "NATIVE_REQUEST_REJECTED"); }
+        });
+    }
+
     @PluginMethod public void request(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             if (!trustedPage() || engine == null) {

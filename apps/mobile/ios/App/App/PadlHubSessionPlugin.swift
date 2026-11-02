@@ -1,5 +1,6 @@
 import Capacitor
 import Foundation
+import UIKit
 import PadlHubSession
 #if DEBUG && targetEnvironment(simulator) && PADLHUB_B07_TEST_HOST
 import WebKit
@@ -42,6 +43,7 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
   public let jsName = "PadlHubSession"
   public let pluginMethods: [CAPPluginMethod] = [
     CAPPluginMethod(name: "configuration", returnType: CAPPluginReturnPromise),
+    CAPPluginMethod(name: "openSubscriptionPayment", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise),
   ]
   private var transport: SessionTransport?
@@ -88,6 +90,25 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       "apiBaseUrl": settings.origin, "tenantKey": settings.tenant,
       "appVersion": settings.appVersion, "appBuild": settings.appBuild,
     ])
+  }
+
+  @objc func openSubscriptionPayment(_ call: CAPPluginCall) {
+    #if DEBUG && targetEnvironment(simulator) && PADLHUB_B07_TEST_HOST
+    call.reject("Payment unavailable in synthetic host", SessionFailure.request.rawValue)
+    return
+    #else
+    DispatchQueue.main.async {
+      do {
+        guard let settings=self.settings, self.transport != nil,
+          let page=self.bridge?.webView?.url, page.scheme=="capacitor",page.host=="localhost",page.user==nil,page.password==nil,page.port==nil,
+          Set(call.options.keys)==Set(["operationId","launchCode"]),let id=call.getString("operationId"),let code=call.getString("launchCode") else {throw SessionFailure.request}
+        let url=try MonthlyPurchaseRequest.launchURL(configuration:settings,operationID:id,launchCode:code)
+        UIApplication.shared.open(url,options:[:]) {opened in
+          if opened {call.resolve(["opened":true])} else {call.reject("Payment unavailable",SessionFailure.request.rawValue)}
+        }
+      } catch {call.reject("Payment unavailable",SessionFailure.request.rawValue)}
+    }
+    #endif
   }
 
   @objc func request(_ call: CAPPluginCall) {
@@ -146,6 +167,13 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
         let id = call.getString("resourceId"), call.options["body"] is String
       else {call.reject("Native request is unavailable",SessionFailure.request.rawValue);return}
       gameCancel = GameCancelRequest(gameID:id)
+    }
+    var monthly: MonthlyPurchaseRequest?
+    if operation == .monthlyPurchase {
+      guard Set(call.options.keys).isSubset(of:Set(["operation","resource","resourceId","headers","body"])),let resource=call.getString("resource"),
+        (call.options["resourceId"] == nil || call.options["resourceId"] is String), (call.options["body"] == nil || call.options["body"] is String)
+      else {call.reject("Native request unavailable",SessionFailure.request.rawValue);return}
+      monthly=MonthlyPurchaseRequest(resource:resource,operationID:call.getString("resourceId"))
     }
     var quarter: QuarterCreateRequest?
     if operation == .quarterCreate {
@@ -208,7 +236,7 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
     let messaging = operation == .messaging ? MessagingCommand(resource: call.getString("resource") ?? "", id: call.getString("resourceId")) : nil
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"), read: read, notification: notification, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat, tournament: tournament, messaging: messaging, training: training, selfLeave: selfLeave, gameJoin: gameJoin, profileSettings: profileSettings)
+      headers: headers, body: call.getString("body"), read: read, notification: notification, monthlyPurchase: monthly, quarterCreate: quarter, gameCancel: gameCancel, stationMessage: stationMessage, stationStream: stationStream, tournamentChat: tournamentChat, tournament: tournament, messaging: messaging, training: training, selfLeave: selfLeave, gameJoin: gameJoin, profileSettings: profileSettings)
     Task {
       do {
         let response = try await transport.request(request)

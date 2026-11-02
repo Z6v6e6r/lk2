@@ -3,7 +3,11 @@ import { AndroidTournamentNavigation } from './AndroidTournamentNavigation.js';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
-import { createNativeApiFetch, type NativeReadFailure } from './native-api-fetch.js';
+import {
+  androidSessionPlugin,
+  createNativeApiFetch,
+  type NativeReadFailure,
+} from './native-api-fetch.js';
 import { installMobileNavigation } from './navigation.js';
 import type { MobileRuntimeConfig } from './runtime-config.js';
 import { MobileCacheNotice } from './MobileCacheNotice.js';
@@ -79,6 +83,17 @@ function MobileSession({
       appVersion: config.appVersion,
       platform: native ? 'android' : 'web',
       nativeSessionTransport: native,
+      ...(native
+        ? {
+            openSubscriptionPayment: async (input: { operationId: string; launchCode: string }) => {
+              if (!androidSessionPlugin.openSubscriptionPayment)
+                throw new Error('NATIVE_PAYMENT_UNAVAILABLE');
+              const r = await androidSessionPlugin.openSubscriptionPayment(input);
+              if (r.opened !== true || Object.keys(r).length !== 1)
+                throw new Error('NATIVE_PAYMENT_UNAVAILABLE');
+            },
+          }
+        : {}),
       ...(nativeFetch ? { fetchImplementation: nativeFetch } : {}),
     });
     if (!native) return { gateway: service, push: undefined };

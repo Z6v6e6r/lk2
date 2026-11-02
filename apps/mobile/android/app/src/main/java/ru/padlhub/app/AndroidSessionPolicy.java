@@ -96,6 +96,7 @@ final class AndroidSessionPolicy {
         boolean station = stationStream || AndroidStationMessageRequest.matches(relativePath);
         if (!station && !tournamentChat && !validQuery(relativePath, method, (relativePath.startsWith("/games") || relativePath.startsWith("/trainings/")) ? uri.getRawQuery() : uri.getQuery())) throw rejected();
         String gameUuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        boolean monthly = relativePath.startsWith("/subscription-purchase-operations");
         boolean quarter = relativePath.startsWith("/game-create-operations");
         boolean gameCancel = "POST".equals(method) && relativePath.matches("/games/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/cancel");
         boolean trainingRegistration = "POST".equals(method) && relativePath.matches("/trainings/" + TRAINING_UUID + "/registrations");
@@ -120,7 +121,7 @@ final class AndroidSessionPolicy {
             boolean notificationWrite = "PUT".equals(method) && (cleanPath.equals(userRoot + "/notifications/read-cursor")
                 || cleanPath.equals(userRoot + "/notifications/preferences"));
             if (!("GET".equals(method) && allowedRead(relativePath))
-                && !station && !tournamentChat && !gameCancel && !quarter && !notificationWrite && !gameJoin && !gameReconcile && !trainingRegistration && !allowedMessagingWrite(relativePath, method)) throw rejected();
+                && !station && !tournamentChat && !gameCancel && !quarter && !monthly && !notificationWrite && !gameJoin && !gameReconcile && !trainingRegistration && !allowedMessagingWrite(relativePath, method)) throw rejected();
             operation = Operation.API;
         }
         boolean auth = operation != Operation.API && operation != Operation.PUBLIC;
@@ -147,6 +148,7 @@ final class AndroidSessionPolicy {
         if (tournamentChat) AndroidTournamentChatRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
         if (stationStream) AndroidStationStreamRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
         else if (station) AndroidStationMessageRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
+        if (monthly) AndroidMonthlyPurchaseRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody);
         if (quarter) AndroidQuarterCreateRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody);
         String intent = operation == Operation.REFRESH ? "refresh" : operation == Operation.LOGOUT ? "logout" : null;
         if (!java.util.Objects.equals(intent, headers.get("x-session-intent"))) throw rejected();

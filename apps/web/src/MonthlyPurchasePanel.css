@@ -1,0 +1,38 @@
+.monthly-purchase {
+  margin: 1rem;
+  padding: 1.25rem;
+  border: 1px solid #d5dbe2;
+  border-radius: 1rem;
+  background: #fff;
+  color: #17212f;
+}
+.monthly-purchase h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+}
+.monthly-purchase button {
+  min-height: 44px;
+  margin: 0.35rem 0.5rem 0.35rem 0;
+  padding: 0.65rem 1rem;
+  border: 1px solid #17212f;
+  border-radius: 0.65rem;
+  background: #17212f;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.monthly-purchase button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.monthly-purchase button:focus-visible {
+  outline: 3px solid #3974cc;
+  outline-offset: 3px;
+}
+.monthly-purchase-price {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.monthly-purchase [role='alert'] {
+  color: #9a281d;
+}

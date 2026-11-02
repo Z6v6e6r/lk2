@@ -983,3 +983,17 @@ pair. Five tags or inventory from failed run `33011023879` are never release inp
 No step above authorizes publication dispatch/rerun, reconciliation, GHCR mutation, merge, deploy,
 migration, provider write, firewall change, TLS issuance, worker/realtime activation or live data
 mutation by itself.
+
+## Monthly Friendship purchase inputs (source only)
+
+The optional `MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED`, `MONTHLY_SUBSCRIPTION_OWNER_BASE_URL`
+and `MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS` belong only to `api.env`; worker, realtime and migrator
+must reject them. Omission keeps purchase admission disabled. A supplied flag must be `false` or
+`true`, timeout 100–10000 ms, and owner URL exactly the HTTPS root `https://padlhub.su/`.
+
+Enabling requires the existing canonical RSA delegation keyring, selected active key, issuer and
+audience plus the paired LK monthly private API. It does not enable generic subscription WARN or
+require that contour's integration token. Existing runtime keys and live flags are not changed by
+this contract addition. Use [monthly purchase ownership and recovery](../domains/monthly-subscription-purchase.md)
+for source pairing, immutable inputs, provider/device acceptance and rollback retention. Activation
+remains a separate approved operation; validation alone never sends a payment or grants release authority.

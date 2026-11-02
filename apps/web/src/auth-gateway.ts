@@ -1,3 +1,4 @@
+import type { MonthlyPurchaseGateway } from './monthly-purchase-attempt.js';
 import {
   profileSettingsCommand,
   profileSettingsIdentity,
@@ -611,6 +612,7 @@ export interface AuthGateway {
    * without it keeps the untouched free-create behavior.
    */
   readonly createPaidGame?: PadlHubApiClient['createPaidGame'];
+  readonly monthlyPurchase?: MonthlyPurchaseGateway;
   readonly quarterCreatePrincipal?: () => string | null;
   /** Close the quarter command before native async cleanup. */
   readonly closeQuarterCreate?: () => void;
@@ -877,6 +879,7 @@ interface BrowserAuthGatewayOptions {
   /** Native callers must explicitly provide the reviewed persistent session transport. */
   readonly platform?: 'web' | 'android';
   readonly nativeSessionTransport?: boolean;
+  readonly openSubscriptionPayment?: MonthlyPurchaseGateway['openSubscriptionPayment'];
   readonly onSessionExpired?: () => void;
   readonly baseUrl: string;
   readonly tenantKey: string;
@@ -1003,6 +1006,26 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   ) {
     throw new Error('NATIVE_TRANSPORT_REQUIRED');
   }
+  const monthlyPending = new Set<{ principal: string; token: string }>();
+  const monthlyDispatchAllowed = () =>
+    [...monthlyPending].some(
+      (x) => x.principal === quarterCreatePrincipal() && x.token === client.getAccessToken(),
+    );
+  async function monthlyCall<T>(load: () => Promise<T>): Promise<T> {
+    const p = requireQuarterPrincipal(),
+      token = client.getAccessToken();
+    if (!token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+    const entry = { principal: p, token };
+    monthlyPending.add(entry);
+    try {
+      const result = await load();
+      requireQuarterPrincipal(p);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
+    } finally {
+      monthlyPending.delete(entry);
+    }
+  }
   const clientOptions = {
     baseUrl: options.baseUrl.replace(/\/$/, ''),
     tenantKey: options.tenantKey,
@@ -1016,6 +1039,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     ...(options.appBuild ? { appBuild: options.appBuild } : {}),
     fetchImplementation: (async (input, init) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const monthly = url.startsWith(
+        `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${options.tenantKey}/subscription-purchase-operations`,
+      );
+      if (monthly && !monthlyDispatchAllowed()) throw new Error('AUTH_PRINCIPAL_CHANGED');
       const cancel =
         (init?.method ?? 'GET') === 'POST' &&
         url.startsWith(
@@ -2640,6 +2667,27 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.createGame(input, options);
     },
 
+    ...(options.nativeSessionTransport && options.openSubscriptionPayment
+      ? {
+          monthlyPurchase: {
+            monthlyPurchasePrincipal: quarterCreatePrincipal,
+            getSubscriptionPurchaseCapability: () =>
+              monthlyCall(() => client.getSubscriptionPurchaseCapability()),
+            quoteSubscriptionPurchase: (offer, key) =>
+              monthlyCall(() => client.quoteSubscriptionPurchase(offer, key)),
+            purchaseSubscription: (input, key) =>
+              monthlyCall(() => client.purchaseSubscription(input, key)),
+            getSubscriptionPurchase: (key) =>
+              monthlyCall(() => client.getSubscriptionPurchase(key)),
+            reconcileSubscriptionPurchase: (id, key) =>
+              monthlyCall(() => client.reconcileSubscriptionPurchase(id, key)),
+            launchSubscriptionPayment: (id, key) =>
+              monthlyCall(() => client.launchSubscriptionPayment(id, key)),
+            openSubscriptionPayment: (input) =>
+              monthlyCall(() => options.openSubscriptionPayment!(input)),
+          } satisfies MonthlyPurchaseGateway,
+        }
+      : {}),
     quarterCreatePrincipal,
     closeQuarterCreate() {
       quarterClosed = true;

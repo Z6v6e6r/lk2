@@ -75,8 +75,16 @@ describe('native DIRECT acceptance custody', () => {
     expect(registry).toBeDefined();
     expect(registry?.match(/name: "([^"]+)"/g)).toEqual([
       'name: "configuration"',
+      'name: "openSubscriptionPayment"',
       'name: "request"',
     ]);
+    const payment = plugin.slice(
+      plugin.indexOf('@objc func openSubscriptionPayment'),
+      plugin.indexOf('@objc func request'),
+    );
+    expect(payment).toContain(`${guard}\n    call.reject("Payment unavailable in synthetic host"`);
+    expect(payment.indexOf('return')).toBeLessThan(payment.indexOf('#else'));
+    expect(payment.indexOf('#else')).toBeLessThan(payment.indexOf('UIApplication.shared.open'));
     expect(plugin).toContain(`${guard}\n  // Swift-only`);
     expect(plugin).not.toMatch(/@objc[^\n]*installDirectIntegrationTransport/);
     for (const filename of [

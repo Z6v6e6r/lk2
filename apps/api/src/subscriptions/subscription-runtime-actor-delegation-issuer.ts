@@ -1,4 +1,19 @@
 import {
+  mpUuid,
+  mpId,
+  mpDigest,
+  mpIso,
+  mpHash,
+  mpStable,
+  mpBody,
+  mpPath,
+  mpVersion,
+  mpOperationId,
+  mpRequestHash,
+  type MonthlyMode,
+} from '@phub/domain/subscription-purchase';
+import type { SubscriptionPurchaseConsent } from '@phub/api-contracts';
+import {
   qcUuid,
   qcId,
   qcDigest,
@@ -135,6 +150,79 @@ export class SubscriptionRuntimeActorDelegationIssuer {
         'SUBSCRIPTION_RUNTIME_DELEGATION_CONFIGURATION_INVALID',
       );
     }
+  }
+
+  async issueMonthlyPurchase(input: {
+    tenantKey: string;
+    tenantId: string;
+    userId: string;
+    sessionId: string;
+    correlationId: string;
+    providerClientId: string;
+    providerMappingId: string;
+    keySha256: string;
+    operationId: string;
+    mode: MonthlyMode;
+    actorToken: { token: string; expiresAt: string };
+    consent?: SubscriptionPurchaseConsent;
+  }): Promise<string> {
+    if (
+      input.tenantKey !== 'iSkq6G' ||
+      ![
+        input.tenantId,
+        input.userId,
+        input.sessionId,
+        input.providerMappingId,
+        input.operationId,
+      ].every(mpUuid) ||
+      !mpId(input.providerClientId) ||
+      !mpId(input.correlationId) ||
+      !mpDigest(input.keySha256) ||
+      input.operationId !== mpOperationId(input.tenantId, input.userId, input.keySha256) ||
+      !['quote', 'purchase', 'read', 'reconcile'].includes(input.mode) ||
+      /[\r\n]/.test(input.actorToken.token) ||
+      !/^[!-~]{16,4096}$(?![\s\S])/.test(input.actorToken.token) ||
+      !mpIso(input.actorToken.expiresAt) ||
+      Date.parse(input.actorToken.expiresAt) <= Date.now()
+    )
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    const now = Math.floor(Date.now() / 1000),
+      claims = {
+        iss: this.options.issuer,
+        aud: this.options.audience,
+        sub: input.userId,
+        sid: input.sessionId,
+        jti: randomUUID(),
+        iat: now,
+        nbf: now,
+        exp: now + this.options.ttlSeconds,
+        contract: mpVersion,
+        caller: 'lk2-api',
+        scope: 'subscription-runtime.monthly-friendship.' + input.mode,
+        method: 'POST',
+        path: mpPath(input.mode),
+        tenant_id: input.tenantId,
+        tenant_key: input.tenantKey,
+        provider: 'VIVA',
+        provider_client_id: input.providerClientId,
+        provider_mapping_id: input.providerMappingId,
+        operation_id: input.operationId,
+        idempotency_key_sha256: input.keySha256,
+        request_sha256: mpRequestHash(input.mode, mpBody(input.mode, input.consent)),
+        correlation_id: input.correlationId,
+        actor_token_sha256: mpHash(input.actorToken.token),
+        actor_token_expires_at: input.actorToken.expiresAt,
+      };
+    // The dedicated owner rejects noncanonical/duplicate JSON properties.
+    return new SignJWT(JSON.parse(mpStable(claims)) as Record<string, unknown>)
+      .setProtectedHeader({
+        alg: 'RS256',
+        kid: this.options.keyId,
+        typ: 'phub-monthly-friendship-actor+jwt',
+      })
+      .sign(await importPKCS8(this.options.privateKeyPem, 'RS256'));
   }
 
   async issueQuarterCreate(input: {

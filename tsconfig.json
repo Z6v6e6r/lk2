@@ -65,6 +65,10 @@
       ],
       "@phub/database/tournament-message-notifications": [
         "packages/database/src/tournament-message-notifications.ts"
+      ],
+      "@phub/domain/subscription-purchase": ["packages/domain/src/subscription-purchase.ts"],
+      "@phub/database/subscription-purchase": [
+        "packages/database/src/monthly-purchase-repository.ts"
       ]
     },
     "types": ["node", "vitest/globals"]

@@ -1866,3 +1866,15 @@ describe('independent training registration composition', () => {
       expect(() => loadConfig({ ...training, ...delta })).toThrow();
   });
 });
+
+it('monthly purchase admission remains default-off and requires a complete dedicated owner contract', () => {
+  expect(loadConfig(validEnvironment).MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED).toBe(false);
+  expect(loadConfig(validEnvironment).MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS).toBe(10000);
+  expect(() =>
+    loadConfig({ ...validEnvironment, MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED: 'true' }),
+  ).toThrow('MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED requires');
+  for (const timeout of ['99', '10001'])
+    expect(() =>
+      loadConfig({ ...validEnvironment, MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS: timeout }),
+    ).toThrow();
+});

@@ -1,3 +1,5 @@
+import { registerMonthlyPurchaseRoutes } from './subscriptions/monthly-purchase-routes.js';
+import type { MonthlyPurchaseRuntime } from './subscriptions/monthly-purchase-runtime.js';
 import { registerTournamentChatRoutes } from './tournaments/tournament-chat-routes.js';
 import type { TournamentChatOwner } from './tournaments/tournament-chat-owner-client.js';
 import { registerStationStreamRoutes } from './communities/station-stream-routes.js';
@@ -436,6 +438,7 @@ export interface BuildAppOptions {
   /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
   readonly gameCommercialCreate?: GameCommercialCreateOptions;
   readonly gameQuarterCreate?: QuarterCreateRuntime;
+  readonly monthlyPurchase?: MonthlyPurchaseRuntime;
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
   readonly bookedOperationRead?: Omit<
     BookedOperationReadRouteOptions,
@@ -1133,6 +1136,12 @@ export async function buildApp(options: BuildAppOptions) {
       chat: userRuntimeCapabilities.communityReadChat,
       rating: userRuntimeCapabilities.communityReadRating,
     },
+  });
+  registerMonthlyPurchaseRoutes(app as unknown as FastifyInstance, {
+    ...(options.monthlyPurchase ? { runtime: options.monthlyPurchase } : {}),
+    readHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+    allowDebugOrigin: options.config.APP_ENV !== 'production',
   });
   registerQuarterCreateRoutes(app as unknown as FastifyInstance, {
     ...(options.gameQuarterCreate ? { runtime: options.gameQuarterCreate } : {}),

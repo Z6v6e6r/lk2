@@ -1,3 +1,4 @@
+import { MonthlyPurchasePanel } from './MonthlyPurchasePanel.js';
 import { cancelGameAndRead } from './game-cancel-readback.js';
 import type { NativeJoinRequest } from './native-game-join-attempt.js';
 import { NativeGames } from './NativeGames.js';
@@ -3344,22 +3345,30 @@ export function App({
     }
     if (protectedRoute.kind === 'subscriptions') {
       return (
-        <SubscriptionsPage
-          key={`${context.tenant.id}:${context.user.id}`}
-          loadDashboard={gateway.getHomeDashboard}
-          {...(protectedRoute.subscriptionId
-            ? { subscriptionId: protectedRoute.subscriptionId }
-            : {})}
-          onNavigate={(href, method) => {
-            if (method === 'back') {
-              window.history.back();
-              return;
-            }
-            if (method === 'replace') window.history.replaceState({}, '', href);
-            else window.history.pushState({}, '', href);
-            refreshLocation();
-          }}
-        />
+        <>
+          {clientPlatform !== 'web' && gateway.monthlyPurchase ? (
+            <MonthlyPurchasePanel
+              gateway={gateway.monthlyPurchase}
+              principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+            />
+          ) : null}
+          <SubscriptionsPage
+            key={`${context.tenant.id}:${context.user.id}`}
+            loadDashboard={gateway.getHomeDashboard}
+            {...(protectedRoute.subscriptionId
+              ? { subscriptionId: protectedRoute.subscriptionId }
+              : {})}
+            onNavigate={(href, method) => {
+              if (method === 'back') {
+                window.history.back();
+                return;
+              }
+              if (method === 'replace') window.history.replaceState({}, '', href);
+              else window.history.pushState({}, '', href);
+              refreshLocation();
+            }}
+          />
+        </>
       );
     }
     if (protectedRoute.kind === 'gift-certificates') {

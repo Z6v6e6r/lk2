@@ -75,8 +75,13 @@ export function fixtureReply(
 export function syntheticSession(
   request: IOSSessionPlugin['request'] = async (input) =>
     await Promise.resolve(fixtureReply(input)),
+  openSubscriptionPayment?: IOSSessionPlugin['openSubscriptionPayment'],
 ): IOSSession {
-  const plugin = { configuration: async () => await Promise.resolve(config), request };
+  const plugin = {
+    configuration: async () => await Promise.resolve(config),
+    request,
+    ...(openSubscriptionPayment ? { openSubscriptionPayment } : {}),
+  };
   const session: IOSSession = new IOSSession(
     config,
     new PadlHubApiClient({
@@ -96,8 +101,10 @@ export function syntheticSession(
         (request, key) => session?.canDispatchSelfLeave(request, key) === true,
         (request) => session?.canDispatchJoin(request) === true,
         (request) => session?.canDispatchProfileSettings(request) === true,
+        () => session?.canDispatchMonthly() === true,
       ),
     }),
+    plugin,
   );
   return session;
 }

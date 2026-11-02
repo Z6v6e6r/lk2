@@ -1,3 +1,6 @@
+import { createMonthlyPurchaseRuntime } from './subscriptions/monthly-purchase-runtime.js';
+import { createMonthlyPurchaseRepository } from '@phub/database/subscription-purchase';
+import { MonthlyPurchaseOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createTournamentChatOwner } from './tournaments/tournament-chat-owner-client.js';
 import { createOrganizerProfileLookup } from './tournaments/organizer-profile-lookup-runtime.js';
 import { createCommunityActorToken } from './communities/community-actor-token.js';
@@ -862,8 +865,40 @@ const gameQuarterCreate = (() => {
     },
   });
 })();
+const monthlyPurchase = (() => {
+  const repository = createMonthlyPurchaseRepository(pool);
+  if (!config.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED)
+    return createMonthlyPurchaseRuntime({ enabled: false, repository });
+  const keys = JSON.parse(config.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!) as Record<
+      string,
+      string
+    >,
+    keyId = config.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID!;
+  return createMonthlyPurchaseRuntime({
+    enabled: true,
+    repository,
+    issuer: new SubscriptionRuntimeActorDelegationIssuer({
+      privateKeyPem: keys[keyId]!,
+      keyId,
+      issuer: config.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER!,
+      audience: config.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE!,
+      ttlSeconds: config.SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS,
+    }),
+    client: new MonthlyPurchaseOwnerClient({
+      baseUrl: config.MONTHLY_SUBSCRIPTION_OWNER_BASE_URL!,
+      timeoutMs: config.MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS,
+      environment: ['local', 'ci'].includes(config.APP_ENV) ? 'development' : 'production',
+      onMetric: (metric) => logger.info({ metric }, 'monthly subscription owner operation'),
+    }),
+    token: async (actor) => {
+      const issued = await authService.issueVivaAccessToken(actor);
+      return { token: issued.accessToken, expiresAt: issued.expiresAt };
+    },
+  });
+})();
 const organizerProfileLookup = createOrganizerProfileLookup(config, pool, redis);
 const app = await buildApp({
+  monthlyPurchase,
   ...(gameQuarterCreate ? { gameQuarterCreate } : {}),
   config,
   logger,

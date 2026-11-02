@@ -1,0 +1,588 @@
+{
+  'paths':
+    {
+      '/{tenantKey}/subscription-purchase-operations/capability':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+            ],
+          'get':
+            {
+              'tags': ['subscriptions'],
+              'operationId': 'getMonthlyPurchaseCapability',
+              'summary': 'Read monthly purchase availability',
+              'description': 'Requires an active tenant client session. Uses the same original key from quote through purchase and recovery. No automatic command or 401 retry. Server-owned offer/price only; provider identifiers and URLs never enter these public DTOs. UNKNOWN retains custody; PAID is a historical receipt and does not grant current entitlement. Cache-Control: no-store.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Original purchase result.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/MonthlyCapability' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                  '409':
+                    {
+                      'description': 'Original key, identity, quote, price or pending-operation conflict.',
+                    },
+                },
+            },
+        },
+      '/{tenantKey}/subscription-purchase-operations/quote':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+              {
+                'name': 'Idempotency-Key',
+                'in': 'header',
+                'required': true,
+                'schema':
+                  {
+                    'type': 'string',
+                    'minLength': 16,
+                    'maxLength': 128,
+                    'pattern': '^[A-Za-z0-9._:-]+$',
+                  },
+              },
+            ],
+          'post':
+            {
+              'tags': ['subscriptions'],
+              'operationId': 'quoteMonthlyPurchase',
+              'summary': 'Quote the original monthly purchase without a payment',
+              'description': 'Requires an active tenant client session. Uses the same original key from quote through purchase and recovery. No automatic command or 401 retry. Server-owned offer/price only; provider identifiers and URLs never enter these public DTOs. UNKNOWN retains custody; PAID is a historical receipt and does not grant current entitlement. Cache-Control: no-store.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Original purchase result.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/MonthlyQuote' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                  '409':
+                    {
+                      'description': 'Original key, identity, quote, price or pending-operation conflict.',
+                    },
+                },
+              'requestBody':
+                {
+                  'required': true,
+                  'content':
+                    {
+                      'application/json':
+                        { 'schema': { '$ref': '#/components/schemas/MonthlyQuoteRequest' } },
+                    },
+                },
+            },
+        },
+      '/{tenantKey}/subscription-purchase-operations':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+              {
+                'name': 'Idempotency-Key',
+                'in': 'header',
+                'required': true,
+                'schema':
+                  {
+                    'type': 'string',
+                    'minLength': 16,
+                    'maxLength': 128,
+                    'pattern': '^[A-Za-z0-9._:-]+$',
+                  },
+              },
+            ],
+          'post':
+            {
+              'tags': ['subscriptions'],
+              'operationId': 'createMonthlyPurchase',
+              'summary': 'Submit exact price consent once for the original purchase',
+              'description': 'Requires an active tenant client session. Uses the same original key from quote through purchase and recovery. No automatic command or 401 retry. Server-owned offer/price only; provider identifiers and URLs never enter these public DTOs. UNKNOWN retains custody; PAID is a historical receipt and does not grant current entitlement. Cache-Control: no-store.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Original purchase result.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/MonthlyResult' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                  '409':
+                    {
+                      'description': 'Original key, identity, quote, price or pending-operation conflict.',
+                    },
+                },
+              'requestBody':
+                {
+                  'required': true,
+                  'content':
+                    {
+                      'application/json':
+                        { 'schema': { '$ref': '#/components/schemas/MonthlyConsent' } },
+                    },
+                },
+            },
+        },
+      '/{tenantKey}/subscription-purchase-operations/by-key':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+              {
+                'name': 'Idempotency-Key',
+                'in': 'header',
+                'required': true,
+                'schema':
+                  {
+                    'type': 'string',
+                    'minLength': 16,
+                    'maxLength': 128,
+                    'pattern': '^[A-Za-z0-9._:-]+$',
+                  },
+              },
+            ],
+          'get':
+            {
+              'tags': ['subscriptions'],
+              'operationId': 'getMonthlyPurchase',
+              'summary': 'Read the original purchase journal',
+              'description': 'Requires an active tenant client session. Uses the same original key from quote through purchase and recovery. No automatic command or 401 retry. Server-owned offer/price only; provider identifiers and URLs never enter these public DTOs. UNKNOWN retains custody; PAID is a historical receipt and does not grant current entitlement. Cache-Control: no-store.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Original purchase result.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/MonthlyResult' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                  '409':
+                    {
+                      'description': 'Original key, identity, quote, price or pending-operation conflict.',
+                    },
+                },
+            },
+        },
+      '/{tenantKey}/subscription-purchase-operations/{operationId}/reconcile':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+              {
+                'name': 'Idempotency-Key',
+                'in': 'header',
+                'required': true,
+                'schema':
+                  {
+                    'type': 'string',
+                    'minLength': 16,
+                    'maxLength': 128,
+                    'pattern': '^[A-Za-z0-9._:-]+$',
+                  },
+              },
+              {
+                'name': 'operationId',
+                'in': 'path',
+                'required': true,
+                'schema': { 'type': 'string', 'format': 'uuid' },
+              },
+            ],
+          'post':
+            {
+              'tags': ['subscriptions'],
+              'operationId': 'reconcileMonthlyPurchase',
+              'summary': 'Reconcile only the original payment and issuance',
+              'description': 'Requires an active tenant client session. Uses the same original key from quote through purchase and recovery. No automatic command or 401 retry. Server-owned offer/price only; provider identifiers and URLs never enter these public DTOs. UNKNOWN retains custody; PAID is a historical receipt and does not grant current entitlement. Cache-Control: no-store.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Original purchase result.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/MonthlyResult' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                  '409':
+                    {
+                      'description': 'Original key, identity, quote, price or pending-operation conflict.',
+                    },
+                },
+              'requestBody':
+                {
+                  'required': true,
+                  'content':
+                    {
+                      'application/json':
+                        { 'schema': { '$ref': '#/components/schemas/MonthlyEmpty' } },
+                    },
+                },
+            },
+        },
+      '/{tenantKey}/subscription-purchase-operations/{operationId}/payment-launch':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+              {
+                'name': 'Idempotency-Key',
+                'in': 'header',
+                'required': true,
+                'schema':
+                  {
+                    'type': 'string',
+                    'minLength': 16,
+                    'maxLength': 128,
+                    'pattern': '^[A-Za-z0-9._:-]+$',
+                  },
+              },
+              {
+                'name': 'operationId',
+                'in': 'path',
+                'required': true,
+                'schema': { 'type': 'string', 'format': 'uuid' },
+              },
+            ],
+          'post':
+            {
+              'tags': ['subscriptions'],
+              'operationId': 'launchMonthlyPayment',
+              'summary': 'Create a short-lived one-use bank navigation capability',
+              'description': 'Requires an active tenant client session. Uses the same original key from quote through purchase and recovery. No automatic command or 401 retry. Server-owned offer/price only; provider identifiers and URLs never enter these public DTOs. UNKNOWN retains custody; PAID is a historical receipt and does not grant current entitlement. Cache-Control: no-store.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Original purchase result.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/MonthlyLaunch' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                  '409':
+                    {
+                      'description': 'Original key, identity, quote, price or pending-operation conflict.',
+                    },
+                },
+              'requestBody':
+                {
+                  'required': true,
+                  'content':
+                    {
+                      'application/json':
+                        { 'schema': { '$ref': '#/components/schemas/MonthlyEmpty' } },
+                    },
+                },
+            },
+        },
+      '/subscription-payment-launch':
+        {
+          'get':
+            {
+              'tags': ['subscriptions'],
+              'operationId': 'openMonthlyPaymentLaunch',
+              'summary': 'Open the first-party bank handoff page',
+              'security': [],
+              'description': 'No-store first-party page. Launch capability arrives only in the URL fragment and is immediately removed from browser history. Bank return parameters never mutate or prove a purchase.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Accessible Russian HTML page.',
+                      'content': { 'text/html': { 'schema': { 'type': 'string' } } },
+                    },
+                },
+            },
+        },
+      '/subscription-payment-return':
+        {
+          'get':
+            {
+              'tags': ['subscriptions'],
+              'operationId': 'returnMonthlyPayment',
+              'summary': 'Return from bank without accepting any payment result',
+              'security': [],
+              'description': 'No-store first-party page. Launch capability arrives only in the URL fragment and is immediately removed from browser history. Bank return parameters never mutate or prove a purchase.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Accessible Russian HTML page.',
+                      'content': { 'text/html': { 'schema': { 'type': 'string' } } },
+                    },
+                },
+            },
+        },
+      '/subscription-payment-launch/consume':
+        {
+          'post':
+            {
+              'tags': ['subscriptions'],
+              'operationId': 'consumeMonthlyPaymentLaunch',
+              'summary': 'Consume an actor-session-bound one-use navigation capability',
+              'security': [],
+              'description': 'Requires the exact first-party Origin and a live, unused 60-second launch capability. The original session, actor mapping and payment expiry are rechecked. Does not create or confirm a payment. No-store; no-referrer; bounded rate limit.',
+              'requestBody':
+                {
+                  'required': true,
+                  'content':
+                    {
+                      'application/json':
+                        { 'schema': { '$ref': '#/components/schemas/MonthlyLaunchRequest' } },
+                    },
+                },
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Original owner bank URL for browser navigation.',
+                      'content':
+                        {
+                          'application/json':
+                            {
+                              'schema': { '$ref': '#/components/schemas/MonthlyLaunchDestination' },
+                            },
+                        },
+                    },
+                  '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' },
+                  '429': { 'description': 'Rate limit exceeded.' },
+                },
+            },
+        },
+    },
+  'components':
+    {
+      'schemas':
+        {
+          'MonthlyConsent':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['offerId', 'expectedRevision', 'amountMinor', 'currency'],
+              'properties':
+                {
+                  'offerId': { 'type': 'string', 'const': '862670f6-a476-4a18-aecb-9e27661fbad3' },
+                  'expectedRevision': { 'type': 'string', 'pattern': '^sha256:[a-f0-9]{64}$' },
+                  'amountMinor': { 'type': 'integer', 'minimum': 1 },
+                  'currency': { 'type': 'string', 'const': 'RUB' },
+                },
+            },
+          'MonthlyQuoteRequest':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['offerId'],
+              'properties':
+                {
+                  'offerId': { 'type': 'string', 'const': '862670f6-a476-4a18-aecb-9e27661fbad3' },
+                },
+            },
+          'MonthlyEmpty':
+            { 'type': 'object', 'additionalProperties': false, 'required': [], 'properties': {} },
+          'MonthlyQuote':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required':
+                [
+                  'contractVersion',
+                  'operationId',
+                  'keySha256',
+                  'offerId',
+                  'title',
+                  'revision',
+                  'amountMinor',
+                  'currency',
+                  'expiresAt',
+                ],
+              'properties':
+                {
+                  'contractVersion': { 'type': 'integer', 'const': 1 },
+                  'operationId': { 'type': 'string', 'format': 'uuid' },
+                  'keySha256': { 'type': 'string', 'pattern': '^sha256:[a-f0-9]{64}$' },
+                  'offerId': { 'type': 'string', 'const': '862670f6-a476-4a18-aecb-9e27661fbad3' },
+                  'title': { 'type': 'string' },
+                  'revision': { 'type': 'string', 'pattern': '^sha256:[a-f0-9]{64}$' },
+                  'amountMinor': { 'type': 'integer', 'minimum': 1 },
+                  'currency': { 'type': 'string', 'const': 'RUB' },
+                  'expiresAt': { 'type': 'string', 'format': 'date-time' },
+                },
+            },
+          'MonthlyResult':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required':
+                [
+                  'contractVersion',
+                  'operationId',
+                  'keySha256',
+                  'offerId',
+                  'status',
+                  'amountMinor',
+                  'currency',
+                  'canOpenPayment',
+                  'paymentExpiresAt',
+                ],
+              'properties':
+                {
+                  'contractVersion': { 'type': 'integer', 'const': 1 },
+                  'operationId': { 'type': 'string', 'format': 'uuid' },
+                  'keySha256': { 'type': 'string', 'pattern': '^sha256:[a-f0-9]{64}$' },
+                  'offerId': { 'type': 'string', 'const': '862670f6-a476-4a18-aecb-9e27661fbad3' },
+                  'status':
+                    {
+                      'type': 'string',
+                      'enum': ['QUOTING', 'QUOTED', 'UNKNOWN', 'PAYMENT_PENDING', 'PAID'],
+                    },
+                  'amountMinor': { 'type': ['integer', 'null'], 'minimum': 1 },
+                  'currency': { 'type': 'string', 'const': 'RUB' },
+                  'canOpenPayment': { 'type': 'boolean' },
+                  'paymentExpiresAt': { 'type': ['string', 'null'], 'format': 'date-time' },
+                },
+            },
+          'MonthlyLaunch':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['contractVersion', 'operationId', 'launchCode', 'expiresAt'],
+              'properties':
+                {
+                  'contractVersion': { 'type': 'integer', 'const': 1 },
+                  'operationId': { 'type': 'string', 'format': 'uuid' },
+                  'launchCode': { 'type': 'string', 'minLength': 101, 'maxLength': 101 },
+                  'expiresAt': { 'type': 'string', 'format': 'date-time' },
+                },
+            },
+          'MonthlyCapability':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['contractVersion', 'available', 'offers'],
+              'properties':
+                {
+                  'contractVersion': { 'type': 'integer', 'const': 1 },
+                  'available': { 'type': 'boolean' },
+                  'offers':
+                    {
+                      'type': 'array',
+                      'maxItems': 1,
+                      'items':
+                        {
+                          'type': 'object',
+                          'additionalProperties': false,
+                          'required': ['id', 'title'],
+                          'properties':
+                            {
+                              'id':
+                                {
+                                  'type': 'string',
+                                  'const': '862670f6-a476-4a18-aecb-9e27661fbad3',
+                                },
+                              'title': { 'type': 'string' },
+                            },
+                        },
+                    },
+                },
+            },
+          'MonthlyLaunchRequest':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['operationId', 'launchCode'],
+              'properties':
+                {
+                  'operationId': { 'type': 'string', 'format': 'uuid' },
+                  'launchCode': { 'type': 'string', 'minLength': 101, 'maxLength': 101 },
+                },
+            },
+          'MonthlyLaunchDestination':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['url'],
+              'properties': { 'url': { 'type': 'string', 'format': 'uri' } },
+            },
+        },
+    },
+}

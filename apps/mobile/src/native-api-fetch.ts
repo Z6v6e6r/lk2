@@ -1,3 +1,4 @@
+import { monthlyRequest } from './native-monthly-purchase-request.js';
 import { nativeProfileSettingsRequest } from './native-profile-settings-request.js';
 import { nativePublicGamesRequest } from './native-public-games-request.js';
 import { nativeJoinRequest } from './native-game-join-request.js';
@@ -16,6 +17,10 @@ import { resolveCabinetMedia } from './cabinet-media.js';
 
 export interface AndroidSessionPlugin {
   configuration(): Promise<MobileRuntimeConfig>;
+  openSubscriptionPayment?(input: {
+    operationId: string;
+    launchCode: string;
+  }): Promise<{ opened: true }>;
   /** Fixed native capability; no provider credential or payload crosses this bridge. */
   refreshUpcomingBookings?(): Promise<{ readonly state: 'refreshed' }>;
   cancelUpcomingBookingsRefresh?(): Promise<{ readonly state: 'cancelled' }>;
@@ -206,6 +211,7 @@ export function createNativeApiFetch(
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();
     const method = init?.method ?? 'GET';
+    const monthly = monthlyRequest(value, init, config);
     const settings = nativeProfileSettingsRequest(value, init, config);
     const join = nativeJoinRequest(value, init, config);
     const selfLeave = selfLeaveRequest(value, init, config);
@@ -227,7 +233,7 @@ export function createNativeApiFetch(
       generation += 1;
       displayedReads.clear();
     }
-    if ((selfLeave || join || cancel || settings) && !active)
+    if ((selfLeave || join || cancel || settings || monthly) && !active)
       throw new DOMException('Session changed', 'AbortError');
     const requestGeneration = generation;
     const section =
@@ -314,7 +320,7 @@ export function createNativeApiFetch(
       }
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
       if (
-        (selfLeave || join || cancel || settings) &&
+        (selfLeave || join || cancel || settings || monthly) &&
         (!active || requestGeneration !== generation)
       )
         throw new DOMException('Session changed', 'AbortError');

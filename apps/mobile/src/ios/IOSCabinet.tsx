@@ -1,3 +1,4 @@
+import { MonthlyPurchasePanel } from '../../../web/src/MonthlyPurchasePanel.js';
 import { ProfileLevelHistoryPage } from '../../../web/src/ProfileLevelHistoryPage.js';
 import type {
   ProfileSettingsInputs,
@@ -534,6 +535,7 @@ export function IOSCabinet({
 }): React.JSX.Element {
   const route = useCabinetRoute();
   const tournamentChatGateway = useMemo(() => createIOSTournamentChatGateway(session), [session]);
+  const monthlyGateway = useMemo(() => session.monthlyPurchaseGateway(), [session]);
   const quarterGateway = useMemo(() => createIOSQuarterGateway(session), [session]);
   const trainingGateway = useMemo(() => createIOSTrainingGateway(session), [session]);
   const tournamentGateway = useMemo(() => createIOSTournamentGateway(session), [session]);
@@ -719,12 +721,18 @@ export function IOSCabinet({
     )
   )
     content = (
-      <Subscriptions
-        data={data}
-        {...(path === '/subscriptions'
-          ? {}
-          : { subscriptionId: path.slice('/subscriptions/'.length).toLowerCase() })}
-      />
+      <>
+        <MonthlyPurchasePanel
+          gateway={monthlyGateway}
+          principal={{ tenantId: auth.context.tenantId, userId: auth.context.userId }}
+        />
+        <Subscriptions
+          data={data}
+          {...(path === '/subscriptions'
+            ? {}
+            : { subscriptionId: path.slice('/subscriptions/'.length).toLowerCase() })}
+        />
+      </>
     );
   else if (path === '/locations')
     content = (
