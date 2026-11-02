@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, symlink, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
-import type { PoolClient } from 'pg';
+import type { PoolClient, QueryConfig } from 'pg';
 import { describe, expect, it } from 'vitest';
 import original from '../../../deploy/timeweb/notification-migration-catalogs.v1.json';
 import reviewed from '../../../deploy/timeweb/r1-tail108-119-catalogs.v1.json';
@@ -68,6 +68,28 @@ const quote = (name: string) => {
   return '"' + name + '"';
 };
 const qualified = (name: string) => name.split('.').map(quote).join('.');
+
+// pg supports per-query query_timeout; @types/pg exposes it only on ClientConfig.
+const cleanupQuery = (
+  text: string,
+  values: string[] = [],
+  timeout = 1000,
+): QueryConfig<string[]> & { query_timeout: number } => ({ text, values, query_timeout: timeout });
+async function waitForOwnedDatabaseDisconnect(admin: Pool, name: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const remaining = await admin.query<{ count: number }>(
+      cleanupQuery(
+        'select count(*)::int as count from pg_catalog.pg_stat_activity where datname=$1',
+        [name],
+      ),
+    );
+    if (remaining.rows[0]!.count === 0) return;
+    if (Date.now() >= deadline) throw Error('R1_TAIL_SYNTHETIC_CONNECTIONS_NOT_CLOSED');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 const originalRole = (name: string) =>
   name === 'MIGRATOR' ? 'phub_migrator' : name === 'RUNTIME' ? 'phub_runtime' : name;
 type Metadata = { key: string; value: string };
@@ -506,11 +528,21 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             owner.release();
           }
         } finally {
-          await Promise.all(pools.map((pool) => pool.end()));
-          for (const name of databases.reverse())
-            await admin.query(`drop database ${quote(name)}with(force)`);
-          for (const role of ownedRoles.reverse()) await admin.query(`drop role ${quote(role)}`);
-          await admin.end();
+          try {
+            await Promise.all(pools.map((pool) => pool.end()));
+            await admin.query(cleanupQuery("set statement_timeout='1s';set lock_timeout='1s'"));
+            for (const name of databases.reverse()) {
+              // pg-pool can resolve end() before every closing socket has left PostgreSQL.
+              // FORCE races those sockets and emits unhandled57P01 after passing tests.
+              await waitForOwnedDatabaseDisconnect(admin, name);
+              // Never terminate an unexpected connection to make cleanup pass.
+              await admin.query(cleanupQuery(`drop database ${quote(name)}`, [], 2000));
+            }
+            for (const role of ownedRoles.reverse())
+              await admin.query(cleanupQuery(`drop role ${quote(role)}`, [], 2000));
+          } finally {
+            await admin.end();
+          }
         }
       },
       150000,
