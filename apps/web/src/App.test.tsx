@@ -3793,7 +3793,7 @@ it('native quarter entry mounts only the bounded subscription form, not legacy C
   expect(screen.queryByRole('button', { name: 'Создать игру' })).not.toBeInTheDocument();
   expect(gateway.createGame).not.toHaveBeenCalled();
 });
-it('native quarter confirmed-game destination remains read-only', async () => {
+it('native game detail exposes only reviewed participation controls', async () => {
   const { game } = await import('../../mobile/src/ios/testing/cabinet-fixtures.js');
   window.history.replaceState(null, '', '/games/' + game.id);
   const gateway = createGateway({
@@ -3803,9 +3803,9 @@ it('native quarter confirmed-game destination remains read-only', async () => {
   });
   render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
   await waitFor(() => expect(gateway.getGame).toHaveBeenCalledWith(game.id));
-  expect(await screen.findByRole('link', { name: 'К созданию игры' })).toHaveAttribute(
+  expect(await screen.findByRole('link', { name: 'К списку игр' })).toHaveAttribute(
     'href',
-    '/games/new?quarterCreate=1',
+    '/games',
   );
   expect(screen.queryByRole('button', { name: /Вступить|Отменить игру/ })).not.toBeInTheDocument();
   expect(gateway.joinGame).not.toHaveBeenCalled();

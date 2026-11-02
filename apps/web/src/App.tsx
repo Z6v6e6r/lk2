@@ -1,3 +1,6 @@
+import type { NativeJoinRequest } from './native-game-join-attempt.js';
+import { NativeGames } from './NativeGames.js';
+import { NativeGameJoin } from './NativeGameJoin.js';
 import { NativeSelfLeave } from './NativeSelfLeave.js';
 import { NativeGameChat } from './NativeGameChat.js';
 import { TournamentChatPage } from './TournamentChatPage.js';
@@ -708,6 +711,18 @@ function NativeCreatedGame({
   gameId: string;
   scope: { tenantId: string; userId: string };
 }) {
+  const joinGateway = useMemo(
+    () => ({
+      principal: () => gateway.quarterCreatePrincipal?.() ?? null,
+      getGame: gateway.getGame,
+      getHomeDashboard: gateway.getHomeDashboard,
+      request: (request: NativeJoinRequest) => {
+        if (!gateway.nativeGameJoin) return Promise.reject(new Error('NATIVE_JOIN_UNAVAILABLE'));
+        return gateway.nativeGameJoin(request);
+      },
+    }),
+    [gateway],
+  );
   const leaveGateway = useMemo(
     () => ({
       leaveGame: gateway.leaveGame,
@@ -723,6 +738,7 @@ function NativeCreatedGame({
   );
   const [game, setGame] = useState<Awaited<ReturnType<AuthGateway['getGame']>> | null>(null);
   const [failed, setFailed] = useState(false);
+  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     let active = true;
     const principal = gateway.quarterCreatePrincipal?.();
@@ -737,14 +753,34 @@ function NativeCreatedGame({
     return () => {
       active = false;
     };
-  }, [gateway, gameId]);
+  }, [gateway, gameId, refresh]);
   return (
     <main>
-      <a href="/games/new?quarterCreate=1">К созданию игры</a>
+      <a href="/games">К списку игр</a>
+      <button
+        type="button"
+        onClick={() => {
+          setFailed(false);
+          setRefresh((v) => v + 1);
+        }}
+      >
+        Обновить статус игры
+      </button>
       {game ? (
         <>
           <GameCard game={game} readOnly />
-          <NativeSelfLeave key={game.id} game={game} gateway={leaveGateway} scope={scope} />
+          <NativeGameJoin
+            game={game}
+            gateway={joinGateway}
+            scope={scope}
+            onCanonicalGame={setGame}
+          />
+          <NativeSelfLeave
+            key={`${game.id}:${game.viewerRelation}`}
+            game={game}
+            gateway={leaveGateway}
+            scope={scope}
+          />
           <NativeGameChat
             key={game.id}
             game={game}
@@ -1003,6 +1039,7 @@ export function App({
   // The first native increment exposes canonical API screens. Browser-only provider, payment
   // and upload routes stay unavailable until their native handoff contracts are implemented.
   const nativeSections = new Set([
+    'games',
     'trainings',
     'tournaments',
     'home',
@@ -3056,6 +3093,8 @@ export function App({
       }
       return <LocationDetailPage location={locationDetail} />;
     }
+    if (clientPlatform === 'android' && protectedRoute.kind === 'games')
+      return <NativeGames gateway={gateway} />;
     if (clientPlatform === 'android' && protectedRoute.kind === 'game') {
       return (
         <NativeCreatedGame
