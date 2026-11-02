@@ -78,13 +78,13 @@ final class AndroidSessionPolicy {
         String cleanPath = uri.getRawPath();
         if (uri.isAbsolute() || uri.getRawAuthority() != null || cleanPath == null
             || cleanPath.contains("%") || cleanPath.contains("..") || cleanPath.contains("//")) throw rejected();
-        if ((cleanPath.startsWith(userRoot + "/tournaments") && !AndroidTournamentChatRequest.matches(cleanPath.substring(userRoot.length()))) || cleanPath.startsWith("/public/api/v1/" + tenant + "/tournaments")) {
+        if ((cleanPath.startsWith(userRoot + "/tournaments") && !cleanPath.substring(userRoot.length()).matches("/tournaments/[^/]+/chat(?:/.*)?")) || cleanPath.startsWith("/public/api/v1/" + tenant + "/tournaments")) {
             if (binaryBody != null) throw rejected();
             return tournamentRequest(cleanPath, uri.getRawQuery(), method, inputHeaders, textBody);
         }
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
         String relativePath = cleanPath.substring(userRoot.length());
-        boolean tournamentChat = AndroidTournamentChatRequest.matches(relativePath);
+        boolean tournamentChat = relativePath.matches("/tournaments/[^/]+/chat(?:/.*)?");
         boolean stationStream = AndroidStationStreamRequest.matches(relativePath);
         boolean station = stationStream || AndroidStationMessageRequest.matches(relativePath);
         if (!station && !tournamentChat && !validQuery(relativePath, method, (relativePath.startsWith("/games") || relativePath.startsWith("/trainings/")) ? uri.getRawQuery() : uri.getQuery())) throw rejected();

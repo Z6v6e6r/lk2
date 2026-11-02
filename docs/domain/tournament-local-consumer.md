@@ -172,3 +172,22 @@ invoked after push cleanup. Process death during that earlier cleanup retains th
 auth restoration behavior; this packet does not rewrite push/auth sequencing. Once native
 logout is invoked, the existing Keychain pending-revocation journal protects restart. Neither
 case automatically retries a tournament mutation; original custody remains for explicit recovery.
+
+## Combined native journeys (R1 source integration)
+
+The native tournament catalogue/registration and tournament chat use distinct concrete
+request recognizers. Android routes only the `/{id}/chat` namespace to its chat validator;
+registration endpoints retain their own body, identity and retry validation. iOS keeps both
+Swift operation envelopes and rejects mixed messaging payloads before early-return handlers.
+Public discovery requests remain free of cookies/access tokens on the wire; the native cabinet
+and Swift transport still require an active local session. This is not logged-out discovery.
+
+In iOS, `/station-chats` opens station communities and `/chats` opens DIRECT/GAME conversations.
+Tournament detail links to its chat; returning from chat preserves the original UNKNOWN
+registration and permits only status lookup or explicit original-operation retry. Game detail
+adds a chat-only entry through the canonical game-conversation API while its existing read-only
+booking controls remain unchanged. The iOS command is bound to its original principal before
+and after bridge dispatch, has no automatic 401/network replay and rejects concurrent opens.
+
+These are source/local/CI guarantees. Unsigned simulator/JVM checks and the synthetic iOS
+transport do not prove device push delivery, provider settlement, signing or store readiness.

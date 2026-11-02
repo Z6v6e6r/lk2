@@ -7,6 +7,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { IOSAuthApp } from './IOSAuthApp.js';
 import type { QuarterCustody } from '../../../web/src/quarter-create-attempt.js';
 import type { IOSSessionPlugin } from './session.js';
+import { chatFixture } from './testing/chat-fixtures.js';
+import { getChatsUnreadCount } from '../../../web/src/chats-unread.js';
 import {
   fixtureReply,
   homeDashboard,
@@ -59,6 +61,26 @@ afterEach(() => {
 });
 
 describe('iOS cabinet with the real shared screens and one native session', () => {
+  it('opens existing chats without direct-create permission and clears unread on logout', async () => {
+    const fixture = chatFixture();
+    const request = vi.fn<IOSSessionPlugin['request']>(
+      async (input) => await Promise.resolve(fixture.reply(input)),
+    );
+    const session = syntheticSession(request);
+    await session.restore();
+    render(<IOSAuthApp session={session} />);
+    await screen.findByRole('main', { name: 'Главная' });
+    const link = await screen.findByRole('link', { name: 'Чаты, непрочитанных сообщений: 5' });
+    fireEvent.click(link);
+    await screen.findByRole('heading', { name: 'Чаты' });
+    await screen.findByText('Тестовая игра');
+    expect(screen.queryByRole('link', { name: 'Создать игру' })).toBeNull();
+    fireEvent.click(screen.getByRole('link', { name: 'Профиль' }));
+    await screen.findByRole('heading', { name: 'Анна Петрова' });
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти из аккаунта' }));
+    await screen.findByLabelText('Номер телефона');
+    expect(getChatsUnreadCount()).toBe(0);
+  });
   it('restores home, navigates profile/bookings/games/location, and logs out without browser or provider commands', async () => {
     let markDashboardRequested!: () => void;
     const dashboardRequested = new Promise<void>((resolve) => {
@@ -82,9 +104,9 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     await screen.findByRole('main', { name: 'Главная' });
     const nav = screen.getByRole('navigation', { name: 'Основная навигация' });
     expect(nav).toBeInTheDocument();
-    expect(within(nav).getAllByRole('link')).toHaveLength(3);
+    expect(within(nav).getAllByRole('link')).toHaveLength(4);
     expect(screen.queryByRole('link', { name: 'Создать игру' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Чаты' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Чаты' })).toHaveAttribute('href', '/chats');
     fireEvent.click(within(nav).getByRole('link', { name: 'Профиль' }));
     // Home and Profile share the name heading; await a region unique to the destination.
     const subscriptions = await screen.findByRole('region', { name: 'Подписки и абонементы' });
@@ -423,6 +445,28 @@ describe('iOS concrete tournament consumer', () => {
     let current: unknown = null;
     const request = vi.fn<IOSSessionPlugin['request']>(async (input) => {
       await Promise.resolve();
+      if (input.operation === 'tournamentChat')
+        return nativeResult(
+          input.resource === 'history'
+            ? {
+                contractVersion: 'tournament-chat.v1',
+                tournamentId: id,
+                streamId: null,
+                throughSequence: 0,
+                messages: [],
+                hasMore: false,
+                nextCursor: null,
+              }
+            : {
+                contractVersion: 'tournament-chat-read.v1',
+                tournamentId: id,
+                streamId: null,
+                witnessHash: null,
+                baselineSequence: 0,
+                readThroughSequence: 0,
+                publishedSequence: 0,
+              },
+        );
       if (input.operation !== 'tournament') return fixtureReply(input);
       if (input.resource === 'list') return nativeResult({ items: [summary] });
       if (input.resource === 'summary') return nativeResult(summary);
@@ -493,6 +537,22 @@ describe('iOS concrete tournament consumer', () => {
     )![0];
     expect(original.body).toBe('{"action":"JOIN"}');
     expect(original.headers['idempotency-key']).toBeTruthy();
+    fireEvent.click(await screen.findByRole('link', { name: 'Чат турнира' }));
+    await screen.findByRole('textbox', { name: 'Сообщение' });
+    await waitFor(() =>
+      expect(
+        f.request.mock.calls.some(
+          ([v]) => v.operation === 'tournamentChat' && v.resource === 'history',
+        ),
+      ).toBe(true),
+    );
+    fireEvent.click(screen.getByRole('link', { name: '← К турниру' }));
+    await screen.findByText('Операция ожидает подтверждения. Сохранён исходный запрос.');
+    expect(
+      f.request.mock.calls.filter(
+        ([v]) => v.operation === 'tournament' && v.resource === 'command',
+      ),
+    ).toHaveLength(1);
     cleanup();
     const restored = syntheticSession(f.request);
     await restored.restore();
@@ -535,15 +595,82 @@ describe('iOS concrete tournament consumer', () => {
       const f = tournamentFixture();
       await f.session.restore();
       await openTournament(f.session);
-      const button = await screen.findByRole('button', { name: 'Записаться на турнир' });
       if (missing === 'randomUUID') {
+        const button = await screen.findByRole('button', { name: 'Записаться на турнир' });
         await waitFor(() => expect(button).toBeEnabled());
         fireEvent.click(button);
         await screen.findByRole('alert');
-      } else await waitFor(() => expect(button).toBeDisabled());
+      } else {
+        await screen.findByRole('button', { name: 'Проверить запись' });
+        // A retained UNKNOWN may expose only original-operation recovery. Neither
+        // a fresh command nor its retry may run without locks/durable storage.
+        await waitFor(() => {
+          const writes = screen
+            .getAllByRole('button')
+            .filter((button) =>
+              /Записаться на турнир|Выйти из турнира|Повторить исходную операцию/.test(
+                button.textContent ?? '',
+              ),
+            );
+          expect(writes.length).toBeGreaterThan(0);
+          for (const button of writes) expect(button).toBeDisabled();
+        });
+      }
       expect(
         f.request.mock.calls.filter(([x]) => x.resource === 'command' || x.resource === 'retry'),
       ).toHaveLength(0);
     },
   );
+});
+
+it('keeps station and DIRECT/GAME directories independently reachable in the merged cabinet', async () => {
+  const f = chatFixture();
+  const request = vi.fn<IOSSessionPlugin['request']>(
+    async (input) => await Promise.resolve(f.reply(input)),
+  );
+  const session = syntheticSession(request);
+  await session.restore();
+  render(<IOSAuthApp session={session} />);
+  fireEvent.click(await screen.findByRole('link', { name: 'Чаты сообществ' }));
+  await screen.findByRole('heading', { name: 'Чаты сообществ' });
+  expect(window.location.pathname).toBe('/station-chats');
+  fireEvent.click(screen.getByRole('link', { name: 'Личные и игровые чаты' }));
+  await screen.findByRole('heading', { name: 'Чаты' });
+  await screen.findByText('Тестовая игра');
+  expect(window.location.pathname).toBe('/chats');
+});
+it('opens canonical GAME chat from native game detail while booking remains read-only', async () => {
+  const f = chatFixture();
+  const conversationId = '22222222-2222-4222-8222-222222222222';
+  const request = vi.fn<IOSSessionPlugin['request']>(
+    async (input) =>
+      await Promise.resolve(
+        input.operation === 'read' && input.resource === 'game'
+          ? nativeResult({ game: { ...game, viewerRelation: 'PARTICIPANT', conversation: null } })
+          : input.resource === 'createGame'
+            ? nativeResult({
+                outcome: 'ok',
+                conversation: { id: conversationId },
+                created: true,
+                replayed: false,
+              })
+            : f.reply(input),
+      ),
+  );
+  const session = syntheticSession(request);
+  await session.restore();
+  render(<IOSAuthApp session={session} />);
+  await screen.findByRole('main', { name: 'Главная' });
+  act(() => {
+    window.history.pushState(null, '', `/games/${game.id}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Чат игры' }));
+  await screen.findByRole('heading', { name: 'Чаты' });
+  expect(window.location.pathname).toBe(`/chats/${conversationId}`);
+  expect(request.mock.calls.filter(([v]) => v.resource === 'createGame')).toHaveLength(1);
+  expect(request.mock.calls.find(([v]) => v.resource === 'createGame')![0].body).toBe(
+    JSON.stringify({ gameId: game.id }),
+  );
+  expect(screen.queryByRole('button', { name: 'Вступить' })).toBeNull();
 });

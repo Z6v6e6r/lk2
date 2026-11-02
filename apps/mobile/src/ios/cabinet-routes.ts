@@ -9,6 +9,7 @@ export interface CabinetReadRequest {
 }
 
 const reads: Readonly<Record<string, readonly [string, readonly string[]]>> = {
+  '/conversations': ['conversations', ['limit']],
   '/notification-endpoints/ios/config': ['pushConfig', []],
   '/notifications': ['notifications', ['limit', 'cursor', 'unreadOnly']],
   '/notifications/preferences': ['notificationPreferences', []],
@@ -62,8 +63,24 @@ export function cabinetReadRequest(
       /^\/(locations|games)\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i.exec(
         path,
       );
+    const profile =
+      /^\/profiles\/([a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/.exec(
+        path,
+      );
+    const messages =
+      /^\/conversations\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\/messages$/i.exec(
+        path,
+      );
     if (route) [resource, allowed] = route;
-    else if (detail) {
+    else if (messages) {
+      resource = 'conversationMessages';
+      resourceId = messages[1];
+      allowed = ['afterSequence', 'limit'];
+    } else if (profile) {
+      resource = 'playerProfile';
+      resourceId = profile[1];
+      allowed = [];
+    } else if (detail) {
       resource = detail[1] === 'locations' ? 'location' : 'game';
       resourceId = detail[2];
       allowed = [];
@@ -83,7 +100,18 @@ export function cabinetReadRequest(
       reject();
     if (
       key === 'limit' &&
-      (!/^[1-9][0-9]?$/.test(entry) || Number(entry) > (resource === 'recommendations' ? 20 : 50))
+      (!/^[1-9][0-9]{0,2}$/.test(entry) ||
+        Number(entry) >
+          (resource === 'recommendations'
+            ? 20
+            : resource === 'conversations' || resource === 'conversationMessages'
+              ? 100
+              : 50))
+    )
+      reject();
+    if (
+      key === 'afterSequence' &&
+      (!/^(0|[1-9][0-9]*)$/.test(entry) || !Number.isSafeInteger(Number(entry)))
     )
       reject();
     if (key === 'cursor' && (entry.length < 16 || entry.length > 512)) reject();

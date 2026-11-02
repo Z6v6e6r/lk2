@@ -1,3 +1,4 @@
+import { NativeGameChat } from './NativeGameChat.js';
 import { TournamentChatPage } from './TournamentChatPage.js';
 import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
 import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
@@ -719,7 +720,15 @@ function NativeCreatedGame({ gateway, gameId }: { gateway: AuthGateway; gameId: 
     <main>
       <a href="/games/new?quarterCreate=1">К созданию игры</a>
       {game ? (
-        <GameCard game={game} readOnly />
+        <>
+          <GameCard game={game} readOnly />
+          <NativeGameChat
+            key={game.id}
+            game={game}
+            principal={() => gateway.quarterCreatePrincipal?.() ?? null}
+            open={(id) => gateway.getOrCreateGameConversation(id)}
+          />
+        </>
       ) : (
         <p role="status">{failed ? 'Игра пока недоступна.' : 'Загружаем игру…'}</p>
       )}

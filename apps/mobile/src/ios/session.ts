@@ -14,6 +14,7 @@ import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type { AuthenticatedSession, UserContext } from '@phub/api-sdk';
 import { tournamentRequest } from './tournament-routes.js';
 import { cabinetReadRequest } from './cabinet-routes.js';
+import { messagingRequest } from './messaging-routes.js';
 
 export interface IOSConfiguration {
   readonly apiBaseUrl: string;
@@ -36,7 +37,8 @@ interface NativeRequest {
     | 'stationMessage'
     | 'stationStream'
     | 'tournamentChat'
-    | 'tournament';
+    | 'tournament'
+    | 'messaging';
   readonly requestId?: string;
   readonly challengeId?: string;
   readonly operationId?: string;
@@ -66,6 +68,7 @@ export function createIOSFetch(
   canDispatchGameCancellation?: (gameId: string) => boolean,
   canDispatchStation?: (request: NativeStationRequest | NativeStationStreamRequest) => boolean,
   canDispatchTournamentChat?: (request: NativeTournamentChatRequest) => boolean,
+  canDispatchGameChat?: (gameId: string) => boolean,
 ): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   let cancellationClosed = false;
@@ -112,7 +115,10 @@ export function createIOSFetch(
     else if (quarter) operation = 'quarterCreate';
     else if (tournament) operation = 'tournament';
     else if (read) operation = 'read';
-    else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
+    else if (path.startsWith('/conversations/') || path === '/messaging/realtime-ticket') {
+      operation = 'messaging';
+      notification = messagingRequest(path, method, init);
+    } else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
     else if (path === '/auth/session/refresh' && method === 'POST') operation = 'refresh';
     else if (path === '/auth/session' && method === 'DELETE') operation = 'logout';
     else if (path === '/context' && method === 'GET') operation = 'context';
@@ -142,6 +148,12 @@ export function createIOSFetch(
       cancellationEpoch++;
     }
     const originalCancellationEpoch = cancellationEpoch;
+    const gameChatId =
+      notification?.resource === 'createGame'
+        ? (JSON.parse(init?.body as string) as { gameId: string }).gameId
+        : null;
+    if (gameChatId && (cancellationClosed || canDispatchGameChat?.(gameChatId) !== true))
+      throw new DOMException('Session changed', 'AbortError');
     if (cancel && (cancellationClosed || canDispatchGameCancellation?.(cancel.resourceId) !== true))
       throw new DOMException('Session changed', 'AbortError');
     if (
@@ -168,6 +180,13 @@ export function createIOSFetch(
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (
+        gameChatId &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchGameChat?.(gameChatId) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
       if (
         tournamentChat &&
         new TextEncoder().encode(result.body).length >
@@ -247,6 +266,7 @@ export class IOSSession {
   private tournamentClosed = false;
   private tournamentEpoch = 0;
   private readonly reads = new Set<Promise<unknown>>();
+  private readonly gameChatRequests = new Map<string, string>();
   private readonly cancellations = new Map<string, string>();
   private readonly stationRequests = new Map<string, string>();
   private readonly tournamentChatRequests = new Map<string, string>();
@@ -295,6 +315,29 @@ export class IOSSession {
     if (p !== this.quarterCreatePrincipal())
       throw new DOMException('Session changed', 'AbortError');
     return v;
+  }
+  public canDispatchGameChat(gameId: string): boolean {
+    const original = this.gameChatRequests.get(gameId);
+    return original !== undefined && original === this.quarterCreatePrincipal();
+  }
+  public async openGameChat(
+    gameId: string,
+  ): ReturnType<PadlHubApiClient['getOrCreateGameConversation']> {
+    const original = this.quarterCreatePrincipal();
+    if (!original || this.gameChatRequests.has(gameId)) throw rejectedRequest();
+    this.gameChatRequests.set(gameId, original);
+    try {
+      return await this.quarterCall((api) =>
+        api.request('/conversations/game', {
+          method: 'POST',
+          idempotencyKey: crypto.randomUUID(),
+          body: JSON.stringify({ gameId }),
+          retryOnUnauthorized: false,
+        }),
+      );
+    } finally {
+      this.gameChatRequests.delete(gameId);
+    }
   }
   public gameCancelPrincipal(): string | null {
     return this.quarterCreatePrincipal();
@@ -633,6 +676,7 @@ export function getIOSSession(): Promise<IOSSession> {
         (id) => session?.canDispatchGameCancellation(id) === true,
         (request) => session?.canDispatchStation(request) === true,
         (request) => session?.canDispatchTournamentChat(request) === true,
+        (id) => session?.canDispatchGameChat(id) === true,
       ),
     });
     const session: IOSSession = new IOSSession(configuration, api);

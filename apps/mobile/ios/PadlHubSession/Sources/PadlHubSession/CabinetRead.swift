@@ -3,8 +3,9 @@ import Foundation
 /// Reviewed first-party reads only. The WebView cannot choose a URL, tenant or HTTP method.
 public enum CabinetResource: String, Sendable {
   case home, homeBase, profile, preferences, privacy, bookings, history, recommendations
-  case locations, location, game, publicGames, communities
+  case locations, location, game, publicGames, communities, playerProfile
   case pushConfig, notifications, notificationPreferences
+  case conversations, conversationMessages
 
   var isPublic: Bool { self == .publicGames }
 }
@@ -24,6 +25,13 @@ public struct CabinetRead: Sendable {
     let suffix: String
     var allowed: Set<String> = []
     switch resource {
+    case .conversations:
+      suffix = "/conversations"
+      allowed = ["limit"]
+    case .conversationMessages:
+      guard let id, UUID(uuidString: id) != nil else { throw SessionFailure.request }
+      suffix = "/conversations/\(id)/messages"
+      allowed = ["limit", "afterSequence"]
     case .pushConfig: suffix = "/notification-endpoints/ios/config"
     case .notificationPreferences: suffix = "/notifications/preferences"
     case .notifications:
@@ -32,6 +40,9 @@ public struct CabinetRead: Sendable {
     case .home: suffix = "/home"
     case .homeBase: suffix = "/home/base"
     case .profile: suffix = "/profile"
+    case .playerProfile:
+      guard let id, UUID(uuidString: id) != nil else { throw SessionFailure.request }
+      suffix = "/profiles/\(id)"
     case .preferences: suffix = "/profile/booking-preferences"
     case .privacy: suffix = "/profile/privacy"
     case .bookings: suffix = "/bookings/upcoming"
@@ -52,7 +63,7 @@ public struct CabinetRead: Sendable {
       suffix = "/communities/mine"
       allowed = ["limit", "cursor"]
     }
-    guard (resource == .location || resource == .game) || id == nil,
+    guard (resource == .location || resource == .game || resource == .conversationMessages || resource == .playerProfile) || id == nil,
       Set(query.keys).isSubset(of: allowed)
     else { throw SessionFailure.request }
     for (key, value) in query {
@@ -60,11 +71,15 @@ public struct CabinetRead: Sendable {
         value.rangeOfCharacter(from: .controlCharacters) == nil
       else { throw SessionFailure.request }
       switch key {
+      case "afterSequence":
+        guard value.range(of: "^(0|[1-9][0-9]*)$", options: .regularExpression) != nil,
+          let sequence = UInt64(value), sequence <= 9007199254740991
+        else { throw SessionFailure.request }
       case "unreadOnly":
         guard ["true", "false"].contains(value) else { throw SessionFailure.request }
       case "limit":
-        guard value.range(of: "^[1-9][0-9]?$", options: .regularExpression) != nil,
-          let limit = Int(value), limit <= (resource == .recommendations ? 20 : 50)
+        guard value.range(of: "^[1-9][0-9]{0,2}$", options: .regularExpression) != nil,
+          let limit = Int(value), limit <= (resource == .recommendations ? 20 : (resource == .conversations || resource == .conversationMessages) ? 100 : 50)
         else { throw SessionFailure.request }
       case "cursor":
         guard (16...512).contains(value.count) else { throw SessionFailure.request }

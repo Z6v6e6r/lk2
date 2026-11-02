@@ -200,10 +200,49 @@ result. History and public games retain their existing query contracts. There is
 read-job POST, arbitrary URL fetch, browser-cookie fallback or new backend endpoint.
 
 Home, upcoming bookings, history, public games, own profile/subscriptions and locations are
-available for viewing. Settings are disabled without save callbacks; game/payment/chat commands,
-friends and notifications are not connected yet. Unsupported links show an explicit unavailable
+available for viewing. Settings are disabled without save callbacks; game/payment commands and
+friends are not connected yet. Unsupported links show an explicit unavailable
 screen with navigation back. This is an implementation stage toward the full cabinet, not a
 permanent reduction of the mobile product.
+
+The existing DIRECT/GAME text-chat consumer adds `/chats` and `/chats/{conversationUuid}`.
+It reuses the Web list/thread/composer and the same native session. Native GETs allow only
+`conversations` (`limit <= 100`) and `{uuid}/messages` (`afterSequence`, `limit <= 100`).
+Named native commands allow text send, read cursor, bounded notification policy, and an empty-body
+realtime ticket. Swift reconstructs each URL/method, validates bodies/headers and rejects all other
+chat/media/provider operations. The read-only navigation can show Chats without enabling CREATE.
+GAME-only users do not need the direct-create permission to load their authorized conversations.
+
+An unconfirmed message retains its `clientMessageId`/idempotency key in the current mounted thread.
+HTTP reconciliation checks for that ID before enabling/repeating the same command. There is no
+background/offline send queue and no automatic resend after reconnect or a new login. Realtime
+starts only after initial history; tickets go in the first frame, fresh tickets are obtained on
+reconnect, and HTTP sequence recovery/polling remains active. Logout/account changes discard late
+results, stop sockets/polling and clear the shared unread badge. Read cursors advance only for a
+visible thread after history loads. Unread totals cover the existing bounded conversation list.
+
+Personal chat creation starts from an existing game participant's `/profile/{publicUuid}` link.
+The existing authenticated `/profiles/{uuid}` projection must match that exact player, have
+`OTHER` audience and contain no private account section. The native allowlist permits only this
+GET without query parameters. Shared profile UI preserves server chat privacy/capabilities;
+friend/contact writes and player search are not added. Other-player avatars use the initials
+placeholder, without fetching protected media.
+
+The server-projected `/chats/new?recipientUserId={uuid}&open=1` action rechecks the profile,
+current `profile.read`/`chat.direct.create` grants and exact target before the named native
+`createDirect` command: POST `/conversations/direct`, only `{otherUserId}`, current JWT and a
+stable idempotency key. Swift independently constructs/validates the route, method and body.
+One command is active at a time. After an ambiguous response, a user retry checks HTTP conversation
+history before retrying the same key; a bounded list miss is not proof of absence. The backend
+canonical pair and command ledger prevent duplicate threads. There is no automatic network retry
+or offline queue. Route exit clears presentation, and logout/account changes discard commands
+and late responses. Successful creation opens the existing text thread; server privacy, blocks,
+reachability and stored grants remain authoritative on every command/replay.
+
+This increment does not create game conversations, change membership, send or fetch
+attachments, or enable community/tournament writes. Existing media is explicitly unavailable on
+iOS; it never falls back to a protected browser fetch. Server messaging gates remain authoritative.
+Signing, provider/device acceptance and full B07 closure remain separate requirements.
 
 Private reads require an active native credential. Session generations discard obsolete UI
 responses; logout and the next authentication wait for pending SDK reads/refreshes. Final 401s
@@ -215,6 +254,29 @@ A native opaque shield covers windows before iOS captures an inactive/background
 `src/ios/testing/cabinet-preview.tsx` is a synthetic Playwright interception entry, never imported
 by the production entry or used as an API fallback. Block non-loopback network in that preview.
 Its browser evidence proves rendering/navigation, not live API/Keychain end-to-end behavior.
+
+The separate native `AppTests/PadlHubDirectIntegrationTests.swift` acceptance suite runs only
+when a Debug simulator test host is compiled with `PADLHUB_B07_TEST_HOST`. The flag is never
+enabled in project build settings, normal Debug, or Release. Its internal Swift installation
+hook is absent from Release and the JavaScript plugin method table. This host cannot initialize
+the production URLSession/Keychain session transport: AppTests supplies the existing injected
+`SessionTransport` initializer with an in-memory credential store and strict synthetic replies.
+The bundled production TypeScript entry, Capacitor command parser and Swift validators remain
+in the path. Synthetic OTP verification must create a native credential before protected reads.
+
+Before its first WebView load, this host installs a WebKit HTTP(S) content blocker and an
+all-frame document-start WebSocket-constructor denial; failure to install the content blocker
+leaves the WebView blank. This is browser-level denial plus an injected native transport, not
+an OS network namespace. Unknown fixture calls fail without a network fallback. Push remains
+disabled; realtime tickets return the existing disabled response so only HTTP polling is used.
+
+CI owns a fresh disposable simulator and executes this suite without signing. Local execution
+requires a separately established task-owned simulator and sufficient disk space; never install
+over an existing user/production app. The suite covers participant→OTHER profile→DIRECT, lost
+response reconciliation, offline manual same-key retry, capability denial and logout with a
+late read. Rendered synthetic profile/error/thread/logout snapshots are retained in `.xcresult`.
+Simulator fixtures do not verify real OTP delivery, Keychain persistence, APNs, provider writes,
+physical-device behavior or store readiness. No production credential/configuration is required.
 
 Remaining work: connect booking/payment commands and the remaining cabinet modules through
 their reviewed native contracts; validate legal-document return, keyboard/safe areas and a

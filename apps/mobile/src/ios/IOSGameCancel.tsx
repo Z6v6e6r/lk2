@@ -1,3 +1,4 @@
+import { NativeGameChat } from '../../../web/src/NativeGameChat.js';
 import { useEffect, useRef, useState } from 'react';
 import type { GameCard as Game } from '@phub/api-sdk';
 import { GameCard } from '../../../web/src/GameCard.js';
@@ -61,6 +62,12 @@ export function IOSGameCancel({ game, session }: { game: Game; session: IOSSessi
   return (
     <>
       <GameCard game={currentGame} readOnly />
+      <NativeGameChat
+        key={currentGame.id}
+        game={currentGame}
+        principal={() => session.quarterCreatePrincipal()}
+        open={(id) => session.openGameChat(id)}
+      />
       {currentGame.viewerRelation === 'ORGANIZER' &&
         currentGame.allowedActions.includes('CANCEL') && (
           <button
