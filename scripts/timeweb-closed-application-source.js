@@ -57,9 +57,48 @@ export const CLOSED_R1_CONTROLLER_FILES = Object.freeze([
   'docs/runbooks/closed-application-migrations-0103-0104.md',
   'docs/runbooks/r1-tail108-119-migration.md',
 ]);
+// Exact P0 JOIN lifetime correction, independently reviewed with its regression test.
+// These paths remain outside the editable controller allowlist. Admit the complete
+// regular-blob pair only; later UI changes require their own reviewed release path.
+const NATIVE_JOIN_PREREQUISITE = Object.freeze({
+  'apps/web/src/NativeGameJoin.tsx': {
+    oldOid: '5f0bd216b2236ad3dceb759dec01e9d56e261d36',
+    newOid: '76175a62bd0a25ac281dd2ddf949f94add1106f5',
+  },
+  'apps/web/src/NativeGameJoin.test.tsx': {
+    oldOid: 'f428b2d54b2f88d415fa936eca66b4b6d68435a3',
+    newOid: '89350edf3ad31bdef5662197b95f554ce72182c6',
+  },
+});
+export function validateClosedR1NativeJoinPrerequisite(entries) {
+  if (!Array.isArray(entries)) fail('R1_NATIVE_JOIN');
+  const rows = entries.filter((row) => row && Object.hasOwn(NATIVE_JOIN_PREREQUISITE, row.path));
+  if (rows.length === 0) return new Set();
+  if (
+    rows.length !== 2 ||
+    new Set(rows.map((row) => row.path)).size !== 2 ||
+    rows.some((row) => {
+      const pin = NATIVE_JOIN_PREREQUISITE[row.path];
+      return (
+        !same(
+          Object.keys(row).sort(),
+          ['oldMode', 'newMode', 'oldOid', 'newOid', 'status', 'path'].sort(),
+        ) ||
+        row.status !== 'M' ||
+        row.oldMode !== '100644' ||
+        row.newMode !== '100644' ||
+        row.oldOid !== pin.oldOid ||
+        row.newOid !== pin.newOid
+      );
+    })
+  )
+    fail('R1_NATIVE_JOIN');
+  return new Set(rows.map((row) => row.path));
+}
 export function validateClosedR1ControllerClosure(entries) {
   const paths = new Set();
   if (!Array.isArray(entries) || !entries.length) fail('R1_DELTA');
+  const nativePrerequisite = validateClosedR1NativeJoinPrerequisite(entries);
   for (const row of entries) {
     if (
       !row ||
@@ -68,7 +107,7 @@ export function validateClosedR1ControllerClosure(entries) {
         ['oldMode', 'newMode', 'oldOid', 'newOid', 'status', 'path'].sort(),
       ) ||
       paths.has(row.path) ||
-      !CLOSED_R1_CONTROLLER_FILES.includes(row.path) ||
+      (!CLOSED_R1_CONTROLLER_FILES.includes(row.path) && !nativePrerequisite.has(row.path)) ||
       !['A', 'M'].includes(row.status) ||
       row.newMode !== '100644' ||
       !/^[a-f0-9]{40}$/.test(row.newOid ?? '') ||

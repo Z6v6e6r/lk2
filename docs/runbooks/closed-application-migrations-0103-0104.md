@@ -150,3 +150,17 @@ matching the publication workflow and manifest schema. Closed 0103/0104 and R1 t
 migration admission validate that string without coercion or rewriting the immutable
 manifest. GitHub run metadata and migration operation `publicationRunAttempt` remain
 numeric `1`; later attempts and noncanonical representations are rejected.
+
+### Exact native JOIN lifetime prerequisite
+
+The R1 source closure can additionally contain one complete, independently reviewed
+pair: `NativeGameJoin.tsx` blob `5f0bd216b2236ad3dceb759dec01e9d56e261d36` →
+`76175a62bd0a25ac281dd2ddf949f94add1106f5`, and its regression test blob
+`f428b2d54b2f88d415fa936eca66b4b6d68435a3` → `89350edf3ad31bdef5662197b95f554ce72182c6`.
+The correction activates the JOIN lifetime before a visible enabled action accepts input;
+the deterministic test fails on the prior implementation with zero dispatched requests.
+Both closed-prefix and tail validators use the same all-or-none exact blob check. These
+paths are not added to the editable controller allowlist. Partial pairs, different blobs,
+mode/status changes and other application paths are rejected. Base27d, SQL/catalog/ledger,
+ACL/backup guards and controller=migrator source identity remain unchanged. This source
+exception does not activate an application, mobile build/store or provider operation.
