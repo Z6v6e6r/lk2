@@ -65,7 +65,12 @@ it.each([401, 503, 'network'] as const)(
   async (status) => {
     const request = vi.fn<IOSSessionPlugin['request']>((v) => {
       if (v.operation !== 'training') return Promise.resolve(fixtureReply(v));
-      if (status === 'network') return Promise.reject({ code: 'NATIVE_NETWORK_UNAVAILABLE' });
+      if (status === 'network')
+        return Promise.reject(
+          Object.assign(new Error('synthetic network failure'), {
+            code: 'NATIVE_NETWORK_UNAVAILABLE',
+          }),
+        );
       return Promise.resolve(
         nativeResult({ error: { code: 'SYNTHETIC_FAILURE', message: 'unavailable' } }, status),
       );
