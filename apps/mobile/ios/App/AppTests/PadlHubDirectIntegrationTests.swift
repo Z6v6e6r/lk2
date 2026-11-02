@@ -58,7 +58,7 @@ final class PadlHubDirectIntegrationTests: XCTestCase {
       throw NSError(domain: "B07NativeAcceptance", code: 2)
     }
     let plugin = try XCTUnwrap(controller.bridge?.plugin(withName: "PadlHubSession") as? PadlHubSessionPlugin)
-    XCTAssertEqual(Set(plugin.pluginMethods.map(\.name)), ["configuration", "request"])
+    XCTAssertEqual(Set(plugin.pluginMethods.map(\.name)), ["configuration", "request", "openSubscriptionPayment"])
     // Clear the previous document's timers before replacing its synthetic transport.
     // A nil base URL becomes about:blank, which Capacitor correctly rejects as external.
     let localURL = try XCTUnwrap(controller.bridge?.config.localURL)
@@ -218,6 +218,15 @@ final class PadlHubDirectIntegrationTests: XCTestCase {
         && Object.keys(opened).length === 0 && denied.every(Boolean);
       """, arguments: [:], in: nil, contentWorld: .page) as? Bool
     XCTAssertEqual(unsupportedPush, true, "Synthetic DIRECT tests never register or revoke a real notification installation")
+    let paymentDenied = try await web.callAsyncJavaScript("""
+      const plugin = window.Capacitor.Plugins.PadlHubSession;
+      const id = '11111111-1111-4111-8111-111111111111';
+      try {
+        await plugin.openSubscriptionPayment({operationId: id, launchCode: id + '.' + 'a'.repeat(64)});
+        return false;
+      } catch (error) { return error.code === 'NATIVE_REQUEST_REJECTED'; }
+      """, arguments: [:], in: nil, contentWorld: .page) as? Bool
+    XCTAssertEqual(paymentDenied, true, "Synthetic host must reject valid payment launch input before opening an external browser")
     let result = try await web.callAsyncJavaScript("""
       const output = [];
       for (const scheme of ['http', 'https']) {
