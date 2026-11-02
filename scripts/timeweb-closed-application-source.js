@@ -1,6 +1,11 @@
+import {
+  closedApplicationPackageFamily,
+  closedApplicationPackageDescriptor,
+  closedApplicationDescriptorPath,
+  assertClosedR1Descriptor,
+} from './closed-application-package-family.js';
 // Separate enrollment closure: the historical notification/photo allowlists are unchanged.
 import { createHash } from 'node:crypto';
-import descriptor from '../deploy/timeweb/closed-application-migrations-0103-0104.v1.json' with { type: 'json' };
 import { assertControllerPromotionGitConfig } from './verify-source-ci.js';
 import { parseApiWorkerControllerDiff } from './timeweb-api-worker-contract.js';
 import { parseStrictJson } from './strict-json.js';
@@ -13,6 +18,84 @@ export const CLOSED_APPLICATION_CONTROLLER_BASE = Object.freeze({
   sha: '871cc2f8660ec98ec4b95f50a78aad1e6d1b1cfe',
   tree: 'a76bc4ce1f472e2465a0bbb0075f1ec0efba294c',
 });
+export const CLOSED_R1_CONTROLLER_BASE = Object.freeze({
+  sha: '27d8527f2f36e1a647012a86f92f4a51b9dd50eb',
+  tree: 'f144d66d2aaa3dfdb53177c62d35bcb7b327253f',
+});
+export const CLOSED_R1_CONTROLLER_FILES = Object.freeze([
+  'deploy/timeweb/closed-application-prefix108-package119.v1.json',
+  'deploy/timeweb/r1-tail108-119-catalogs.v1.json',
+  'scripts/closed-application-package-family.js',
+  'scripts/closed-application-package-family.d.ts',
+  'scripts/closed-application-package-family.test.ts',
+  'apps/migrator/src/main.ts',
+  'apps/migrator/src/migration-runner.ts',
+  'apps/migrator/src/closed-single-migration.ts',
+  'apps/migrator/src/closed-single-migration.test.ts',
+  'apps/migrator/src/closed-single-migration.pg.test.ts',
+  'apps/migrator/src/r1-tail-migration.pg.test.ts',
+  'scripts/timeweb-api-worker-migration.js',
+  'scripts/timeweb-api-worker-migration.test.ts',
+  'scripts/timeweb-closed-application-profile.js',
+  'scripts/timeweb-closed-application-profile.test.ts',
+  'scripts/timeweb-closed-application-backup.js',
+  'scripts/timeweb-closed-application-backup.d.ts',
+  'scripts/timeweb-closed-application-backup.test.ts',
+  'scripts/timeweb-closed-application-source.js',
+  'scripts/timeweb-closed-application-source.d.ts',
+  'scripts/timeweb-closed-application-source.test.ts',
+  'scripts/timeweb-closed-application-runtime.js',
+  'scripts/timeweb-closed-application-runtime.test.ts',
+  'scripts/timeweb-closed-application.fixture.ts',
+  'scripts/control-timeweb-database-backup.py',
+  'scripts/test-timeweb-database-backup.py',
+  'scripts/r1-tail-migration-runtime.js',
+  'scripts/r1-tail-migration-source.js',
+  'docs/runbooks/closed-application-migrations-0103-0104.md',
+  'docs/runbooks/r1-tail108-119-migration.md',
+]);
+export function validateClosedR1ControllerClosure(entries) {
+  const paths = new Set();
+  if (!Array.isArray(entries) || !entries.length) fail('R1_DELTA');
+  for (const row of entries) {
+    if (
+      !row ||
+      !same(
+        Object.keys(row).sort(),
+        ['oldMode', 'newMode', 'oldOid', 'newOid', 'status', 'path'].sort(),
+      ) ||
+      paths.has(row.path) ||
+      !CLOSED_R1_CONTROLLER_FILES.includes(row.path) ||
+      !['A', 'M'].includes(row.status) ||
+      row.newMode !== '100644' ||
+      !/^[a-f0-9]{40}$/.test(row.newOid ?? '') ||
+      /^0{40}$/.test(row.newOid) ||
+      (row.status === 'A'
+        ? row.oldMode !== '000000' || row.oldOid !== '0'.repeat(40)
+        : row.oldMode !== '100644' ||
+          !/^[a-f0-9]{40}$/.test(row.oldOid ?? '') ||
+          row.oldOid === row.newOid)
+    )
+      fail('R1_DELTA');
+    paths.add(row.path);
+  }
+  for (const required of [
+    'scripts/closed-application-package-family.js',
+    'deploy/timeweb/closed-application-prefix108-package119.v1.json',
+    'deploy/timeweb/r1-tail108-119-catalogs.v1.json',
+    'apps/migrator/src/main.ts',
+    'apps/migrator/src/migration-runner.ts',
+    'apps/migrator/src/closed-single-migration.ts',
+    'scripts/timeweb-closed-application-profile.js',
+    'scripts/timeweb-closed-application-source.js',
+    'scripts/timeweb-closed-application-runtime.js',
+    'scripts/timeweb-closed-application-backup.js',
+    'scripts/timeweb-api-worker-migration.js',
+    'scripts/control-timeweb-database-backup.py',
+  ])
+    if (!paths.has(required)) fail('R1_REQUIRED');
+  return entries;
+}
 const source = '/opt/phub/timeweb-beta/standard/source';
 const workflow = Object.freeze({
   path: '.github/workflows/pull-request.yaml',
@@ -138,6 +221,11 @@ export function validateClosedApplicationControllerClosure(entries) {
 }
 export function attestClosedApplicationControllerSource(operation, deps) {
   validateClosedApplicationOperation(operation);
+  const family = closedApplicationPackageFamily(operation);
+  const base =
+    family === 'R1_PACKAGE119' ? CLOSED_R1_CONTROLLER_BASE : CLOSED_APPLICATION_CONTROLLER_BASE;
+  const selectedDescriptor = closedApplicationPackageDescriptor(operation);
+  if (family === 'R1_PACKAGE119') assertClosedR1Descriptor();
   const { git, read, secure, present } = deps;
   if (!secure(source, 0o700).isDirectory() || !secure(`${source}/.git`).isDirectory())
     fail('DIRECTORY');
@@ -160,18 +248,11 @@ export function attestClosedApplicationControllerSource(operation, deps) {
     present(`${source}/.git/shallow`)
   )
     fail('IDENTITY');
-  if (
-    git(['rev-parse', `${CLOSED_APPLICATION_CONTROLLER_BASE.sha}^{tree}`]) !==
-    CLOSED_APPLICATION_CONTROLLER_BASE.tree
-  )
-    fail('BASE');
-  git([
-    'merge-base',
-    '--is-ancestor',
-    CLOSED_APPLICATION_CONTROLLER_BASE.sha,
-    operation.controllerSha,
-  ]);
-  validateClosedApplicationControllerClosure(
+  if (git(['rev-parse', `${base.sha}^{tree}`]) !== base.tree) fail('BASE');
+  git(['merge-base', '--is-ancestor', base.sha, operation.controllerSha]);
+  (family === 'R1_PACKAGE119'
+    ? validateClosedR1ControllerClosure
+    : validateClosedApplicationControllerClosure)(
     parseApiWorkerControllerDiff(
       git([
         'diff',
@@ -179,7 +260,7 @@ export function attestClosedApplicationControllerSource(operation, deps) {
         '--raw',
         '--abbrev=40',
         '-z',
-        CLOSED_APPLICATION_CONTROLLER_BASE.sha,
+        base.sha,
         operation.controllerSha,
       ]),
     ),
@@ -195,30 +276,37 @@ export function attestClosedApplicationControllerSource(operation, deps) {
       fail('FILE');
     secure(`${source}/${match[2]}`, match[1] === '100644' ? 0o644 : 0o755);
   }
-  const packageBytes = read(
-      `${source}/deploy/timeweb/closed-application-migrations-0103-0104.v1.json`,
-      0o644,
-    ),
+  const packageBytes = read(`${source}/${closedApplicationDescriptorPath(operation)}`, 0o644),
     builderBytes = read(`${source}/scripts/closed-application-migration-catalog.js`, 0o644);
   if (
     hash(packageBytes) !== operation.packageDescriptorSha256 ||
     hash(builderBytes) !== operation.catalogBuilderSha256 ||
-    !same(parseStrictJson(packageBytes), descriptor)
+    !same(parseStrictJson(packageBytes), selectedDescriptor)
   )
     fail('INPUTS');
+  if (family === 'R1_PACKAGE119') {
+    if (
+      hash(
+        read(`${source}/deploy/timeweb/closed-application-migrations-0103-0104.v1.json`, 0o644),
+      ) !== selectedDescriptor.prefixDescriptorSha256 ||
+      hash(read(`${source}/deploy/timeweb/r1-tail108-119.v1.json`, 0o644)) !==
+        selectedDescriptor.fullInventoryDescriptorSha256
+    )
+      fail('R1_PREFIX_INPUTS');
+  }
   const files = git(['ls-files', '--', 'packages/database/migrations/*.sql'])
     .split('\n')
     .filter(Boolean)
     .sort();
-  if (files.length !== descriptor.packagedCount) fail('MIGRATION_SOURCE');
+  if (files.length !== selectedDescriptor.packagedCount) fail('MIGRATION_SOURCE');
   const packaged = files.map((path) => {
     const match = /^packages\/database\/migrations\/([0-9]{4}_[a-z0-9_]+\.sql)$/.exec(path);
     if (!match) fail('MIGRATION_SOURCE');
     return [match[1], hash(read(`${source}/${path}`, 0o644))];
   });
-  if (hash(JSON.stringify(packaged) + '\n') !== descriptor.packagedLedgerSha256)
+  if (hash(JSON.stringify(packaged) + '\n') !== selectedDescriptor.packagedLedgerSha256)
     fail('MIGRATION_SOURCE');
-  for (const step of Object.values(descriptor.profiles))
+  for (const step of Object.values(selectedDescriptor.profiles))
     if (!packaged.some(([name, checksum]) => name === step.filename && checksum === step.checksum))
       fail('MIGRATION_SOURCE');
   // Runtime/env checks belong to the host binding, never the networkless restore child.

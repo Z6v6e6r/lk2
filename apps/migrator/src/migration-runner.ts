@@ -1,3 +1,4 @@
+import type { ClosedPackageFamily } from '../../../scripts/closed-application-package-family.js';
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -37,6 +38,7 @@ type MigrationRunMode =
   | {
       readonly mode: typeof closedSingleMode;
       readonly profile: ClosedSingleProfile;
+      readonly packageFamily?: ClosedPackageFamily;
       readonly target: ClosedSingleTarget;
     }
   | {
@@ -123,6 +125,7 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
         packagedMigrations.map(({ filename, checksum }) => ({ filename, checksum })),
         input.profile,
         input.target,
+        input.packageFamily ?? 'HISTORICAL108',
       );
 
     const appliedFilenames = new Set(applied.map((entry) => entry.filename));

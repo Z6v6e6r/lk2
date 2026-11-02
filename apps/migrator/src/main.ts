@@ -10,6 +10,7 @@ import { parseStrictJson } from '../../../scripts/strict-json.js';
 import {
   closedSingleMode,
   closedProfileArgument,
+  r1ClosedProfileArgument,
   parseClosedSingleTarget,
 } from './closed-single-migration.js';
 
@@ -35,6 +36,25 @@ else if (args.length === 2 && args[0] === R1_TAIL_ARGUMENT) {
     mode: notificationMode,
     target: parseNotificationTarget(parseStrictJson(bytes)),
   });
+} else if (args.length === 2 && r1ClosedProfileArgument(args[0]!)) {
+  const bytes = Buffer.from(args[1]!, 'base64');
+  if (bytes.toString('base64') !== args[1]) throw Error('MIGRATOR_TARGET_ENCODING');
+  try {
+    await runMigrationProcess({
+      mode: closedSingleMode,
+      profile: r1ClosedProfileArgument(args[0]!)!,
+      packageFamily: 'R1_PACKAGE119',
+      target: parseClosedSingleTarget(parseStrictJson(bytes)),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    process.stderr.write(
+      (/^CLOSED_APPLICATION_[A-Z0-9_]+$/.test(message)
+        ? message
+        : 'CLOSED_APPLICATION_MIGRATION_FAILED') + '\n',
+    );
+    process.exitCode = 1;
+  }
 } else if (args.length === 2 && closedProfileArgument(args[0]!)) {
   const bytes = Buffer.from(args[1]!, 'base64');
   if (bytes.toString('base64') !== args[1]) throw new Error('MIGRATOR_TARGET_ENCODING');

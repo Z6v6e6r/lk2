@@ -1,3 +1,4 @@
+import { closedApplicationPackageFamily } from './closed-application-package-family.js';
 import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
 import descriptor from '../deploy/timeweb/closed-application-migrations-0103-0104.v1.json' with { type: 'json' };
@@ -30,6 +31,27 @@ export const CLOSED_APPLICATION_BACKUPS = Object.freeze({
     preimageSchema: 'PHUB_TIMEWEB_SUBJECT_LINK_PRE0104_PREIMAGE_V1',
   }),
 });
+export const CLOSED_APPLICATION_R1_BACKUPS = Object.freeze(
+  Object.fromEntries(
+    Object.entries(CLOSED_APPLICATION_BACKUPS).map(([kind, value]) => [
+      kind,
+      Object.freeze({
+        ...value,
+        schema: value.schema.replace('PHUB_TIMEWEB_', 'PHUB_TIMEWEB_R1_'),
+        receiptSchema: value.receiptSchema.replace('PHUB_TIMEWEB_', 'PHUB_TIMEWEB_R1_'),
+        terminalSchema: value.terminalSchema.replace('PHUB_TIMEWEB_', 'PHUB_TIMEWEB_R1_'),
+        supervisorSchema: value.supervisorSchema.replace('PHUB_', 'PHUB_R1_'),
+        preimageSchema: value.preimageSchema.replace('PHUB_TIMEWEB_', 'PHUB_TIMEWEB_R1_'),
+      }),
+    ]),
+  ),
+);
+export function closedApplicationBackupDefinition(operation) {
+  const family = closedApplicationPackageFamily(operation);
+  return (family === 'R1_PACKAGE119' ? CLOSED_APPLICATION_R1_BACKUPS : CLOSED_APPLICATION_BACKUPS)[
+    operation.migrationProfile
+  ];
+}
 const HASH = /^[a-f0-9]{64}$/,
   ROOT = '/opt/phub/timeweb-beta';
 const canonical = (value) =>
@@ -87,7 +109,7 @@ export function validateClosedApplicationBackupOperation(value, at) {
   ]);
   const intent = validateClosedApplicationOperation(value.migrationIntent),
     profile = intent.migrationProfile,
-    definition = CLOSED_APPLICATION_BACKUPS[profile];
+    definition = closedApplicationBackupDefinition(intent);
   exact(value.migratorPrefetch, ['requestSha256', 'receiptSha256', 'migratorImage', 'imageId']);
   if (
     value.schema !== definition.schema ||
@@ -131,7 +153,7 @@ export function validateClosedApplicationBackupOperation(value, at) {
 }
 export function closedApplicationBackupDirectory(operation) {
   validateClosedApplicationBackupOperation(operation);
-  return `${ROOT}/backups/${operation.releaseId}-${CLOSED_APPLICATION_BACKUPS[operation.migrationIntent.migrationProfile].mode}`;
+  return `${ROOT}/backups/${operation.releaseId}-${closedApplicationBackupDefinition(operation.migrationIntent).mode}`;
 }
 export function validateClosedApplicationBackupReceipt(
   operation,
@@ -147,7 +169,7 @@ export function validateClosedApplicationBackupReceipt(
     preimage = parseStrictJson(preimageBytes);
   if (!same(parseStrictJson(backupBytes), backup)) fail('OPERATION_BYTES');
   const profile = operation.migrationProfile,
-    definition = CLOSED_APPLICATION_BACKUPS[profile],
+    definition = closedApplicationBackupDefinition(operation),
     directory = closedApplicationBackupDirectory(backup);
   if (
     !same(

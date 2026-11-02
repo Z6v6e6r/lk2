@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import descriptor from '../../../deploy/timeweb/closed-application-migrations-0103-0104.v1.json';
 import {
+  assertClosedR1PackagedCatalog,
+  CLOSED_R1_ARGUMENTS,
+  type ClosedPackageFamily,
+} from '../../../scripts/closed-application-package-family.js';
+import {
   notificationLedgerDigest,
   type MigrationRow,
 } from '../../../scripts/notification-migration-package.js';
@@ -53,6 +58,9 @@ export function parseClosedSingleTarget(value: unknown): ClosedSingleTarget {
     catalogVariant: row.catalogVariant,
   };
 }
+export function r1ClosedProfileArgument(value: string): ClosedSingleProfile | undefined {
+  return Object.hasOwn(CLOSED_R1_ARGUMENTS, value) ? CLOSED_R1_ARGUMENTS[value] : undefined;
+}
 export function closedProfileArgument(value: string): ClosedSingleProfile | undefined {
   return Object.hasOwn(closedSingleArguments, value)
     ? closedSingleArguments[value as keyof typeof closedSingleArguments]
@@ -62,7 +70,16 @@ export function closedProfile(profile: ClosedSingleProfile) {
   if (!Object.hasOwn(descriptor.profiles, profile)) return fail('PROFILE');
   return descriptor.profiles[profile];
 }
-export function assertClosedPackagedCatalog(packaged: readonly MigrationRow[]): void {
+export function assertClosedPackagedCatalog(
+  packaged: readonly MigrationRow[],
+  family: ClosedPackageFamily = 'HISTORICAL108',
+): void {
+  if (family === 'R1_PACKAGE119') {
+    assertClosedR1PackagedCatalog(packaged);
+    assertClosedPackagedCatalog(packaged.slice(0, 108));
+    return;
+  }
+  if (family !== 'HISTORICAL108') fail('PACKAGE_FAMILY');
   if (descriptor.catalogSchema !== CLOSED_APPLICATION_CATALOG_VERSION) fail('CATALOG_SCHEMA');
   if (
     packaged.length !== descriptor.packagedCount ||
@@ -147,8 +164,9 @@ export async function assertClosedRun(
   packaged: readonly MigrationRow[],
   profile: ClosedSingleProfile,
   target: ClosedSingleTarget,
+  family: ClosedPackageFamily = 'HISTORICAL108',
 ): Promise<void> {
-  assertClosedPackagedCatalog(packaged);
+  assertClosedPackagedCatalog(packaged, family);
   await roleAndTarget(client, target);
   const step = closedProfile(profile);
   assertClosedLedger(await ledger(client), step.preCount);

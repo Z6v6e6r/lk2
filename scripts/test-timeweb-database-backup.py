@@ -235,6 +235,24 @@ class ClosedApplicationSourcePrelaunchTests(unittest.TestCase):
             self.assertNotIn('NODE_OPTIONS',environment)
             self.assertNotIn('DOCKER_HOST',environment)
 
+class ClosedR1Package119BackupTests(unittest.TestCase):
+    def test_explicit119_schemas_preserve106_107_ledgers_and_refuse_mixed_families(self):
+        for kind in ('game_start_0103','subject_link_0104'):
+            old=closed_application_operation(kind);op=copy.deepcopy(old)
+            op['schema']=old['schema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1)
+            op['migrationIntent']['schema']=old['migrationIntent']['schema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1)
+            definition=m.CLOSED_APPLICATION_BACKUPS[op['schema']]
+            self.assertEqual(definition['family'],'R1_PACKAGE119')
+            self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+            self.assertEqual(m.disk_ledger_sha(op),old['expectedLedgerSha256'])
+            self.assertEqual(m.owner_acl_receipt_schema(op),definition['receiptSchema'])
+            self.assertEqual(m.operation_mode(op),m.operation_mode(old))
+            for bad in ({**op,'schema':old['schema']},{**old,'schema':op['schema']},
+                        {**op,'migrationIntent':{**op['migrationIntent'],'controllerSha':'f'*40}},
+                        {**op,'expectedLedgerSha256':'f'*64}):
+                with self.assertRaises(m.Stop):m.validate_operation(bad,NOW,'2'*64)
+
+
 class R1TailBackupPrefixTests(unittest.TestCase):
     def operation(self,count=108):
         op=closed_application_operation('subject_link_0104')

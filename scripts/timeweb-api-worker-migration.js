@@ -1,3 +1,7 @@
+import {
+  closedApplicationPackageFamily,
+  closedApplicationPackageArgument,
+} from './closed-application-package-family.js';
 import { isPreservedNotificationRollout } from './timeweb-notification-android-gates.js';
 import { assertCompletedNotificationInputs } from './timeweb-notification-completed-migration.js';
 // Closed migration-only mode of the enrolled standard runner. No env swap or FCM key access.
@@ -494,7 +498,7 @@ function closedContainerCommand(payload, kind) {
   if (
     !Object.hasOwn(closedProductionStages, profile.kind) ||
     operation?.migrationProfile !== profile.kind ||
-    operation.schema !== closedProductionStages[profile.kind].schema ||
+    !['HISTORICAL108', 'R1_PACKAGE119'].includes(closedApplicationPackageFamily(operation)) ||
     !['DORMANT', 'SCENARIO_EDITOR_V1'].includes(operation.catalogVariant) ||
     !same(operation.expectedDatabaseTarget, {
       databaseName: 'phub_beta',
@@ -508,7 +512,7 @@ function closedContainerCommand(payload, kind) {
     ? [
         'node',
         'apps/migrator/dist/main.js',
-        closedProductionStages[profile.kind].argument,
+        closedApplicationPackageArgument(operation),
         Buffer.from(
           JSON.stringify({
             ...operation.expectedDatabaseTarget,
@@ -541,7 +545,7 @@ function validateClosedProductionBinding(operation, binding) {
     !Object.hasOwn(closedProductionStages, binding.kind) ||
     binding.kernelProfile?.kind !== binding.kind ||
     operation?.migrationProfile !== binding.kind ||
-    operation.schema !== closedProductionStages[binding.kind].schema ||
+    !['HISTORICAL108', 'R1_PACKAGE119'].includes(closedApplicationPackageFamily(operation)) ||
     operation.profile !== 'beta' ||
     !same(operation.target, { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 }) ||
     !same(operation.expectedDatabaseTarget, {
@@ -3641,6 +3645,12 @@ function productionOps(op, owner, ignoredRestore = null, closedBinding = null) {
       roleName = runtimeRole ?? roleName;
       const s = spec(kind);
       if (lookup(kind, imageId, operationSha)) stop('EXISTING_CONTAINER');
+      if (
+        closed &&
+        closedApplicationPackageFamily(op) === 'R1_PACKAGE119' &&
+        Date.now() >= Date.parse(op.expiresAt)
+      )
+        stop('EXPIRED');
       let id;
       try {
         id = docker(

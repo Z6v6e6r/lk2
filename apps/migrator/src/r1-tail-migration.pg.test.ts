@@ -1,5 +1,13 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { tmpdir } from 'node:os';
+import {
+  closedApplicationAclSql,
+  closedApplicationAclPlan,
+} from '../../../scripts/closed-application-migration-acl.js';
+import type { ClosedApplicationAclRow } from '../../../scripts/closed-application-migration-acl.js';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
 import type { PoolClient } from 'pg';
@@ -10,7 +18,6 @@ import {
   CLOSED_APPLICATION_CATALOG_SQL,
   CLOSED_APPLICATION_CATALOG_TABLES,
   CLOSED_APPLICATION_EDITOR_ACL,
-  CLOSED_APPLICATION_NEW_TABLES,
 } from '../../../scripts/closed-application-migration-catalog.js';
 import {
   R1_TAIL,
@@ -114,7 +121,7 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             await client.query(
               'create table public.schema_migrations(filename text primary key,checksum text not null,applied_at timestamptz not null default now())',
             );
-            for (const migration of packaged.slice(0, 108)) {
+            for (const migration of packaged.slice(0, 106)) {
               await client.query('begin');
               try {
                 await client.query(migration.sql);
@@ -203,8 +210,6 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
                 );
               }
             }
-            for (const relation of CLOSED_APPLICATION_NEW_TABLES)
-              await client.query(`alter table ${qualified(relation)}owner to phub_migrator`);
             await client.query(`alter table public.schema_migrations owner to phub_migrator;
      grant usage on schema public,identity,profile,notifications,support,games,locations,integration,eligibility,booking,commerce to phub_migrator,phub_runtime;
      grant execute on function pg_catalog.pg_control_system()to phub_migrator,phub_runtime;
@@ -217,6 +222,71 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
               } finally {
                 await client.query('reset role');
               }
+            }
+            // Exercise106→107→108 using the actual119 package and existing one-step hooks.
+            // Target metadata here identifies only this explicitly owned synthetic database.
+            const actualId = (
+              await client.query<{ id: string }>(
+                'select system_identifier::text as id from pg_catalog.pg_control_system()',
+              )
+            ).rows[0]!.id;
+            const source = resolve('packages/database/migrations'),
+              stage = await mkdtemp(resolve(tmpdir(), 'r1-prefix119-'));
+            const sourceRoot = process.cwd();
+            try {
+              await symlink(source, resolve(stage, 'migrations'), 'dir');
+              for (const profile of ['game_start_0103', 'subject_link_0104'] as const) {
+                const before = (
+                  await client.query<{ acl: ClosedApplicationAclRow[] }>(
+                    `select (${closedApplicationAclSql(profile)})as acl`,
+                  )
+                ).rows[0]!.acl;
+                const preparation = closedApplicationAclPlan(profile, before);
+                await client.query(preparation.bootstrapSql);
+                const explicitArgument =
+                  profile === 'game_start_0103'
+                    ? '--r1-game-start-migration-0103'
+                    : '--r1-subject-link-migration-0104';
+                const encoded = Buffer.from(
+                  JSON.stringify({
+                    databaseName: name,
+                    systemIdentifier: actualId,
+                    catalogVariant: variant,
+                  }),
+                ).toString('base64');
+                await promisify(execFile)(
+                  process.execPath,
+                  [
+                    '--import',
+                    resolve(sourceRoot, 'node_modules/tsx/dist/loader.mjs'),
+                    resolve(sourceRoot, 'apps/migrator/src/main.ts'),
+                    explicitArgument,
+                    encoded,
+                  ],
+                  {
+                    cwd: stage,
+                    timeout: 45000,
+                    maxBuffer: 200000,
+                    env: {
+                      PATH: process.env.PATH ?? '',
+                      DATABASE_URL: url(name, 'phub_migrator'),
+                      TSX_TSCONFIG_PATH: resolve(sourceRoot, 'tsconfig.json'),
+                    },
+                  },
+                );
+                await client.query(preparation.cleanupSql);
+                const rows = (
+                  await client.query<{ filename: string; checksum: string }>(
+                    'select filename,checksum from public.schema_migrations order by filename',
+                  )
+                ).rows;
+                expect(rows).toHaveLength(profile === 'game_start_0103' ? 107 : 108);
+                expect(
+                  rows.some((row) => row.filename === '0105_game_create_location_bindings.sql'),
+                ).toBe(false);
+              }
+            } finally {
+              await rm(stage, { recursive: true, force: true });
             }
             await client.query("set search_path='pg_catalog'");
             const closedRows = (

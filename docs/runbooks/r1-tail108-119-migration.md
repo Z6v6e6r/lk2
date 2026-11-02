@@ -31,15 +31,16 @@ lineage and index-storage metadata. New catalog values cannot be supplied in ope
 
 The exact new controller source/tree, successful source CI, immutable published migrator index
 and amd64 runtime identity are required. Source enrollment is separately scoped against
-`50ba9576c2758312917e223b42d5270cebea994e`; unrelated changes, SQL additions and historical
+`27d8527f2f36e1a647012a86f92f4a51b9dd50eb`; unrelated changes, SQL additions and historical
 controller-source expansion are refused. Publication builds and enrollment remain separate
 reviewed operations. Existing capacity/namespace/backup prerequisites are inherited unchanged.
 
 1. Require exact reconciled subject-link0104 predecessor capsule, plan, role/bootstrap/cleanup
    proofs, stopped successful containers and retained independently restored backups, including
    the0103 chain. This version consumes the strict existing subject-link0104 receipt schema.
-   A future predecessor schema/source-family proposal requires explicit narrow compatibility
-   review before integration; it is not accepted by weakening this reader.
+   The explicit R1 package119 predecessor family uses the same frozen108 hooks and must match
+   the tail source/tree/source CI/publication/image tuple. Historical inputs retain their strict
+   historical branch. Mixed0103/0104 families are refused; no receipt is reinterpreted.
 2. Collect fresh minimized live metadata in approved private custody: exact runtime/PostgreSQL
    identities, secret-file digests, role/membership/default ACL, target, prefix ledger, semantic
    catalog, locks/long transactions and intents/deliveries sizes/counts. This code assumes the

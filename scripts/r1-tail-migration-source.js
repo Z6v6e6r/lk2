@@ -1,3 +1,7 @@
+import {
+  CLOSED_R1_CONTROLLER_BASE,
+  CLOSED_R1_CONTROLLER_FILES,
+} from './timeweb-closed-application-source.js';
 // Separate exact-source enrollment. Historical108 source guards stay unchanged.
 import { assertControllerPromotionGitConfig } from './verify-source-ci.js';
 import { parseApiWorkerControllerDiff } from './timeweb-api-worker-contract.js';
@@ -6,8 +10,9 @@ import { r1PackagedInventory, r1Hash, r1Stop } from './r1-tail-migration-profile
 import { validateR1TailOperation } from './r1-tail-migration-controller.js';
 import { r1TailSourceCatalogs } from './r1-tail-migration-state.js';
 const SOURCE = '/opt/phub/timeweb-beta/standard/source';
-export const R1_TAIL_SOURCE_BASE = '50ba9576c2758312917e223b42d5270cebea994e';
+export const R1_TAIL_SOURCE_BASE = CLOSED_R1_CONTROLLER_BASE.sha;
 const allowed = new Set([
+  ...CLOSED_R1_CONTROLLER_FILES,
   'apps/migrator/src/main.ts',
   'apps/migrator/src/closed-single-migration.pg.test.ts',
   'apps/migrator/src/r1-tail-migration.ts',
@@ -82,6 +87,8 @@ export function attestR1TailSource(operation, deps) {
     config.controllerSha !== operation.controllerSha
   )
     r1Stop('SOURCE_ENROLLMENT');
+  if (git(['rev-parse', `${R1_TAIL_SOURCE_BASE}^{tree}`]) !== CLOSED_R1_CONTROLLER_BASE.tree)
+    r1Stop('SOURCE_BASE');
   git(['merge-base', '--is-ancestor', R1_TAIL_SOURCE_BASE, operation.controllerSha]);
   validateR1TailSourceDelta(
     parseApiWorkerControllerDiff(

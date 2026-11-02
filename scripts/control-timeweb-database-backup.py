@@ -174,6 +174,19 @@ CLOSED_APPLICATION_BACKUPS = {
 }
 
 
+# Explicit119-package/108-prefix family. Old schemas and their definitions are unchanged.
+for _r1_prefix_kind,_r1_prefix_old in (
+    ('game_start_0103','PHUB_TIMEWEB_GAME_START_PRE0103_BACKUP_NAMESPACE_V1'),
+    ('subject_link_0104','PHUB_TIMEWEB_SUBJECT_LINK_PRE0104_BACKUP_NAMESPACE_V1')):
+    _r1_prefix_definition=CLOSED_APPLICATION_BACKUPS[_r1_prefix_old]
+    CLOSED_APPLICATION_BACKUPS[_r1_prefix_old.replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1)]={
+        **_r1_prefix_definition,'family':'R1_PACKAGE119',
+        'migrationSchema':_r1_prefix_definition['migrationSchema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1),
+        'receiptSchema':_r1_prefix_definition['receiptSchema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1),
+        'terminalSchema':_r1_prefix_definition['terminalSchema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1),
+        'supervisorSchema':_r1_prefix_definition['supervisorSchema'].replace('PHUB_','PHUB_R1_',1),
+        'preimageSchema':_r1_prefix_definition['preimageSchema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1)}
+
 # Separate fixed R1 tail backup profiles; historical0103/0104 entries stay byte-exact.
 R1_TAIL_PREFIX_LEDGERS = {108: '3289f5f7021efce6da670cb7ecb848262c2e4e7b39c12aee91d05ff6583fe9e9', 109: '17fcb3e52e5918c6c7aab40a0a73a8707af1ed2aaee60c8851c4e883bbd592b0', 110: '8837c54c64993c58ad215ba76d14f797e3f8c3a4327ad07583fd24907fe0746a', 111: '527d07d1281b6ce7ce07d3341df9ee60dde82a63d01c5b048d22dc352313f200', 112: '6b44cc24949157d392a13c183cb87177d005346f7fe4005554ccac97670c66b9', 113: '624307206f3bfbfd65d26052c4efa06aa66f32729dafe9a7294385ae2eef4cf9', 114: '4d813a80130ff8b17031112f934d9272b351759eb100657406bc37b160ec37bb', 115: 'e24ea76929b5485bf2a6d7cfefc235d7f70dfd18fe05a56c01ec284c4c6cd4fd', 116: '74113db30901599590025387d338f7bbb12487d170352f11ac1094133c1a441e', 117: 'febc2bb5d723688e422057e441e745c49d394d4a38551aa19fd1b3b678cfff55', 118: '25d7e9bc85aafe167ca9dc39710eaa98b3e52591609e90230d7b680e0cca7e31'}
 for _r1_count,_r1_ledger in R1_TAIL_PREFIX_LEDGERS.items():

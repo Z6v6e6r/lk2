@@ -1,3 +1,4 @@
+import { closedApplicationPackageFamily } from './closed-application-package-family.js';
 // Fixed R1 tail host binding. Reuses enrolled executor, secure files and owner/ACL backup custody.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -273,12 +274,22 @@ function previousCapsule(tail, kind = 'subject_link_0104', dependencies = deps) 
     closedApplicationProductionPaths(op).transactionRoot !== root
   )
     r1Stop('PREDECESSOR_BINDING');
+  if (closedApplicationPackageFamily(op) === 'R1_PACKAGE119') {
+    if (
+      op.controllerSha !== tail.controllerSha ||
+      op.controllerTree !== tail.controllerTree ||
+      op.controllerSourceCiRunId !== tail.controllerSourceCiRunId ||
+      !r1Same(op.publishedMigrator, tail.publishedMigrator)
+    )
+      r1Stop('PREDECESSOR_R1_SOURCE');
+  }
   if (kind === 'subject_link_0104') return current;
   const pointer = op.previousMigrationSuccess,
     otherRoot = pointer.path.slice(0, -'/migration-success.json'.length);
   const other = readApiWorkerMigrationCapsule(dependencies.read(otherRoot + '/preparation.json'));
   if (
     other.operation.migrationProfile !== 'game_start_0103' ||
+    closedApplicationPackageFamily(other.operation) !== closedApplicationPackageFamily(op) ||
     r1Hash(other.operationBytes) !== pointer.operationSha256 ||
     r1Hash(dependencies.read(pointer.path)) !== pointer.sha256
   )

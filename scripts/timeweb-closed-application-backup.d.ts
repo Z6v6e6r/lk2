@@ -17,6 +17,10 @@ export const CLOSED_APPLICATION_BACKUPS: Readonly<
     }
   >
 >;
+export const CLOSED_APPLICATION_R1_BACKUPS: typeof CLOSED_APPLICATION_BACKUPS;
+export function closedApplicationBackupDefinition(
+  operation: ClosedApplicationOperation,
+): (typeof CLOSED_APPLICATION_BACKUPS)[ClosedApplicationKind];
 export function closedApplicationMigrationBinding(operation: ClosedApplicationOperation): unknown;
 export function validateClosedApplicationBackupOperation(
   value: unknown,

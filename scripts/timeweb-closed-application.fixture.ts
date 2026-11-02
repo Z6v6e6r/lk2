@@ -1,4 +1,8 @@
-import { CLOSED_APPLICATION_BACKUPS } from './timeweb-closed-application-backup.js';
+import {
+  CLOSED_R1_OPERATION_SCHEMAS,
+  type ClosedPackageFamily,
+} from './closed-application-package-family.js';
+import { closedApplicationBackupDefinition } from './timeweb-closed-application-backup.js';
 import {
   CLOSED_APPLICATION_DATABASE_TARGET,
   CLOSED_APPLICATION_POSTGRES_CONTAINER,
@@ -54,6 +58,7 @@ function aclFixture(profile: ClosedApplicationKind): ClosedApplicationAclRow[] {
 }
 export function closedApplicationOperationFixture(
   migrationProfile: ClosedApplicationKind,
+  family: ClosedPackageFamily = 'HISTORICAL108',
 ): ClosedApplicationOperation {
   const revision = 'a'.repeat(40),
     run = '123456',
@@ -74,7 +79,9 @@ export function closedApplicationOperationFixture(
   const expectedPrivilegePreimage = aclFixture(migrationProfile),
     acl = closedApplicationAclPlan(migrationProfile, expectedPrivilegePreimage);
   return {
-    schema: CLOSED_APPLICATION_OPERATION_SCHEMAS[migrationProfile],
+    schema: (family === 'R1_PACKAGE119'
+      ? CLOSED_R1_OPERATION_SCHEMAS
+      : CLOSED_APPLICATION_OPERATION_SCHEMAS)[migrationProfile],
     profile: 'beta',
     migrationProfile,
     target: CLOSED_APPLICATION_HOST_TARGET,
@@ -125,10 +132,14 @@ export function closedApplicationOperationFixture(
   };
 }
 
-export function closedBackupFixture(kind: 'game_start_0103' | 'subject_link_0104') {
-  const intent = closedApplicationOperationFixture(kind);
+export function closedBackupFixture(
+  kind: 'game_start_0103' | 'subject_link_0104',
+  family: ClosedPackageFamily = 'HISTORICAL108',
+) {
+  const intent = closedApplicationOperationFixture(kind, family),
+    definition = closedApplicationBackupDefinition(intent);
   return {
-    schema: CLOSED_APPLICATION_BACKUPS[kind].schema,
+    schema: definition.schema,
     profile: 'beta',
     target: intent.target,
     toolCommit: intent.controllerSha,
@@ -145,7 +156,7 @@ export function closedBackupFixture(kind: 'game_start_0103' | 'subject_link_0104
     confirmation: `BACKUP_RESTORE_${kind.toUpperCase()}_PRIVATE_NAMESPACE_KEEP_RUNTIME`,
     releaseId: `${intent.controllerSha}-${intent.controllerSourceCiRunId}-1`,
     controllerSourceCiRunId: intent.controllerSourceCiRunId,
-    expectedLedgerSha256: CLOSED_APPLICATION_BACKUPS[kind].ledgerSha256,
+    expectedLedgerSha256: definition.ledgerSha256,
     expectedDatabaseTarget: intent.expectedDatabaseTarget,
     packageDescriptorSha256: intent.packageDescriptorSha256,
     catalogBuilderSha256: intent.catalogBuilderSha256,
