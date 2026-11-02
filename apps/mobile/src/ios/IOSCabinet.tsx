@@ -1,3 +1,4 @@
+import { SubscriptionsPage } from '../../../web/src/SubscriptionsPage.js';
 import { TrainingsPage } from '../../../web/src/TrainingsPage.js';
 import { createIOSTrainingGateway } from './training-gateway.js';
 import { TournamentChatPage } from '../../../web/src/TournamentChatPage.js';
@@ -440,48 +441,21 @@ function Games({ data }: { readonly data: CabinetData }): React.JSX.Element {
   );
 }
 
-function Subscriptions({ data }: { readonly data: CabinetData }): React.JSX.Element {
-  const query = useQuery(data.dashboard);
+function Subscriptions({
+  data,
+  subscriptionId,
+}: {
+  readonly data: CabinetData;
+  readonly subscriptionId?: string;
+}): React.JSX.Element {
   return (
-    <Page title="Мои абонементы" active="profile">
-      <QueryResult query={query}>
-        {(dashboard) => (
-          <>
-            {dashboard.subscriptions.length ? (
-              <div className="ios-cabinet-cards">
-                {dashboard.subscriptions.map((subscription) => (
-                  <article className="ios-cabinet-subscription" key={subscription.id}>
-                    <h2>{subscription.title}</h2>
-                    <p>
-                      {
-                        {
-                          active: 'Активен',
-                          scheduled: 'Ещё не начался',
-                          paused: 'Приостановлен',
-                          exhausted: 'Занятия закончились',
-                          expired: 'Истёк',
-                        }[subscription.status]
-                      }
-                    </p>
-                    <p>Осталось занятий: {subscription.remainingUnits}</p>
-                    {subscription.validUntil ? (
-                      <p>
-                        Действует до{' '}
-                        {new Date(subscription.validUntil).toLocaleDateString('ru-RU', {
-                          timeZone: 'Europe/Moscow',
-                        })}
-                      </p>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p role="status">Абонементов пока нет.</p>
-            )}
-          </>
-        )}
-      </QueryResult>
-    </Page>
+    <>
+      <SubscriptionsPage
+        loadDashboard={data.dashboard}
+        {...(subscriptionId ? { subscriptionId } : {})}
+      />
+      <Navigation active="profile" />
+    </>
   );
 }
 
@@ -664,8 +638,20 @@ export function IOSCabinet({
         <ActivityHistoryPanel active loadHistory={data.history} />
       </Page>
     );
-  else if (path === '/subscriptions' || /^\/subscriptions\/[a-f0-9-]{36}$/i.test(path))
-    content = <Subscriptions data={data} />;
+  else if (
+    path === '/subscriptions' ||
+    /^\/subscriptions\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    )
+  )
+    content = (
+      <Subscriptions
+        data={data}
+        {...(path === '/subscriptions'
+          ? {}
+          : { subscriptionId: path.slice('/subscriptions/'.length).toLowerCase() })}
+      />
+    );
   else if (path === '/locations')
     content = (
       <Load title="Локации" load={data.locations}>
