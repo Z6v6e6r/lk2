@@ -1015,7 +1015,11 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       const cancelId = cancel ? url.slice(url.lastIndexOf('/games/') + 7, -'/cancel'.length) : null;
       const principal = cancelId === null ? undefined : cancellationPrincipals.get(cancelId);
       if (cancel && principal === undefined) throw new Error('AUTH_PRINCIPAL_CHANGED');
-      if (principal !== undefined) requireQuarterPrincipal(principal);
+      if (principal !== undefined) {
+        requireQuarterPrincipal(principal.principal);
+        if (principal.token !== undefined && client.getAccessToken() !== principal.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       const selfPath = url.slice(
         `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${options.tenantKey}`.length,
       );
@@ -1060,7 +1064,11 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         if (client.getAccessToken() !== leaveCustody.token)
           throw new Error('AUTH_PRINCIPAL_CHANGED');
       }
-      if (principal !== undefined) requireQuarterPrincipal(principal);
+      if (principal !== undefined) {
+        requireQuarterPrincipal(principal.principal);
+        if (principal.token !== undefined && client.getAccessToken() !== principal.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       return result;
     }) as typeof fetch,
   };
@@ -1101,7 +1109,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let currentTenantId: string | undefined;
   const subjectLinkStartKeys = new Map<string, string>();
   const subjectLinkVerifyKeys = new Map<string, string>();
-  const cancellationPrincipals = new Map<string, string>();
+  const cancellationPrincipals = new Map<
+    string,
+    { principal: string; token: string | undefined }
+  >();
   const nativeJoinPrincipals = new Map<
     string,
     { principal: string; token: string; count: number }
@@ -2573,10 +2584,22 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       const original = requireQuarterPrincipal();
       const id = encodeURIComponent(gameId);
       if (cancellationPrincipals.has(id)) throw new Error('GAME_CANCEL_IN_PROGRESS');
-      cancellationPrincipals.set(id, original);
+      const token = nativeClient ? client.getAccessToken() : undefined;
+      if (nativeClient && !token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      cancellationPrincipals.set(id, { principal: original, token });
       try {
-        const result = await client.cancelGame(gameId, input);
+        const result = nativeClient
+          ? await client.request<GameCommandResult>(`/games/${id}/cancel`, {
+              method: 'POST',
+              idempotencyKey: crypto.randomUUID(),
+              body: JSON.stringify(input),
+              retryOnUnauthorized: false,
+              cache: 'no-store',
+            })
+          : await client.cancelGame(gameId, input);
         requireQuarterPrincipal(original);
+        if (nativeClient && client.getAccessToken() !== token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
         return result;
       } finally {
         cancellationPrincipals.delete(id);

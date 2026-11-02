@@ -1,3 +1,4 @@
+import type { GameCommandResult } from '@phub/api-sdk';
 import { nativeJoinRequest, nativeJoinIdentity } from '../native-game-join-request.js';
 import { nativeJoinTarget } from '../../../web/src/native-game-join-wire.js';
 import type { NativeJoinRequest } from '../../../web/src/native-game-join-attempt.js';
@@ -357,7 +358,7 @@ export class IOSSession {
     { principal: string; count: number; token: string }
   >();
   private readonly gameChatRequests = new Map<string, string>();
-  private readonly cancellations = new Map<string, string>();
+  private readonly cancellations = new Map<string, { principal: string; token: string }>();
   private readonly stationRequests = new Map<string, string>();
   private readonly tournamentChatRequests = new Map<string, string>();
 
@@ -612,16 +613,30 @@ export class IOSSession {
   }
   public canDispatchGameCancellation(gameId: string): boolean {
     const original = this.cancellations.get(gameId);
-    return original !== undefined && original === this.gameCancelPrincipal();
+    return (
+      original !== undefined &&
+      original.principal === this.gameCancelPrincipal() &&
+      original.token === this.api.getAccessToken()
+    );
   }
   public async cancelGame(gameId: string): ReturnType<PadlHubApiClient['cancelGame']> {
-    const original = this.gameCancelPrincipal();
-    if (!original || this.cancellations.has(gameId)) throw rejectedRequest();
-    this.cancellations.set(gameId, original);
+    const original = this.gameCancelPrincipal(),
+      token = this.api.getAccessToken();
+    if (!original || !token || this.cancellations.has(gameId)) throw rejectedRequest();
+    this.cancellations.set(gameId, { principal: original, token });
     try {
-      return await this.quarterCall((api) =>
-        api.cancelGame(gameId, { reasonCode: 'ORGANIZER_REQUEST' }),
+      const result = await this.quarterCall((api) =>
+        api.request<GameCommandResult>(`/games/${encodeURIComponent(gameId)}/cancel`, {
+          method: 'POST',
+          idempotencyKey: crypto.randomUUID(),
+          body: JSON.stringify({ reasonCode: 'ORGANIZER_REQUEST' }),
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        }),
       );
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return result;
     } finally {
       this.cancellations.delete(gameId);
     }

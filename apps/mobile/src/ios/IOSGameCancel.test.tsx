@@ -56,11 +56,11 @@ describe('iOS local cancellation', () => {
       expect(await screen.findByRole('status')).toHaveTextContent(
         displayState === 'CANCELLED' ? 'Игра отменена.' : 'Отмена пока не подтверждена.',
       );
-      expect(keys).toHaveLength(2);
-      expect(new Set(keys).size).toBe(1); // Existing SDK network retry, same key.
+      expect(keys).toHaveLength(1);
+      expect(new Set(keys).size).toBe(1); // Native cancellation is attempted once; ambiguous ACK uses GET.
       fireEvent.click(screen.getByRole('button', { name: 'Обновить статус игры' }));
       await waitFor(() => expect(reads).toBe(2));
-      expect(keys).toHaveLength(2);
+      expect(keys).toHaveLength(1);
     },
   );
   it('coalesces double click and drops late ACK on synchronous logout', async () => {

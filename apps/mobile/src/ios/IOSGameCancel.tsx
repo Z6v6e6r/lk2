@@ -2,7 +2,7 @@ import type { NativeJoinRequest } from '../../../web/src/native-game-join-attemp
 import { NativeGameJoin } from '../../../web/src/NativeGameJoin.js';
 import { NativeSelfLeave } from '../../../web/src/NativeSelfLeave.js';
 import { NativeGameChat } from '../../../web/src/NativeGameChat.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GameCard as Game } from '@phub/api-sdk';
 import { GameCard } from '../../../web/src/GameCard.js';
 import { cancelGameAndRead } from '../../../web/src/game-cancel-readback.js';
@@ -31,6 +31,18 @@ export function IOSGameCancel({ game, session }: { game: Game; session: IOSSessi
   );
   const snapshot = session.getSnapshot();
   const [currentGame, setGame] = useState(game);
+  const adoptGame = useCallback(
+    (next: Game) => {
+      if (next.id !== game.id || !Number.isSafeInteger(next.revision)) return;
+      setGame((previous) =>
+        next.revision < previous.revision ||
+        (previous.displayState === 'CANCELLED' && next.displayState !== 'CANCELLED')
+          ? previous
+          : next,
+      );
+    },
+    [game.id],
+  );
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
@@ -68,7 +80,7 @@ export function IOSGameCancel({ game, session }: { game: Game; session: IOSSessi
           })
         : await read(currentGame.id);
       if (!current()) return;
-      if (observed?.id === currentGame.id) setGame(observed);
+      if (observed?.id === currentGame.id) adoptGame(observed);
       setNotice(
         observed?.displayState === 'CANCELLED'
           ? 'Игра отменена.'
@@ -90,7 +102,7 @@ export function IOSGameCancel({ game, session }: { game: Game; session: IOSSessi
         <NativeGameJoin
           game={currentGame}
           gateway={joinGateway}
-          onCanonicalGame={setGame}
+          onCanonicalGame={adoptGame}
           scope={{
             tenantId: snapshot.session.context.tenantId,
             userId: snapshot.session.context.userId,

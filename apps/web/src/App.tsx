@@ -1,3 +1,4 @@
+import { cancelGameAndRead } from './game-cancel-readback.js';
 import type { NativeJoinRequest } from './native-game-join-attempt.js';
 import { NativeGames } from './NativeGames.js';
 import { NativeGameJoin } from './NativeGameJoin.js';
@@ -10,7 +11,7 @@ import { QuarterCreatePanel } from './QuarterCreatePanel.js';
 import { GameCard } from './GameCard.js';
 import { normalizePhoneE164 } from '@phub/auth';
 import { PrimaryButton } from '@phub/ui';
-import { lazy, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
@@ -737,43 +738,111 @@ function NativeCreatedGame({
     [gateway],
   );
   const [game, setGame] = useState<Awaited<ReturnType<AuthGateway['getGame']>> | null>(null);
+  const adoptGame = useCallback(
+    (next: Awaited<ReturnType<AuthGateway['getGame']>>) => {
+      if (next.id !== gameId || !Number.isSafeInteger(next.revision)) return;
+      setGame((previous) =>
+        previous &&
+        (next.revision < previous.revision ||
+          (previous.displayState === 'CANCELLED' && next.displayState !== 'CANCELLED'))
+          ? previous
+          : next,
+      );
+    },
+    [gameId],
+  );
   const [failed, setFailed] = useState(false);
-  const [refresh, setRefresh] = useState(0);
+  const [notice, setNotice] = useState(''),
+    [busy, setBusy] = useState(false);
+  const active = useRef(false),
+    inFlight = useRef(false),
+    cancellationAttempted = useRef(false);
   useEffect(() => {
-    let active = true;
+    let retired = false;
+    active.current = true;
     const principal = gateway.quarterCreatePrincipal?.();
     void gateway.getGame(gameId).then(
       (v) => {
-        if (active && principal && gateway.quarterCreatePrincipal?.() === principal) setGame(v);
+        if (
+          !retired &&
+          active.current &&
+          principal &&
+          gateway.quarterCreatePrincipal?.() === principal
+        )
+          adoptGame(v);
       },
       () => {
-        if (active) setFailed(true);
+        if (!retired && active.current) setFailed(true);
       },
     );
     return () => {
-      active = false;
+      retired = true;
+      active.current = false;
     };
-  }, [gateway, gameId, refresh]);
+  }, [gateway, gameId, adoptGame]);
+  async function run(cancel: boolean) {
+    const principal = gateway.gameCancelPrincipal?.();
+    if (!principal || inFlight.current || !active.current) return;
+    if (
+      cancel &&
+      (!game ||
+        game.viewerRelation !== 'ORGANIZER' ||
+        !game.allowedActions.includes('CANCEL') ||
+        !window.confirm('Отменить игру для всех участников?'))
+    )
+      return;
+    const current = () => active.current && gateway.gameCancelPrincipal?.() === principal;
+    if (!current()) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      if (cancel) cancellationAttempted.current = true;
+      const observed = cancel
+        ? await cancelGameAndRead({
+            gameId,
+            cancel: gateway.cancelGame,
+            read: gateway.getGame,
+            isCurrent: current,
+          })
+        : await gateway.getGame(gameId);
+      if (!current()) return;
+      if (observed?.id === gameId) {
+        adoptGame(observed);
+        setFailed(false);
+      }
+      setNotice(
+        observed?.id === gameId && observed.displayState === 'CANCELLED'
+          ? 'Игра отменена.'
+          : cancellationAttempted.current
+            ? 'Отмена пока не подтверждена. Обновите статус позже.'
+            : 'Статус игры обновлён.',
+      );
+    } catch {
+      if (current()) setNotice('Статус временно недоступен. Повторите обновление.');
+    } finally {
+      inFlight.current = false;
+      if (current()) setBusy(false);
+    }
+  }
   return (
     <main>
       <a href="/games">К списку игр</a>
-      <button
-        type="button"
-        onClick={() => {
-          setFailed(false);
-          setRefresh((v) => v + 1);
-        }}
-      >
+      <button type="button" disabled={busy} onClick={() => void run(false)}>
         Обновить статус игры
       </button>
       {game ? (
         <>
           <GameCard game={game} readOnly />
+          {game.viewerRelation === 'ORGANIZER' && game.allowedActions.includes('CANCEL') && (
+            <button type="button" disabled={busy} onClick={() => void run(true)}>
+              Отменить игру
+            </button>
+          )}
           <NativeGameJoin
             game={game}
             gateway={joinGateway}
             scope={scope}
-            onCanonicalGame={setGame}
+            onCanonicalGame={adoptGame}
           />
           <NativeSelfLeave
             key={`${game.id}:${game.viewerRelation}`}
@@ -791,6 +860,7 @@ function NativeCreatedGame({
       ) : (
         <p role="status">{failed ? 'Игра пока недоступна.' : 'Загружаем игру…'}</p>
       )}
+      {notice && <p role="status">{notice}</p>}
     </main>
   );
 }

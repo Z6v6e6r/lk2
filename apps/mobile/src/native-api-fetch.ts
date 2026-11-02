@@ -207,7 +207,7 @@ export function createNativeApiFetch(
     const method = init?.method ?? 'GET';
     const join = nativeJoinRequest(value, init, config);
     const selfLeave = selfLeaveRequest(value, init, config);
-    gameCancelRequest(value, init, config);
+    const cancel = gameCancelRequest(value, init, config);
     const stream = stationStreamRequest(value, init, config);
     if (!stream) stationRequest(value, init, config);
     if (url.pathname.startsWith(`/user/api/v1/${config.tenantKey}/game-create-operations`))
@@ -225,7 +225,8 @@ export function createNativeApiFetch(
       generation += 1;
       displayedReads.clear();
     }
-    if ((selfLeave || join) && !active) throw new DOMException('Session changed', 'AbortError');
+    if ((selfLeave || join || cancel) && !active)
+      throw new DOMException('Session changed', 'AbortError');
     const requestGeneration = generation;
     const section =
       !onReadObservation || method !== 'GET'
@@ -310,7 +311,7 @@ export function createNativeApiFetch(
         }
       }
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
-      if ((selfLeave || join) && (!active || requestGeneration !== generation))
+      if ((selfLeave || join || cancel) && (!active || requestGeneration !== generation))
         throw new DOMException('Session changed', 'AbortError');
       if (result.status === 200 && (refresh || url.pathname.endsWith('/verify'))) active = true;
       if (result.status === 401 && refresh && active) {
