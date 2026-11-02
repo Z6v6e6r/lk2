@@ -3,6 +3,7 @@ import { stationStreamRequest } from './native-station-stream-request.js';
 import { stationRequest } from './native-station-message-request.js';
 import { gameCancelRequest } from './native-game-cancel-request.js';
 import { quarterRequest } from './native-quarter-request.js';
+import { nativeTournamentRequest } from './native-tournament-request.js';
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError } from '@phub/api-sdk';
 import type { MobileRuntimeConfig } from './runtime-config.js';
@@ -181,13 +182,26 @@ export function createNativeApiFetch(
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
     const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}/`;
     // Check before URL normalization, which would hide traversal or encoded delimiters.
-    if (!value.startsWith(root) || /[%#\\]|\.\./.test(value.split('?')[0] ?? '')) throw rejected();
+    const tournament = value.includes('/chat/') ? tournamentChatRequest(value, init, config) : null;
+    const tournamentRegistration = tournament
+      ? null
+      : nativeTournamentRequest(
+          value,
+          init?.method ?? 'GET',
+          init?.body,
+          Object.fromEntries(new Headers(init?.headers).entries()),
+          config,
+        );
+    if (
+      (!value.startsWith(root) && tournamentRegistration !== 'PUBLIC') ||
+      /[%#\\]|\.\./.test(value.split('?')[0] ?? '')
+    )
+      throw rejected();
     const url = new URL(value);
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();
     const method = init?.method ?? 'GET';
     gameCancelRequest(value, init, config);
-    const tournament = tournamentChatRequest(value, init, config);
     const stream = stationStreamRequest(value, init, config);
     if (!stream) stationRequest(value, init, config);
     if (url.pathname.startsWith(`/user/api/v1/${config.tenantKey}/game-create-operations`))

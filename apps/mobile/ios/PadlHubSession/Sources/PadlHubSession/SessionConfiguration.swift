@@ -34,7 +34,7 @@ public struct SessionConfiguration: Sendable {
 }
 
 public enum SessionOperation: String, Sendable {
-  case challenge, verify, refresh, logout, context, read, notification, quarterCreate, gameCancel, stationMessage, stationStream, tournamentChat
+  case challenge, verify, refresh, logout, context, read, notification, quarterCreate, gameCancel, stationMessage, stationStream, tournamentChat, tournament, messaging
 }
 
 public struct SessionRequest: Sendable {
@@ -44,6 +44,8 @@ public struct SessionRequest: Sendable {
   public let body: String?
   public let read: CabinetRead?
   public let notification: NotificationCommand?
+  public let messaging: MessagingCommand?
+  public let tournament: TournamentRequest?
   public let tournamentChat: TournamentChatRequest?
   public let stationStream: StationStreamRequest?
   public let stationMessage: StationMessageRequest?
@@ -52,7 +54,7 @@ public struct SessionRequest: Sendable {
 
   public init(
     operation: SessionOperation, challengeID: String? = nil,
-    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil, quarterCreate: QuarterCreateRequest? = nil, gameCancel: GameCancelRequest? = nil, stationMessage: StationMessageRequest? = nil, stationStream: StationStreamRequest? = nil, tournamentChat: TournamentChatRequest? = nil
+    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil, quarterCreate: QuarterCreateRequest? = nil, gameCancel: GameCancelRequest? = nil, stationMessage: StationMessageRequest? = nil, stationStream: StationStreamRequest? = nil, tournamentChat: TournamentChatRequest? = nil, tournament: TournamentRequest? = nil, messaging: MessagingCommand? = nil
   ) {
     self.operation = operation
     self.challengeID = challengeID
@@ -60,14 +62,22 @@ public struct SessionRequest: Sendable {
     self.body = body
     self.read = read
     self.notification = notification
+    self.tournament = tournament
     self.quarterCreate = quarterCreate
     self.gameCancel = gameCancel
     self.stationMessage = stationMessage
     self.stationStream = stationStream
     self.tournamentChat = tournamentChat
+    self.messaging = messaging
   }
 
   func urlRequest(configuration: SessionConfiguration) throws -> URLRequest {
+    guard messaging == nil || operation == .messaging else { throw SessionFailure.request }
+    if operation == .tournament {
+      guard let tournament, challengeID == nil, read == nil, notification == nil, quarterCreate == nil, gameCancel == nil, stationMessage == nil, stationStream == nil, tournamentChat == nil else { throw SessionFailure.request }
+      return try tournament.urlRequest(configuration: configuration, headers: headers, body: body)
+    }
+    guard tournament == nil else { throw SessionFailure.request }
     if operation == .tournamentChat {
       guard let tournamentChat, challengeID == nil, read == nil, notification == nil, quarterCreate == nil, gameCancel == nil, stationMessage == nil, stationStream == nil else {throw SessionFailure.request}
       return try tournamentChat.urlRequest(configuration:configuration,headers:headers,body:body)
@@ -96,7 +106,7 @@ public struct SessionRequest: Sendable {
     var path = configuration.authPath
     let method: String
     switch operation {
-    case .quarterCreate, .gameCancel, .stationMessage, .stationStream, .tournamentChat: throw SessionFailure.request
+    case .quarterCreate, .gameCancel, .stationMessage, .stationStream, .tournamentChat, .tournament: throw SessionFailure.request
     case .challenge:
       path += "/challenges"
       method = "POST"
@@ -117,6 +127,10 @@ public struct SessionRequest: Sendable {
       guard let notification else {throw SessionFailure.request}
       path = try notification.path(configuration: configuration)
       method = notification.method
+    case .messaging:
+      guard let messaging else { throw SessionFailure.request }
+      path = try messaging.path(configuration: configuration)
+      method = messaging.method
     case .read:
       guard read != nil else { throw SessionFailure.request }
       method = "GET"
@@ -124,6 +138,7 @@ public struct SessionRequest: Sendable {
     guard challengeID == nil || operation == .verify,
       read == nil || operation == .read,
       notification == nil || operation == .notification,
+      messaging == nil || operation == .messaging,
       let url = try read?.url(configuration: configuration) ?? URL(string: configuration.origin + path)
     else { throw SessionFailure.request }
     var request = URLRequest(
@@ -142,7 +157,20 @@ public struct SessionRequest: Sendable {
       else { throw SessionFailure.request }
       normalized[name] = value
     }
-    if operation == .notification {
+    if operation == .messaging {
+      guard let authorization = normalized["authorization"],
+        authorization.range(of: "^Bearer \\S+$", options: .regularExpression) != nil
+      else { throw SessionFailure.request }
+      request.setValue(authorization, forHTTPHeaderField: "Authorization")
+      if messaging?.isTicket == true {
+        guard normalized["idempotency-key"] == nil else { throw SessionFailure.request }
+      } else {
+        guard let key = normalized["idempotency-key"],
+          key.range(of: "^[A-Za-z0-9._:-]{16,128}$", options: .regularExpression) != nil
+        else { throw SessionFailure.request }
+        request.setValue(key, forHTTPHeaderField: "Idempotency-Key")
+      }
+    } else if operation == .notification {
       guard let authorization=normalized["authorization"], authorization.hasPrefix("Bearer "), authorization.count>7,
         let key=normalized["idempotency-key"],key.range(of:"^[A-Za-z0-9._:-]{16,128}$",options:.regularExpression) != nil else {throw SessionFailure.request}
       request.setValue(authorization,forHTTPHeaderField:"Authorization")
@@ -193,6 +221,9 @@ public struct SessionRequest: Sendable {
       }
       request.httpBody = data
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    } else if operation == .messaging {
+      request.httpBody = try messaging?.validatedBody(body, key: normalized["idempotency-key"])
+      if request.httpBody != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     } else if operation == .notification {
       request.httpBody = try notification?.validatedBody(body)
       if request.httpBody != nil {request.setValue("application/json",forHTTPHeaderField:"Content-Type")}

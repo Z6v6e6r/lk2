@@ -279,7 +279,15 @@ export function TournamentDetailPage({
   principal,
   chatAvailable = false,
 }: {
-  readonly gateway: AuthGateway;
+  readonly gateway: Pick<
+    AuthGateway,
+    | 'tournamentPrincipal'
+    | 'getPublicTournamentSummary'
+    | 'getTournamentParticipants'
+    | 'commandTournament'
+    | 'retryTournament'
+    | 'getTournamentRegistration'
+  >;
   readonly tournamentId: string | null;
   readonly principal?: { tenantId: string; userId: string };
   readonly chatAvailable?: boolean;

@@ -1,3 +1,4 @@
+import { NativeGameChat } from './NativeGameChat.js';
 import { TournamentChatPage } from './TournamentChatPage.js';
 import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
 import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
@@ -141,6 +142,11 @@ const ProfileLevelHistoryPage = lazy(() =>
 );
 const TrainingsPage = lazy(() =>
   import('./TrainingsPage.js').then((module) => ({ default: module.TrainingsPage })),
+);
+const TournamentDirectoryPage = lazy(() =>
+  import('./TournamentDirectoryPage.js').then((module) => ({
+    default: module.TournamentDirectoryPage,
+  })),
 );
 const TournamentDetailPage = lazy(() =>
   import('./TournamentDetailPage.js').then((module) => ({ default: module.TournamentDetailPage })),
@@ -714,7 +720,15 @@ function NativeCreatedGame({ gateway, gameId }: { gateway: AuthGateway; gameId: 
     <main>
       <a href="/games/new?quarterCreate=1">К созданию игры</a>
       {game ? (
-        <GameCard game={game} readOnly />
+        <>
+          <GameCard game={game} readOnly />
+          <NativeGameChat
+            key={game.id}
+            game={game}
+            principal={() => gateway.quarterCreatePrincipal?.() ?? null}
+            open={(id) => gateway.getOrCreateGameConversation(id)}
+          />
+        </>
       ) : (
         <p role="status">{failed ? 'Игра пока недоступна.' : 'Загружаем игру…'}</p>
       )}
@@ -967,6 +981,7 @@ export function App({
   // and upload routes stay unavailable until their native handoff contracts are implemented.
   const nativeSections = new Set([
     'trainings',
+    'tournaments',
     'home',
     'home-v2',
     'home-v3',
@@ -3135,6 +3150,8 @@ export function App({
         typeof window === 'undefined'
           ? null
           : new URLSearchParams(window.location.search).get('event');
+      if (clientPlatform === 'android' && !tournamentId)
+        return <TournamentDirectoryPage gateway={gateway} />;
       return (
         <TournamentDetailPage
           key={`${context.tenant.id}:${context.user.id}`}

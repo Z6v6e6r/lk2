@@ -7,6 +7,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { IOSAuthApp } from './IOSAuthApp.js';
 import type { QuarterCustody } from '../../../web/src/quarter-create-attempt.js';
 import type { IOSSessionPlugin } from './session.js';
+import { chatFixture } from './testing/chat-fixtures.js';
+import { getChatsUnreadCount } from '../../../web/src/chats-unread.js';
 import {
   fixtureReply,
   homeDashboard,
@@ -55,9 +57,30 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('iOS cabinet with the real shared screens and one native session', () => {
+  it('opens existing chats without direct-create permission and clears unread on logout', async () => {
+    const fixture = chatFixture();
+    const request = vi.fn<IOSSessionPlugin['request']>(
+      async (input) => await Promise.resolve(fixture.reply(input)),
+    );
+    const session = syntheticSession(request);
+    await session.restore();
+    render(<IOSAuthApp session={session} />);
+    await screen.findByRole('main', { name: 'Главная' });
+    const link = await screen.findByRole('link', { name: 'Чаты, непрочитанных сообщений: 5' });
+    fireEvent.click(link);
+    await screen.findByRole('heading', { name: 'Чаты' });
+    await screen.findByText('Тестовая игра');
+    expect(screen.queryByRole('link', { name: 'Создать игру' })).toBeNull();
+    fireEvent.click(screen.getByRole('link', { name: 'Профиль' }));
+    await screen.findByRole('heading', { name: 'Анна Петрова' });
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти из аккаунта' }));
+    await screen.findByLabelText('Номер телефона');
+    expect(getChatsUnreadCount()).toBe(0);
+  });
   it('restores home, navigates profile/bookings/games/location, and logs out without browser or provider commands', async () => {
     let markDashboardRequested!: () => void;
     const dashboardRequested = new Promise<void>((resolve) => {
@@ -81,9 +104,9 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     await screen.findByRole('main', { name: 'Главная' });
     const nav = screen.getByRole('navigation', { name: 'Основная навигация' });
     expect(nav).toBeInTheDocument();
-    expect(within(nav).getAllByRole('link')).toHaveLength(3);
+    expect(within(nav).getAllByRole('link')).toHaveLength(4);
     expect(screen.queryByRole('link', { name: 'Создать игру' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Чаты' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Чаты' })).toHaveAttribute('href', '/chats');
     fireEvent.click(within(nav).getByRole('link', { name: 'Профиль' }));
     // Home and Profile share the name heading; await a region unique to the destination.
     const subscriptions = await screen.findByRole('region', { name: 'Подписки и абонементы' });
@@ -125,8 +148,10 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     await screen.findByRole('heading', { name: 'Хаб Селигерская' });
     fireEvent.click(screen.getByRole('link', { name: 'Профиль' }));
     await screen.findByRole('heading', { name: 'Анна Петрова' });
+    expect(session.tournamentPrincipal()).not.toBeNull();
     nativePush.suspend.mockRejectedValueOnce(new Error('SYNTHETIC_REVOKE_UNAVAILABLE'));
     fireEvent.click(screen.getByRole('button', { name: 'Выйти из аккаунта' }));
+    expect(session.tournamentPrincipal()).toBeNull();
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Не удалось отключить уведомления перед выходом',
     );
@@ -181,7 +206,7 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     );
     const before = request.mock.calls.length;
     act(() => {
-      window.history.pushState(null, '', '/tournaments?new=1');
+      window.history.pushState(null, '', '/tournaments/new');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
     await screen.findByRole('heading', { name: 'Раздел пока недоступен' });
@@ -398,4 +423,254 @@ it('tournament A pending custody cannot leak into tournament B after native rout
   );
   expect(request.mock.calls.filter(([v]) => v.resource === 'send')).toHaveLength(2);
   localStorage.clear();
+});
+describe('iOS concrete tournament consumer', () => {
+  const id = '11111111-1111-4111-8111-111111111111',
+    operation = '22222222-2222-4222-8222-222222222222';
+  const summary = {
+    id,
+    title: 'Synthetic iOS tournament',
+    format: 'Мексикано',
+    startsAt: '2099-11-02T15:00:00Z',
+    endsAt: '2099-11-02T17:00:00Z',
+    venue: 'Synthetic station',
+    trainerName: null,
+    levelRange: null,
+    organizer: null,
+    capacity: { total: 8, registered: 0, open: 8, waitlist: 0 },
+    status: 'REGISTRATION',
+    route: '/tournaments?event=' + id,
+  };
+  function tournamentFixture() {
+    let current: unknown = null;
+    const request = vi.fn<IOSSessionPlugin['request']>(async (input) => {
+      await Promise.resolve();
+      if (input.operation === 'tournamentChat')
+        return nativeResult(
+          input.resource === 'history'
+            ? {
+                contractVersion: 'tournament-chat.v1',
+                tournamentId: id,
+                streamId: null,
+                throughSequence: 0,
+                messages: [],
+                hasMore: false,
+                nextCursor: null,
+              }
+            : {
+                contractVersion: 'tournament-chat-read.v1',
+                tournamentId: id,
+                streamId: null,
+                witnessHash: null,
+                baselineSequence: 0,
+                readThroughSequence: 0,
+                publishedSequence: 0,
+              },
+        );
+      if (input.operation !== 'tournament') return fixtureReply(input);
+      if (input.resource === 'list') return nativeResult({ items: [summary] });
+      if (input.resource === 'summary') return nativeResult(summary);
+      if (input.resource === 'participants')
+        return nativeResult({ items: [], refreshedAt: '2099-11-01T10:00:00Z' });
+      if (input.resource === 'status')
+        return nativeResult({ commandsEnabled: true, result: current });
+      const action =
+        input.resource === 'retry'
+          ? 'JOIN'
+          : (JSON.parse(input.body!) as { action: 'JOIN' | 'LEAVE' }).action;
+      const status =
+        input.resource === 'retry' ? 'REGISTERED' : action === 'JOIN' ? 'UNKNOWN' : 'LEFT';
+      current = {
+        tournamentId: id,
+        operation: {
+          id: action === 'JOIN' ? operation : id,
+          action,
+          status,
+          reason: status === 'UNKNOWN' ? null : status,
+          generation: status === 'UNKNOWN' ? null : operation,
+        },
+        registration: {
+          status:
+            status === 'UNKNOWN'
+              ? 'UNKNOWN'
+              : status === 'REGISTERED'
+                ? 'REGISTERED'
+                : 'NOT_REGISTERED_BY_OPERATION',
+          asOf: null,
+        },
+        retryAfterSeconds: status === 'UNKNOWN' ? 15 : null,
+      };
+      return nativeResult(current);
+    });
+    return { request, session: syntheticSession(request) };
+  }
+  function locks() {
+    vi.stubGlobal(
+      'navigator',
+      Object.create(navigator, {
+        locks: {
+          value: { request: async (_n: string, _o: unknown, cb: () => unknown) => await cb() },
+          configurable: true,
+        },
+      }),
+    );
+  }
+  async function openTournament(session: ReturnType<typeof syntheticSession>) {
+    render(<IOSAuthApp session={session} />);
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Турниры' })).toBeVisible());
+    fireEvent.click(screen.getByRole('link', { name: 'Турниры' }));
+    fireEvent.click(await screen.findByRole('link', { name: summary.title }));
+    await screen.findByRole('heading', { name: summary.title });
+  }
+  it('actual IOSSession/SDK bridge: directory → UNKNOWN → remount → original retry → LEAVE', async () => {
+    locks();
+    const f = tournamentFixture();
+    await f.session.restore();
+    await openTournament(f.session);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Записаться на турнир' })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Записаться на турнир' }));
+    await screen.findByText('Операция ожидает подтверждения. Сохранён исходный запрос.');
+    const original = f.request.mock.calls.find(
+      ([x]) => x.operation === 'tournament' && x.resource === 'command',
+    )![0];
+    expect(original.body).toBe('{"action":"JOIN"}');
+    expect(original.headers['idempotency-key']).toBeTruthy();
+    fireEvent.click(await screen.findByRole('link', { name: 'Чат турнира' }));
+    await screen.findByRole('textbox', { name: 'Сообщение' });
+    await waitFor(() =>
+      expect(
+        f.request.mock.calls.some(
+          ([v]) => v.operation === 'tournamentChat' && v.resource === 'history',
+        ),
+      ).toBe(true),
+    );
+    fireEvent.click(screen.getByRole('link', { name: '← К турниру' }));
+    await screen.findByText('Операция ожидает подтверждения. Сохранён исходный запрос.');
+    expect(
+      f.request.mock.calls.filter(
+        ([v]) => v.operation === 'tournament' && v.resource === 'command',
+      ),
+    ).toHaveLength(1);
+    cleanup();
+    const restored = syntheticSession(f.request);
+    await restored.restore();
+    await openTournament(restored);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Повторить исходную операцию' })).toBeEnabled(),
+    );
+    expect(
+      f.request.mock.calls.filter(
+        ([x]) => x.operation === 'tournament' && x.resource === 'command',
+      ),
+    ).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить исходную операцию' }));
+    await screen.findByText('Запись подтверждена.');
+    expect(f.request.mock.calls.find(([x]) => x.resource === 'retry')![0]).toMatchObject({
+      operationId: operation,
+      headers: { 'idempotency-key': operation },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти из турнира' }));
+    await screen.findByText('Вы вышли из исходной регистрации.');
+    expect(f.request.mock.calls.filter(([x]) => x.resource === 'command').at(-1)![0].body).toBe(
+      JSON.stringify({ action: 'LEAVE', originalJoinOperationId: operation }),
+    );
+    const publicRead = f.request.mock.calls.find(([x]) => x.resource === 'list')![0];
+    expect(publicRead.headers).not.toHaveProperty('authorization');
+    expect(publicRead.headers).not.toHaveProperty('cookie');
+  });
+  it.each(['locks', 'randomUUID', 'storage'] as const)(
+    'missing %s has zero mutation POST, without native fallback',
+    async (missing) => {
+      locks();
+      if (missing === 'locks')
+        vi.stubGlobal('navigator', Object.create(navigator, { locks: { value: undefined } }));
+      else if (missing === 'randomUUID')
+        vi.stubGlobal('crypto', Object.create(crypto, { randomUUID: { value: undefined } }));
+      else
+        vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => {
+          throw new DOMException('denied', 'SecurityError');
+        });
+      const f = tournamentFixture();
+      await f.session.restore();
+      await openTournament(f.session);
+      if (missing === 'randomUUID') {
+        const button = await screen.findByRole('button', { name: 'Записаться на турнир' });
+        await waitFor(() => expect(button).toBeEnabled());
+        fireEvent.click(button);
+        await screen.findByRole('alert');
+      } else {
+        await screen.findByRole('button', { name: 'Проверить запись' });
+        // A retained UNKNOWN may expose only original-operation recovery. Neither
+        // a fresh command nor its retry may run without locks/durable storage.
+        await waitFor(() => {
+          const writes = screen
+            .getAllByRole('button')
+            .filter((button) =>
+              /Записаться на турнир|Выйти из турнира|Повторить исходную операцию/.test(
+                button.textContent ?? '',
+              ),
+            );
+          expect(writes.length).toBeGreaterThan(0);
+          for (const button of writes) expect(button).toBeDisabled();
+        });
+      }
+      expect(
+        f.request.mock.calls.filter(([x]) => x.resource === 'command' || x.resource === 'retry'),
+      ).toHaveLength(0);
+    },
+  );
+});
+
+it('keeps station and DIRECT/GAME directories independently reachable in the merged cabinet', async () => {
+  const f = chatFixture();
+  const request = vi.fn<IOSSessionPlugin['request']>(
+    async (input) => await Promise.resolve(f.reply(input)),
+  );
+  const session = syntheticSession(request);
+  await session.restore();
+  render(<IOSAuthApp session={session} />);
+  fireEvent.click(await screen.findByRole('link', { name: 'Чаты сообществ' }));
+  await screen.findByRole('heading', { name: 'Чаты сообществ' });
+  expect(window.location.pathname).toBe('/station-chats');
+  fireEvent.click(screen.getByRole('link', { name: 'Личные и игровые чаты' }));
+  await screen.findByRole('heading', { name: 'Чаты' });
+  await screen.findByText('Тестовая игра');
+  expect(window.location.pathname).toBe('/chats');
+});
+it('opens canonical GAME chat from native game detail while booking remains read-only', async () => {
+  const f = chatFixture();
+  const conversationId = '22222222-2222-4222-8222-222222222222';
+  const request = vi.fn<IOSSessionPlugin['request']>(
+    async (input) =>
+      await Promise.resolve(
+        input.operation === 'read' && input.resource === 'game'
+          ? nativeResult({ game: { ...game, viewerRelation: 'PARTICIPANT', conversation: null } })
+          : input.resource === 'createGame'
+            ? nativeResult({
+                outcome: 'ok',
+                conversation: { id: conversationId },
+                created: true,
+                replayed: false,
+              })
+            : f.reply(input),
+      ),
+  );
+  const session = syntheticSession(request);
+  await session.restore();
+  render(<IOSAuthApp session={session} />);
+  await screen.findByRole('main', { name: 'Главная' });
+  act(() => {
+    window.history.pushState(null, '', `/games/${game.id}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Чат игры' }));
+  await screen.findByRole('heading', { name: 'Чаты' });
+  expect(window.location.pathname).toBe(`/chats/${conversationId}`);
+  expect(request.mock.calls.filter(([v]) => v.resource === 'createGame')).toHaveLength(1);
+  expect(request.mock.calls.find(([v]) => v.resource === 'createGame')![0].body).toBe(
+    JSON.stringify({ gameId: game.id }),
+  );
+  expect(screen.queryByRole('button', { name: 'Вступить' })).toBeNull();
 });

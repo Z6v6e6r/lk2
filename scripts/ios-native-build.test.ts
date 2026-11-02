@@ -103,4 +103,21 @@ describe('iOS APNs capability and native verification boundary', () => {
     expect(commands).toContain('IOS_SIGNED_RELEASE_NOT_IMPLEMENTED');
     expect(commands).toContain('exit 1');
   });
+
+  it('keeps simulator integration isolated and checks Release without DEBUG even with the test flag', () => {
+    const steps = workflow.jobs['unsigned-native']?.steps ?? [];
+    const release = steps.find((step) => step.name?.startsWith('Compile Release'))?.run ?? '';
+    expect(release).toContain('-configuration Release');
+    expect(release).toContain('CODE_SIGNING_ALLOWED=NO');
+    expect(release).toContain('$(inherited) PADLHUB_B07_TEST_HOST');
+    expect(release).not.toMatch(/CONDITIONS=.*DEBUG/);
+    const native = steps.find(
+      (step) => step.name === 'Verify real native DIRECT bridge with synthetic transport',
+    );
+    expect(native?.run).toContain('ios-native-direct-test.ts --ci-owned-simulator');
+    expect(workflow.on.pull_request.paths).toContain('scripts/ios-native-direct-test*');
+    const evidence = steps.find((step) => step.name === 'Retain synthetic native test evidence');
+    expect(evidence?.with?.path).toBe('.ci-artifacts/ios-native-direct/');
+    expect(workflowSource).not.toContain('simctl delete all');
+  });
 });

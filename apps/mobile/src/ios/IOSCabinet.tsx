@@ -11,7 +11,24 @@ import {
   initialAndroidPushState,
   type AndroidPushPlugin,
 } from '../android-push.js';
+import { TournamentDirectoryPage } from '../../../web/src/TournamentDirectoryPage.js';
+import { TournamentDetailPage } from '../../../web/src/TournamentDetailPage.js';
+import { createIOSTournamentGateway } from './tournament-gateway.js';
 import { IOSNotifications } from './IOSNotifications.js';
+import { IOSChats } from './IOSChats.js';
+import { IOSDirectStart } from './IOSDirectStart.js';
+import {
+  IOSDirectController,
+  directRecipient,
+  readOtherProfile,
+  playerIdPattern,
+} from './direct-start.js';
+import { readIOSConversations } from './chat-data.js';
+import {
+  CHATS_UNREAD_REFRESH_INTERVAL_MS,
+  setChatsUnreadCount,
+  totalUnreadConversations,
+} from '../../../web/src/chats-unread.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthenticatedSession, PublicGameCardPage } from '@phub/api-sdk';
@@ -87,7 +104,7 @@ function useQuery<T>(load: () => Promise<T>): Query<T> {
 }
 
 function Navigation({ active }: { readonly active?: MainNavigationSection }): React.JSX.Element {
-  return <MainBottomNavigation readOnly {...(active ? { active } : {})} />;
+  return <MainBottomNavigation readOnly chatsAvailable {...(active ? { active } : {})} />;
 }
 
 function Page({
@@ -207,6 +224,46 @@ function Home({
           onRetryViewer={viewer.retry}
           onRetryUpcoming={bookings.retry}
           onLogout={onLogout}
+        />
+      )}
+    </QueryResult>
+  );
+}
+
+function OtherProfile({
+  session,
+  viewerId,
+  userId,
+  onLogout,
+}: {
+  readonly session: IOSSession;
+  readonly viewerId: string;
+  readonly userId: string;
+  readonly onLogout: () => void;
+}) {
+  const load = useCallback(
+    () => readOtherProfile(session, viewerId, userId),
+    [session, viewerId, userId],
+  );
+  const profile = useQuery(load);
+  if (!profile.value)
+    return (
+      <Page title="Профиль игрока">
+        <QueryResult query={profile}>{() => null}</QueryResult>
+      </Page>
+    );
+  return (
+    <QueryResult query={profile}>
+      {(value) => (
+        <ProfilePage
+          profile={value}
+          logoutBusy={false}
+          onLogout={onLogout}
+          navigation={<Navigation />}
+          publicProfileOrigin={session.configuration.apiBaseUrl}
+          notificationsAvailable={false}
+          friendsAvailable={false}
+          subscriptionRenewalAvailable={false}
         />
       )}
     </QueryResult>
@@ -438,6 +495,35 @@ export function IOSCabinet({
   const route = useCabinetRoute();
   const tournamentChatGateway = useMemo(() => createIOSTournamentChatGateway(session), [session]);
   const quarterGateway = useMemo(() => createIOSQuarterGateway(session), [session]);
+  const tournamentGateway = useMemo(() => createIOSTournamentGateway(session), [session]);
+  const directController = useMemo(
+    () => new IOSDirectController(session, auth.user.id),
+    [session, auth.user.id],
+  );
+  useEffect(() => {
+    let active = true;
+    setChatsUnreadCount(0);
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      void readIOSConversations(session).then(
+        (page) => {
+          if (active) setChatsUnreadCount(totalUnreadConversations(page));
+        },
+        () => {
+          if (active) setChatsUnreadCount(0);
+        },
+      );
+    };
+    refresh();
+    const timer = window.setInterval(refresh, CHATS_UNREAD_REFRESH_INTERVAL_MS);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+      setChatsUnreadCount(0);
+    };
+  }, [session, auth.user.id]);
   const data = useMemo(() => createCabinetData(session, auth.user.id), [session, auth.user.id]);
   const [push, setPush] = useState(initialAndroidPushState);
   const [logoutError, setLogoutError] = useState<string>();
@@ -477,6 +563,7 @@ export function IOSCabinet({
     );
   const logout = () => {
     session.closeQuarterCreate();
+    session.closeTournament();
     setLogoutError(undefined);
     void controller
       .beforeLogout()
@@ -488,6 +575,9 @@ export function IOSCabinet({
       );
   };
   let content: ReactNode;
+  const chat = /^\/chats\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i.exec(
+    path,
+  );
   if (path === '/') content = <Home data={data} auth={auth} onLogout={logout} />;
   else if (tournamentChat)
     content = (
@@ -498,7 +588,7 @@ export function IOSCabinet({
         gateway={tournamentChatGateway}
       />
     );
-  else if (path === '/chats') content = <IOSStationChats session={session} />;
+  else if (path === '/station-chats') content = <IOSStationChats session={session} />;
   else if (path === '/games/new')
     content = (
       <QuarterCreatePanel
@@ -510,8 +600,31 @@ export function IOSCabinet({
         }}
       />
     );
+  else if (path === '/chats/new')
+    content = <IOSDirectStart controller={directController} recipient={directRecipient(route)} />;
+  else if (path === '/chats' || chat)
+    content = (
+      <IOSChats
+        session={session}
+        userId={auth.user.id}
+        {...(chat ? { conversationId: chat[1]! } : {})}
+      />
+    );
   else if (path === '/profile' || path === `/profile/${auth.user.id}`)
     content = <Profile data={data} origin={session.configuration.apiBaseUrl} onLogout={logout} />;
+  else if (
+    route === path &&
+    path.startsWith('/profile/') &&
+    playerIdPattern.test(path.slice('/profile/'.length))
+  )
+    content = (
+      <OtherProfile
+        session={session}
+        viewerId={auth.user.id}
+        userId={path.slice('/profile/'.length)}
+        onLogout={logout}
+      />
+    );
   else if (path === '/notifications')
     content = (
       <IOSNotifications
@@ -521,7 +634,19 @@ export function IOSCabinet({
         onDisable={() => void controller.disable().catch(() => undefined)}
       />
     );
-  else if (path === '/bookings') content = <Bookings data={data} />;
+  else if (path === '/tournaments') {
+    const id = new URLSearchParams(route.split('?')[1] ?? '').get('event');
+    content = id ? (
+      <TournamentDetailPage
+        gateway={tournamentGateway}
+        chatAvailable
+        tournamentId={id}
+        principal={{ tenantId: auth.context.tenantId, userId: auth.context.userId }}
+      />
+    ) : (
+      <TournamentDirectoryPage gateway={tournamentGateway} />
+    );
+  } else if (path === '/bookings') content = <Bookings data={data} />;
   else if (path === '/games') content = <Games data={data} />;
   else if (path === '/history')
     content = (
@@ -564,8 +689,10 @@ export function IOSCabinet({
   return (
     <div className="ios-cabinet">
       <nav className="native-quarter-navigation" aria-label="Разделы приложения">
-        <a href="/chats">Чаты сообществ</a>
+        <a href="/station-chats">Чаты сообществ</a>
+        <a href="/chats">Личные и игровые чаты</a>
         <a href="/games/new?quarterCreate=1">Игра по подписке</a>
+        <a href="/tournaments">Турниры</a>
       </nav>
       {logoutError ? <p role="alert">{logoutError}</p> : null}
       <div key={path}>{content}</div>
