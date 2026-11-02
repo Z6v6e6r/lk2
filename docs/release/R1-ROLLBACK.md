@@ -1,5 +1,28 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Актуальный срез — 2026-11-03 (MSK)
+
+Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.
+
+Rollback readiness: **PARTIAL / live restore не подтверждён**. Наличие старого image или dump само по себе недостаточно.
+
+- По последнему доступному срезу 2026-11-02 сохранены текущие/rollback images,13containers,4retainedCCC stopped containers, два исторических verified dumps. После разрешённой очистки snapshot свободного места57,942,347,776байт; это не резервирование.
+- Не удалять CCC/photo dumps до нового106backup с independent restore и проверки всех custody consumers. Для0104/tail сохранить новые106/107 predecessors.
+- В предыдущем metadata capture было356415 rows, включая694 opaque dependency symlinks; driver fingerprint учитывает их и не следует по targets. Свежий host capture не выполнен. LOCAL34synthetic tests и security/recovery reviews CLEAR. Отдельная LOCAL Linux репетиция5/5 PASS проверила реальные renameat2/flock/fsync; host execution не выполнялся. Lost-ACK physical case — inode exchange/INTENT, semantic classifier проверен synthetic suite.
+- Source/helper/config switch только по reviewed atomic procedure, с exact preimage/locks/expiry. UNKNOWN результата означает fresh readback и отдельное guarded recovery, не повторную команду.
+- CUP rollback должен понимать durable pending/held queue; возврат к старому process-only Map после новых durable writes не считается безопасным. Export не равен drain, ACK не придумывать. Аудит exact83: whole-row fireAndForget не отслеживает поздние записи. Установленный index-preflight считает receipt-v1, но пропускает meta.legacyMaxRestartCustody: автоматический rollback к старому writer после held import не допущен.
+- Клиентский lost ACK повторяет исходные key/body только по явному действию и прежнему principal; денежный UNKNOWN не превращать в повторный refund.
+
+Destructive rollback, restore или migration execution требуют конкретного разрешённого operation packet; фактического rollback в текущем этапе не было.
+
+Локальный пакет b88f2100: driver e984cba5…,34 synthetic PASS, independent repin review CLEAR. Изменены только FINAL/TREE/confirmation; неизменённые security/recovery проверки переиспользованы. Это не production rollback evidence.
+
+CUP: PR78/79 source merged, PR80 LOCAL/review CLEAR и CI pending; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+
+---
+
+Исторические контрольные точки сохранены ниже; их прежние формулировки «текущий» не описывают состояние на дату раздела выше.
+
 ## Дополнение recovery — 2026-11-02, monthly checkout
 
 Изменения находятся в task/integration branches и Draft PR; production rollback не выполнялся. Точные sources: [READINESS](R1-READINESS.md).

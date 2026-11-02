@@ -1,5 +1,27 @@
 # LK2 R1 — GO / NO-GO
 
+## Актуальный срез — 2026-11-03 (MSK)
+
+Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.
+
+**NO-GO: production release ещё не закрыт.**
+
+Source work и разрешённая публикация b88f2100 завершены в своих границах. PR571 исправил initial native JOIN race и merged в main b88f2100. Main CI41491347884 SUCCESS:9144 PASS/133 SKIP, PG16 7/7; PR full/Android/iOS CI SUCCESS.
+
+До GO требуются: verified enrollment и106→119 migrations с backup/independent restore/rollback; сохранение и recovery очереди CUP перед restart; monthly binding/admission; attributable Viva refunds/training visit-return; coherent runtime/provider/device acceptance.
+
+Подтверждены14,574,268,416байт cleanup и canonical V2 publication41506910421. Нового production service deploy/restart, DB migration, provider payment/refund либо store activation не было. Android/iOS signing/stores отложены владельцем в отдельную ветку; это не означает, что мобильный release принят.
+
+Решение меняется только по фактическим receipts/test/runtime evidence; общее разрешение продолжать не подменяет технические prerequisites. Подробности: R1-READINESS.md, R1-BLOCKERS.md, R1-DEPENDENCIES.md, R1-E2E-MATRIX.md, R1-RELEASE-RUNBOOK.md, R1-ROLLBACK.md.
+
+Разрешённый цикл571 завершён: delivery41494088418 SKIPPED, флаг true восстановлен и проверен. Публикация b88f2100 выполнена один раз, attempt1; все пять образов и canonical manifest проверены. LOCAL Linux companion5/5 PASS; fresh host metadata заблокированы автоматической проверкой, точное разрешение запрошено.
+
+CUP: PR78/79 source merged, PR80 LOCAL/review CLEAR и CI pending; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+
+---
+
+Исторические контрольные точки сохранены ниже; их прежние формулировки «текущий» не описывают состояние на дату раздела выше.
+
 ## Текущее решение — 2026-11-02, monthly checkout
 
 **NO-GO для production.** Source-gap ordinary monthly native purchase закрыт: LK2#565 и paired LK#289 имеют reviewed source, full/native/physical CI. Они наследуют подготовленные интеграции#558/#288; CUP#76 остаётся совместимым source head. Точные SHA/runs и ограничения в [READINESS](R1-READINESS.md).

@@ -1,5 +1,27 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## Актуальный срез — 2026-11-03 (MSK)
+
+Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.
+
+Использовать действующие lk2-release/lk2-deploy и repository runbooks; этот файл задаёт порядок и stop conditions, не заменяет исполнители.
+
+1. Зафиксировать green exact source/PR head и отсутствие чужого main/flag/delivery owner. Источник сейчас main b88f2100: CI41491347884 SUCCESS; PR571 full/native CI SUCCESS.
+2. Source-only merge571 завершён: [main CI41491347884](https://github.com/Z6v6e6r/lk2/actions/runs/41491347884) и delivery41494088418. Main CI SUCCESS, downstream41494088418 SKIPPED, captured true восстановлен. Для будущих циклов сохраняется порядок: false → exact merge → terminal CI/SKIPPED → original flag; ambiguous API требует GET reconciliation.
+3. Выполнено: одна exact publication41506910421, source b88f2100, main CI41491347884 SUCCESS; canonical V2 и5 digests verified. Повторную публикацию не запускать; не смешивать159342 images с новым controller.
+4. Перед host action обновить identity, configuration, permanent locks, request/custody inventory, disk capacity, preserved symlink fingerprint и expiry. Пакет b88f2100 LOCAL-only; fresh host inputs отсутствуют, executable manifest не заполнен.
+5. Enrollment, backups/independent restores,106→107→108→119 — строго canonical guarded procedures и конкретные operation packets. API не запускает migrations при старте. Сохранить predecessor backups и rollback inputs.
+6. CUP не рестартовать до сохранения/разбора in-memory queue и совместимого rollback. LK monthly не применять до effective binding/storage/admission и fresh preimage checks.
+7. Runtime health/readiness, business smoke, provider/device acceptance и soak. Только фактические receipts закрывают этап.
+
+Не создавать ключи, не менять payment config, не публиковать stores. Не применять raw Docker/Compose/SSH workaround вместо отказавшего canonical guard. Остановить только затронутую границу, продолжить независимую подготовку.
+
+CUP: PR78/79 source merged, PR80 LOCAL/review CLEAR и CI pending; факты и ссылки — в [актуальном readiness](R1-READINESS.md). First restart admission, old83 late writes и live executor остаются открытыми; restart/deploy/import не выполнялись.
+
+---
+
+Исторические контрольные точки сохранены ниже; их прежние формулировки «текущий» не описывают состояние на дату раздела выше.
+
 ## Дополнение подготовки — 2026-11-02, monthly checkout
 
 Coherent source tuple: LK2#565, LK#289, CUP#76; exact heads/runs в [READINESS](R1-READINESS.md). Все исходники находятся в Draft PR; это не immutable release manifest.
