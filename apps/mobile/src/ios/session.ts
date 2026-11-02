@@ -1,3 +1,14 @@
+import { nativeProfileSettingsRequest } from '../native-profile-settings-request.js';
+import {
+  profileSettingsCommand,
+  profileSettingsIdentity,
+  profileSettingsPath,
+  profileSettingsResult,
+  type NativeProfileSettingsRequest,
+  type ProfileSettingsResource,
+  type ProfileSettingsInputs,
+  type ProfileSettingsResults,
+} from '../../../web/src/native-profile-settings.js';
 import type { GameCommandResult } from '@phub/api-sdk';
 import { nativeJoinRequest, nativeJoinIdentity } from '../native-game-join-request.js';
 import { nativeJoinTarget } from '../../../web/src/native-game-join-wire.js';
@@ -56,7 +67,8 @@ interface NativeRequest {
     | 'messaging'
     | 'training'
     | 'selfLeave'
-    | 'gameJoin';
+    | 'gameJoin'
+    | 'profileSettings';
   readonly requestId?: string;
   readonly challengeId?: string;
   readonly operationId?: string;
@@ -90,12 +102,14 @@ export function createIOSFetch(
   canDispatchTraining?: (request: NativeTrainingRequest, key?: string, body?: string) => boolean,
   canDispatchSelfLeave?: (request: NativeSelfLeaveRequest, key: string) => boolean,
   canDispatchJoin?: (request: NativeJoinRequest) => boolean,
+  canDispatchProfileSettings?: (request: NativeProfileSettingsRequest) => boolean,
 ): typeof fetch {
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   let cancellationClosed = false;
   let cancellationEpoch = 0;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
+    const settings = nativeProfileSettingsRequest(value, init, config);
     const join = nativeJoinRequest(value, init, config);
     const selfLeave = selfLeaveRequest(value, init, config);
     const training = trainingRequest(value, init, config);
@@ -116,6 +130,7 @@ export function createIOSFetch(
           config,
         );
     const read =
+      !settings &&
       !join &&
       !selfLeave &&
       !training &&
@@ -128,6 +143,7 @@ export function createIOSFetch(
         : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
     if (
+      !settings &&
       !join &&
       !selfLeave &&
       !training &&
@@ -143,7 +159,8 @@ export function createIOSFetch(
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
     let notification: { resource: string; resourceId?: string } | undefined;
-    if (join) operation = 'gameJoin';
+    if (settings) operation = 'profileSettings';
+    else if (join) operation = 'gameJoin';
     else if (selfLeave) operation = 'selfLeave';
     else if (training) operation = 'training';
     else if (tournamentChat) operation = 'tournamentChat';
@@ -217,10 +234,13 @@ export function createIOSFetch(
       throw new DOMException('Session changed', 'AbortError');
     if (init?.body != null && typeof init.body !== 'string') throw rejectedRequest();
     if (read && init?.body != null) throw rejectedRequest();
+    if (settings && (cancellationClosed || canDispatchProfileSettings?.(settings) !== true))
+      throw rejectedRequest();
     if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
     try {
       const result = await plugin.request({
         operation,
+        ...(settings ? { resource: settings.resource } : {}),
         ...(read ?? {}),
         ...(training ?? {}),
         ...(selfLeave ?? {}),
@@ -237,6 +257,13 @@ export function createIOSFetch(
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
       });
+      if (
+        settings &&
+        (cancellationClosed ||
+          originalCancellationEpoch !== cancellationEpoch ||
+          canDispatchProfileSettings?.(settings) !== true)
+      )
+        throw new DOMException('Session changed', 'AbortError');
       if (
         join &&
         (cancellationClosed ||
@@ -451,6 +478,55 @@ export class IOSSession {
     } finally {
       custody.count--;
       if (custody.count === 0) this.joinRequests.delete(identity);
+    }
+  }
+  private readonly profileSettingsRequests = new Map<
+    ProfileSettingsResource,
+    { principal: string; token: string; request?: NativeProfileSettingsRequest }
+  >();
+  public canDispatchProfileSettings(request: NativeProfileSettingsRequest): boolean {
+    const v = this.profileSettingsRequests.get(request.resource);
+    return (
+      v?.request !== undefined &&
+      v.principal === this.quarterCreatePrincipal() &&
+      v.token === this.api.getAccessToken() &&
+      profileSettingsIdentity(v.request) === profileSettingsIdentity(request)
+    );
+  }
+  public async updateProfileSettings<R extends ProfileSettingsResource>(
+    resource: R,
+    input: ProfileSettingsInputs[R],
+  ): Promise<ProfileSettingsResults[R]> {
+    const principal = this.quarterCreatePrincipal(),
+      token = this.api.getAccessToken();
+    const existing = this.profileSettingsRequests.get(resource);
+    if (!principal || !token || (existing?.principal === principal && existing.token === token))
+      throw rejectedRequest();
+    const custody: { principal: string; token: string; request?: NativeProfileSettingsRequest } = {
+      principal,
+      token,
+    };
+    this.profileSettingsRequests.set(resource, custody);
+    try {
+      const request = await profileSettingsCommand(resource, input);
+      if (this.quarterCreatePrincipal() !== principal || this.api.getAccessToken() !== token)
+        throw rejectedRequest();
+      custody.request = request;
+      const result = await this.quarterCall((api) =>
+        api.request<ProfileSettingsResults[R]>(profileSettingsPath(resource), {
+          method: 'PUT',
+          idempotencyKey: request.key,
+          body: request.body,
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        }),
+      );
+      if (this.api.getAccessToken() !== token)
+        throw new DOMException('Session changed', 'AbortError');
+      return profileSettingsResult(resource, result);
+    } finally {
+      if (this.profileSettingsRequests.get(resource) === custody)
+        this.profileSettingsRequests.delete(resource);
     }
   }
   public canDispatchSelfLeave(request: NativeSelfLeaveRequest, key: string): boolean {
@@ -963,6 +1039,7 @@ export function getIOSSession(): Promise<IOSSession> {
         (request, key, body) => session?.canDispatchTraining(request, key, body) === true,
         (request, key) => session?.canDispatchSelfLeave(request, key) === true,
         (request) => session?.canDispatchJoin(request) === true,
+        (request) => session?.canDispatchProfileSettings(request) === true,
       ),
     });
     const session: IOSSession = new IOSSession(configuration, api);

@@ -1,3 +1,9 @@
+import { ProfileLevelHistoryPage } from '../../../web/src/ProfileLevelHistoryPage.js';
+import type {
+  ProfileSettingsInputs,
+  ProfileSettingsResults,
+  ProfileSettingsResource,
+} from '../../../web/src/native-profile-settings.js';
 import { SubscriptionsPage } from '../../../web/src/SubscriptionsPage.js';
 import { TrainingsPage } from '../../../web/src/TrainingsPage.js';
 import { createIOSTrainingGateway } from './training-gateway.js';
@@ -32,7 +38,7 @@ import {
   setChatsUnreadCount,
   totalUnreadConversations,
 } from '../../../web/src/chats-unread.js';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthenticatedSession, PublicGameCardPage } from '@phub/api-sdk';
 import {
@@ -273,11 +279,27 @@ function OtherProfile({
   );
 }
 
+function LevelHistory({ data }: { readonly data: CabinetData }): React.JSX.Element {
+  const history = useQuery(data.levelHistory);
+  return (
+    <>
+      <ProfileLevelHistoryPage history={history.value} error={history.error} />
+      {history.error ? (
+        <button type="button" onClick={history.retry}>
+          Повторить загрузку
+        </button>
+      ) : null}
+    </>
+  );
+}
+
 function Profile({
+  session,
   data,
   origin,
   onLogout,
 }: {
+  readonly session: IOSSession;
   readonly data: CabinetData;
   readonly origin: string;
   readonly onLogout: () => void;
@@ -286,6 +308,48 @@ function Profile({
   const dashboard = useQuery(data.dashboard);
   const preferences = useQuery(data.preferences);
   const privacy = useQuery(data.privacy);
+  const [saved, setSaved] = useState<Partial<ProfileSettingsResults>>({});
+  const [busy, setBusy] = useState<Partial<Record<ProfileSettingsResource, boolean>>>({});
+  const [errors, setErrors] = useState<Partial<Record<ProfileSettingsResource, string>>>({});
+  const pending = useRef(new Set<ProfileSettingsResource>());
+  const alive = useRef(false);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  function save<R extends ProfileSettingsResource>(
+    resource: R,
+    input: ProfileSettingsInputs[R],
+  ): void {
+    if (pending.current.has(resource)) return;
+    const principal = session.quarterCreatePrincipal();
+    if (!principal) return;
+    pending.current.add(resource);
+    setBusy((v) => ({ ...v, [resource]: true }));
+    setErrors((v) => ({ ...v, [resource]: '' }));
+    const current = () => alive.current && session.quarterCreatePrincipal() === principal;
+    void session
+      .updateProfileSettings(resource, input)
+      .then(
+        (value) => {
+          if (current()) setSaved((v) => ({ ...v, [resource]: value }));
+        },
+        () => {
+          if (current())
+            setErrors((v) => ({
+              ...v,
+              [resource]: 'Не удалось сохранить. Обновите профиль и повторите.',
+            }));
+        },
+      )
+      .finally(() => {
+        pending.current.delete(resource);
+        if (current()) setBusy((v) => ({ ...v, [resource]: false }));
+      });
+  }
+
   if (profile.value === null)
     return (
       <Page title="Профиль" active="profile">
@@ -311,12 +375,14 @@ function Profile({
           subscriptionsError={dashboard.error}
           communities={dashboard.value ? { items: dashboard.value.communities } : null}
           communitiesError={dashboard.error}
-          bookingPreferences={preferences.value}
-          bookingPreferencesBusy={preferences.loading}
-          bookingPreferencesError={preferences.error}
-          privacySettings={privacy.value}
-          privacyBusy={privacy.loading}
-          privacyError={privacy.error}
+          bookingPreferences={saved.preferences ?? preferences.value}
+          bookingPreferencesBusy={busy.preferences || preferences.loading}
+          bookingPreferencesError={errors.preferences || preferences.error}
+          onSaveBookingPreferences={(input) => save('preferences', input)}
+          privacySettings={saved.privacy ?? privacy.value}
+          privacyBusy={busy.privacy || privacy.loading}
+          privacyError={errors.privacy || privacy.error}
+          onSavePrivacy={(input) => save('privacy', input)}
           stationChoices={
             dashboard.value?.locations.map((location) => ({
               id: location.id,
@@ -585,8 +651,16 @@ export function IOSCabinet({
         {...(chat ? { conversationId: chat[1]! } : {})}
       />
     );
+  else if (route === '/profile/level-history') content = <LevelHistory data={data} />;
   else if (path === '/profile' || path === `/profile/${auth.user.id}`)
-    content = <Profile data={data} origin={session.configuration.apiBaseUrl} onLogout={logout} />;
+    content = (
+      <Profile
+        session={session}
+        data={data}
+        origin={session.configuration.apiBaseUrl}
+        onLogout={logout}
+      />
+    );
   else if (
     route === path &&
     path.startsWith('/profile/') &&

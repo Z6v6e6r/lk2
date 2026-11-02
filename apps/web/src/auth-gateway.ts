@@ -1,3 +1,13 @@
+import {
+  profileSettingsCommand,
+  profileSettingsIdentity,
+  profileSettingsPath,
+  profileSettingsResult,
+  type NativeProfileSettingsRequest,
+  type ProfileSettingsResource,
+  type ProfileSettingsInputs,
+  type ProfileSettingsResults,
+} from './native-profile-settings.js';
 import { nativeJoinTarget } from './native-game-join-wire.js';
 import type { NativeJoinRequest } from './native-game-join-attempt.js';
 import type {
@@ -1053,7 +1063,36 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         if (client.getAccessToken() !== joinCustody.token)
           throw new Error('AUTH_PRINCIPAL_CHANGED');
       }
+      const settingsResource =
+        options.platform === 'android' && (init?.method ?? 'GET') === 'PUT'
+          ? selfPath === '/profile/privacy'
+            ? 'privacy'
+            : selfPath === '/profile/booking-preferences'
+              ? 'preferences'
+              : null
+          : null;
+      const settingsCustody = settingsResource
+        ? profileSettingsRequests.get(settingsResource)
+        : undefined;
+      if (settingsResource) {
+        if (
+          !settingsCustody?.request ||
+          typeof init?.body !== 'string' ||
+          profileSettingsIdentity(settingsCustody.request) !==
+            profileSettingsIdentity({ resource: settingsResource, key: selfKey, body: init.body })
+        )
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(settingsCustody.principal);
+        if (client.getAccessToken() !== settingsCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       const result = await (options.fetchImplementation ?? globalThis.fetch)(input, init);
+      if (settingsCustody) {
+        requireQuarterPrincipal(settingsCustody.principal);
+        if (client.getAccessToken() !== settingsCustody.token)
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+
       if (joinCustody) {
         requireQuarterPrincipal(joinCustody.principal);
         if (client.getAccessToken() !== joinCustody.token)
@@ -1127,6 +1166,48 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let quarterClosing = false;
   let tournamentLogoutPending = 0;
   let tournamentSessionEpoch = 0;
+  const profileSettingsRequests = new Map<
+    ProfileSettingsResource,
+    { principal: string; token: string; request?: NativeProfileSettingsRequest }
+  >();
+  async function nativeProfileSettings<R extends ProfileSettingsResource>(
+    resource: R,
+    input: ProfileSettingsInputs[R],
+  ): Promise<ProfileSettingsResults[R]> {
+    if (!options.nativeSessionTransport) return nativeUnavailable();
+    const principal = requireQuarterPrincipal(),
+      token = client.getAccessToken();
+    const existing = profileSettingsRequests.get(resource);
+    if (!token || (existing?.principal === principal && existing.token === token))
+      throw new Error('PROFILE_SETTINGS_IN_PROGRESS');
+    const custody: { principal: string; token: string; request?: NativeProfileSettingsRequest } = {
+      principal,
+      token,
+    };
+    profileSettingsRequests.set(resource, custody);
+    try {
+      const request = await profileSettingsCommand(resource, input);
+      requireQuarterPrincipal(principal);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      custody.request = request;
+      const result = await client.request<ProfileSettingsResults[R]>(
+        profileSettingsPath(resource),
+        {
+          method: 'PUT',
+          idempotencyKey: request.key,
+          body: request.body,
+          retryOnUnauthorized: false,
+          cache: 'no-store',
+        },
+      );
+      requireQuarterPrincipal(principal);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return profileSettingsResult(resource, result);
+    } finally {
+      if (profileSettingsRequests.get(resource) === custody)
+        profileSettingsRequests.delete(resource);
+    }
+  }
   function quarterCreatePrincipal(): string | null {
     return !quarterClosed && !tournamentLogoutStarted && currentUserId && currentTenantId
       ? `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`
@@ -2223,6 +2304,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getProfilePrivacy() {
+      if (nativeClient) return client.getProfilePrivacySettings();
       profilePrivacyPromise ??= client.getProfilePrivacySettings().catch((error: unknown) => {
         profilePrivacyPromise = undefined;
         throw error;
@@ -2231,7 +2313,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async updateProfilePrivacy(input) {
-      const settings = await client.updateProfilePrivacySettings(input);
+      const original = nativeClient
+        ? { principal: requireQuarterPrincipal(), token: client.getAccessToken() }
+        : undefined;
+      const settings = nativeClient
+        ? await nativeProfileSettings('privacy', input)
+        : await client.updateProfilePrivacySettings(input);
+      if (original) {
+        requireQuarterPrincipal(original.principal);
+        if (client.getAccessToken() !== original.token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       profilePrivacyPromise = Promise.resolve(settings);
       return settings;
     },
@@ -2265,6 +2356,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getBookingPreferences() {
+      if (nativeClient) return client.getBookingPreferences();
       bookingPreferencesPromise ??= client.getBookingPreferences().catch((error: unknown) => {
         bookingPreferencesPromise = undefined;
         throw error;
@@ -2273,7 +2365,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async updateBookingPreferences(input) {
-      const settings = await client.updateBookingPreferences(input);
+      const original = nativeClient
+        ? { principal: requireQuarterPrincipal(), token: client.getAccessToken() }
+        : undefined;
+      const settings = nativeClient
+        ? await nativeProfileSettings('preferences', input)
+        : await client.updateBookingPreferences(input);
+      if (original) {
+        requireQuarterPrincipal(original.principal);
+        if (client.getAccessToken() !== original.token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
       bookingPreferencesPromise = Promise.resolve(settings);
       return settings;
     },

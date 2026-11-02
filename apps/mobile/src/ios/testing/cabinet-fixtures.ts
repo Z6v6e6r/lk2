@@ -95,6 +95,7 @@ export function syntheticSession(
         (request, key, body) => session?.canDispatchTraining(request, key, body) === true,
         (request, key) => session?.canDispatchSelfLeave(request, key) === true,
         (request) => session?.canDispatchJoin(request) === true,
+        (request) => session?.canDispatchProfileSettings(request) === true,
       ),
     }),
   );
