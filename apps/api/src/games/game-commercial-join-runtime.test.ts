@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import managedFixture from '../../../../packages/subscription-runtime-adapter/src/fixtures/managed-join-v2.json';
+import {
+  parseManagedJoinEntitlement,
+  managedJoinAdmissionSha256,
+} from '@phub/subscription-runtime-adapter';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   createGameCommercialJoinRuntime,
@@ -386,5 +391,162 @@ describe('commercial JOIN runtime composition', () => {
     });
     expect(outcome).toEqual({ status: 'UNKNOWN' });
     expect(calls).toEqual([]);
+  });
+});
+
+describe('managed JOIN runtime wire selection', () => {
+  const entitlement = parseManagedJoinEntitlement(managedFixture.admission.request.entitlement);
+  it.each(['managed', 'legacy'] as const)(
+    'dispatches only %s owner wire chosen by authoritative preflight',
+    async (mode) => {
+      const b = boundary();
+      const preflight = vi.fn(
+        (
+          request: { target: { id: string; expectedRevision: number } },
+          env: { operationId: string },
+        ) =>
+          Promise.resolve({
+            contractVersion: 2 as const,
+            nonBinding: true as const,
+            operationId: env.operationId,
+            action: 'JOIN_GAME' as const,
+            target: request.target,
+            ...(mode === 'managed' ? { entitlement } : { management: 'LEGACY' as const }),
+          }),
+      );
+      const admit = vi.fn().mockResolvedValue({
+        contractVersion: 2,
+        status: 'PENDING',
+        reason: 'OWNER_PENDING',
+        asOf: new Date().toISOString(),
+        operationId: fixtureId(20),
+      });
+      const read = vi.fn();
+      const v1 = vi.fn().mockResolvedValue({
+        contractVersion: 1,
+        status: 'PENDING',
+        reason: 'OWNER_PENDING',
+        asOf: new Date().toISOString(),
+        operationId: fixtureId(20),
+      });
+      const issuePreflight = vi.fn().mockResolvedValue('synthetic-delegation');
+      const issueAdmission = vi.fn().mockResolvedValue('synthetic-delegation');
+      const runtime = createGameCommercialJoinRuntime({
+        ...dependencies(),
+        ownerBoundary: {
+          ...b,
+          delegationIssuer: {
+            ...b.delegationIssuer,
+            issueManagedJoinPreflight: issuePreflight,
+            issueManagedJoinAdmission: issueAdmission,
+          },
+          managedJoinClient: { preflight, admit, read },
+          admissionTransport: { admit: v1 },
+        },
+      })!;
+      const request = {
+        actor,
+        subscriptionInstanceId: fixtureId(5),
+        idempotencyKey: 'fixture-managed-key',
+        operationId: fixtureId(20),
+        correlationId: 'fixture-correlation',
+        requestFingerprint: 'a'.repeat(64),
+      };
+      const prepared = await runtime.owner.prepareManaged!(request);
+      expect(prepared.outcome).toBe('prepared');
+      if (prepared.outcome !== 'prepared') return;
+      expect(issuePreflight.mock.calls[0]?.[0]).toMatchObject({
+        providerExerciseId: fixtureId(3),
+        providerClientSubscriptionId: fixtureId(40),
+        actorToken: { token: ACTOR_TOKEN },
+      });
+      expect(preflight).toHaveBeenCalledOnce();
+      expect(admit).not.toHaveBeenCalled();
+      if (mode === 'managed')
+        expect(prepared.binding.requestSha256).toBe(
+          managedJoinAdmissionSha256({
+            contractVersion: 2,
+            action: 'JOIN_GAME',
+            target: { id: actor.gameId, expectedRevision: actor.expectedRevision },
+            paymentIntent: 'USE_SUBSCRIPTION',
+            entitlement,
+          }),
+        );
+      expect(
+        await runtime.owner.execute({
+          ...request,
+          price: { ...price, amountMinor: 0, freeMinutes: 90, paidMinutes: 0 },
+          reservationId: fixtureId(21),
+          providerBinding: prepared.binding,
+          ...(prepared.managedJoin ? { managedJoin: prepared.managedJoin } : {}),
+        }),
+      ).toEqual({ status: 'PENDING' });
+      expect(mode === 'managed' ? admit : v1).toHaveBeenCalledOnce();
+      expect(mode === 'managed' ? v1 : admit).not.toHaveBeenCalled();
+      if (mode === 'managed')
+        expect(issueAdmission.mock.calls[0]?.[0]).toMatchObject({
+          reservationId: fixtureId(21),
+          request: { entitlement },
+        });
+      if (mode === 'managed') {
+        expect(
+          await runtime.owner.recover!({
+            ...request,
+            reservationId: fixtureId(21),
+            providerBinding: prepared.binding,
+            managedJoin: prepared.managedJoin!,
+          }),
+        ).toEqual({ status: 'PENDING' });
+        expect(issueAdmission.mock.calls[1]?.[0]).toMatchObject({
+          recoveryOnly: true,
+          request: { entitlement },
+        });
+        expect(issueAdmission.mock.calls[0]?.[0]).not.toHaveProperty('recoveryOnly');
+        expect(preflight).toHaveBeenCalledOnce();
+        expect(v1).not.toHaveBeenCalled();
+      }
+    },
+  );
+  it('fails before preflight if actor-owned target mapping is unavailable', async () => {
+    const preflight = vi.fn();
+    const b = boundary({ mapped: false });
+    const runtime = createGameCommercialJoinRuntime({
+      ...dependencies(),
+      ownerBoundary: { ...b, managedJoinClient: { preflight, admit: vi.fn(), read: vi.fn() } },
+    })!;
+    expect(
+      await runtime.owner.prepareManaged!({
+        actor,
+        subscriptionInstanceId: fixtureId(5),
+        idempotencyKey: 'fixture-managed-key',
+        operationId: fixtureId(20),
+        correlationId: 'fixture-correlation',
+        requestFingerprint: 'a'.repeat(64),
+      }),
+    ).toEqual({ outcome: 'not_available' });
+    expect(preflight).not.toHaveBeenCalled();
+  });
+  it('reads managed operation only through the v2 receipt issuer/client', async () => {
+    const b = boundary();
+    const issue = vi.fn().mockResolvedValue('synthetic-delegation');
+    const read = vi.fn().mockResolvedValue({ status: 'UNKNOWN' });
+    const runtime = createGameCommercialJoinRuntime({
+      ...dependencies(),
+      ownerBoundary: {
+        ...b,
+        delegationIssuer: { ...b.delegationIssuer, issueManagedJoinRead: issue },
+        managedJoinClient: { preflight: vi.fn(), admit: vi.fn(), read },
+      },
+    })!;
+    expect(
+      await runtime.owner.read({
+        actor,
+        operationId: fixtureId(20),
+        correlationId: 'fixture-correlation',
+        managedJoin: { contractVersion: 2, requestFingerprint: 'a'.repeat(64), entitlement },
+      }),
+    ).toEqual({ status: 'UNKNOWN' });
+    expect(issue).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledOnce();
   });
 });

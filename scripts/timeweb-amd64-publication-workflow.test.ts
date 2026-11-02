@@ -1622,8 +1622,8 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(testStep).toEqual({
       name: 'Unit and integration tests',
       run: 'scripts/run-ci-tests-with-diagnostics.sh',
-      'timeout-minutes': 12,
-      env: { CI_TEST_WATCHDOG_SECONDS: '600' },
+      'timeout-minutes': 14,
+      env: { CI_TEST_WATCHDOG_SECONDS: '720' },
     });
     expect(artifactStep).toMatchObject({
       if: '${{ always() }}',
@@ -1631,7 +1631,7 @@ describe('Timeweb amd64 publication workflow', () => {
       uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
       with: {
         'if-no-files-found': 'error',
-        path: '.ci-artifacts/test-and-coverage\ncoverage\n',
+        path: '.ci-artifacts/test-and-coverage\n.ci-artifacts/required-game\ncoverage\n',
       },
     });
     expect(secretScanJob?.permissions).toEqual({

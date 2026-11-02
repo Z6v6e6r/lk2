@@ -226,6 +226,8 @@ export interface StoredGame {
 }
 
 export interface StoredGameCardProjection {
+  /** Private, same-statement/revision canonical evidence; never a public payment heuristic. */
+  readonly localCancellationOrganizerUserId?: string | null;
   readonly gameId: string;
   readonly aggregateRevision: number;
   readonly projectionRevision: number;
@@ -516,6 +518,7 @@ interface CanonicalGameLevelRow extends QueryResultRow {
 }
 
 interface ProjectionRow extends QueryResultRow {
+  readonly local_cancellation_organizer_user_id?: string | null;
   readonly game_id: string;
   readonly aggregate_revision: string | number;
   readonly projection_revision: string | number;
@@ -656,8 +659,21 @@ function mapGame(row: GameRow): StoredGame {
   };
 }
 
+// Correlates only the canonical aggregate at the exact projection revision. Missing/stale
+// projections cannot advertise a command that the local NO_PAYMENT writer cannot perform.
+function localCancellationOrganizerSql(projection: 'games.card_projections' | 'p'): string {
+  return `(select g.organizer_user_id from games.games g
+    where g.tenant_id = ${projection}.tenant_id and g.id = ${projection}.game_id
+      and g.revision = ${projection}.aggregate_revision
+      and g.organizer_user_id::text = ${projection}.base_payload ->> 'organizerUserId'
+      and g.lifecycle_state = 'SCHEDULED' and ${projection}.lifecycle_state = 'SCHEDULED'
+      and g.starts_at = ${projection}.starts_at and g.starts_at > statement_timestamp()
+      and g.payment_mode = 'NO_PAYMENT') as local_cancellation_organizer_user_id`;
+}
+
 function mapProjection(row: ProjectionRow): StoredGameCardProjection {
   return {
+    localCancellationOrganizerUserId: row.local_cancellation_organizer_user_id ?? null,
     gameId: row.game_id,
     aggregateRevision: positiveInteger(row.aggregate_revision),
     projectionRevision: positiveInteger(row.projection_revision),
@@ -1450,7 +1466,8 @@ export function createGameRepository(
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const result = await client.query<ProjectionRow>(
           `select game_id, aggregate_revision, projection_revision, lifecycle_state,
-                  visibility, starts_at, ends_at, base_payload, projected_at
+                  visibility, starts_at, ends_at, base_payload, projected_at,
+                  ${localCancellationOrganizerSql('games.card_projections')}
              from games.card_projections
             where tenant_id = $1
               and not exists (
@@ -1486,7 +1503,8 @@ export function createGameRepository(
       return withTenantTransaction(pool, tenantId, async (client) => {
         const result = await client.query<ProjectionRow & { requested_id: string }>(
           `select requested.id as requested_id, p.game_id, p.aggregate_revision, p.projection_revision, p.lifecycle_state,
-                  p.visibility, p.starts_at, p.ends_at, p.base_payload, p.projected_at
+                  p.visibility, p.starts_at, p.ends_at, p.base_payload, p.projected_at,
+                  ${localCancellationOrganizerSql('p')}
              from unnest($2::uuid[]) as requested(id)
              left join integration.legacy_game_merge_redirects r
                on r.tenant_id = $1 and r.source_game_id = requested.id
@@ -1503,7 +1521,8 @@ export function createGameRepository(
         const row = await queryOne<ProjectionRow>(
           client,
           `select game_id, aggregate_revision, projection_revision, lifecycle_state,
-                  visibility, starts_at, ends_at, base_payload, projected_at
+                  visibility, starts_at, ends_at, base_payload, projected_at,
+                  ${localCancellationOrganizerSql('games.card_projections')}
              from games.card_projections
             where tenant_id = $1
               and game_id = coalesce((
@@ -1533,7 +1552,8 @@ export function createGameRepository(
           (await hasGameTestCourtAccess(client, input.tenantId, input.viewerUserId));
         const result = await client.query<ProjectionRow>(
           `select game_id, aggregate_revision, projection_revision, lifecycle_state,
-                  visibility, starts_at, ends_at, base_payload, projected_at
+                  visibility, starts_at, ends_at, base_payload, projected_at,
+                  ${localCancellationOrganizerSql('games.card_projections')}
              from games.card_projections
             where tenant_id = $1
               and not exists (
@@ -1591,7 +1611,8 @@ export function createGameRepository(
         const result = await client.query<RecommendationProjectionRow>(
           `with candidates as (
              select game_id, aggregate_revision, projection_revision, lifecycle_state,
-                    visibility, starts_at, ends_at, base_payload, projected_at
+                    visibility, starts_at, ends_at, base_payload, projected_at,
+                  ${localCancellationOrganizerSql('games.card_projections')}
                from games.card_projections
               where tenant_id = $1
                 and not exists (
@@ -1612,7 +1633,8 @@ export function createGameRepository(
               limit $3
            ), history as (
              select game_id, aggregate_revision, projection_revision, lifecycle_state,
-                    visibility, starts_at, ends_at, base_payload, projected_at
+                    visibility, starts_at, ends_at, base_payload, projected_at,
+                  ${localCancellationOrganizerSql('games.card_projections')}
                from games.card_projections
               where tenant_id = $1
                 and not exists (

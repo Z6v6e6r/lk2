@@ -1,0 +1,41 @@
+{
+  "source": "Actual CUP notification service; synthetic memory only",
+  "scope": {
+    "tenantId": "aa36be6b-b492-4721-bdba-2659510e33f1",
+    "tenantKey": "synthetic",
+    "ownerTenantKey": "provider-synthetic",
+    "expiresAt": 1793554674921,
+    "correlationId": "77d073d9-7b00-48a9-b779-5752a04bf42f"
+  },
+  "input": {
+    "version": 1,
+    "tournamentId": "a5163db6-5bd7-415e-97c1-36fc861e382c",
+    "incarnationHash": "12f457f50aa3a053b8de66b1502089d68865497bfe62c28a86dfea6bff4ff72f",
+    "streamId": "a9bd4e4f-b9b4-422d-af20-fcd34c2f5620",
+    "afterSequence": 0,
+    "throughSequence": null,
+    "limit": 50
+  },
+  "identity": {
+    "userId": "8aed0e8c-bde5-44e3-a6d1-25144f89f022",
+    "ownerTenantKey": "provider-synthetic",
+    "providerClientId": "synthetic-recipient",
+    "observedAt": 1793554644926,
+    "providerMappingId": "be0230c0-df75-4a3d-b082-a8cf6e2a01a8"
+  },
+  "candidate": {
+    "witness": {
+      "kind": "PARTICIPANT",
+      "generation": "c3be3dcf-bbaa-416e-a759-f0068b46fea8",
+      "actorHash": "a59ae50c03f3db3154316dbf0898e7df849e0763f8c064c0d909d102f29b1acc"
+    },
+    "witnessHash": "5f166ae7299f3f9acbd6fbaebad0c1b54c718306d46742f735f998998affee03",
+    "baselineSequence": 0,
+    "capturedReadThroughSequence": 0
+  },
+  "wire": {
+    "publications": "{\"contractVersion\":\"tournament-chat-notifications.v1\",\"tournamentId\":\"a5163db6-5bd7-415e-97c1-36fc861e382c\",\"incarnationHash\":\"12f457f50aa3a053b8de66b1502089d68865497bfe62c28a86dfea6bff4ff72f\",\"streamId\":\"a9bd4e4f-b9b4-422d-af20-fcd34c2f5620\",\"throughSequence\":1,\"facts\":[{\"tournamentId\":\"a5163db6-5bd7-415e-97c1-36fc861e382c\",\"incarnationHash\":\"12f457f50aa3a053b8de66b1502089d68865497bfe62c28a86dfea6bff4ff72f\",\"streamId\":\"a9bd4e4f-b9b4-422d-af20-fcd34c2f5620\",\"sequence\":1,\"messageId\":\"4c915d79-7da5-44f2-a009-cc920bb435ba\",\"authorUserId\":\"4f06f1d5-989f-4a48-b348-0b216fa10aa8\",\"factHash\":\"49a10a4534db9198491fc8372bea8fbd93154a86ec8172f368a723d98fecc7d8\"}],\"nextAfterSequence\":null,\"hasMore\":false}",
+    "recipients": "{\"contractVersion\":\"tournament-chat-notifications.v1\",\"fact\":{\"tournamentId\":\"a5163db6-5bd7-415e-97c1-36fc861e382c\",\"incarnationHash\":\"12f457f50aa3a053b8de66b1502089d68865497bfe62c28a86dfea6bff4ff72f\",\"streamId\":\"a9bd4e4f-b9b4-422d-af20-fcd34c2f5620\",\"sequence\":1,\"messageId\":\"4c915d79-7da5-44f2-a009-cc920bb435ba\",\"authorUserId\":\"4f06f1d5-989f-4a48-b348-0b216fa10aa8\",\"factHash\":\"49a10a4534db9198491fc8372bea8fbd93154a86ec8172f368a723d98fecc7d8\"},\"throughSequence\":1,\"snapshotHash\":\"a18dcebd0c32089ef1c71fe59ab0ed7f3e52f198ec7ced5dc446d4b2744575ea\",\"candidates\":[{\"witness\":{\"kind\":\"PARTICIPANT\",\"generation\":\"c3be3dcf-bbaa-416e-a759-f0068b46fea8\",\"actorHash\":\"a59ae50c03f3db3154316dbf0898e7df849e0763f8c064c0d909d102f29b1acc\"},\"witnessHash\":\"5f166ae7299f3f9acbd6fbaebad0c1b54c718306d46742f735f998998affee03\",\"baselineSequence\":0,\"capturedReadThroughSequence\":0},{\"witness\":{\"kind\":\"PARTICIPANT\",\"generation\":\"d458db93-bd47-4378-afc0-2b2a8b7ad6e9\",\"actorHash\":\"388eac8f1ad694caf41af99049a06e8960d32c2bff909ca1c72fd5155227618c\"},\"witnessHash\":\"d072ae6d09265444decb0119f2de21cdd549b3acf4974380cb6194416ed175ec\",\"baselineSequence\":0,\"capturedReadThroughSequence\":0}],\"nextCursor\":null,\"hasMore\":false}",
+    "eligibility": "{\"contractVersion\":\"tournament-chat-notifications.v1\",\"fact\":{\"tournamentId\":\"a5163db6-5bd7-415e-97c1-36fc861e382c\",\"incarnationHash\":\"12f457f50aa3a053b8de66b1502089d68865497bfe62c28a86dfea6bff4ff72f\",\"streamId\":\"a9bd4e4f-b9b4-422d-af20-fcd34c2f5620\",\"sequence\":1,\"messageId\":\"4c915d79-7da5-44f2-a009-cc920bb435ba\",\"authorUserId\":\"4f06f1d5-989f-4a48-b348-0b216fa10aa8\",\"factHash\":\"49a10a4534db9198491fc8372bea8fbd93154a86ec8172f368a723d98fecc7d8\"},\"userId\":\"8aed0e8c-bde5-44e3-a6d1-25144f89f022\",\"witnessHash\":\"5f166ae7299f3f9acbd6fbaebad0c1b54c718306d46742f735f998998affee03\",\"baselineSequence\":0,\"decision\":\"ALLOW\",\"code\":\"ELIGIBLE\",\"observedAt\":1793554644926,\"validUntil\":1793554649926}"
+  }
+}

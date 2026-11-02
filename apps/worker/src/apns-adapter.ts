@@ -140,72 +140,97 @@ export class ApnsDeliveryAdapter implements NotificationPushDeliveryPort {
           settings: { enablePush: false },
         });
         session.on('error', () => finish(networkFailure()));
-        const stream = session.request({
-          ':method': 'POST',
-          ':path': `/3/device/${request.endpoint.toLowerCase()}`,
-          authorization: `bearer ${this.options.tokenProvider.getToken()}`,
-          'apns-topic': this.options.topic,
-          'apns-push-type': 'alert',
-          'apns-priority': '10',
-          'apns-id': request.deliveryId,
-          'apns-collapse-id': request.deliveryId,
-          'apns-expiration': String(Math.floor(now / 1000) + (request.ttlSeconds ?? 3600)),
-          'content-type': 'application/json',
-        });
-        let status = 0;
-        let responseId: string | undefined;
-        let size = 0;
-        const chunks: Buffer[] = [];
-        stream.on('response', (headers) => {
-          status = Number(headers[':status']);
-          const value = headers['apns-id'];
-          if (typeof value === 'string' && /^[a-f0-9-]{36}$/i.test(value)) responseId = value;
-        });
-        stream.on('data', (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > 16_384) {
-            stream.close(constants.NGHTTP2_CANCEL);
-            finish(networkFailure());
-          } else chunks.push(chunk);
-        });
-        stream.on('error', () => finish(networkFailure()));
-        stream.on('end', () => {
-          if (status === 200)
-            return finish({
-              outcome: 'accepted',
-              externalMessageId: responseId ?? request.deliveryId,
-            });
-          let reason: unknown;
-          try {
-            reason = (JSON.parse(Buffer.concat(chunks).toString('utf8')) as { reason?: unknown })
-              .reason;
-          } catch {
-            /* Ignore untrusted provider body. */
+        const submit = () => {
+          if (completed) return;
+          const token = this.options.tokenProvider.getToken();
+          if (request.stationCanSubmit && !request.stationCanSubmit()) {
+            finish({ outcome: 'retryable_failure', errorCode: 'STATION_NOT_SUBMITTED' });
+            return;
           }
-          if (status === 410 || reason === 'BadDeviceToken' || reason === 'Unregistered')
-            return finish({
-              outcome: 'terminal_failure',
-              errorCode: 'APNS_TOKEN_INVALID',
-              invalidate: true,
-            });
-          if (status === 403) {
-            this.options.tokenProvider.invalidate();
-            return finish({ outcome: 'retryable_failure', errorCode: 'APNS_AUTH_REJECTED' });
-          }
-          if (status === 429 || status >= 500)
-            return finish({
-              outcome: 'retryable_failure',
-              errorCode: 'APNS_PROVIDER_RETRYABLE',
-              retryAfterMs: 30_000,
-            });
-          finish({
-            outcome: 'terminal_failure',
-            errorCode: 'APNS_PROVIDER_REJECTED',
-            invalidate: false,
+          // Station request creation can itself submit headers; claim uncertainty before it.
+          if (request.stationCanSubmit) submitted = true;
+          const stream = session!.request({
+            ':method': 'POST',
+            ':path': `/3/device/${request.endpoint.toLowerCase()}`,
+            authorization: `bearer ${token}`,
+            'apns-topic': this.options.topic,
+            'apns-push-type': 'alert',
+            'apns-priority': '10',
+            'apns-id': request.deliveryId,
+            'apns-collapse-id': request.deliveryId,
+            'apns-expiration': String(Math.floor(now / 1000) + (request.ttlSeconds ?? 3600)),
+            'content-type': 'application/json',
           });
-        });
-        submitted = true;
-        stream.end(payload);
+          let status = 0;
+          let responseId: string | undefined;
+          let size = 0;
+          const chunks: Buffer[] = [];
+          stream.on('response', (headers) => {
+            status = Number(headers[':status']);
+            const value = headers['apns-id'];
+            if (typeof value === 'string' && /^[a-f0-9-]{36}$/i.test(value)) responseId = value;
+          });
+          stream.on('data', (chunk: Buffer) => {
+            size += chunk.length;
+            if (size > 16_384) {
+              stream.close(constants.NGHTTP2_CANCEL);
+              finish(networkFailure());
+            } else chunks.push(chunk);
+          });
+          stream.on('error', () => finish(networkFailure()));
+          stream.on('end', () => {
+            if (request.stationCanSubmit && !request.stationCanSubmit())
+              return finish({
+                outcome: 'terminal_failure',
+                errorCode: 'STATION_PROVIDER_OUTCOME_UNKNOWN',
+                invalidate: false,
+              });
+            if (status === 200)
+              return finish({
+                outcome: 'accepted',
+                externalMessageId: responseId ?? request.deliveryId,
+              });
+            let reason: unknown;
+            try {
+              reason = (JSON.parse(Buffer.concat(chunks).toString('utf8')) as { reason?: unknown })
+                .reason;
+            } catch {
+              /* Ignore untrusted provider body. */
+            }
+            if (status === 410 || reason === 'BadDeviceToken' || reason === 'Unregistered')
+              return finish({
+                outcome: 'terminal_failure',
+                errorCode: 'APNS_TOKEN_INVALID',
+                invalidate: true,
+              });
+            if (status === 403) {
+              this.options.tokenProvider.invalidate();
+              return finish({ outcome: 'retryable_failure', errorCode: 'APNS_AUTH_REJECTED' });
+            }
+            if (status === 429 || status >= 500)
+              return finish({
+                outcome: 'retryable_failure',
+                errorCode: 'APNS_PROVIDER_RETRYABLE',
+                retryAfterMs: 30_000,
+              });
+            finish({
+              outcome: 'terminal_failure',
+              errorCode: 'APNS_PROVIDER_REJECTED',
+              invalidate: false,
+            });
+          });
+          submitted = true;
+          stream.end(payload);
+        };
+        if (request.stationCanSubmit)
+          session.once('connect', () => {
+            try {
+              submit();
+            } catch {
+              finish(networkFailure());
+            }
+          });
+        else submit();
       } catch {
         finish(networkFailure());
       }

@@ -270,3 +270,117 @@ describe('Android native bridge adapter', () => {
     expect(observe).not.toHaveBeenCalled();
   });
 });
+
+it('Android station adapter preserves exact UTF-8 send once and original GET-only recovery', async () => {
+  const native = plugin();
+  const fetcher = createNativeApiFetch(config, native);
+  const community = '11111111-1111-4111-8111-111111111111',
+    requestId = '22222222-2222-4222-8222-222222222222';
+  const path = `${root}/community-views/${community}/message-requests`;
+  const body = JSON.stringify({ requestId, text: 'я'.repeat(8000) });
+  const headers = {
+    authorization: 'Bearer synthetic.session',
+    'content-type': 'application/json',
+    'idempotency-key': requestId,
+  };
+  native.request.mockRejectedValueOnce(
+    Object.assign(new Error('synthetic'), { code: 'NATIVE_NETWORK_UNAVAILABLE' }),
+  );
+  await expect(fetcher(path, { method: 'POST', headers, body })).rejects.toThrow();
+  expect(native.request).toHaveBeenCalledTimes(1);
+  expect(native.request.mock.calls[0]![0]).toMatchObject({ method: 'POST', body, headers });
+  await fetcher(`${path}/${requestId}`, { headers: { authorization: 'Bearer synthetic.session' } });
+  expect(native.request).toHaveBeenCalledTimes(2);
+  expect(native.request.mock.calls[1]![0].method).toBe('GET');
+  await expect(
+    fetcher(path, { method: 'POST', headers, body: body.replace(requestId, community) }),
+  ).rejects.toThrow();
+  expect(native.request).toHaveBeenCalledTimes(2);
+});
+
+it('relays training registration bytes and key once, with no network or 401 retry', async () => {
+  const native = plugin();
+  const fetcher = createNativeApiFetch(config, native);
+  const body = JSON.stringify({
+    dateHint: '2035-04-02',
+    subscriptionId: '22222222-2222-4222-8222-222222222222',
+  });
+  const path = '/trainings/11111111-1111-4111-8111-111111111111/registrations';
+  const headers = {
+    authorization: 'Bearer synthetic-access',
+    'idempotency-key': 'synthetic-original-training-key',
+  };
+  native.request.mockResolvedValueOnce(result(401));
+  expect((await fetcher(root + path, { method: 'POST', headers, body })).status).toBe(401);
+  expect(native.request).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      path: `/user/api/v1/local-padel${path}`,
+      method: 'POST',
+      body,
+    }),
+  );
+  expect(native.request.mock.calls[0]?.[0].headers).toMatchObject(headers);
+  native.request.mockRejectedValueOnce(new Error('NATIVE_NETWORK_UNAVAILABLE'));
+  await expect(fetcher(root + path, { method: 'POST', headers, body })).rejects.toThrow();
+  expect(native.request).toHaveBeenCalledTimes(2);
+});
+
+it('native station v3 forwards exact four routes without response credentials or mutation retries', async () => {
+  const native = plugin(),
+    transport = createNativeApiFetch(config, native);
+  const id = '11111111-1111-4111-8111-111111111111',
+    key = '22222222-2222-4222-8222-222222222222';
+  const headers = { authorization: 'Bearer synthetic.session' };
+  for (const path of [
+    `station-stream-summaries?communityIds=${id}%2C${key}`,
+    `${id}/station-stream?limit=50&cursor=${'a'.repeat(1024)}`,
+    `${id}/read-requests/${key}`,
+  ])
+    await transport(`${root}/community-views/${path}`, { headers });
+  native.request.mockRejectedValueOnce(new TypeError('offline'));
+  await expect(
+    transport(`${root}/community-views/${id}/read-requests`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json', 'idempotency-key': key },
+      body: JSON.stringify({
+        requestId: key,
+        streamId: id,
+        membershipEpoch: 1,
+        throughSequence: 2,
+      }),
+    }),
+  ).rejects.toThrow();
+  expect(native.request).toHaveBeenCalledTimes(4);
+  expect(native.request.mock.calls.at(-1)?.[0]).toMatchObject({
+    method: 'POST',
+    path: `/user/api/v1/local-padel/community-views/${id}/read-requests`,
+  });
+});
+it('native v3 history alone accepts3MiB while oversized responses and receipts fail before parse', async () => {
+  const native = plugin(),
+    transport = createNativeApiFetch(config, native),
+    id = '11111111-1111-4111-8111-111111111111';
+  const headers = { authorization: 'Bearer synthetic.session' };
+  const body = JSON.stringify({
+    items: Array.from({ length: 50 }, () => ({ body: 'x' + '\u0001'.repeat(7998) + 'y' })),
+  });
+  expect(Buffer.byteLength(body)).toBeGreaterThan(2_000_000);
+  native.request.mockResolvedValue({ ...result(), body: Buffer.from(body).toString('base64') });
+  const response = await transport(`${root}/community-views/${id}/station-stream?limit=50`, {
+    headers,
+  });
+  expect(await response.text()).toBe(body);
+  native.request.mockResolvedValue({
+    ...result(),
+    body: Buffer.alloc(3 * 1024 * 1024 + 1, 32).toString('base64'),
+  });
+  await expect(
+    transport(`${root}/community-views/${id}/station-stream`, { headers }),
+  ).rejects.toThrow();
+  native.request.mockResolvedValue({
+    ...result(),
+    body: Buffer.alloc(1024 * 1024 + 1, 32).toString('base64'),
+  });
+  for (const suffix of ['station-stream-summaries?communityIds=' + id, `${id}/read-requests/${id}`])
+    await expect(transport(`${root}/community-views/${suffix}`, { headers })).rejects.toThrow();
+});

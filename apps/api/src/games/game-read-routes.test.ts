@@ -86,6 +86,7 @@ function snapshot(overrides: Partial<GameCardProjectionInput> = {}): GameCardPro
 
 function projection(value: GameCardProjectionInput): StoredGameCardProjection {
   return {
+    localCancellationOrganizerUserId: value.organizerUserId,
     gameId: value.id,
     aggregateRevision: value.revision,
     projectionRevision: value.revision,
@@ -598,4 +599,39 @@ describe('Games read APIs', () => {
     expect(JSON.stringify(response.json())).not.toContain('DISPUTED');
     expect(JSON.stringify(response.json())).not.toContain(userId);
   });
+});
+
+// Missing proof also models old/stale projections; public price/payment state never fills it.
+describe('local cancellation capability', () => {
+  it.each([null, playerId])(
+    'denies CANCEL without exact canonical organizer proof: %s',
+    async (proof) => {
+      const value = {
+        ...projection(snapshot({ priceSummary: { amountMinor: 0, currency: 'RUB' } })),
+        localCancellationOrganizerUserId: proof,
+      };
+      const app = await appWith(
+        repository({
+          getCardProjection: vi.fn().mockResolvedValue(value),
+          listViewerCardProjections: vi.fn().mockResolvedValue({ items: [value] }),
+        }),
+      );
+      const headers = { authorization: `Bearer ${await accessToken()}` };
+      for (const path of [`/games/${gameId}`, '/games?scope=UPCOMING']) {
+        const response = await app.inject({
+          method: 'GET',
+          url: `/user/api/v1/local-padel${path}`,
+          headers,
+        });
+        expect(response.statusCode).toBe(200);
+        const body = response.json<{
+          game?: { allowedActions: string[] };
+          items?: { allowedActions: string[] }[];
+        }>();
+        const card = body.game ?? body.items?.[0];
+        expect(card?.allowedActions).not.toContain('CANCEL');
+        expect(JSON.stringify(body)).not.toContain('localCancellationOrganizerUserId');
+      }
+    },
+  );
 });

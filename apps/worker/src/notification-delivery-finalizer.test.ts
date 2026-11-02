@@ -330,3 +330,91 @@ describe('notification delivery finalizer', () => {
     expect(audit?.values).toContain(JSON.stringify({ status: 'SUSPENDED_POLICY' }));
   });
 });
+
+describe('ordinary-only advisory deferral', () => {
+  it('restores only the exact still-live ordinary claim and retains immutable identity predicates', async () => {
+    const { pool, queries } = fakePool(1);
+    expect(
+      await deferNotificationDeliveryWithoutAttempt({
+        pool,
+        job,
+        ordinaryOnly: true,
+        retryAfterMs: 30000,
+        errorCode: 'FCM_ROLLOUT_GATE_BUSY',
+      }),
+    ).toBe('retry');
+    const update = queries.find((x) => x.text.includes('update notifications.deliveries'))!;
+    expect(update.values).toEqual([
+      job.tenantId,
+      job.deliveryId,
+      job.attemptNo,
+      30000,
+      'FCM_ROLLOUT_GATE_BUSY',
+      job.intentId,
+      job.endpointId,
+    ]);
+    for (const predicate of [
+      'intent_id=$6',
+      'endpoint_id=$7',
+      'lease_expires_at>clock_timestamp()',
+      'scenario_available_at is null',
+      'scenario_v2_available_at is null',
+      'scenario_dispatch_started_at is null',
+      "not (i.render_data ? 'scenarioRunId')",
+    ])
+      expect(update.text).toContain(predicate);
+    expect(
+      queries.some((x) => /delivery_attempts|delivery_receipts|outbox_events/u.test(x.text)),
+    ).toBe(false);
+  });
+  it('a nonmatching current generation/lease/marker is stale, never forced back to pending', async () => {
+    const { pool, queries } = fakePool(0);
+    expect(
+      await deferNotificationDeliveryWithoutAttempt({
+        pool,
+        job,
+        ordinaryOnly: true,
+        retryAfterMs: 30000,
+        errorCode: 'FCM_ROLLOUT_GATE_BUSY',
+      }),
+    ).toBe('stale');
+    expect(queries.filter((x) => x.text.startsWith('update'))).toHaveLength(1);
+  });
+  it('refuses an explicitly retained scenario job before any scheduling mutation', async () => {
+    const { pool, queries } = fakePool(1);
+    expect(
+      await deferNotificationDeliveryWithoutAttempt({
+        pool,
+        job: { ...job, scenarioDelivery: true },
+        ordinaryOnly: true,
+        retryAfterMs: 30000,
+        errorCode: 'FCM_ROLLOUT_GATE_BUSY',
+      }),
+    ).toBe('stale');
+    expect(queries).toHaveLength(0);
+  });
+  it('omitted option preserves prior circuit and scenario deferral SQL', async () => {
+    const { pool, queries } = fakePool(1);
+    await deferNotificationDeliveryWithoutAttempt({
+      pool,
+      job: { ...job, scenarioDelivery: true },
+      retryAfterMs: 30000,
+      errorCode: 'FCM_CIRCUIT_OPEN',
+    });
+    const update = queries.find((x) => x.text.startsWith('update'))!;
+    expect(update.text).toContain("next_attempt_at='infinity'::timestamptz");
+    expect(update.text).not.toContain('intent_id=$6');
+    expect(update.values).toHaveLength(5);
+  });
+});
+
+describe('station intent unfinished state floor', () => {
+  it('counts station pending/sending siblings as unfinished instead of historical in-app success', async () => {
+    const { resolveNotificationIntentState } = await import('./notification-delivery-finalizer.js');
+    for (const state of ['STATION_PENDING', 'STATION_SENDING'])
+      expect(resolveNotificationIntentState(['DELIVERED', state])).toEqual({
+        state: 'PROCESSING',
+        completed: false,
+      });
+  });
+});

@@ -637,3 +637,194 @@ describe('legacy community experience repository', () => {
     expect(second).toMatchObject({ items: [{ body: 'Second' }] });
   });
 });
+
+it('authenticates each session without cross-session coalescing, preserves canonical UUID and only STATION eligibility', async () => {
+  const token = vi.fn((actor: { sessionId: string }) =>
+    Promise.resolve(`token-${actor.sessionId}`),
+  );
+  const fetchImplementation = vi.fn<typeof fetch>((url, init) => {
+    expect(new Headers(init?.headers).get('Authorization')).toMatch(/^Bearer token-session[12]$/);
+    if (fetchUrl(url).pathname.endsWith('/messages')) {
+      expect(Object.fromEntries(fetchUrl(url).searchParams)).toEqual({
+        historyVersion: '2',
+        limit: '50',
+      });
+    }
+    return Promise.resolve(
+      Response.json(
+        fetchUrl(url).toString().includes('view=summary')
+          ? { communities: [{ ...summary.communities[0], communityType: 'STATION' }] }
+          : {
+              historyVersion: 2,
+              nextBefore: null,
+              hasMore: false,
+              messages: [
+                {
+                  publicId: '22222222-2222-8222-8222-222222222222',
+                  text: 'hello',
+                  createdAt: '2026-11-01T00:00:00.000Z',
+                  createdTs: Date.parse('2026-11-01T00:00:00.000Z'),
+                  authorId: 'legacy-viewer',
+                  authorName: 'Player',
+                },
+              ],
+            },
+      ),
+    );
+  });
+  const repo = new LegacyCommunityExperienceRepository({
+    baseUrl: 'https://legacy.test',
+    timeoutMs: 1000,
+    maxAttempts: 1,
+    circuitFailureThreshold: 3,
+    circuitResetMs: 1000,
+    bridge: bridge(),
+    fetchImplementation,
+    token,
+    stationMessageRequests: true,
+  });
+  const pages = await Promise.all(
+    ['session1', 'session2'].map((sessionId) =>
+      repo.getChat({ ...input, tenantKey: 'test', sessionId, limit: 50 }),
+    ),
+  );
+  expect(JSON.stringify(pages)).not.toContain('legacy-viewer');
+  expect(token).toHaveBeenCalledTimes(2);
+  expect(fetchImplementation).toHaveBeenCalledTimes(4);
+  expect(pages[0]).toMatchObject({
+    canRequestStationMessage: true,
+    items: [{ id: '22222222-2222-8222-8222-222222222222', isViewer: true }],
+  });
+  await expect(repo.getChat({ ...input, limit: 50 })).rejects.toMatchObject({
+    code: 'COMMUNITY_EXPERIENCE_FORBIDDEN',
+  });
+  token.mockRejectedValueOnce(new Error('revoked'));
+  await expect(
+    repo.getChat({ ...input, tenantKey: 'test', sessionId: 'session1', limit: 50 }),
+  ).rejects.toMatchObject({ code: 'COMMUNITY_EXPERIENCE_FORBIDDEN' });
+  expect(fetchImplementation).toHaveBeenCalledTimes(4);
+});
+
+it.each([401, 403, 404])(
+  'three actor history %i denials do not block a different session',
+  async (status) => {
+    let allowed = false;
+    const token = vi.fn(({ sessionId }: { sessionId: string }) =>
+      Promise.resolve(`synthetic-${sessionId}`),
+    );
+    const fetchImplementation = vi.fn<typeof fetch>((url) =>
+      Promise.resolve(
+        fetchUrl(url).searchParams.has('view')
+          ? Response.json(summary)
+          : allowed
+            ? Response.json({ messages: [] })
+            : new Response(null, { status }),
+      ),
+    );
+    const repo = new LegacyCommunityExperienceRepository({
+      baseUrl: 'https://legacy.test',
+      timeoutMs: 1000,
+      maxAttempts: 1,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30000,
+      bridge: bridge(),
+      token,
+      fetchImplementation,
+    });
+    for (let n = 0; n < 3; n++)
+      await expect(
+        repo.getChat({ ...input, tenantKey: 'test', sessionId: 'denied', limit: 50 }),
+      ).rejects.toMatchObject({
+        code: status === 404 ? 'COMMUNITY_EXPERIENCE_NOT_FOUND' : 'COMMUNITY_EXPERIENCE_FORBIDDEN',
+      });
+    allowed = true;
+    expect(
+      await repo.getChat({
+        ...input,
+        viewerUserId: 'other-user',
+        tenantKey: 'test',
+        sessionId: 'other-session',
+        limit: 50,
+      }),
+    ).toMatchObject({ items: [] });
+    expect(fetchImplementation).toHaveBeenCalledTimes(8);
+    for (let n = 0; n < 3; n++) {
+      token.mockRejectedValueOnce(new Error('revoked'));
+      await expect(
+        repo.getChat({ ...input, tenantKey: 'test', sessionId: 'denied', limit: 50 }),
+      ).rejects.toMatchObject({ code: 'COMMUNITY_EXPERIENCE_FORBIDDEN' });
+    }
+    expect(
+      await repo.getChat({ ...input, tenantKey: 'test', sessionId: 'valid', limit: 50 }),
+    ).toMatchObject({ items: [] });
+  },
+);
+
+it('station history binds public cursors and refuses an older owner instead of falling back', async () => {
+  const seen: URL[] = [];
+  let oldOwner = false;
+  const fetchImplementation = vi.fn<typeof fetch>((url) => {
+    const request = fetchUrl(url);
+    seen.push(request);
+    if (request.searchParams.has('view'))
+      return Promise.resolve(
+        Response.json({
+          communities: [{ ...summary.communities[0], communityType: 'STATION' }],
+        }),
+      );
+    if (oldOwner) return Promise.resolve(Response.json({ messages: [], nextBeforeTs: 0 }));
+    expect([...request.searchParams.keys()].sort()).toEqual(
+      request.searchParams.has('beforeId')
+        ? ['beforeId', 'beforeTs', 'historyVersion', 'limit']
+        : ['historyVersion', 'limit'],
+    );
+    const createdTs = Date.parse('2026-11-01T00:00:00.000Z');
+    const publicId = request.searchParams.has('beforeId')
+      ? '22222222-2222-5222-8222-222222222221'
+      : '22222222-2222-8222-8222-222222222222';
+    return Promise.resolve(
+      Response.json({
+        historyVersion: 2,
+        messages: [
+          {
+            publicId,
+            text: 'same',
+            createdTs,
+            createdAt: new Date(createdTs).toISOString(),
+            authorName: 'Player',
+          },
+        ],
+        nextBefore: { createdTs, publicId },
+        hasMore: true,
+      }),
+    );
+  });
+  const repo = new LegacyCommunityExperienceRepository({
+    baseUrl: 'https://legacy.test',
+    timeoutMs: 1000,
+    maxAttempts: 1,
+    circuitFailureThreshold: 3,
+    circuitResetMs: 1000,
+    bridge: bridge(),
+    fetchImplementation,
+    token: () => Promise.resolve('synthetic-user-token'),
+  });
+  const actor = { ...input, sessionId: 'session', tenantKey: 'test', limit: 1 };
+  const first = await repo.getChat(actor);
+  const second = await repo.getChat({ ...actor, cursor: first.nextCursor! });
+  expect(first.items[0]?.body).toBe(second.items[0]?.body);
+  expect(first.items[0]?.id).not.toBe(second.items[0]?.id);
+  expect(
+    seen.filter((url) => url.pathname.endsWith('/messages'))[1]?.searchParams.get('beforeId'),
+  ).toBe(first.items[0]?.id);
+  const before = seen.filter((url) => url.pathname.endsWith('/messages')).length;
+  await expect(
+    repo.getChat({ ...actor, tenantId: 'foreign', cursor: first.nextCursor! }),
+  ).rejects.toMatchObject({ code: 'COMMUNITY_EXPERIENCE_PROVIDER_INVALID' });
+  expect(seen.filter((url) => url.pathname.endsWith('/messages'))).toHaveLength(before);
+  oldOwner = true;
+  await expect(repo.getChat(actor)).rejects.toMatchObject({
+    code: 'COMMUNITY_EXPERIENCE_PROVIDER_INVALID',
+  });
+  expect(seen.filter((url) => url.pathname.endsWith('/messages'))).toHaveLength(before + 1);
+});

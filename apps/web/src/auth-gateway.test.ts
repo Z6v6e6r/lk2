@@ -814,6 +814,9 @@ describe('browser auth gateway', () => {
       else {
         session = {
           ...session,
+          ...(change === 'user'
+            ? { user: { ...session.user, id: '00000000-0000-4000-8000-000000000003' } }
+            : {}),
           context: {
             ...session.context,
             ...(change === 'user'
@@ -3705,193 +3708,76 @@ describe('browser auth gateway', () => {
     }
   });
 
-  it('bounds both messaging attempts while they wait for one hung shared session refresh', async () => {
-    const userId = '00000000-0000-4000-8000-000000000001';
-    const conversationId = '66666666-6666-4666-8666-666666666666';
-    const clientMessageId = '77777777-7777-4777-8777-777777777777';
-    const session = {
-      accessToken: 'expired-padlhub-token',
-      tokenType: 'Bearer',
-      expiresAt: '2099-07-11T12:10:00.000Z',
-      user: { id: userId, displayName: 'Анна' },
-      context: {
-        userId,
-        tenantId: '00000000-0000-4000-8000-000000000002',
-        displayName: 'Анна',
-        phoneLast4: '0001',
-        roles: ['client'],
-        permissions: ['games.play'],
-      },
-    };
-    let resolveSharedRefresh!: (response: Response) => void;
-    const sharedRefresh = new Promise<Response>((resolve) => {
-      resolveSharedRefresh = resolve;
-    });
-    let refreshCalls = 0;
-    let sharedRefreshSignal: AbortSignal | null | undefined;
-    const commandCalls: RequestInit[] = [];
-    const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
-      const url = requestUrl(input);
-      if (url.endsWith('/auth/session/refresh')) {
-        refreshCalls += 1;
-        if (refreshCalls === 1) return Promise.resolve(Response.json(session));
-        sharedRefreshSignal = init?.signal;
-        return sharedRefresh;
-      }
-      if (!url.endsWith(`/conversations/${conversationId}/messages`)) {
-        return Promise.resolve(new Response(null, { status: 404 }));
-      }
-      commandCalls.push(init ?? {});
-      return Promise.resolve(new Response(null, { status: 401 }));
-    });
-    const gateway = createBrowserAuthGateway({
-      baseUrl: 'https://api.padlhub.test/',
-      tenantKey: 'padlhub',
-      appVersion: 'test',
-      fetchImplementation,
-    });
-    await gateway.restoreSession();
-    const restoreRefreshCalls = refreshCalls;
-
-    vi.useFakeTimers();
-    try {
-      const result = gateway.sendConversationMessage(conversationId, {
-        clientMessageId,
-        body: 'Привет',
-      });
-      const failurePromise = result.then(
-        () => {
-          throw new Error('Expected the bounded command to fail');
+  it.each(['unauthorized', 'network-after-refresh'] as const)(
+    'does not replay the original message through an independent shared refresh (%s)',
+    async (mode) => {
+      const userId = '11111111-1111-4111-8111-111111111111',
+        conversationId = '22222222-2222-4222-8222-222222222222',
+        key = '33333333-3333-4333-8333-333333333333';
+      const auth = {
+        accessToken: 'synthetic-original',
+        tokenType: 'Bearer',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        user: { id: userId, displayName: 'Synthetic' },
+        context: {
+          userId,
+          tenantId: conversationId,
+          displayName: 'Synthetic',
+          phoneLast4: '0001',
+          roles: ['client'],
+          permissions: [],
         },
-        (error: unknown) => error,
-      );
-
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(commandCalls).toHaveLength(2);
-      expect(commandCalls[1]?.signal?.aborted).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(15_000);
-      const failure = await failurePromise;
-      expect(failure).toBeInstanceOf(DOMException);
-      if (!(failure instanceof DOMException)) throw new Error('Expected an abort DOMException');
-      expect(['AbortError', 'TimeoutError']).toContain(failure.name);
-      expect(commandCalls).toHaveLength(2);
-      expect(refreshCalls - restoreRefreshCalls).toBe(1);
-      expect(sharedRefreshSignal?.aborted ?? false).toBe(false);
-      expect(new Set(commandCalls.map((call) => call.signal)).size).toBe(2);
-      expect(
-        new Set(commandCalls.map((call) => new Headers(call.headers).get('Idempotency-Key'))).size,
-      ).toBe(1);
-      expect(new Headers(commandCalls[0]?.headers).get('Idempotency-Key')).toBe(clientMessageId);
-    } finally {
-      resolveSharedRefresh(Response.json({ ...session, accessToken: 'late-padlhub-token' }));
-      await vi.advanceTimersByTimeAsync(0);
-      vi.useRealTimers();
-    }
-
-    expect(commandCalls).toHaveLength(2);
-    expect(sharedRefreshSignal?.aborted ?? false).toBe(false);
-  });
-
-  it('lets the second messaging attempt recover through the first late shared refresh', async () => {
-    const userId = '00000000-0000-4000-8000-000000000001';
-    const conversationId = '66666666-6666-4666-8666-666666666666';
-    const clientMessageId = '77777777-7777-4777-8777-777777777777';
-    const session = {
-      accessToken: 'expired-padlhub-token',
-      tokenType: 'Bearer',
-      expiresAt: '2099-07-11T12:10:00.000Z',
-      user: { id: userId, displayName: 'Анна' },
-      context: {
-        userId,
-        tenantId: '00000000-0000-4000-8000-000000000002',
-        displayName: 'Анна',
-        phoneLast4: '0001',
-        roles: ['client'],
-        permissions: ['games.play'],
-      },
-    };
-    const refreshedSession = { ...session, accessToken: 'refreshed-padlhub-token' };
-    const sentMessage = {
-      id: '88888888-8888-4888-8888-888888888888',
-      conversationId,
-      sequence: 1,
-      sender: { userId, displayName: 'Анна' },
-      messageType: 'TEXT',
-      body: 'Привет',
-      createdAt: '2026-09-01T00:00:00.000Z',
-    };
-    let resolveSharedRefresh!: (response: Response) => void;
-    const sharedRefresh = new Promise<Response>((resolve) => {
-      resolveSharedRefresh = resolve;
-    });
-    let refreshCalls = 0;
-    let sharedRefreshSignal: AbortSignal | null | undefined;
-    const commandCalls: RequestInit[] = [];
-    const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
-      const url = requestUrl(input);
-      if (url.endsWith('/auth/session/refresh')) {
-        refreshCalls += 1;
-        if (refreshCalls === 1) return Promise.resolve(Response.json(session));
-        sharedRefreshSignal = init?.signal;
-        return sharedRefresh;
-      }
-      if (!url.endsWith(`/conversations/${conversationId}/messages`)) {
-        return Promise.resolve(new Response(null, { status: 404 }));
-      }
-      commandCalls.push(init ?? {});
-      if (commandCalls.length < 3) return Promise.resolve(new Response(null, { status: 401 }));
-      return Promise.resolve(
-        Response.json({ outcome: 'ok', message: sentMessage, replayed: true }),
-      );
-    });
-    const gateway = createBrowserAuthGateway({
-      baseUrl: 'https://api.padlhub.test/',
-      tenantKey: 'padlhub',
-      appVersion: 'test',
-      fetchImplementation,
-    });
-    await gateway.restoreSession();
-    const restoreRefreshCalls = refreshCalls;
-
-    vi.useFakeTimers();
-    try {
-      const result = gateway.sendConversationMessage(conversationId, {
-        clientMessageId,
-        body: 'Привет',
+      };
+      let resolveRefresh!: (r: Response) => void, failCommand!: (e: Error) => void;
+      let refreshes = 0,
+        reads = 0,
+        commands = 0;
+      const transport = vi.fn<typeof fetch>((raw) => {
+        const url = requestUrl(raw);
+        if (url.endsWith('/auth/session/refresh'))
+          return ++refreshes === 1
+            ? Promise.resolve(Response.json(auth))
+            : new Promise((resolve) => {
+                resolveRefresh = resolve;
+              });
+        if (url.includes('/messages?'))
+          return Promise.resolve(
+            ++reads === 1 ? new Response(null, { status: 401 }) : Response.json({ messages: [] }),
+          );
+        commands++;
+        return mode === 'unauthorized'
+          ? Promise.resolve(new Response(null, { status: 401 }))
+          : new Promise((_resolve, reject) => {
+              failCommand = reject;
+            });
       });
-
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(commandCalls).toHaveLength(2);
-      expect(commandCalls[1]?.signal?.aborted).toBe(false);
-      resolveSharedRefresh(Response.json(refreshedSession));
-      await vi.advanceTimersByTimeAsync(0);
-
-      await expect(result).resolves.toEqual({
-        outcome: 'ok',
-        message: sentMessage,
-        replayed: true,
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.invalid',
+        tenantKey: 'synthetic',
+        appVersion: 'test',
+        fetchImplementation: transport,
       });
-    } finally {
-      resolveSharedRefresh(Response.json(refreshedSession));
-      await vi.advanceTimersByTimeAsync(0);
-      vi.useRealTimers();
-    }
-
-    expect(commandCalls).toHaveLength(3);
-    expect(refreshCalls - restoreRefreshCalls).toBe(1);
-    expect(sharedRefreshSignal?.aborted ?? false).toBe(false);
-    expect(new Set(commandCalls.map((call) => call.signal)).size).toBe(2);
-    expect(
-      new Set(commandCalls.map((call) => new Headers(call.headers).get('Idempotency-Key'))).size,
-    ).toBe(1);
-    expect(new Headers(commandCalls[0]?.headers).get('Idempotency-Key')).toBe(clientMessageId);
-    expect(commandCalls.map((call) => new Headers(call.headers).get('Authorization'))).toEqual([
-      'Bearer expired-padlhub-token',
-      'Bearer expired-padlhub-token',
-      'Bearer refreshed-padlhub-token',
-    ]);
-  });
+      await gateway.restoreSession();
+      const pending = gateway
+        .sendConversationMessage(conversationId, { clientMessageId: key, body: 'synthetic' })
+        .then(
+          () => null,
+          (error) => error as Error,
+        );
+      const history = gateway.listConversationMessages(conversationId);
+      await vi.waitFor(() => expect(resolveRefresh).toBeTypeOf('function'));
+      if (mode === 'unauthorized') expect(await pending).toMatchObject({ status: 401 });
+      resolveRefresh(Response.json({ ...auth, accessToken: 'synthetic-refreshed' }));
+      await history;
+      if (mode === 'network-after-refresh') {
+        failCommand(new TypeError('synthetic'));
+        expect(await pending).toMatchObject({ message: 'AUTH_PRINCIPAL_CHANGED' });
+      }
+      expect(commands).toBe(1);
+      expect(refreshes).toBe(2);
+      expect(reads).toBe(2);
+    },
+  );
 });
 
 describe('managed commercial CREATE gateway capability', () => {
@@ -3977,4 +3863,151 @@ describe('mixed-version game capability', () => {
       join.mockRestore();
     }
   });
+});
+
+describe('local CANCEL synchronous principal fence', () => {
+  it.each([true, false])(
+    'blocks dispatch/retry and late ACK while logout is unresolved; network=%s',
+    async (network) => {
+      let finishLogout!: (r: Response) => void;
+      let finishCancel!: (r: Response) => void;
+      let failCancel!: (e: Error) => void;
+      const logoutPending = new Promise<Response>((r) => {
+        finishLogout = r;
+      });
+      const cancelPending = new Promise<Response>((r, j) => {
+        finishCancel = r;
+        failCancel = j;
+      });
+      const fetchImplementation = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input);
+        if (url.endsWith('/auth/session/refresh'))
+          return Promise.resolve(Response.json(profilePhotoSession()));
+        if (url.endsWith('/auth/session')) return logoutPending;
+        if (url.endsWith('/cancel')) return cancelPending;
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.padlhub.test',
+        tenantKey: 'padlhub',
+        appVersion: 'test',
+        fetchImplementation,
+      });
+      await gateway.restoreSession();
+      const id = '751fe6a8-b0b1-4b2b-873d-a2d785c4e191';
+      const command = gateway.cancelGame(id, { reasonCode: 'ORGANIZER_REQUEST' }).then(
+        () => 'accepted',
+        () => 'discarded',
+      );
+      await vi.waitFor(() =>
+        expect(
+          fetchImplementation.mock.calls.some(([u]) => requestUrl(u).endsWith('/cancel')),
+        ).toBe(true),
+      );
+      const logout = gateway.logout();
+      expect(gateway.gameCancelPrincipal?.()).toBeNull();
+      await expect(gateway.cancelGame(id, { reasonCode: 'ORGANIZER_REQUEST' })).rejects.toThrow(
+        'AUTH_PRINCIPAL_CHANGED',
+      );
+      if (network) failCancel(new TypeError('lost ACK'));
+      else finishCancel(Response.json({ operation: { status: 'SUCCEEDED' } }));
+      expect(await command).toBe('discarded');
+      expect(
+        fetchImplementation.mock.calls.filter(([u]) => requestUrl(u).endsWith('/cancel')),
+      ).toHaveLength(1);
+      finishLogout(new Response(null, { status: 204 }));
+      await logout;
+    },
+  );
+});
+
+describe('CANCEL invocation survives session transitions without acquiring new authority', () => {
+  it.each([false, true])(
+    'never retries an old command after successful relogin (different actor=%s)',
+    async (differentActor) => {
+      let failFirst!: (e: Error) => void;
+      const first = new Promise<Response>((_, reject) => {
+        failFirst = reject;
+      });
+      let commands = 0;
+      const session = profilePhotoSession();
+      const next = differentActor
+        ? {
+            ...session,
+            user: { ...session.user, id: '11111111-1111-4111-8111-111111111111' },
+            context: { ...session.context, userId: '11111111-1111-4111-8111-111111111111' },
+          }
+        : session;
+      const fetchImplementation = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input);
+        if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+        if (url.endsWith('/auth/session'))
+          return Promise.resolve(new Response(null, { status: 204 }));
+        if (url.endsWith('/verify')) return Promise.resolve(Response.json(next));
+        if (url.endsWith('/cancel')) {
+          commands++;
+          return commands === 1 ? first : Promise.resolve(Response.json({}));
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.padlhub.test',
+        tenantKey: 'padlhub',
+        appVersion: 'test',
+        fetchImplementation,
+      });
+      await gateway.restoreSession();
+      const original = gateway.gameCancelPrincipal?.();
+      const command = gateway
+        .cancelGame('751fe6a8-b0b1-4b2b-873d-a2d785c4e191', { reasonCode: 'ORGANIZER_REQUEST' })
+        .then(
+          () => 'accepted',
+          () => 'discarded',
+        );
+      await vi.waitFor(() => expect(commands).toBe(1));
+      await gateway.logout();
+      await gateway.verifyCode({
+        challengeId: '22222222-2222-4222-8222-222222222222',
+        code: '1234',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      });
+      expect(gateway.gameCancelPrincipal?.()).toBeTruthy();
+      expect(gateway.gameCancelPrincipal?.()).not.toBe(original);
+      failFirst(new TypeError('old response lost'));
+      expect(await command).toBe('discarded');
+      expect(commands).toBe(1);
+    },
+  );
+});
+
+it('Android training catalogue stays on the server route and does not open browser provider read jobs', async () => {
+  const session = profilePhotoSession();
+  const calls: string[] = [];
+  const fetchImplementation = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input);
+    calls.push(url);
+    if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+    if (url.includes('/trainings/catalog?'))
+      return Promise.resolve(Response.json({ state: 'READY', items: [], nextCursor: null }));
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+  const gateway = createBrowserAuthGateway({
+    baseUrl: 'https://lk2.padlhub.su',
+    tenantKey: 'local-padel',
+    platform: 'android',
+    nativeSessionTransport: true,
+    appVersion: 'test',
+    fetchImplementation,
+  });
+  await gateway.restoreSession();
+  await gateway.listEventCatalog({
+    surface: 'TRAININGS',
+    localDates: ['2035-04-02'],
+    kinds: ['GROUP_TRAINING'],
+    availability: 'INCLUDE_FULL',
+    limit: 20,
+  });
+  await gateway.continueEventCatalog('11111111-1111-4111-8111-111111111111', 20);
+  expect(calls.filter((url) => url.includes('/trainings/catalog?'))).toHaveLength(2);
+  expect(calls.join(' ')).not.toMatch(/booking-screen-read-jobs|viva|\/user\/api\/v2/);
 });

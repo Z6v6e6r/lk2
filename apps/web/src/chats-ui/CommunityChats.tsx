@@ -1,3 +1,7 @@
+import {
+  StationMessageComposer,
+  type StationMessageComposerProps,
+} from './StationMessageComposer.js';
 import { useLayoutEffect, useRef } from 'react';
 
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
@@ -131,7 +135,13 @@ function CommunityChatRow({
   readonly selected: boolean;
   readonly onOpen: () => void;
 }): React.JSX.Element {
-  const unread = unreadLabel(community.unreadChatCount);
+  const count =
+    community.stationStream?.availability === 'AVAILABLE'
+      ? community.stationStream.unreadCount
+      : community.stationStream?.availability === 'UNAVAILABLE'
+        ? null
+        : community.unreadChatCount;
+  const unread = count === null ? '?' : unreadLabel(count);
   return (
     <li className={styles.listItem}>
       <button
@@ -151,7 +161,11 @@ function CommunityChatRow({
           {unread ? (
             <span
               className={styles.unreadBadge}
-              aria-label={`Непрочитанных сообщений: ${community.unreadChatCount}`}
+              aria-label={
+                count === null
+                  ? 'Число непрочитанных сообщений недоступно'
+                  : `Непрочитанных сообщений: ${count}`
+              }
             >
               {unread}
             </span>
@@ -163,6 +177,7 @@ function CommunityChatRow({
 }
 
 interface CommunityThreadProps {
+  readonly composer?: StationMessageComposerProps | undefined;
   readonly community: CommunityRow;
   readonly messages: readonly CommunityChatMessage[];
   readonly busy: 'load' | 'load-earlier' | null;
@@ -182,6 +197,7 @@ const EARLIER_PAGE_TRIGGER_PX = 96;
  * instead of offering a composer that no published command could accept.
  */
 export function CommunityThread({
+  composer,
   community,
   messages,
   busy,
@@ -281,7 +297,9 @@ export function CommunityThread({
         <CommunityAvatar title={community.title} logoUrl={community.logoUrl} />
         <div className={styles.threadHeading}>
           <h2>{community.title}</h2>
-          <small>Чат сообщества · только для чтения</small>
+          <small>
+            {composer?.eligible ? 'Чат сообщества' : 'Чат сообщества · только для чтения'}
+          </small>
         </div>
         <button
           type="button"
@@ -347,7 +365,11 @@ export function CommunityThread({
             )}
           </div>
         ) : null}
-        <p className={styles.threadReadOnlyNote}>Чат сообщества доступен только для чтения.</p>
+        {composer ? (
+          <StationMessageComposer key={`${composer.scope}:${community.id}`} {...composer} />
+        ) : (
+          <p className={styles.threadReadOnlyNote}>Чат сообщества доступен только для чтения.</p>
+        )}
       </div>
     </section>
   );

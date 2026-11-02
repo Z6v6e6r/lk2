@@ -34,6 +34,7 @@ export const communityReadExperienceFeedItemSchema = z
   .strict();
 export const communityReadExperienceChatMessageSchema = z
   .object({
+    id: uuid.optional(),
     body: z.string().min(1).max(8_000),
     sentAt: dateTime,
     author: authorSchema,
@@ -64,6 +65,7 @@ export type CommunityReadExperienceFeedPage = {
   readonly nextCursor?: string | undefined;
 };
 export type CommunityReadExperienceChatPage = {
+  readonly canRequestStationMessage?: boolean | undefined;
   readonly items: readonly z.infer<typeof communityReadExperienceChatMessageSchema>[];
   readonly nextCursor?: string | undefined;
 };
@@ -79,12 +81,16 @@ export class CommunityReadExperienceError extends Error {
 
 export interface CommunityReadExperienceRepository {
   getDetail(input: {
+    readonly tenantKey?: string;
+    readonly sessionId?: string;
     readonly tenantId: string;
     readonly viewerUserId: string;
     readonly communityId: string;
     readonly correlationId: string;
   }): Promise<unknown>;
   getFeed(input: {
+    readonly tenantKey?: string;
+    readonly sessionId?: string;
     readonly tenantId: string;
     readonly viewerUserId: string;
     readonly communityId: string;
@@ -93,6 +99,8 @@ export interface CommunityReadExperienceRepository {
     readonly cursor?: string;
   }): Promise<unknown>;
   getChat(input: {
+    readonly tenantKey?: string;
+    readonly sessionId?: string;
     readonly tenantId: string;
     readonly viewerUserId: string;
     readonly communityId: string;
@@ -101,6 +109,8 @@ export interface CommunityReadExperienceRepository {
     readonly cursor?: string;
   }): Promise<unknown>;
   getRating(input: {
+    readonly tenantKey?: string;
+    readonly sessionId?: string;
     readonly tenantId: string;
     readonly viewerUserId: string;
     readonly communityId: string;
@@ -154,7 +164,17 @@ export function createCommunityReadExperienceService(
     async getChat(input) {
       if (!pageLimit.safeParse(input.limit).success)
         throw new CommunityReadExperienceError('COMMUNITY_EXPERIENCE_INVALID');
-      return page(communityReadExperienceChatMessageSchema, await repository.getChat(input));
+      const value = await repository.getChat(input);
+      const parsed = z
+        .object({
+          items: z.array(communityReadExperienceChatMessageSchema).max(50),
+          nextCursor: z.string().min(16).max(512).optional(),
+          canRequestStationMessage: z.boolean().optional(),
+        })
+        .strict()
+        .safeParse(value);
+      if (!parsed.success) throw new CommunityReadExperienceError('COMMUNITY_EXPERIENCE_INVALID');
+      return parsed.data;
     },
     async getRating(input) {
       const parsed = communityReadExperienceRatingSchema.safeParse(

@@ -1,0 +1,626 @@
+{
+  'paths':
+    {
+      '/{tenantKey}/community-views/station-stream-summaries':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+              {
+                'name': 'communityIds',
+                'in': 'query',
+                'required': true,
+                'schema':
+                  {
+                    'type': 'string',
+                    'maxLength': 1849,
+                    'description': 'Comma-separated 1..50 distinct canonical public UUIDs. No external identities.',
+                  },
+              },
+            ],
+          'get':
+            {
+              'tags': ['communities'],
+              'operationId': 'listStationStreamSummaries',
+              'summary': 'Read exact current owner stream summaries for a bounded public community batch',
+              'description': 'Authenticated, no-store. Unavailable or malformed owner evidence never means zero unread or permission to fall back. Read requests retain the original UUID/body and are never automatically retried.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Validated current range/summary or exact original receipt. A receipt is not a new current unread snapshot.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/StationStreamSummaries' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '429':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/TooManyRequests',
+                    },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                },
+            },
+        },
+      '/{tenantKey}/community-views/{communityId}/station-stream':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+              {
+                'name': 'communityId',
+                'in': 'path',
+                'required': true,
+                'schema': { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+              },
+              {
+                'name': 'limit',
+                'in': 'query',
+                'required': false,
+                'schema': { 'type': 'integer', 'minimum': 1, 'maximum': 50, 'default': 50 },
+              },
+              {
+                'name': 'cursor',
+                'in': 'query',
+                'required': false,
+                'schema':
+                  {
+                    'type': 'string',
+                    'minLength': 16,
+                    'maxLength': 1024,
+                    'pattern': '^[A-Za-z0-9_-]+$',
+                  },
+              },
+            ],
+          'get':
+            {
+              'tags': ['communities'],
+              'operationId': 'getStationCommunityStream',
+              'summary': 'Read a complete fixed station sequence range or its separate legacy archive',
+              'description': 'Authenticated, no-store. Unavailable or malformed owner evidence never means zero unread or permission to fall back. Read requests retain the original UUID/body and are never automatically retried.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Validated current range/summary or exact original receipt. A receipt is not a new current unread snapshot.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/StationStreamPage' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '429':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/TooManyRequests',
+                    },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                },
+            },
+        },
+      '/{tenantKey}/community-views/{communityId}/read-requests':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+              {
+                'name': 'communityId',
+                'in': 'path',
+                'required': true,
+                'schema': { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+              },
+              {
+                'name': 'Idempotency-Key',
+                'in': 'header',
+                'required': true,
+                'schema': { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+              },
+            ],
+          'post':
+            {
+              'tags': ['communities'],
+              'operationId': 'requestStationCommunityRead',
+              'summary': 'Explicitly acknowledge an accepted and displayed original station range',
+              'description': 'Authenticated, no-store. Unavailable or malformed owner evidence never means zero unread or permission to fall back. Read requests retain the original UUID/body and are never automatically retried.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Validated current range/summary or exact original receipt. A receipt is not a new current unread snapshot.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/StationReadReceipt' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '429':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/TooManyRequests',
+                    },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                },
+              'requestBody':
+                {
+                  'required': true,
+                  'content':
+                    {
+                      'application/json':
+                        { 'schema': { '$ref': '#/components/schemas/StationReadRequest' } },
+                    },
+                },
+            },
+        },
+      '/{tenantKey}/community-views/{communityId}/read-requests/{requestId}':
+        {
+          'parameters':
+            [
+              { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' },
+              { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' },
+              {
+                'name': 'communityId',
+                'in': 'path',
+                'required': true,
+                'schema': { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+              },
+              {
+                'name': 'requestId',
+                'in': 'path',
+                'required': true,
+                'schema': { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+              },
+            ],
+          'get':
+            {
+              'tags': ['communities'],
+              'operationId': 'getStationCommunityReadRequest',
+              'summary': 'Read immutable original acknowledgement without mutation',
+              'description': 'Authenticated, no-store. Unavailable or malformed owner evidence never means zero unread or permission to fall back. Read requests retain the original UUID/body and are never automatically retried.',
+              'responses':
+                {
+                  '200':
+                    {
+                      'description': 'Validated current range/summary or exact original receipt. A receipt is not a new current unread snapshot.',
+                      'content':
+                        {
+                          'application/json':
+                            { 'schema': { '$ref': '#/components/schemas/StationReadReceipt' } },
+                        },
+                    },
+                  '400':
+                    { '$ref': '../../common/components.yaml#/components/responses/BadRequest' },
+                  '401':
+                    { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' },
+                  '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' },
+                  '429':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/TooManyRequests',
+                    },
+                  '503':
+                    {
+                      '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable',
+                    },
+                },
+            },
+        },
+    },
+  'components':
+    {
+      'schemas':
+        {
+          'StationStreamPage':
+            {
+              'oneOf':
+                [
+                  {
+                    'type': 'object',
+                    'additionalProperties': false,
+                    'required':
+                      [
+                        'historyVersion',
+                        'streamId',
+                        'membershipEpoch',
+                        'baselineSequence',
+                        'readThroughSequence',
+                        'publishedThroughSequence',
+                        'unreadCount',
+                        'nextCursor',
+                        'catchUpCursor',
+                        'olderCursor',
+                        'archiveCursor',
+                        'canRequestStationMessage',
+                        'mode',
+                        'afterSequence',
+                        'throughSequence',
+                        'items',
+                      ],
+                    'properties':
+                      {
+                        'historyVersion': { 'type': 'integer', 'enum': [3] },
+                        'streamId':
+                          { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                        'membershipEpoch':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'baselineSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'readThroughSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'publishedThroughSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'unreadCount':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'nextCursor':
+                          {
+                            'type': ['string', 'null'],
+                            'minLength': 16,
+                            'maxLength': 1024,
+                            'pattern': '^[A-Za-z0-9_-]+$',
+                          },
+                        'catchUpCursor':
+                          {
+                            'type': ['string', 'null'],
+                            'minLength': 16,
+                            'maxLength': 1024,
+                            'pattern': '^[A-Za-z0-9_-]+$',
+                          },
+                        'olderCursor':
+                          {
+                            'type': ['string', 'null'],
+                            'minLength': 16,
+                            'maxLength': 1024,
+                            'pattern': '^[A-Za-z0-9_-]+$',
+                          },
+                        'archiveCursor':
+                          {
+                            'type': ['string', 'null'],
+                            'minLength': 16,
+                            'maxLength': 1024,
+                            'pattern': '^[A-Za-z0-9_-]+$',
+                          },
+                        'canRequestStationMessage': { 'type': 'boolean' },
+                        'mode': { 'type': 'string', 'enum': ['STREAM'] },
+                        'afterSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'throughSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'items':
+                          {
+                            'type': 'array',
+                            'maxItems': 50,
+                            'items':
+                              {
+                                'type': 'object',
+                                'additionalProperties': false,
+                                'required':
+                                  ['id', 'body', 'sentAt', 'author', 'isViewer', 'sequence'],
+                                'properties':
+                                  {
+                                    'id':
+                                      {
+                                        'type': 'string',
+                                        'format': 'uuid',
+                                        'pattern': '^[0-9a-f-]{36}$',
+                                      },
+                                    'body': { 'type': 'string', 'minLength': 1, 'maxLength': 8000 },
+                                    'sentAt': { 'type': 'string', 'format': 'date-time' },
+                                    'author':
+                                      {
+                                        'type': 'object',
+                                        'additionalProperties': false,
+                                        'required': ['displayName'],
+                                        'properties':
+                                          {
+                                            'displayName':
+                                              {
+                                                'type': 'string',
+                                                'minLength': 1,
+                                                'maxLength': 120,
+                                              },
+                                          },
+                                      },
+                                    'isViewer': { 'type': 'boolean' },
+                                    'sequence':
+                                      {
+                                        'type': 'integer',
+                                        'minimum': 1,
+                                        'maximum': 9007199254740990,
+                                      },
+                                  },
+                              },
+                          },
+                      },
+                  },
+                  {
+                    'type': 'object',
+                    'additionalProperties': false,
+                    'required':
+                      [
+                        'historyVersion',
+                        'streamId',
+                        'membershipEpoch',
+                        'baselineSequence',
+                        'readThroughSequence',
+                        'publishedThroughSequence',
+                        'unreadCount',
+                        'nextCursor',
+                        'catchUpCursor',
+                        'olderCursor',
+                        'archiveCursor',
+                        'canRequestStationMessage',
+                        'mode',
+                        'items',
+                      ],
+                    'properties':
+                      {
+                        'historyVersion': { 'type': 'integer', 'enum': [3] },
+                        'streamId':
+                          { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                        'membershipEpoch':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'baselineSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'readThroughSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'publishedThroughSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'unreadCount':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'nextCursor':
+                          {
+                            'type': ['string', 'null'],
+                            'minLength': 16,
+                            'maxLength': 1024,
+                            'pattern': '^[A-Za-z0-9_-]+$',
+                          },
+                        'catchUpCursor':
+                          {
+                            'type': ['string', 'null'],
+                            'minLength': 16,
+                            'maxLength': 1024,
+                            'pattern': '^[A-Za-z0-9_-]+$',
+                          },
+                        'olderCursor':
+                          {
+                            'type': ['string', 'null'],
+                            'minLength': 16,
+                            'maxLength': 1024,
+                            'pattern': '^[A-Za-z0-9_-]+$',
+                          },
+                        'archiveCursor':
+                          {
+                            'type': ['string', 'null'],
+                            'minLength': 16,
+                            'maxLength': 1024,
+                            'pattern': '^[A-Za-z0-9_-]+$',
+                          },
+                        'canRequestStationMessage': { 'type': 'boolean' },
+                        'mode': { 'type': 'string', 'enum': ['ARCHIVE'] },
+                        'items':
+                          {
+                            'type': 'array',
+                            'maxItems': 50,
+                            'items':
+                              {
+                                'type': 'object',
+                                'additionalProperties': false,
+                                'required':
+                                  ['id', 'body', 'sentAt', 'author', 'isViewer', 'sequence'],
+                                'properties':
+                                  {
+                                    'id':
+                                      {
+                                        'type': 'string',
+                                        'format': 'uuid',
+                                        'pattern': '^[0-9a-f-]{36}$',
+                                      },
+                                    'body': { 'type': 'string', 'minLength': 1, 'maxLength': 8000 },
+                                    'sentAt': { 'type': 'string', 'format': 'date-time' },
+                                    'author':
+                                      {
+                                        'type': 'object',
+                                        'additionalProperties': false,
+                                        'required': ['displayName'],
+                                        'properties':
+                                          {
+                                            'displayName':
+                                              {
+                                                'type': 'string',
+                                                'minLength': 1,
+                                                'maxLength': 120,
+                                              },
+                                          },
+                                      },
+                                    'isViewer': { 'type': 'boolean' },
+                                    'sequence': { 'type': 'null', 'enum': [null] },
+                                  },
+                              },
+                          },
+                      },
+                  },
+                ],
+            },
+          'StationStreamSummary':
+            {
+              'oneOf':
+                [
+                  {
+                    'type': 'object',
+                    'additionalProperties': false,
+                    'required':
+                      [
+                        'communityId',
+                        'availability',
+                        'streamId',
+                        'membershipEpoch',
+                        'baselineSequence',
+                        'readThroughSequence',
+                        'publishedThroughSequence',
+                        'unreadCount',
+                      ],
+                    'properties':
+                      {
+                        'communityId':
+                          { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                        'availability': { 'type': 'string', 'enum': ['AVAILABLE'] },
+                        'streamId':
+                          { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                        'membershipEpoch':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'baselineSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'readThroughSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'publishedThroughSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'unreadCount':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                      },
+                  },
+                  {
+                    'type': 'object',
+                    'additionalProperties': false,
+                    'required': ['communityId', 'availability'],
+                    'properties':
+                      {
+                        'communityId':
+                          { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                        'availability': { 'type': 'string', 'enum': ['UNADOPTED'] },
+                      },
+                  },
+                  {
+                    'type': 'object',
+                    'additionalProperties': false,
+                    'required': ['communityId', 'availability'],
+                    'properties':
+                      {
+                        'communityId':
+                          { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                        'availability': { 'type': 'string', 'enum': ['NOT_STATION'] },
+                      },
+                  },
+                ],
+            },
+          'StationStreamSummaries':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['contractVersion', 'contract', 'items'],
+              'properties':
+                {
+                  'contractVersion': { 'type': 'integer', 'enum': [1] },
+                  'contract': { 'type': 'string', 'enum': ['station-stream-summaries'] },
+                  'items':
+                    {
+                      'type': 'array',
+                      'minItems': 1,
+                      'maxItems': 50,
+                      'items': { '$ref': '#/components/schemas/StationStreamSummary' },
+                    },
+                },
+            },
+          'StationReadRequest':
+            {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['requestId', 'streamId', 'membershipEpoch', 'throughSequence'],
+              'properties':
+                {
+                  'requestId': { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                  'streamId': { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                  'membershipEpoch':
+                    { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                  'throughSequence':
+                    { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                },
+            },
+          'StationReadReceipt':
+            {
+              'oneOf':
+                [
+                  {
+                    'type': 'object',
+                    'additionalProperties': false,
+                    'required':
+                      [
+                        'contractVersion',
+                        'contract',
+                        'requestId',
+                        'outcome',
+                        'streamId',
+                        'membershipEpoch',
+                        'throughSequence',
+                        'readThroughSequence',
+                      ],
+                    'properties':
+                      {
+                        'contractVersion': { 'type': 'integer', 'enum': [1] },
+                        'contract': { 'type': 'string', 'enum': ['station-read'] },
+                        'requestId':
+                          { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                        'outcome': { 'type': 'string', 'enum': ['CONFIRMED'] },
+                        'streamId':
+                          { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                        'membershipEpoch':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'throughSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                        'readThroughSequence':
+                          { 'type': 'integer', 'minimum': 0, 'maximum': 9007199254740990 },
+                      },
+                  },
+                  {
+                    'type': 'object',
+                    'additionalProperties': false,
+                    'required': ['contractVersion', 'contract', 'requestId', 'outcome', 'code'],
+                    'properties':
+                      {
+                        'contractVersion': { 'type': 'integer', 'enum': [1] },
+                        'contract': { 'type': 'string', 'enum': ['station-read'] },
+                        'requestId':
+                          { 'type': 'string', 'format': 'uuid', 'pattern': '^[0-9a-f-]{36}$' },
+                        'outcome': { 'type': 'string', 'enum': ['UNKNOWN'] },
+                        'code':
+                          {
+                            'type': 'string',
+                            'enum':
+                              [
+                                'READ_REQUEST_INVALID',
+                                'READ_REQUEST_CONFLICT',
+                                'READ_ACCESS_DENIED',
+                                'READ_STREAM_UNAVAILABLE',
+                                'READ_RECEIPT_UNPROVEN',
+                              ],
+                          },
+                      },
+                  },
+                ],
+            },
+        },
+    },
+}

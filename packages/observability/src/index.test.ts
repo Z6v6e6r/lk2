@@ -48,3 +48,21 @@ describe('password recovery log privacy', () => {
     expect(output[0]).toContain('[REDACTED]');
   });
 });
+
+it('redacts one-use monthly launch capabilities at all transport paths', () => {
+  const lines: string[] = [],
+    logger = createLogger('monthly-fixture', 'info');
+  (logger as unknown as Record<symbol, unknown>)[symbols.streamSym] = {
+    write: (line: string) => lines.push(line),
+  };
+  const launchCode = 'synthetic-one-use-navigation-capability';
+  logger.info({
+    launchCode,
+    body: { launchCode },
+    req: { body: { launchCode } },
+    payload: { launchCode },
+  });
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).not.toContain(launchCode);
+  expect(lines[0]).toContain('[REDACTED]');
+});

@@ -1,19 +1,18 @@
+import type { StationStreamSummary } from '@phub/api-sdk';
 import type { CommunityMembershipPage, CommunityReadExperienceChatPage } from '../auth-gateway.js';
 
 /** One destination row of the Сообщества tab: a community the viewer is a member of. */
-export type CommunityRow = CommunityMembershipPage['items'][number];
+export type CommunityRow = CommunityMembershipPage['items'][number] & {
+  readonly stationStream?: StationStreamSummary | { readonly availability: 'UNAVAILABLE' };
+};
 export type CommunityChatMessage = CommunityReadExperienceChatPage['items'][number];
 
 /** The projection has no last-message preview for a community chat, so the row states what it is. */
 export const COMMUNITY_CHAT_PREVIEW = 'Чат сообщества';
 
-/**
- * A community chat message carries no identifier of its own: the provider addresses the history by
- * the send instant, and the projection exposes that instant together with the author and the body.
- * Two identical messages sent within the same second therefore share a key. That is the honest
- * limit of this read contract, and it is preferable to showing the same history page twice.
- */
+/** Canonical UUIDs distinguish identical messages; old rows retain their timestamp compatibility. */
 export function communityMessageKey(message: CommunityChatMessage): string {
+  if (message.id) return message.id;
   return `${message.sentAt}|${message.author.displayName}|${message.body}`;
 }
 
@@ -23,16 +22,22 @@ function communityInstant(message: CommunityChatMessage): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function chronological(left: CommunityChatMessage, right: CommunityChatMessage): number {
+  const time = communityInstant(left) - communityInstant(right);
+  if (time !== 0 || !left.id || !right.id) return time;
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
 /**
  * The chat reads chronologically: the newest message sits at the bottom and earlier pages are pulled
  * in above it. The projection exposes a send instant for every message, so the reading order comes
  * from that instant rather than from the direction the provider happened to use for the page — a page
- * that arrives oldest-first would otherwise be shown upside down. Equal instants keep provider order.
+ * that arrives oldest-first would otherwise be shown upside down. Equal instants use public UUID order; old rows without UUID retain compatibility.
  */
 export function communityThreadPage(
   page: CommunityReadExperienceChatPage,
 ): readonly CommunityChatMessage[] {
-  return [...page.items].sort((left, right) => communityInstant(left) - communityInstant(right));
+  return [...page.items].sort(chronological);
 }
 
 /**
@@ -44,14 +49,15 @@ export function mergeCommunityThreadPage(
   page: CommunityReadExperienceChatPage,
 ): { readonly messages: readonly CommunityChatMessage[]; readonly added: number } {
   const known = new Set(current.map(communityMessageKey));
-  const added = communityThreadPage(page).filter(
-    (message) => !known.has(communityMessageKey(message)),
-  );
+  const added = communityThreadPage(page).filter((message) => {
+    const key = communityMessageKey(message);
+    if (known.has(key)) return false;
+    known.add(key);
+    return true;
+  });
   if (added.length === 0) return { messages: current, added: 0 };
   return {
-    messages: [...current, ...added].sort(
-      (left, right) => communityInstant(left) - communityInstant(right),
-    ),
+    messages: [...current, ...added].sort(chronological),
     added: added.length,
   };
 }
@@ -68,7 +74,13 @@ export function communityRows(input: {
 }): readonly CommunityRow[] {
   const normalizedQuery = input.query.trim().toLocaleLowerCase('ru-RU');
   return input.communities.filter((community) => {
-    if (input.unreadOnly && community.unreadChatCount <= 0) return false;
+    const count =
+      community.stationStream?.availability === 'AVAILABLE'
+        ? community.stationStream.unreadCount
+        : community.stationStream?.availability === 'UNAVAILABLE'
+          ? null
+          : community.unreadChatCount;
+    if (input.unreadOnly && count !== null && count <= 0) return false;
     if (!normalizedQuery) return true;
     return community.title.toLocaleLowerCase('ru-RU').includes(normalizedQuery);
   });

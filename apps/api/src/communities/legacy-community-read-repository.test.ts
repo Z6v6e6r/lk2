@@ -306,14 +306,14 @@ describe('legacy community read repository', () => {
 
     await expect(
       repository.listMemberships({ tenantId, userId, correlationId: 'not-found-test', limit: 20 }),
-    ).rejects.toEqual(expect.objectContaining({ code: 'COMMUNITY_LEGACY_UNAVAILABLE' }));
+    ).rejects.toEqual(expect.objectContaining({ code: 'COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE' }));
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
     expect(onMetric).toHaveBeenCalledWith(
       expect.objectContaining({
         outcome: 'failure',
         attempt: 1,
         status: 404,
-        code: 'COMMUNITY_LEGACY_UNAVAILABLE',
+        code: 'COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE',
       }),
     );
   });
@@ -640,3 +640,60 @@ describe('legacy community read repository', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 });
+
+it.each([401, 403, 404])(
+  'three directory actor %i denials do not open shared dependency breaker',
+  async (status) => {
+    const token = vi.fn(({ sessionId }: { sessionId: string }) =>
+      Promise.resolve(`synthetic-${sessionId}`),
+    );
+    const fetchImplementation = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response(null, { status })),
+    );
+    const repository = new LegacyCommunityReadRepository({
+      baseUrl: 'https://legacy.padlhub.test',
+      timeoutMs: 1000,
+      maxAttempts: 1,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30000,
+      cacheTtlMs: 0,
+      staleTtlMs: 0,
+      bridge: bridge(),
+      token,
+      fetchImplementation,
+    });
+    const request = {
+      tenantId,
+      userId,
+      tenantKey: 'test',
+      sessionId: 'denied',
+      correlationId: 'correlation',
+      limit: 20,
+    };
+    for (let n = 0; n < 3; n++)
+      await expect(repository.listMemberships(request)).rejects.toMatchObject({
+        code: 'COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE',
+      });
+    fetchImplementation.mockImplementation(() => Promise.resolve(jsonResponse(payload())));
+    expect(
+      (
+        await repository.listMemberships({
+          ...request,
+          userId: 'other-user',
+          sessionId: 'other-session',
+        })
+      ).items,
+    ).toHaveLength(1);
+    expect(fetchImplementation).toHaveBeenCalledTimes(4);
+    for (let n = 0; n < 3; n++) {
+      token.mockRejectedValueOnce(new Error('revoked'));
+      await expect(repository.listMemberships(request)).rejects.toMatchObject({
+        code: 'COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE',
+      });
+    }
+    expect(
+      (await repository.listMemberships({ ...request, sessionId: 'valid' })).items,
+    ).toHaveLength(1);
+    expect(fetchImplementation).toHaveBeenCalledTimes(5);
+  },
+);

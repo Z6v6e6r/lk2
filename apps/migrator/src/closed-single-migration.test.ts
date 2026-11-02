@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import descriptor from '../../../deploy/timeweb/closed-application-migrations-0103-0104.v1.json';
+import { ledger as frozenLedger } from '../../../scripts/timeweb-api-worker.fixture.js';
 import {
   assertClosedLedger,
   assertClosedPackagedCatalog,
@@ -11,7 +13,17 @@ import {
 } from './closed-single-migration.js';
 
 const directory = resolve('packages/database/migrations');
-const files = (await readdir(directory)).filter((x) => x.endsWith('.sql')).sort();
+const currentFiles = (await readdir(directory)).filter((x) => x.endsWith('.sql')).sort();
+// The closed release remains its exact original package even when current main expands.
+const files = [
+  ...frozenLedger.map((row) => row.filename),
+  '0099_local_password_reset_proofs.sql',
+  '0100_notification_scenarios.sql',
+  '0101_notification_lifecycle_channels.sql',
+  '0102_location_recommendation_photos.sql',
+  descriptor.profiles.game_start_0103.filename,
+  descriptor.profiles.subject_link_0104.filename,
+];
 const packaged = await Promise.all(
   files.map(async (filename) => ({
     filename,
@@ -56,6 +68,7 @@ describe('fixed single application migration source and ledger contract', () => 
       expect(() => parseClosedSingleTarget(value)).toThrow();
   });
   it('pins the full packaged source and each preceding ledger prefix', () => {
+    expect(packaged.slice(0, frozenLedger.length)).toEqual(frozenLedger);
     expect(() => assertClosedPackagedCatalog(packaged)).not.toThrow();
     for (const mutation of [
       packaged.slice(0, -1),
@@ -64,6 +77,20 @@ describe('fixed single application migration source and ledger contract', () => 
       packaged.map((row, i) => (i === 106 ? { ...row, checksum: 'a'.repeat(64) } : row)),
     ])
       expect(() => assertClosedPackagedCatalog(mutation)).toThrow();
+  });
+  it('rejects the extended current directory without widening the closed release', async () => {
+    const current = await Promise.all(
+      currentFiles.map(async (filename) => ({
+        filename,
+        checksum: createHash('sha256')
+          .update(await readFile(resolve(directory, filename)))
+          .digest('hex'),
+      })),
+    );
+    expect(current.length).toBeGreaterThan(descriptor.packagedCount);
+    expect(() => assertClosedPackagedCatalog(current)).toThrow(
+      'CLOSED_APPLICATION_MIGRATION_SOURCE_CATALOG',
+    );
   });
   it('requires each exact full checkpoint, with no skipped or reordered migration', () => {
     for (const count of [106, 107, 108]) {

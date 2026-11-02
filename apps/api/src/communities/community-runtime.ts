@@ -1,3 +1,6 @@
+import { StationStreamOwnerClient } from './station-stream-owner-client.js';
+import { StationMessageOwnerClient } from './station-message-owner-client.js';
+import type { LegacyCommunityToken } from '@phub/communities';
 import {
   createCommunityCreateService,
   createCommunityDirectoryService,
@@ -250,6 +253,7 @@ export function createCommunityMediaRuntime(input: {
 }
 
 export function createCommunityDirectoryRuntime(input: {
+  readonly token?: LegacyCommunityToken;
   readonly config: AppConfig;
   readonly pool: Pool;
   readonly logger: Logger;
@@ -263,6 +267,7 @@ export function createCommunityDirectoryRuntime(input: {
       break;
     case 'legacy':
       repository = new LegacyCommunityReadRepository({
+        ...(input.token ? { token: input.token } : {}),
         baseUrl: input.config.COMMUNITIES_LEGACY_BASE_URL,
         timeoutMs: input.config.COMMUNITIES_LEGACY_TIMEOUT_MS,
         maxAttempts: input.config.COMMUNITIES_LEGACY_MAX_ATTEMPTS,
@@ -284,6 +289,7 @@ export function createCommunityDirectoryRuntime(input: {
 }
 
 export function createCommunityReadExperienceRuntime(input: {
+  readonly token?: LegacyCommunityToken;
   readonly config: AppConfig;
   readonly pool: Pool;
   readonly logger: Logger;
@@ -298,6 +304,8 @@ export function createCommunityReadExperienceRuntime(input: {
     return undefined;
   return createCommunityReadExperienceService(
     new LegacyCommunityExperienceRepository({
+      stationMessageRequests: Boolean(createStationMessageRuntime(input)),
+      ...(input.token ? { token: input.token } : {}),
       baseUrl: input.config.COMMUNITIES_LEGACY_BASE_URL,
       timeoutMs: input.config.COMMUNITIES_LEGACY_TIMEOUT_MS,
       maxAttempts: input.config.COMMUNITIES_LEGACY_MAX_ATTEMPTS,
@@ -309,4 +317,47 @@ export function createCommunityReadExperienceRuntime(input: {
       }),
     }),
   );
+}
+
+export function createStationMessageRuntime(input: {
+  readonly config: AppConfig;
+  readonly pool: Pool;
+  readonly token?: LegacyCommunityToken;
+}) {
+  if (
+    input.config.COMMUNITIES_READ_MODE !== 'legacy' ||
+    !input.config.COMMUNITY_LEGACY_READ_CHAT_ENABLED ||
+    !input.config.VIVA_OAUTH_ENABLED ||
+    !input.token
+  )
+    return undefined;
+  return new StationMessageOwnerClient({
+    baseUrl: input.config.COMMUNITIES_LEGACY_BASE_URL,
+    timeoutMs: input.config.COMMUNITIES_LEGACY_TIMEOUT_MS,
+    token: input.token,
+    bridge: createCommunityLegacyBridgeRepository(input.pool),
+  });
+}
+
+/** Same existing read/auth gate; owner summaries explicitly attest per-community v3 adoption. */
+export function createStationStreamRuntime(input: {
+  readonly config: AppConfig;
+  readonly pool: Pool;
+  readonly token?: LegacyCommunityToken;
+  readonly logger: Logger;
+}) {
+  if (
+    input.config.COMMUNITIES_READ_MODE !== 'legacy' ||
+    !input.config.COMMUNITY_LEGACY_READ_CHAT_ENABLED ||
+    !input.config.VIVA_OAUTH_ENABLED ||
+    !input.token
+  )
+    return undefined;
+  return new StationStreamOwnerClient({
+    baseUrl: input.config.COMMUNITIES_LEGACY_BASE_URL,
+    timeoutMs: input.config.COMMUNITIES_LEGACY_TIMEOUT_MS,
+    token: input.token,
+    bridge: createCommunityLegacyBridgeRepository(input.pool),
+    onMetric: (metric) => input.logger.info({ metric }, 'station stream owner call'),
+  });
 }

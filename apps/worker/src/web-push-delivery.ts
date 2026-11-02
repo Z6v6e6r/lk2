@@ -1,3 +1,4 @@
+import { checkOrdinaryPushPolicy } from './ordinary-push-policy.js';
 import { withTenantTransaction } from '@phub/database';
 import {
   webPushSubscriptionSchema,
@@ -294,13 +295,32 @@ export async function runWebPushDeliveryBatch(options: {
   let dead = 0;
   let stale = 0;
   for (const job of jobs) {
-    if (options.scenarioPolicyEnabled !== undefined) {
+    const policy = await checkOrdinaryPushPolicy({
+      pool: options.pool,
+      job,
+      provider: 'WEB_PUSH',
+      appId: options.appId,
+      environment: options.environment,
+    });
+    if (policy.outcome === 'SUPPRESSED') {
+      dead++;
+      continue;
+    }
+    if (
+      policy.outcome === 'STALE' ||
+      policy.outcome === 'BUSY' ||
+      (policy.outcome === 'SCENARIO' && options.scenarioPolicyEnabled !== true)
+    ) {
+      stale++;
+      continue;
+    }
+    if (policy.outcome === 'SCENARIO') {
       const decision = await checkScenarioPushDelivery({
         pool: options.pool,
         tenantId: job.tenantId,
         deliveryId: job.deliveryId,
         attemptNo: job.attemptNo,
-        enabled: options.scenarioPolicyEnabled,
+        enabled: options.scenarioPolicyEnabled === true,
         dispatchFence: true,
         ...(options.gameReminderMaxSourceAgeMs === undefined
           ? {}
@@ -314,7 +334,7 @@ export async function runWebPushDeliveryBatch(options: {
       }
     }
     let result: PushDeliveryResult;
-    if (job.endpointStatus !== 'ACTIVE') {
+    if (policy.outcome === 'SCENARIO' && job.endpointStatus !== 'ACTIVE') {
       result = {
         outcome: 'terminal_failure',
         errorCode: 'WEB_PUSH_ENDPOINT_INACTIVE',
@@ -322,7 +342,10 @@ export async function runWebPushDeliveryBatch(options: {
       };
     } else {
       try {
-        const plaintext = options.cipher.decrypt(job.addressCiphertext, job.encryptionKeyId);
+        const plaintext = options.cipher.decrypt(
+          policy.outcome === 'SEND' ? policy.endpoint.ciphertext : job.addressCiphertext,
+          policy.outcome === 'SEND' ? policy.endpoint.encryptionKeyId : job.encryptionKeyId,
+        );
         const subscription = webPushSubscriptionSchema.parse(JSON.parse(plaintext) as unknown);
         result = await options.adapter.send({
           tenantId: job.tenantId,
@@ -347,17 +370,23 @@ export async function runWebPushDeliveryBatch(options: {
         };
       }
     }
+    const finalizedJob = {
+      ...job,
+      ...(policy.outcome === 'SEND'
+        ? { dispatchedEndpoint: policy.endpoint }
+        : { scenarioDelivery: true }),
+    };
     const outcome =
       result.outcome === 'retryable_failure' && result.errorCode === 'WEB_PUSH_CIRCUIT_OPEN'
         ? await deferNotificationDeliveryWithoutAttempt({
             pool: options.pool,
-            job,
+            job: finalizedJob,
             retryAfterMs: options.circuitOpenRetryMs ?? 30_000,
             errorCode: 'WEB_PUSH_CIRCUIT_OPEN',
           })
         : await finalizeNotificationDelivery({
             pool: options.pool,
-            job,
+            job: finalizedJob,
             result,
             platform: 'WEB',
             transport: 'WEB_PUSH',

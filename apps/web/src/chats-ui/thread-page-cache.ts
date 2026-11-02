@@ -91,6 +91,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isCommunityChatMessage(value: unknown): value is CommunityChatMessage {
   if (!isRecord(value) || !isRecord(value.author)) return false;
   return (
+    (value.id === undefined ||
+      (typeof value.id === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.id))) &&
     typeof value.body === 'string' &&
     typeof value.sentAt === 'string' &&
     typeof value.author.displayName === 'string' &&

@@ -100,11 +100,17 @@ describe('shared LK2 Android UI', () => {
     expect(request).not.toHaveBeenCalled();
   });
   it.each(['/giftcard', '/gift-certificates', '/games/new', '/communities'])(
-    'does not expose browser-only commerce/provider/upload controls at %s',
+    'keeps browser-only commerce/provider/upload controls unavailable at %s',
     async (path) => {
       window.history.replaceState({}, '', path);
       const gateway = createGateway();
       const payment = vi.spyOn(gateway, 'getPublicGiftCertificateCatalog');
+      const legacyCreate = vi.spyOn(gateway, 'createGame');
+      const quarterCreate = vi.spyOn(gateway, 'createQuarterGame');
+      vi.spyOn(gateway, 'getQuarterCreateCapability').mockResolvedValue({
+        contractVersion: 1,
+        available: false,
+      });
       const restore = vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
         context: {
           user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Тестовый игрок' },
@@ -122,11 +128,24 @@ describe('shared LK2 Android UI', () => {
       render(<App gateway={gateway} tenantKey="local-padel" clientPlatform="android" />);
       expect(
         await screen.findByRole('heading', {
-          name: 'Раздел появится в следующей версии приложения',
+          name:
+            path === '/games/new'
+              ? 'Игра по подписке'
+              : 'Раздел появится в следующей версии приложения',
         }),
       ).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: 'Вернуться на Главную' })).toBeInTheDocument();
+      expect(
+        screen.getByRole('link', {
+          name: path === '/games/new' ? 'На главную' : 'Вернуться на Главную',
+        }),
+      ).toBeInTheDocument();
+      if (path === '/games/new') {
+        expect(screen.getByRole('button', { name: 'Создать игру по подписке' })).toBeDisabled();
+        expect(screen.queryByRole('textbox', { name: 'Название игры' })).not.toBeInTheDocument();
+      }
       expect(payment).not.toHaveBeenCalled();
+      expect(legacyCreate).not.toHaveBeenCalled();
+      expect(quarterCreate).not.toHaveBeenCalled();
       expect(restore).toHaveBeenCalled();
     },
   );

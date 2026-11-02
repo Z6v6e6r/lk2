@@ -320,3 +320,73 @@ readback.
 - B2 не меняет публичный API/OpenAPI/SDK и не добавляет миграций (0105 — только если понадобится
   хранить сырое тело receipt; это отдельный CRITICAL-approval).
 - Этот документ не разрешает ни writes в LK1, ни staging/production-операции.
+
+## 9. R1 managed JOIN consumer: bounded source contract (2026-10-31)
+
+Sections 1–8 retain the earlier proposal and its historical open questions. The implemented
+consumer below adopts only managed `JOIN_GAME` with zero price, positive free minutes and no
+paid minutes. CREATE, paid cancellation and activation remain separate work. There is no new
+flag, schema, ledger, provider writer or public client identifier.
+
+The commercial JOIN runtime first resolves the existing tenant-scoped, synced VIVA exercise
+mapping and actor-owned selected subscription. For a zero-price selection it calls the LK
+read-only `/lk/integrations/v2/booked-operation-preflights` route with a short-lived signed actor
+delegation and the actor credential. This happens before a seat or admission fingerprint is
+persisted. A strict managed response pins canonical CUP subscription instance, policy
+version/digest and authoritative target snapshot ID/revision/evidence. The synthetic wire
+fixture is `packages/subscription-runtime-adapter/src/fixtures/managed-join-v2.json` (SHA-256
+`82f7b918275c86fd357283abd67bc7c727427a3680dfe9906b2d560eea3c0171`), shared with the LK owner.
+
+Only the exact additive `{contractVersion:2, nonBinding:true, operationId, action:'JOIN_GAME',
+target, management:'LEGACY'}` response selects the existing v1 free JOIN. LK derives that
+classification from its canonical server allowlist, environment and authoritative owned-product
+purchase-date selector. Missing instance, timeout, unknown configuration and malformed response
+never classify a selection as legacy. Paid legacy JOIN stays on v1. The LK receiver must also
+recheck selector drift before a new v1 managed reservation; attempted/completed recovery remains
+bound to the original operation.
+
+Managed admission uses `/lk/integrations/v2/booked-operation-admissions`; its signed body contains
+only the original expectations, with no invented decision UUID, usage reference or proof TTL.
+The existing public operation ID derivation is unchanged across versions. The local request hash
+uses the separate `game.join.managed.v2` domain, original public request fingerprint and complete
+expectations. An existing operation is read before a fresh price/preflight, so retry does not
+repin to a newly published policy. Concurrent different expectations conflict at the existing
+idempotency boundary. A durable eligibility refusal retains the same binding in its existing
+command result JSON even when no seat exists.
+
+The canonical CUP reserve independently enforces these expectations and owns usage. The LK owner
+must verify the canonical FREE decision, final price zero and positive reservation units before
+provider booking. LK2 receives minted `booking:<48 lowercase hex>` usage only in the strict v2
+receipt obtained through `/lk/integrations/v2/booked-operations/:operationId`. Admission success
+alone cannot confirm local participation. The repository checks actor, tenant, game, reservation,
+operation, complete provider tuple, request/key hashes, original instance and policy, then stores
+the full receipt in the existing payment snapshot in the confirmation transaction. Already-applied
+replay must match that stored receipt including usage reference/units; an unbound v1 callback cannot
+settle a managed snapshot. Provider identifiers and canonical instance/usage references remain
+backend-only and are not added to the public response.
+
+The original top-level `policyRef` is retained for rollback: older #503 code refuses to dispatch or
+confirm such a bound snapshot. Rolling code back therefore leaves pending managed operations for
+reconciliation; it does not reinterpret them as legacy or create another booking. No usage is
+refunded, released or reissued by this consumer. Transport has fixed routes, time/size bounds,
+no redirect, no cache and no automatic write retry. Errors remain unresolved or return the
+existing commercial error envelope.
+
+LOCAL synthetic tests cover strict managed/LEGACY parsing, the frozen hash contract, signed route
+and actor bindings, preflight-before-seat order, paid legacy compatibility, immutable retry,
+malformed/mismatched receipt rejection and v1 denial on applied replay. They do not establish
+runtime station/exercise mapping freshness, real subscription migration coverage, physical
+PostgreSQL concurrency, provider acceptance or device behavior. Existing flags remain unchanged;
+activation requires the separately reviewed LK/CUP receiver versions, current mapping evidence and
+explicit owner approval. Preflight is non-binding and provides no latest-at-commit guarantee beyond
+the canonical CUP reserve precondition.
+
+A stored nonterminal v2 same-key retry can reissue the exact original admission with a fresh actor
+credential and signed `recovery_only:true`. The public request fingerprint must still match; its
+original expected revision and the stored provider tuple/expectations/reservation are reused.
+No preflight, new seat or ordinary admission is repeated. The LK receiver restricts this mode to
+an already persisted admission and canonical booking operation; absent canonical state stays
+UNKNOWN without reserve/provider booking POST. The mode is outside the immutable body hash and
+cannot refresh expectations. After this restricted recovery, LK2 reads and validates the full
+receipt normally. Recovery does not change v1 behavior. A raced completed `beginPaidJoin` replay
+also goes through the stored receipt validation rather than returning success from its state alone.

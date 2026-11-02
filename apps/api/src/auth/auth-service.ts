@@ -1024,6 +1024,32 @@ export class AuthService {
     return { ...session, vivaHandoffCode, vivaRecovery: false };
   }
 
+  /** Internal catalogue capability; never returned by an HTTP auth route. */
+  public async issueTrainingCatalogueAccess(input: {
+    readonly tenantKey: string;
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly correlationId: string;
+  }): Promise<{ readonly accessToken: string; readonly providerTenantKey: string }> {
+    const binding = await this.binding(input.tenantKey);
+    if (
+      binding.tenantId !== input.tenantId ||
+      binding.provider !== 'VIVA' ||
+      !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(binding.providerTenantKey)
+    )
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const delegation = await this.issueVivaAccessToken(input);
+    const current = await this.binding(input.tenantKey);
+    if (
+      current.tenantId !== binding.tenantId ||
+      current.provider !== binding.provider ||
+      current.providerTenantKey !== binding.providerTenantKey
+    )
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    return { accessToken: delegation.accessToken, providerTenantKey: binding.providerTenantKey };
+  }
+
   public async issueVivaAccessToken(input: {
     readonly tenantKey: string;
     readonly tenantId: string;

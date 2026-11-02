@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -11,7 +11,11 @@ import {
   NOTIFICATION_CATALOG_SQL,
   NOTIFICATION_NEW_TABLES,
 } from '../../../scripts/notification-migration-catalog.js';
-import { closedNewTables, verifyClosedCatalog } from './closed-single-migration.js';
+import {
+  assertClosedPackagedCatalog,
+  closedNewTables,
+  verifyClosedCatalog,
+} from './closed-single-migration.js';
 import {
   CLOSED_APPLICATION_CATALOG_SQL,
   CLOSED_APPLICATION_CATALOG_TABLES,
@@ -564,6 +568,7 @@ const rolePasswords = {
         const ownedRoles: string[] = [];
         let created = false;
         let db: Pool | undefined;
+        const clientEnds: Promise<void>[] = [];
         try {
           expect(
             (
@@ -587,6 +592,9 @@ const rolePasswords = {
           const adminUrl = new URL(disposable!);
           adminUrl.pathname = '/' + database;
           db = new Pool({ connectionString: adminUrl.toString(), max: 2 });
+          db.on('connect', (connection) => {
+            clientEnds.push(new Promise<void>((done) => connection.once('end', () => done())));
+          });
           const client = await db.connect();
           try {
             await client.query(
@@ -686,10 +694,24 @@ const rolePasswords = {
           } finally {
             client.release();
           }
-          await symlink(
-            resolve(root, 'packages/database/migrations'),
-            resolve(directory, 'migrations'),
+          // Rehearse the immutable 0103/0104 package, not the expanded current directory.
+          // The exact count + catalog digest below reject renamed, reordered or changed SQL.
+          const source = resolve(root, 'packages/database/migrations');
+          const packagedFiles = (await readdir(source))
+            .filter((filename) => filename.endsWith('.sql'))
+            .sort()
+            .slice(0, 108);
+          assertClosedPackagedCatalog(
+            await Promise.all(
+              packagedFiles.map(async (filename) => ({
+                filename,
+                checksum: hash(await readFile(resolve(source, filename))),
+              })),
+            ),
           );
+          await mkdir(resolve(directory, 'migrations'));
+          for (const filename of packagedFiles)
+            await symlink(resolve(source, filename), resolve(directory, 'migrations', filename));
           const roleUrl = new URL(adminUrl);
           roleUrl.username = 'phub_migrator';
           roleUrl.password = rolePasswords.phub_migrator;
@@ -1050,6 +1072,9 @@ const rolePasswords = {
           }
         } finally {
           await db?.end();
+          // pg-pool can resolve end() after removing idle clients but before their sockets end.
+          // Wait for actual disconnects before FORCE cleanup can terminate those connections.
+          await Promise.all(clientEnds);
           if (created) await admin.query(`drop database ${database} with(force)`);
           for (const role of ownedRoles.reverse()) await admin.query(`drop role ${role}`);
           await admin.end();
@@ -1066,6 +1091,7 @@ const rolePasswords = {
         const ownedRoles: string[] = [];
         let created = false;
         let db: Pool | undefined;
+        const clientEnds: Promise<void>[] = [];
         try {
           for (const [role, password] of Object.entries(rolePasswords)) {
             if (!(await admin.query('select 1 from pg_roles where rolname=$1', [role])).rowCount) {
@@ -1080,6 +1106,9 @@ const rolePasswords = {
           const target = new URL(disposable!);
           target.pathname = '/' + database;
           db = new Pool({ connectionString: target.toString(), max: 1 });
+          db.on('connect', (connection) => {
+            clientEnds.push(new Promise<void>((done) => connection.once('end', () => done())));
+          });
           const client = await db.connect();
           try {
             await client.query(`create schema identity authorization phub_beta;create schema games authorization phub_beta;create schema notifications authorization phub_beta;
@@ -1133,6 +1162,9 @@ const rolePasswords = {
           }
         } finally {
           await db?.end();
+          // pg-pool can resolve end() after removing idle clients but before their sockets end.
+          // Wait for actual disconnects before FORCE cleanup can terminate those connections.
+          await Promise.all(clientEnds);
           if (created) await admin.query(`drop database ${database} with(force)`);
           for (const role of ownedRoles.reverse()) await admin.query(`drop role ${role}`);
           await admin.end();

@@ -1,7 +1,7 @@
 import { loadConfig } from '@phub/config';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createCommunityReadRuntime } from './community-runtime.js';
+import { createStationMessageRuntime, createCommunityReadRuntime } from './community-runtime.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const viewerUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
@@ -81,4 +81,26 @@ describe('community runtime', () => {
       },
     );
   });
+});
+
+it('does not create a station message owner for local canonical communities or missing delegation', () => {
+  const config = localConfig(false);
+  expect(
+    createStationMessageRuntime({
+      config: { ...config, COMMUNITY_LEGACY_READ_CHAT_ENABLED: true, VIVA_OAUTH_ENABLED: true },
+      pool: poolWithLogo(null),
+      token: () => Promise.resolve('synthetic'),
+    }),
+  ).toBeUndefined();
+  expect(
+    createStationMessageRuntime({
+      config: {
+        ...config,
+        COMMUNITIES_READ_MODE: 'legacy',
+        COMMUNITY_LEGACY_READ_CHAT_ENABLED: true,
+        VIVA_OAUTH_ENABLED: true,
+      },
+      pool: poolWithLogo(null),
+    }),
+  ).toBeUndefined();
 });

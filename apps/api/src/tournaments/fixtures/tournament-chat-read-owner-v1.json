@@ -1,0 +1,27 @@
+{
+  "source": "CUP TournamentChatService synthetic MemoryStore; no live identities",
+  "actor": {
+    "tenantId": "33808efd-7e7e-40d9-b5ec-4da3fa9aa416",
+    "tenantKey": "synthetic",
+    "userId": "be09fd2a-be18-4164-bb4b-9183a1a81ba4",
+    "sessionId": "2abcb949-a6c7-4f8c-a06a-e5e2716dfdef",
+    "correlationId": "35345378-09ae-4c4b-9fd8-53da2f4e193b"
+  },
+  "identity": {
+    "ownerTenantKey": "provider-synthetic",
+    "providerClientId": "synthetic-client"
+  },
+  "command": {
+    "contractVersion": 1,
+    "tournamentId": "5ee36c9c-a8ea-4450-98e6-7e83adf23fa3",
+    "requestId": "181de945-f596-42c0-9186-c8c96f5dc494",
+    "streamId": "7c271dff-ce38-4b30-ab97-9c86c950bf53",
+    "witnessHash": "94e7ea4a0ad9bdb491ca05323cc191e5f1d7f30f7576d678ba5b3fec91192e5f",
+    "throughSequence": 1
+  },
+  "wire": {
+    "position": "{\"contractVersion\":\"tournament-chat-read.v1\",\"tournamentId\":\"5ee36c9c-a8ea-4450-98e6-7e83adf23fa3\",\"streamId\":\"7c271dff-ce38-4b30-ab97-9c86c950bf53\",\"witness\":{\"kind\":\"PARTICIPANT\",\"generation\":\"e8b3b04d-101a-44ee-a6e1-71ecb4d66842\",\"actorHash\":\"388eac8f1ad694caf41af99049a06e8960d32c2bff909ca1c72fd5155227618c\"},\"witnessHash\":\"94e7ea4a0ad9bdb491ca05323cc191e5f1d7f30f7576d678ba5b3fec91192e5f\",\"baselineSequence\":0,\"readThroughSequence\":0,\"publishedSequence\":1}",
+    "confirmed": "{\"contractVersion\":\"tournament-chat-read.v1\",\"tournamentId\":\"5ee36c9c-a8ea-4450-98e6-7e83adf23fa3\",\"requestId\":\"181de945-f596-42c0-9186-c8c96f5dc494\",\"status\":\"CONFIRMED\",\"requestHash\":\"7c708e5467133b58cb9d6acaa535209b6d3ef5b2454e66782e601988bd3941c8\",\"streamId\":\"7c271dff-ce38-4b30-ab97-9c86c950bf53\",\"witness\":{\"kind\":\"PARTICIPANT\",\"generation\":\"e8b3b04d-101a-44ee-a6e1-71ecb4d66842\",\"actorHash\":\"388eac8f1ad694caf41af99049a06e8960d32c2bff909ca1c72fd5155227618c\"},\"witnessHash\":\"94e7ea4a0ad9bdb491ca05323cc191e5f1d7f30f7576d678ba5b3fec91192e5f\",\"baselineSequence\":0,\"throughSequence\":1,\"readThroughSequence\":1}",
+    "status": "{\"contractVersion\":\"tournament-chat-read.v1\",\"tournamentId\":\"5ee36c9c-a8ea-4450-98e6-7e83adf23fa3\",\"requestId\":\"181de945-f596-42c0-9186-c8c96f5dc494\",\"status\":\"CONFIRMED\",\"requestHash\":\"7c708e5467133b58cb9d6acaa535209b6d3ef5b2454e66782e601988bd3941c8\",\"streamId\":\"7c271dff-ce38-4b30-ab97-9c86c950bf53\",\"witness\":{\"kind\":\"PARTICIPANT\",\"generation\":\"e8b3b04d-101a-44ee-a6e1-71ecb4d66842\",\"actorHash\":\"388eac8f1ad694caf41af99049a06e8960d32c2bff909ca1c72fd5155227618c\"},\"witnessHash\":\"94e7ea4a0ad9bdb491ca05323cc191e5f1d7f30f7576d678ba5b3fec91192e5f\",\"baselineSequence\":0,\"throughSequence\":1,\"readThroughSequence\":1}"
+  }
+}

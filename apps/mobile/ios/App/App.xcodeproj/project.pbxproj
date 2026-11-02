@@ -22,6 +22,9 @@
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
+		A10D00000000000000000001 /* PadlHubDirectIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10D00000000000000000002; };
+		A10D00000000000000000003 /* DirectIntegrationFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10D00000000000000000004; };
+		A10D00000000000000000005 /* direct-integration-fixtures.json in Resources */ = {isa = PBXBuildFile; fileRef = A10D00000000000000000006; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +45,9 @@
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
+		A10D00000000000000000002 /* PadlHubDirectIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PadlHubDirectIntegrationTests.swift; path = AppTests/PadlHubDirectIntegrationTests.swift; sourceTree = SOURCE_ROOT; };
+		A10D00000000000000000004 /* DirectIntegrationFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DirectIntegrationFixture.swift; path = AppTests/DirectIntegrationFixture.swift; sourceTree = SOURCE_ROOT; };
+		A10D00000000000000000006 /* direct-integration-fixtures.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = direct-integration-fixtures.json; path = AppTests/direct-integration-fixtures.json; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -66,6 +72,9 @@
 				504EC3051FED79650016851F /* Products */,
 				A10B00000000000000000002 /* SessionTransportTests.swift */,
 				A10B0000000000000000000E /* PadlHubBridgeTests.swift */,
+				A10D00000000000000000006 /* direct-integration-fixtures.json */,
+				A10D00000000000000000004 /* DirectIntegrationFixture.swift */,
+				A10D00000000000000000002 /* PadlHubDirectIntegrationTests.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -103,7 +112,7 @@
 		A10B00000000000000000006 /* AppTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A10B00000000000000000007;
-			buildPhases = (A10B00000000000000000008, A10B00000000000000000005,);
+			buildPhases = (A10B00000000000000000008, A10B00000000000000000005, A10D00000000000000000007,);
 			buildRules = ();
 			dependencies = (A10B00000000000000000009,);
 			name = AppTests;
@@ -177,6 +186,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A10D00000000000000000007 /* AppTests Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10D00000000000000000005,); runOnlyForDeploymentPostprocessing = 0; };
 		504EC3021FED79650016851F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -193,7 +203,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A10B00000000000000000008 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10B00000000000000000001, A10B0000000000000000000D,); runOnlyForDeploymentPostprocessing = 0; };
+		A10B00000000000000000008 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10B00000000000000000001, A10B0000000000000000000D, A10D00000000000000000001, A10D00000000000000000003,); runOnlyForDeploymentPostprocessing = 0; };
 		504EC3001FED79650016851F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;

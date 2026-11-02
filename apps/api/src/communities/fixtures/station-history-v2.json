@@ -1,0 +1,32 @@
+{
+  "historyVersion": 2,
+  "messages": [
+    {
+      "publicId": "70238666-9832-55d5-9680-162f8587367d",
+      "text": "same body",
+      "createdAt": "1970-01-01T00:00:01.000Z",
+      "createdTs": 1000,
+      "authorName": "Synthetic"
+    },
+    {
+      "publicId": "305fc0fb-4184-5805-be1f-fdd89086b866",
+      "text": "same body",
+      "createdAt": "1970-01-01T00:00:01.000Z",
+      "createdTs": 1000,
+      "authorName": "Synthetic"
+    },
+    {
+      "publicId": "00000000-0000-8000-8000-000000000003",
+      "text": "same body",
+      "createdAt": "1970-01-01T00:00:01.000Z",
+      "createdTs": 1000,
+      "authorId": "actor",
+      "authorName": "Synthetic"
+    }
+  ],
+  "hasMore": true,
+  "nextBefore": {
+    "createdTs": 1000,
+    "publicId": "00000000-0000-8000-8000-000000000003"
+  }
+}

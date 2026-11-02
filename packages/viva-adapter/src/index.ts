@@ -274,3 +274,9 @@ export class VivaAdapter implements VivaIntegrationPort {
 }
 
 export * from './game-subscription-selection.js';
+
+export {
+  VivaCreateLocationSource,
+  CreateLocationProviderContradiction,
+} from './create-location-source.js';
+export type { CreateLocationRoomEvidence } from './create-location-source.js';

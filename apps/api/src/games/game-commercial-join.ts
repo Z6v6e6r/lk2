@@ -1,3 +1,4 @@
+import { parseStationMarker, type StationMarker } from '@phub/subscription-runtime-adapter';
 import { createHash } from 'node:crypto';
 
 import type {
@@ -6,6 +7,11 @@ import type {
   GameRosterCommandResult,
 } from '@phub/database';
 import {
+  parseManagedJoinBinding,
+  parseManagedJoinReceipt,
+  managedJoinReceiptMatchesEntitlement,
+  type ManagedJoinBinding,
+  type ManagedJoinReceipt,
   bookedOperationAdmissionId,
   parseCommercialBindingRefs,
   type BookedOperationReceipt,
@@ -96,6 +102,8 @@ export interface CommercialJoinRepositoryPort {
     readonly reservationTtlSeconds: number;
     readonly providerBinding?: PaidJoinProviderBinding;
     readonly bindingRefs?: CommercialBindingRefs;
+    readonly managedJoin?: ManagedJoinBinding;
+    readonly stationMembership?: StationMarker;
   }): Promise<CommercialJoinBeginResult>;
   getPaidJoinAttempt(input: {
     readonly tenantId: string;
@@ -142,6 +150,9 @@ export type CommercialJoinBeginResult =
   | { readonly outcome: 'reservation_conflict' };
 
 export interface CommercialJoinAttemptView {
+  readonly requestHash?: string;
+  readonly managedJoin?: ManagedJoinBinding;
+  readonly managedReceipt?: ManagedJoinReceipt;
   readonly bindingRefs?: CommercialBindingRefs;
   readonly providerBinding?: PaidJoinProviderBinding;
   readonly commandId: string;
@@ -174,11 +185,23 @@ export interface CommercialJoinOwnerActor {
  * unpayable. An unresolved actor/target stays a generic fail-closed refusal.
  */
 export type CommercialJoinPrepareResult =
-  | { readonly outcome: 'prepared'; readonly binding: PaidJoinProviderBinding }
+  | {
+      readonly outcome: 'prepared';
+      readonly binding: PaidJoinProviderBinding;
+      readonly managedJoin?: ManagedJoinBinding;
+    }
   | { readonly outcome: 'selection_required' }
   | { readonly outcome: 'not_available' };
 
 export interface CommercialJoinOwnerPort {
+  prepareManaged?(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly subscriptionInstanceId: string;
+    readonly idempotencyKey: string;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly requestFingerprint: string;
+  }): Promise<CommercialJoinPrepareResult>;
   prepare?(input: {
     readonly actor: CommercialJoinOwnerActor;
     readonly subscriptionInstanceId: string;
@@ -205,16 +228,22 @@ export interface CommercialJoinOwnerPort {
     readonly providerClientSubscriptionId?: string;
     readonly providerBinding?: PaidJoinProviderBinding;
     readonly reservationId?: string;
+    readonly managedJoin?: ManagedJoinBinding;
   }): Promise<CommercialJoinOwnerOutcome>;
+  /** Restricted retry: existing canonical operation only, never a new reserve/provider booking. */
+  recover?(
+    input: Omit<Parameters<CommercialJoinOwnerPort['execute']>[0], 'price'>,
+  ): Promise<CommercialJoinOwnerOutcome>;
   read(input: {
     readonly actor: CommercialJoinOwnerActor;
     readonly operationId: string;
     readonly correlationId: string;
+    readonly managedJoin?: ManagedJoinBinding;
   }): Promise<CommercialJoinOwnerOutcome | null>;
 }
 
 export type CommercialJoinOwnerOutcome =
-  | { readonly status: 'CONFIRMED'; readonly receipt: BookedOperationReceipt }
+  | { readonly status: 'CONFIRMED'; readonly receipt: BookedOperationReceipt | ManagedJoinReceipt }
   | { readonly status: 'PENDING' }
   | { readonly status: 'UNKNOWN' }
   | {
@@ -381,6 +410,13 @@ export function commercialJoinRequestHashV2(
     .digest('hex');
 }
 
+/** Freeze pre-reservation expectations, never a later owner-minted usage reference. */
+export function managedJoinRequestHash(binding: ManagedJoinBinding): string {
+  return createHash('sha256')
+    .update('game.join.managed.v2\0' + JSON.stringify(parseManagedJoinBinding(binding)))
+    .digest('hex');
+}
+
 /**
  * The owner-visible operation id reuses the existing booked-operation derivation: one key can only
  * ever name one commercial operation, so a repeat cannot mint a second purchase.
@@ -394,6 +430,10 @@ export function commercialOperationId(input: {
 }
 
 export interface CommercialJoinDependencies {
+  readonly stationMembership?: (input: {
+    command: CommercialJoinCommandEnvelope;
+    providerBinding: PaidJoinProviderBinding;
+  }) => Promise<StationMarker>;
   readonly repository: CommercialJoinRepositoryPort;
   readonly conditionsOwner: GameJoinConditionsOwner;
   readonly owner: CommercialJoinOwnerPort;
@@ -453,9 +493,10 @@ async function ownerIsPending(
   actor: CommercialJoinOwnerActor,
   operationId: string,
   correlationId: string,
+  managedJoin?: ManagedJoinBinding,
 ): Promise<boolean> {
   return dependencies.owner
-    .read({ actor, operationId, correlationId })
+    .read({ actor, operationId, correlationId, ...(managedJoin ? { managedJoin } : {}) })
     .then((state) => state?.status === 'PENDING')
     .catch(() => false);
 }
@@ -475,9 +516,69 @@ export async function executeCommercialJoin(
   // error, not a business refusal, so it throws instead of producing a payable fallback.
   const bindingRefs =
     input.bindingRefs === undefined ? undefined : parseCommercialBindingRefs(input.bindingRefs);
-  // The installed owner accepts only v1 and cannot prove policy/usage binding. Keep this
-  // foundation dormant rather than dispatching an apparently bound request over unbound wire.
+  // Caller-supplied proposal refs are not an authoritative owner preflight. Only the
+  // strict managed acquisition below can bind a new v2 operation.
   if (bindingRefs !== undefined) return commercialFailure('GAME_RECONCILIATION_REQUIRED');
+
+  if (dependencies.owner.prepareManaged) {
+    const prior = await dependencies.repository.getPaidJoinAttempt({
+      tenantId: input.tenantId,
+      actorUserId: input.userId,
+      operationId: input.operationId,
+    });
+    if (prior) {
+      const fingerprint = prior.managedJoin
+        ? parseManagedJoinBinding(prior.managedJoin).requestFingerprint
+        : prior.requestHash;
+      if (fingerprint !== input.requestHash || prior.gameId !== input.gameId)
+        return commercialFailure('GAME_COMMERCIAL_ATTEMPT_CONFLICT');
+      if (
+        prior.managedJoin &&
+        prior.state === 'IN_PROGRESS' &&
+        prior.providerBinding &&
+        prior.reservation &&
+        input.subscriptionInstanceId &&
+        dependencies.owner.recover
+      ) {
+        try {
+          await dependencies.owner.recover({
+            actor: {
+              tenantId: input.tenantId,
+              tenantKey: input.tenantKey,
+              userId: input.userId,
+              sessionId: input.sessionId,
+              gameId: input.gameId,
+              expectedRevision: input.expectedRevision,
+            },
+            operationId: input.operationId,
+            idempotencyKey: input.idempotencyKey,
+            correlationId: input.correlationId,
+            subscriptionInstanceId: input.subscriptionInstanceId,
+            providerBinding: prior.providerBinding,
+            reservationId: prior.reservation.id,
+            managedJoin: prior.managedJoin,
+          });
+        } catch {
+          /* Unknown recovery is never a new attempt or permission to release. */
+        }
+      }
+      const read = prior.managedJoin
+        ? reconcileCommercialJoinOperation
+        : readCommercialJoinOperation;
+      const body = await read(
+        {
+          tenantId: input.tenantId,
+          tenantKey: input.tenantKey,
+          actorUserId: input.userId,
+          sessionId: input.sessionId,
+          operationId: input.operationId,
+          correlationId: input.correlationId,
+        },
+        dependencies,
+      );
+      return body ? { kind: 'accepted', body } : commercialFailure('GAME_RECONCILIATION_REQUIRED');
+    }
+  }
 
   if (!input.subscriptionInstanceId)
     return commercialFailure('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
@@ -585,7 +686,39 @@ export async function executeCommercialJoin(
   }
 
   let providerBinding: PaidJoinProviderBinding | undefined;
-  if (dependencies.owner.prepare) {
+  let managedJoin: ManagedJoinBinding | undefined;
+  if (dependencies.owner.prepareManaged && serverAmountMinor === 0) {
+    try {
+      const prepared = await dependencies.owner.prepareManaged({
+        actor: {
+          tenantId: input.tenantId,
+          tenantKey: input.tenantKey,
+          userId: input.userId,
+          sessionId: input.sessionId,
+          gameId: input.gameId,
+          expectedRevision: input.expectedRevision,
+        },
+        subscriptionInstanceId: input.subscriptionInstanceId,
+        idempotencyKey: input.idempotencyKey,
+        operationId: input.operationId,
+        correlationId: input.correlationId,
+        requestFingerprint: input.requestHash,
+      });
+      if (prepared.outcome !== 'prepared') return commercialFailure('GAME_RECONCILIATION_REQUIRED');
+      providerBinding = prepared.binding;
+      if (prepared.managedJoin) {
+        managedJoin = parseManagedJoinBinding(prepared.managedJoin);
+        if (
+          managedJoin.requestFingerprint !== input.requestHash ||
+          conditions.freeMinutes <= 0 ||
+          conditions.paidMinutes !== 0
+        )
+          return commercialFailure('GAME_RECONCILIATION_REQUIRED');
+      }
+    } catch {
+      return commercialFailure('GAME_RECONCILIATION_REQUIRED');
+    }
+  } else if (dependencies.owner.prepare) {
     try {
       const prepared = await dependencies.owner.prepare({
         actor: {
@@ -608,6 +741,21 @@ export async function executeCommercialJoin(
     }
   }
 
+  // Only a NEW managed attempt reaches here. A prior command above never regenerates adoption.
+  let stationMembership: StationMarker | undefined;
+  if (managedJoin && providerBinding) {
+    stationMembership = { version: 1, outcome: 'NO_ENROLLMENT', reason: 'DISABLED' };
+    if (dependencies.stationMembership) {
+      try {
+        stationMembership = parseStationMarker(
+          await dependencies.stationMembership({ command: input, providerBinding }),
+        );
+      } catch {
+        stationMembership = { version: 1, outcome: 'NO_ENROLLMENT', reason: 'OWNER_UNAVAILABLE' };
+      }
+    }
+  }
+
   // 3. Durable attempt + seat reservation. The operation exists before the owner call.
   let begin: CommercialJoinBeginResult;
   try {
@@ -616,15 +764,27 @@ export async function executeCommercialJoin(
       actorUserId: input.userId,
       gameId: input.gameId,
       idempotencyKey: input.idempotencyKey,
-      requestHash: input.requestHash,
+      requestHash: managedJoin ? managedJoinRequestHash(managedJoin) : input.requestHash,
       correlationId: input.correlationId,
       expectedRevision: input.expectedRevision,
       operationId: input.operationId,
       subscriptionInstanceId: input.subscriptionInstanceId,
       price,
+      ...(managedJoin
+        ? {
+            managedJoin,
+            bindingRefs: {
+              policyRef: {
+                policyVersion: managedJoin.entitlement.expectations.policyVersion,
+                policyDigest: managedJoin.entitlement.expectations.policyDigest,
+              },
+            },
+          }
+        : {}),
       ...(input.invitationId === undefined ? {} : { invitationId: input.invitationId }),
       reservationTtlSeconds,
       ...(providerBinding ? { providerBinding } : {}),
+      ...(stationMembership ? { stationMembership } : {}),
     });
   } catch {
     return commercialFailure('GAME_OWNER_UNAVAILABLE');
@@ -646,6 +806,20 @@ export async function executeCommercialJoin(
   const createdAt = new Date(now()).toISOString();
 
   if (begin.outcome === 'replayed') {
+    if (managedJoin) {
+      const body = await readCommercialJoinOperation(
+        {
+          tenantId: input.tenantId,
+          tenantKey: input.tenantKey,
+          actorUserId: input.userId,
+          sessionId: input.sessionId,
+          operationId: input.operationId,
+          correlationId: input.correlationId,
+        },
+        dependencies,
+      );
+      return body ? { kind: 'accepted', body } : commercialFailure('GAME_RECONCILIATION_REQUIRED');
+    }
     // A repeat never dispatches a replacement owner POST.
     if (begin.state === 'COMPLETED') {
       const applied = begin.result;
@@ -722,6 +896,7 @@ export async function executeCommercialJoin(
       subscriptionInstanceId: input.subscriptionInstanceId,
       price,
       reservationId: begin.reservationId,
+      ...(managedJoin ? { managedJoin } : {}),
       ...(providerBinding ? { providerBinding } : {}),
       ...(resolvedProviderClientSubscriptionId === undefined
         ? {}
@@ -837,8 +1012,14 @@ export async function readCommercialJoinOperation(
     operationId: input.operationId,
   });
   if (!attempt) return null;
-  if (attempt.bindingRefs !== undefined)
+  if (attempt.bindingRefs !== undefined && !attempt.managedJoin)
     return unresolvedBoundJoinOperation(attempt, dependencies.now ?? Date.now);
+  if (
+    attempt.managedJoin &&
+    (attempt.state === 'COMPLETED' || attempt.receipt) &&
+    !attempt.managedReceipt
+  )
+    return unresolvedBoundJoinOperation(attempt, now);
   const updatedAt = attempt.receipt?.confirmedAt ?? new Date(now()).toISOString();
   const price: CommercialJoinCommercialView['price'] = null;
 
@@ -905,6 +1086,7 @@ export async function readCommercialJoinOperation(
     },
     attempt.commandId,
     input.correlationId,
+    attempt.managedJoin,
   );
   if (ownerPending) {
     return operationBody({
@@ -951,11 +1133,12 @@ export async function reconcileCommercialJoinOperation(
     operationId: input.operationId,
   });
   if (!attempt) return null;
-  if (attempt.bindingRefs !== undefined)
+  if (attempt.bindingRefs !== undefined && !attempt.managedJoin)
     return unresolvedBoundJoinOperation(attempt, dependencies.now ?? Date.now);
   const binding = attempt.providerBinding;
   if (
-    attempt.state === 'IN_PROGRESS' &&
+    (attempt.state === 'IN_PROGRESS' ||
+      Boolean(attempt.managedJoin && attempt.state === 'COMPLETED')) &&
     binding &&
     attempt.reservation &&
     dependencies.repository.confirmPayment
@@ -973,6 +1156,7 @@ export async function reconcileCommercialJoinOperation(
         },
         operationId: input.operationId,
         correlationId: input.correlationId,
+        ...(attempt.managedJoin ? { managedJoin: attempt.managedJoin } : {}),
       });
     } catch {
       /* Ambiguous read never releases or retries the original attempt. */
@@ -980,6 +1164,13 @@ export async function reconcileCommercialJoinOperation(
     if (owner?.status === 'CONFIRMED') {
       const receipt = owner.receipt;
       const exact =
+        (attempt.managedJoin
+          ? receipt.contractVersion === 2 &&
+            managedJoinReceiptMatchesEntitlement(
+              parseManagedJoinReceipt(receipt),
+              attempt.managedJoin.entitlement,
+            )
+          : receipt.contractVersion === 1) &&
         receipt.operationId === attempt.commandId &&
         receipt.tenantId === input.tenantId &&
         receipt.userId === input.actorUserId &&
@@ -999,7 +1190,13 @@ export async function reconcileCommercialJoinOperation(
         ).every((key) => receipt[key] === binding[key]);
       if (exact) {
         const evidenceHash = createHash('sha256')
-          .update(JSON.stringify(Object.entries(receipt).sort(([a], [b]) => a.localeCompare(b))))
+          .update(
+            JSON.stringify(
+              Object.entries(
+                receipt.contractVersion === 2 ? parseManagedJoinReceipt(receipt) : receipt,
+              ).sort(([a], [b]) => a.localeCompare(b)),
+            ),
+          )
           .digest('hex');
         let confirmed: GameRosterCommandResult;
         try {
@@ -1012,6 +1209,7 @@ export async function reconcileCommercialJoinOperation(
             idempotencyKey: `join-reconcile:${input.operationId}`,
             requestHash: evidenceHash,
             paidJoinBinding: binding,
+            ...(receipt.contractVersion === 2 ? { managedJoinReceipt: receipt } : {}),
             evidence: {
               provider: 'VIVA',
               operationType: 'SUBSCRIPTION_BOOKING',

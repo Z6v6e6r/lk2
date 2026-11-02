@@ -1,3 +1,5 @@
+import { ManagedSelfLeaveError } from '@phub/database/managed-self-leave';
+import type { ManagedSelfLeaveRuntime } from './game-managed-self-leave.js';
 import { createHash } from 'node:crypto';
 
 import type {
@@ -30,6 +32,7 @@ import {
   executeCommercialJoin,
   readCommercialJoinOperation,
   reconcileCommercialJoinOperation,
+  type CommercialJoinDependencies,
   type CommercialJoinFailureCode,
   type CommercialJoinOwnerPort,
   type CommercialJoinRepositoryPort,
@@ -561,6 +564,7 @@ function rejected(
 }
 
 export interface GameCommercialJoinOptions {
+  readonly stationMembership?: CommercialJoinDependencies['stationMembership'];
   readonly repository: CommercialJoinRepositoryPort;
   readonly conditionsOwner: GameJoinConditionsOwner;
   readonly owner: CommercialJoinOwnerPort;
@@ -573,6 +577,7 @@ export function registerGameRoutes(
     readonly managementRepository?: UserManagementRepository;
     readonly testCourtRepository?: GameTestCourtRepository;
     readonly commercialJoin?: GameCommercialJoinOptions;
+    readonly managedSelfLeave?: ManagedSelfLeaveRuntime;
     /** Composed only when the managed commercial CREATE contour is enabled (default OFF). */
     readonly commercialCreate?: GameCommercialCreateOptions;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
@@ -788,6 +793,36 @@ export function registerGameRoutes(
         if (!options.repository) return unavailable(request, reply);
         const payload = parseBody ? parseJoinBody(request, reply) : {};
         if (!payload) return reply;
+        if (type === 'LEAVE_GAME' && options.managedSelfLeave) {
+          try {
+            const managed = await options.managedSelfLeave.execute({
+              tenantId: current.tenantId,
+              actorUserId: current.userId,
+              tenantKey: (request.params as { tenantKey: string }).tenantKey,
+              sessionId: sessionId(request),
+              gameId: currentGameId,
+              idempotencyKey: idempotencyKey(request),
+              requestHash: requestHash(type, currentGameId, payload),
+              correlationId: request.id,
+            });
+            if (managed)
+              return reply
+                .status(['SUCCEEDED', 'FAILED'].includes(managed.operation.status) ? 200 : 202)
+                .send(managed);
+          } catch (error) {
+            if (error instanceof ManagedSelfLeaveError)
+              return sendApiError(
+                request,
+                reply,
+                error.code === 'GAME_NOT_FOUND' ? 404 : 409,
+                error.code === 'MANAGED_SELF_LEAVE_BINDING_INVALID'
+                  ? 'GAME_NOT_LEAVABLE'
+                  : error.code,
+                'Выход из игры пока не подтверждён.',
+              );
+            throw error;
+          }
+        }
         if (
           commercialJoin &&
           (payload.subscriptionInstanceId !== undefined || payload.priceConsent !== undefined)
@@ -862,6 +897,9 @@ export function registerGameRoutes(
               repository: options.commercialJoin.repository,
               conditionsOwner: options.commercialJoin.conditionsOwner,
               owner: options.commercialJoin.owner,
+              ...(options.commercialJoin.stationMembership
+                ? { stationMembership: options.commercialJoin.stationMembership }
+                : {}),
             },
           );
           if (result.kind === 'failed') {
@@ -925,6 +963,95 @@ export function registerGameRoutes(
     (repository, input) => repository.join(input),
     true,
     true,
+  );
+
+  app.get(
+    '/user/api/v1/:tenantKey/games/:gameId/leave-operation',
+    { preHandler: [...options.commandHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current)
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      const id = gameId(request, reply);
+      if (!id) return reply;
+      try {
+        const result = await options.managedSelfLeave?.readByKey({
+          tenantId: current.tenantId,
+          actorUserId: current.userId,
+          gameId: id,
+          idempotencyKey: idempotencyKey(request),
+        });
+        return (
+          result ??
+          sendApiError(request, reply, 404, 'GAME_OPERATION_NOT_FOUND', 'Операция не найдена.')
+        );
+      } catch (error) {
+        if (error instanceof ManagedSelfLeaveError)
+          return sendApiError(
+            request,
+            reply,
+            409,
+            error.code === 'MANAGED_SELF_LEAVE_BINDING_INVALID' ? 'GAME_NOT_LEAVABLE' : error.code,
+            'Исходная операция выхода недоступна.',
+          );
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/games/:gameId/leave-operation/reconcile',
+    { preHandler: [...options.commandHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current)
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      const id = gameId(request, reply);
+      if (!id) return reply;
+      // No marker on the ordinary DELETE: older servers ignore its body and could start a new leave.
+      const emptyNativeBody =
+        request.body === '' &&
+        /^text\/plain(?:;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '');
+      if (
+        (request.body !== undefined && !emptyNativeBody) ||
+        Object.keys(request.query as object).length
+      )
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          'Тело и параметры не поддерживаются.',
+        );
+      if (!options.managedSelfLeave) return unavailable(request, reply);
+      try {
+        const result = await options.managedSelfLeave.reconcile({
+          tenantId: current.tenantId,
+          actorUserId: current.userId,
+          tenantKey: (request.params as { tenantKey: string }).tenantKey,
+          sessionId: sessionId(request),
+          gameId: id,
+          idempotencyKey: idempotencyKey(request),
+          requestHash: requestHash('LEAVE_GAME', id, {}),
+          correlationId: request.id,
+        });
+        return reply
+          .status(['SUCCEEDED', 'FAILED'].includes(result.operation.status) ? 200 : 202)
+          .send(result);
+      } catch (error) {
+        if (error instanceof ManagedSelfLeaveError)
+          return sendApiError(
+            request,
+            reply,
+            error.code === 'GAME_NOT_FOUND' ? 404 : 409,
+            error.code === 'MANAGED_SELF_LEAVE_BINDING_INVALID' ? 'GAME_NOT_LEAVABLE' : error.code,
+            'Исходная операция выхода недоступна.',
+          );
+        throw error;
+      }
+    },
   );
 
   // Recovery by the original key: the client keeps the key even when the JOIN response was lost,
@@ -1081,6 +1208,14 @@ export function registerGameRoutes(
           'INVALID_REQUEST',
           'Некорректный идентификатор операции.',
         );
+      }
+      if (options.managedSelfLeave) {
+        const managed = await options.managedSelfLeave.read({
+          tenantId: current.tenantId,
+          actorUserId: current.userId,
+          operationId,
+        });
+        if (managed) return managed;
       }
       if (!options.repository && !options.managementRepository) return unavailable(request, reply);
       if (options.commercialJoin) {

@@ -1,3 +1,4 @@
+import { createGameStationMembershipAdmission } from './game-station-membership.js';
 import { createHash } from 'node:crypto';
 
 import type { AppConfig } from '@phub/config';
@@ -9,6 +10,11 @@ import type {
 } from '@phub/database';
 import { createBookedOperationAdmissionTargetRepository } from '../../../../packages/database/src/booked-operation-admission-target-repository.js';
 import {
+  ManagedJoinOwnerClient,
+  ManagedJoinOwnerError,
+  managedJoinAdmissionSha256,
+  type ManagedJoinPreflightRequest,
+  type ManagedJoinAdmissionRequest,
   BookedOperationAdmissionClient,
   BookedOperationReadClient,
   BookedOperationReadError,
@@ -40,13 +46,23 @@ import type { GameCommercialJoinOptions } from './game-routes.js';
  * answering `GAME_PAYMENT_REQUIRED` exactly as before.
  */
 
-type CommercialJoinConfig = Pick<
-  AppConfig,
-  | 'APP_ENV'
-  | 'GAME_COMMERCIAL_JOIN_ENABLED'
-  | 'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL'
-  | 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS'
->;
+type CommercialJoinConfig = Partial<
+  Pick<
+    AppConfig,
+    | 'LK_STATION_MEMBERSHIP_LIFETIME_ENABLED'
+    | 'LK2_STATION_MEMBERSHIP_DELEGATION_AUDIENCE'
+    | 'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS'
+    | 'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID'
+    | 'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER'
+  >
+> &
+  Pick<
+    AppConfig,
+    | 'APP_ENV'
+    | 'GAME_COMMERCIAL_JOIN_ENABLED'
+    | 'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL'
+    | 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS'
+  >;
 
 /** User-scoped, backend-issued provider credential handed to the owner for exactly one operation. */
 export interface CommercialJoinActorToken {
@@ -77,7 +93,14 @@ export interface GameCommercialJoinOwnerBoundary {
   readonly delegationIssuer: Pick<
     SubscriptionRuntimeActorDelegationIssuer,
     'issueBookedOperationAdmission' | 'issueBookedOperationRead'
-  >;
+  > &
+    Partial<
+      Pick<
+        SubscriptionRuntimeActorDelegationIssuer,
+        'issueManagedJoinPreflight' | 'issueManagedJoinAdmission' | 'issueManagedJoinRead'
+      >
+    >;
+  readonly managedJoinClient?: Pick<ManagedJoinOwnerClient, 'preflight' | 'admit' | 'read'>;
   readonly actorContextRepository: Pick<SubscriptionRuntimeActorContextRepository, 'resolve'>;
   readonly targetRepository?: BookedOperationAdmissionTargetRepository;
   readonly admissionTransport?: BookedOperationAdmissionTransport;
@@ -176,6 +199,13 @@ export function createBookedOperationOwner(options: {
     timeoutMs: options.timeoutMs,
   });
 
+  const managedClient =
+    options.boundary.managedJoinClient ??
+    new ManagedJoinOwnerClient({
+      baseUrl: options.baseUrl,
+      environment: options.environment,
+      timeoutMs: options.timeoutMs,
+    });
   const resolveActor = async (actor: {
     readonly tenantId: string;
     readonly userId: string;
@@ -201,8 +231,215 @@ export function createBookedOperationOwner(options: {
       subscriptionInstanceId: input.subscriptionInstanceId,
     });
 
-  return {
+  const dispatch = async (
+    input: Omit<Parameters<CommercialJoinOwnerPort['execute']>[0], 'price'>,
+    recoveryOnly = false,
+  ): Promise<CommercialJoinOwnerOutcome> => {
+    if (recoveryOnly && (!input.managedJoin || !input.providerBinding || !input.reservationId))
+      return { status: 'UNKNOWN' };
+    const context = await resolveActor({
+      tenantId: input.actor.tenantId,
+      userId: input.actor.userId,
+      sessionId: input.actor.sessionId,
+    });
+    // An unproven actor context must not book anything, and it must not lose the attempt either.
+    if (context.outcome !== 'ok') return { status: 'UNKNOWN' } satisfies CommercialJoinOwnerOutcome;
+    const target =
+      input.providerBinding ??
+      (await options.targetRepository.resolve({
+        tenantId: input.actor.tenantId,
+        targetId: input.actor.gameId,
+        expectedRevision: input.actor.expectedRevision,
+      }));
+    // The game has no verified owner mapping: this is not a chargeable target, so fail closed
+    // without keeping a seat for an operation that can never be executed.
+    if (!target) return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
+    if (
+      input.providerBinding &&
+      (input.providerBinding.providerClientId !== context.providerClientId ||
+        input.providerBinding.providerMappingId !== context.providerMappingId)
+    )
+      return { status: 'UNKNOWN' };
+    if (!target.admissible) return { status: 'REJECTED', code: 'GAME_SERVICE_BLOCKED' };
+    // The selected product must have a server-side provider subscription mapping; otherwise the
+    // owner cannot execute the booking and the user has to pick a different product.
+    const providerClientSubscriptionId =
+      input.providerBinding?.providerClientSubscriptionId ??
+      input.providerClientSubscriptionId ??
+      (options.issueActorToken
+        ? await options.boundary.resolveProviderClientSubscriptionId?.({
+            tenantId: input.actor.tenantId,
+            tenantKey: input.actor.tenantKey,
+            userId: input.actor.userId,
+            sessionId: input.actor.sessionId,
+            gameId: input.actor.gameId,
+            subscriptionInstanceId: input.subscriptionInstanceId,
+          })
+        : undefined);
+    if (options.issueActorToken && !providerClientSubscriptionId) {
+      return { status: 'REJECTED', code: 'GAME_SUBSCRIPTION_SELECTION_REQUIRED' };
+    }
+    const request: BookedOperationAdmissionRequest = {
+      action: 'JOIN_GAME',
+      target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
+      paymentIntent: 'USE_SUBSCRIPTION',
+    };
+    let actorToken: CommercialJoinActorToken | undefined;
+    if (options.issueActorToken) {
+      try {
+        actorToken = await options.issueActorToken({
+          tenantId: input.actor.tenantId,
+          tenantKey: input.actor.tenantKey,
+          userId: input.actor.userId,
+          sessionId: input.actor.sessionId,
+          correlationId: input.correlationId,
+        });
+      } catch {
+        // No credential, no attributable provider write: unresolved, never failed.
+        options.onMetric?.('actor_token_unavailable');
+        return { status: 'UNKNOWN' };
+      }
+    }
+    if (input.managedJoin) {
+      const issue = options.boundary.delegationIssuer.issueManagedJoinAdmission;
+      if (!issue || !actorToken || !input.reservationId || !providerClientSubscriptionId)
+        return { status: 'UNKNOWN' };
+      const request: ManagedJoinAdmissionRequest = {
+        contractVersion: 2,
+        action: 'JOIN_GAME',
+        target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
+        paymentIntent: 'USE_SUBSCRIPTION',
+        entitlement: input.managedJoin.entitlement,
+      };
+      if (managedJoinAdmissionSha256(request) !== input.providerBinding?.requestSha256)
+        return { status: 'UNKNOWN' };
+      try {
+        const actorDelegation = await issue.call(options.boundary.delegationIssuer, {
+          ...input.actor,
+          ...context,
+          ...target,
+          operationId: input.operationId,
+          correlationId: input.correlationId,
+          idempotencyKey: input.idempotencyKey,
+          request,
+          actorToken,
+          providerClientSubscriptionId,
+          reservationId: input.reservationId,
+          ...(recoveryOnly ? { recoveryOnly: true as const } : {}),
+        });
+        await managedClient.admit(request, {
+          actorDelegation,
+          actorToken,
+          correlationId: input.correlationId,
+          operationId: input.operationId,
+        });
+        return { status: 'PENDING' };
+      } catch {
+        return { status: 'UNKNOWN' };
+      }
+    }
+    try {
+      const actorDelegation = await options.boundary.delegationIssuer.issueBookedOperationAdmission(
+        {
+          tenantId: input.actor.tenantId,
+          tenantKey: input.actor.tenantKey,
+          userId: input.actor.userId,
+          sessionId: input.actor.sessionId,
+          providerClientId: context.providerClientId,
+          providerMappingId: context.providerMappingId,
+          providerExerciseId: target.providerExerciseId,
+          targetMappingId: target.targetMappingId,
+          targetVersion: target.targetVersion,
+          startsAt: target.startsAt,
+          durationMinutes: target.durationMinutes,
+          capacity: target.capacity,
+          admissible: target.admissible,
+          operationId: input.operationId,
+          correlationId: input.correlationId,
+          idempotencyKey: input.idempotencyKey,
+          request,
+          ...(input.reservationId ? { reservationId: input.reservationId } : {}),
+          ...(actorToken === undefined || providerClientSubscriptionId === undefined
+            ? {}
+            : {
+                actorToken,
+                providerClientSubscriptionId,
+              }),
+        },
+      );
+      await admissionTransport.admit(request, {
+        actorDelegation,
+        correlationId: input.correlationId,
+        operationId: input.operationId,
+        ...(actorToken === undefined
+          ? {}
+          : {
+              actorToken,
+              actorTokenSha256: bookedOperationActorTokenBinding(actorToken).actorTokenSha256,
+            }),
+      });
+      options.onMetric?.('execute_pending');
+      return { status: 'PENDING' };
+    } catch {
+      // A conflict or an unavailable owner is not a definitive rejection: keep the attempt and let
+      // readback reconcile it. Only an explicit REJECTED outcome may terminate the operation.
+      options.onMetric?.('execute_unknown');
+      return { status: 'UNKNOWN' };
+    }
+  };
+
+  const owner: CommercialJoinOwnerPort = {
     resolveProviderClientSubscriptionId,
+    async prepareManaged(input) {
+      const prepared = await owner.prepare!(input);
+      if (prepared.outcome !== 'prepared') return prepared;
+      const issuer = options.boundary.delegationIssuer;
+      if (!issuer.issueManagedJoinPreflight || !options.issueActorToken)
+        return { outcome: 'not_available' };
+      const binding = prepared.binding;
+      const actorToken = await options.issueActorToken({
+        ...input.actor,
+        correlationId: input.correlationId,
+      });
+      const request: ManagedJoinPreflightRequest = {
+        contractVersion: 2,
+        action: 'JOIN_GAME',
+        target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
+        paymentIntent: 'USE_SUBSCRIPTION',
+      };
+      const actorDelegation = await issuer.issueManagedJoinPreflight({
+        ...input.actor,
+        ...binding,
+        operationId: input.operationId,
+        correlationId: input.correlationId,
+        idempotencyKey: input.idempotencyKey,
+        actorToken,
+        request,
+      });
+      const result = await managedClient.preflight(request, {
+        actorDelegation,
+        actorToken,
+        correlationId: input.correlationId,
+        operationId: input.operationId,
+      });
+      if ('management' in result) return prepared; // Only the strict explicit LEGACY union reaches v1.
+      const managedJoin = {
+        contractVersion: 2 as const,
+        requestFingerprint: input.requestFingerprint,
+        entitlement: result.entitlement,
+      };
+      return {
+        outcome: 'prepared',
+        binding: {
+          ...binding,
+          requestSha256: managedJoinAdmissionSha256({
+            ...request,
+            entitlement: result.entitlement,
+          }),
+        },
+        managedJoin,
+      };
+    },
     async prepare(input) {
       const context = await resolveActor(input.actor);
       if (context.outcome !== 'ok') return { outcome: 'not_available' } as const;
@@ -233,119 +470,8 @@ export function createBookedOperationOwner(options: {
         } satisfies PaidJoinProviderBinding,
       };
     },
-    async execute(input) {
-      const context = await resolveActor({
-        tenantId: input.actor.tenantId,
-        userId: input.actor.userId,
-        sessionId: input.actor.sessionId,
-      });
-      // An unproven actor context must not book anything, and it must not lose the attempt either.
-      if (context.outcome !== 'ok')
-        return { status: 'UNKNOWN' } satisfies CommercialJoinOwnerOutcome;
-      const target =
-        input.providerBinding ??
-        (await options.targetRepository.resolve({
-          tenantId: input.actor.tenantId,
-          targetId: input.actor.gameId,
-          expectedRevision: input.actor.expectedRevision,
-        }));
-      // The game has no verified owner mapping: this is not a chargeable target, so fail closed
-      // without keeping a seat for an operation that can never be executed.
-      if (!target) return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
-      if (
-        input.providerBinding &&
-        (input.providerBinding.providerClientId !== context.providerClientId ||
-          input.providerBinding.providerMappingId !== context.providerMappingId)
-      )
-        return { status: 'UNKNOWN' };
-      if (!target.admissible) return { status: 'REJECTED', code: 'GAME_SERVICE_BLOCKED' };
-      // The selected product must have a server-side provider subscription mapping; otherwise the
-      // owner cannot execute the booking and the user has to pick a different product.
-      const providerClientSubscriptionId =
-        input.providerBinding?.providerClientSubscriptionId ??
-        input.providerClientSubscriptionId ??
-        (options.issueActorToken
-          ? await options.boundary.resolveProviderClientSubscriptionId?.({
-              tenantId: input.actor.tenantId,
-              tenantKey: input.actor.tenantKey,
-              userId: input.actor.userId,
-              sessionId: input.actor.sessionId,
-              gameId: input.actor.gameId,
-              subscriptionInstanceId: input.subscriptionInstanceId,
-            })
-          : undefined);
-      if (options.issueActorToken && !providerClientSubscriptionId) {
-        return { status: 'REJECTED', code: 'GAME_SUBSCRIPTION_SELECTION_REQUIRED' };
-      }
-      const request: BookedOperationAdmissionRequest = {
-        action: 'JOIN_GAME',
-        target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
-        paymentIntent: 'USE_SUBSCRIPTION',
-      };
-      let actorToken: CommercialJoinActorToken | undefined;
-      if (options.issueActorToken) {
-        try {
-          actorToken = await options.issueActorToken({
-            tenantId: input.actor.tenantId,
-            tenantKey: input.actor.tenantKey,
-            userId: input.actor.userId,
-            sessionId: input.actor.sessionId,
-            correlationId: input.correlationId,
-          });
-        } catch {
-          // No credential, no attributable provider write: unresolved, never failed.
-          options.onMetric?.('actor_token_unavailable');
-          return { status: 'UNKNOWN' };
-        }
-      }
-      try {
-        const actorDelegation =
-          await options.boundary.delegationIssuer.issueBookedOperationAdmission({
-            tenantId: input.actor.tenantId,
-            tenantKey: input.actor.tenantKey,
-            userId: input.actor.userId,
-            sessionId: input.actor.sessionId,
-            providerClientId: context.providerClientId,
-            providerMappingId: context.providerMappingId,
-            providerExerciseId: target.providerExerciseId,
-            targetMappingId: target.targetMappingId,
-            targetVersion: target.targetVersion,
-            startsAt: target.startsAt,
-            durationMinutes: target.durationMinutes,
-            capacity: target.capacity,
-            admissible: target.admissible,
-            operationId: input.operationId,
-            correlationId: input.correlationId,
-            idempotencyKey: input.idempotencyKey,
-            request,
-            ...(input.reservationId ? { reservationId: input.reservationId } : {}),
-            ...(actorToken === undefined || providerClientSubscriptionId === undefined
-              ? {}
-              : {
-                  actorToken,
-                  providerClientSubscriptionId,
-                }),
-          });
-        await admissionTransport.admit(request, {
-          actorDelegation,
-          correlationId: input.correlationId,
-          operationId: input.operationId,
-          ...(actorToken === undefined
-            ? {}
-            : {
-                actorToken,
-                actorTokenSha256: bookedOperationActorTokenBinding(actorToken).actorTokenSha256,
-              }),
-        });
-        options.onMetric?.('execute_pending');
-        return { status: 'PENDING' };
-      } catch {
-        // A conflict or an unavailable owner is not a definitive rejection: keep the attempt and let
-        // readback reconcile it. Only an explicit REJECTED outcome may terminate the operation.
-        options.onMetric?.('execute_unknown');
-        return { status: 'UNKNOWN' };
-      }
-    },
+    execute: (input) => dispatch(input),
+    recover: (input) => dispatch(input, true),
     async read(input) {
       const context = await resolveActor({
         tenantId: input.actor.tenantId,
@@ -353,6 +479,31 @@ export function createBookedOperationOwner(options: {
         sessionId: input.actor.sessionId,
       });
       if (context.outcome !== 'ok') return { status: 'UNKNOWN' };
+      if (input.managedJoin) {
+        const issue = options.boundary.delegationIssuer.issueManagedJoinRead;
+        if (!issue) return { status: 'UNKNOWN' };
+        try {
+          const actorDelegation = await issue.call(options.boundary.delegationIssuer, {
+            ...input.actor,
+            ...context,
+            operationId: input.operationId,
+            correlationId: input.correlationId,
+            includeReceipt: true,
+          });
+          const result = await managedClient.read({
+            actorDelegation,
+            correlationId: input.correlationId,
+            operationId: input.operationId,
+          });
+          if (result.status === 'CONFIRMED' && result.receipt)
+            return { status: 'CONFIRMED', receipt: result.receipt };
+          return { status: result.status === 'PENDING' ? 'PENDING' : 'UNKNOWN' };
+        } catch (error) {
+          return error instanceof ManagedJoinOwnerError && error.status === 404
+            ? null
+            : { status: 'UNKNOWN' };
+        }
+      }
       try {
         const actorDelegation = await options.boundary.delegationIssuer.issueBookedOperationRead({
           tenantId: input.actor.tenantId,
@@ -385,6 +536,7 @@ export function createBookedOperationOwner(options: {
       }
     },
   };
+  return owner;
 }
 
 export function createGameCommercialJoinRuntime(
@@ -409,7 +561,9 @@ export function createGameCommercialJoinRuntime(
       createBookedOperationAdmissionTargetRepository(options.pool),
     ...(options.issueActorToken ? { issueActorToken: options.issueActorToken } : {}),
   });
+  const stationMembership = createGameStationMembershipAdmission({ config, pool: options.pool });
   return {
+    ...(stationMembership ? { stationMembership } : {}),
     repository: options.rosterRepository as unknown as GameCommercialJoinOptions['repository'],
     conditionsOwner: options.conditionsOwner,
     owner,

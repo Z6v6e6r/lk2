@@ -62,6 +62,12 @@ export function createCabinetData(session: IOSSession, viewerId: string) {
   return {
     profile,
     dashboard,
+    levelHistory: () =>
+      read(async (api) => {
+        const value = await api.getProfileLevelHistory(100);
+        requireViewer(value.userId, viewerId);
+        return value;
+      }),
     home: () =>
       read(async (api) => {
         const value = await api.getHomeBase();

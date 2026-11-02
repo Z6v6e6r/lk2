@@ -1,0 +1,37 @@
+/** Synthetic current policy rows; never opens a database or contacts a provider. */
+export function ordinaryPolicyRow(
+  provider: 'FCM' | 'WEB_PUSH',
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    live_lease: true,
+    scenario_marked: false,
+    scenario_run_id: null,
+    recipient_user_id: '77777777-7777-4777-8777-777777777777',
+    endpoint_user_id: '77777777-7777-4777-8777-777777777777',
+    endpoint_status: 'ACTIVE',
+    endpoint_channel: 'PUSH',
+    provider_account_id: '44444444-4444-4444-8444-444444444444',
+    address_ciphertext: Buffer.from('fresh-cipher'),
+    encryption_key_id: 'fresh-key',
+    provider,
+    platform: provider === 'FCM' ? 'ANDROID' : 'WEB',
+    provider_channel: 'PUSH',
+    app_id: provider === 'FCM' ? 'ru.padlhub.app' : 'padlhub-web',
+    environment: 'SANDBOX',
+    provider_status: 'ACTIVE',
+    user_status: 'ACTIVE',
+    runtime_enabled: true,
+    trigger_rule_id: '88888888-8888-4888-8888-888888888888',
+    rule_active: true,
+    mandatory: false,
+    template_active: true,
+    category: 'MESSAGING',
+    preference_enabled: true,
+    quiet_from: null,
+    quiet_until: null,
+    timezone: null,
+    database_now: new Date('2026-11-01T20:30:00Z'),
+    ...overrides,
+  };
+}

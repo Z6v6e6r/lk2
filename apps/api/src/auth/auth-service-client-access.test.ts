@@ -245,3 +245,59 @@ describe('closed-beta client access convergence', () => {
     expect(onClientAccessConvergenceFailure).not.toHaveBeenCalled();
   });
 });
+
+describe('server-only training catalogue tenant capability', () => {
+  const actor = {
+    tenantId,
+    tenantKey: 'local-padel',
+    userId: user.id,
+    sessionId,
+    correlationId: 'catalogue-test',
+  };
+  function catalogueService(bindings: readonly unknown[]) {
+    let index = 0;
+    const resolveTenantAuthBinding = vi.fn(() =>
+      Promise.resolve(bindings[Math.min(index++, bindings.length - 1)]),
+    );
+    const auth = new AuthService({
+      config,
+      repository: { resolveTenantAuthBinding } as unknown as AuthRepository,
+      challengeStore: {} as never,
+      providers: new Map(),
+    });
+    const issue = vi.spyOn(auth, 'issueVivaAccessToken').mockResolvedValue({
+      accessToken: 'synthetic-user-delegation',
+      expiresAt: '2035-04-02T12:00:00Z',
+      profilePhotoGrant: 'not-a-catalogue-field',
+    });
+    return { auth, issue };
+  }
+  const binding = {
+    tenantId,
+    tenantKey: 'local-padel',
+    provider: 'VIVA',
+    providerTenantKey: 'private-tenant',
+  };
+  it('returns a private tenant-bound capability, not a profile handoff grant', async () => {
+    const { auth, issue } = catalogueService([binding]);
+    await expect(auth.issueTrainingCatalogueAccess(actor)).resolves.toEqual({
+      accessToken: 'synthetic-user-delegation',
+      providerTenantKey: 'private-tenant',
+    });
+    expect(issue).toHaveBeenCalledExactlyOnceWith(actor);
+  });
+  it.each([
+    undefined,
+    { ...binding, provider: 'LOCAL' },
+    { ...binding, tenantId: 'foreign' },
+    { ...binding, providerTenantKey: '../other' },
+  ])('rejects invalid provider scope before token issuance', async (invalid) => {
+    const { auth, issue } = catalogueService([invalid]);
+    await expect(auth.issueTrainingCatalogueAccess(actor)).rejects.toThrow();
+    expect(issue).not.toHaveBeenCalled();
+  });
+  it('rejects tenant binding drift after access refresh', async () => {
+    const { auth } = catalogueService([binding, { ...binding, providerTenantKey: 'replaced' }]);
+    await expect(auth.issueTrainingCatalogueAccess(actor)).rejects.toThrow();
+  });
+});

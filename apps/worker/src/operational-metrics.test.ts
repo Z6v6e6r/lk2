@@ -75,6 +75,8 @@ describe('worker operational metrics', () => {
         }
         if (text.includes("channel = 'PUSH'")) {
           pushDeliveryQueries.push(text);
+          expect(text).toContain("state in ('PENDING','STATION_PENDING')");
+          expect(text).toContain("state in ('SENDING','STATION_SENDING')");
           return Promise.resolve({
             rows: [
               values[0] === 'tenant-a'

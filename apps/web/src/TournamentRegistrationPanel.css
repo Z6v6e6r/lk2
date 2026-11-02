@@ -1,0 +1,35 @@
+.tournament-detail .tournament-detail__action--registration {
+  position: static;
+  box-sizing: border-box;
+  margin-top: 16px;
+}
+.tournament-registration {
+  display: grid;
+  width: 100%;
+  gap: 10px;
+  text-align: left;
+}
+.tournament-registration p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.tournament-registration button {
+  min-height: 44px;
+  height: auto;
+  padding: 10px;
+}
+.tournament-registration button:last-of-type {
+  border: 1px solid var(--tournament-purple, #8766eb);
+  color: var(--tournament-purple, #8766eb);
+  background: #fff;
+}
+.tournament-registration button:focus-visible {
+  outline: 3px solid #302158;
+  outline-offset: 2px;
+}
+.tournament-registration small {
+  display: block;
+  line-height: 1.5;
+}

@@ -1184,3 +1184,27 @@ describe('game repository', () => {
     expect(query).toHaveBeenCalledWith('commit');
   });
 });
+
+it('keeps canonical cancellation proof inside every existing projection statement without filtering rows', async () => {
+  const { pool, query } = poolWithHandler(() => ({ rows: [] }));
+  const repo = createGameRepository(pool as never);
+  await repo.getCardProjection(tenantId, gameId);
+  await repo.getCardProjections!(tenantId, [gameId]);
+  await repo.listViewerCardProjections({
+    tenantId,
+    viewerUserId: actorUserId,
+    scope: 'UPCOMING',
+    limit: 20,
+  });
+  const reads = query.mock.calls.filter(([sql]) =>
+    sql.includes('as local_cancellation_organizer_user_id'),
+  );
+  expect(reads).toHaveLength(3);
+  for (const [sql] of reads) {
+    expect(sql).toMatch(/g.tenant_id = (?:games.card_projections|p).tenant_id/);
+    expect(sql).toMatch(/g.revision = (?:games.card_projections|p).aggregate_revision/);
+    expect(sql).toContain("g.payment_mode = 'NO_PAYMENT'");
+    expect(sql).toContain('g.starts_at > statement_timestamp()');
+    expect(sql).not.toMatch(/inner join games.games/i);
+  }
+});

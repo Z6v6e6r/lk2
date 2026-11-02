@@ -1,5 +1,9 @@
 import type { Pool } from 'pg';
 import { withTenantTransaction } from './connection.js';
+import {
+  resolveGameCreateLocationBinding,
+  type GameCreateLocationBinding,
+} from './game-create-location-binding-repository.js';
 
 export type BookedOperationAdmissionAction = 'JOIN_GAME' | 'CREATE_GAME';
 
@@ -67,12 +71,19 @@ export interface BookedOperationCreateAdmissionTargetRepository extends BookedOp
   ): Promise<BookedOperationCreateDraftTarget | null>;
 }
 
+export interface BookedOperationCreateLocationTargetRepository extends BookedOperationCreateAdmissionTargetRepository {
+  /** Server-only location evidence; never included in resolveCreateDraft/public DTOs. */
+  resolveCreateDraftLocation(
+    input: BookedOperationAdmissionCreateDraftResolveInput,
+  ): Promise<GameCreateLocationBinding | null>;
+}
+
 // Current lifecycle/revision eligibility is a signed initial-admission condition.
 // A valid existing receipt is recovered before that condition is applied by its sole owner.
 // Reverse only a previously synced, versioned server mapping. Never establish one from a request.
 export function createBookedOperationAdmissionTargetRepository(
   pool: Pool,
-): BookedOperationCreateAdmissionTargetRepository {
+): BookedOperationCreateLocationTargetRepository {
   return {
     resolve: (input) => {
       // A CREATE draft is games.games-only and has no provider exercise: never let the JOIN mapping
@@ -118,6 +129,23 @@ export function createBookedOperationAdmissionTargetRepository(
           : null;
       });
     },
+    resolveCreateDraftLocation: (input) =>
+      withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query("set local statement_timeout = '3000ms'");
+        const draft = await client.query<{ station_id: string; court_id: string }>(
+          `select station_id,court_id from games.games where tenant_id=$1 and id=$2 and organizer_user_id=$3
+         and revision=$4 and lifecycle_state='PROVISIONING' and payment_mode in ('SPLIT','SUBSCRIPTION')
+         and capacity=4 and starts_at>now() and cancelled_at is null and court_id is not null for share`,
+          [input.tenantId, input.targetId, input.actorUserId, input.expectedRevision],
+        );
+        if (draft.rows.length !== 1) return null;
+        const row = draft.rows[0]!;
+        return resolveGameCreateLocationBinding(client, {
+          tenantId: input.tenantId,
+          stationId: row.station_id,
+          courtId: row.court_id,
+        });
+      }),
     // LK2 drafts are LOCAL_PRIMARY: one tenant-scoped read of games.games only. There is no provider
     // mapping to reverse for a draft and no migration is added for this contract.
     resolveCreateDraft: (input) =>

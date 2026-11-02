@@ -1,0 +1,84 @@
+.tournament-chat {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 16px 100px;
+  color: #19202e;
+}
+.tournament-chat header {
+  margin-bottom: 20px;
+}
+.tournament-chat h1 {
+  font-size: 28px;
+  margin: 16px 0 8px;
+}
+.tournament-chat a {
+  color: #315bce;
+}
+.tournament-chat__actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.tournament-chat button {
+  padding: 12px 16px;
+  border: 1px solid #8b96aa;
+  border-radius: 12px;
+  background: #fff;
+  color: #19202e;
+  font: inherit;
+  cursor: pointer;
+}
+.tournament-chat button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.tournament-chat :focus-visible {
+  outline: 3px solid #315bce;
+  outline-offset: 3px;
+}
+.tournament-chat ol {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.tournament-chat li {
+  padding: 16px;
+  border: 1px solid #d9dfeb;
+  border-radius: 16px;
+  background: #fff;
+}
+.tournament-chat li p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+}
+.tournament-chat time {
+  font-size: 12px;
+  color: #58647a;
+}
+.tournament-chat form {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+}
+.tournament-chat textarea {
+  min-height: 100px;
+  padding: 12px;
+  border: 1px solid #8b96aa;
+  border-radius: 12px;
+  font: inherit;
+  resize: vertical;
+}
+.tournament-chat form button {
+  justify-self: start;
+  background: #315bce;
+  color: #fff;
+}
+.tournament-chat form p {
+  font-size: 13px;
+  color: #58647a;
+}
+.tournament-chat section {
+  margin-top: 20px;
+}

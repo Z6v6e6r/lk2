@@ -78,7 +78,7 @@ describe('authenticated games contract', () => {
       }
     }
 
-    expect(commandCount).toBe(11);
+    expect(commandCount).toBe(12);
   });
 
   it('does not accept identity selectors, provider identifiers or caller-owned roster state', () => {

@@ -977,3 +977,76 @@ describe('dormant JOIN additions preserve the established secret set', () => {
     expect(() => f.validate()).toThrow();
   });
 });
+
+describe('monthly purchase API-only release inputs', () => {
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  function monthly() {
+    const env = safeRuntimeEnvironments();
+    Object.assign(env.api!, {
+      MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED: 'true',
+      MONTHLY_SUBSCRIPTION_OWNER_BASE_URL: 'https://padlhub.su/',
+      MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS: '10000',
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({
+        'synthetic-monthly': privateKey,
+      }),
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'synthetic-monthly',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://issuer.example.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'synthetic-monthly-owner',
+    });
+    return env;
+  }
+  it('accepts absent/false and complete monthly without enabling generic WARN', () => {
+    const off = safeRuntimeEnvironments();
+    expect(() => validateTimewebRuntimeEnvironments(off, { host, tenantKey })).not.toThrow();
+    off.api!.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED = 'false';
+    off.api!.MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS = '10000';
+    expect(() => validateTimewebRuntimeEnvironments(off, { host, tenantKey })).not.toThrow();
+    const env = monthly();
+    expect(env.api!.SUBSCRIPTION_RUNTIME_WARN_MODE).toBe('OFF');
+    expect(env.api!.SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN).toBeUndefined();
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).not.toThrow();
+    expect(loadConfig(env.api).MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED).toBe(true);
+  });
+  it.each([
+    'MONTHLY_SUBSCRIPTION_OWNER_BASE_URL',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE',
+  ])('rejects activation without %s', (key) => {
+    const env = monthly();
+    delete env.api![key];
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each([
+    { MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED: 'yes' },
+    { MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED: '1' },
+    { MONTHLY_SUBSCRIPTION_OWNER_BASE_URL: 'http://padlhub.su/' },
+    { MONTHLY_SUBSCRIPTION_OWNER_BASE_URL: 'https://other.example/' },
+    { MONTHLY_SUBSCRIPTION_OWNER_BASE_URL: 'https://padlhub.su/path' },
+    { MONTHLY_SUBSCRIPTION_OWNER_BASE_URL: 'https://padlhub.su/?x=1' },
+    { MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS: '99' },
+    { MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS: '10001' },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'unknown-key' },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: '{}' },
+  ])('rejects invalid monthly runtime input', (patch) => {
+    const env = monthly();
+    Object.assign(env.api!, patch);
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each(['worker', 'realtime', 'migrator'])('does not widen the %s role', (role) => {
+    for (const [key, value] of Object.entries({
+      MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED: 'false',
+      MONTHLY_SUBSCRIPTION_OWNER_BASE_URL: 'https://padlhub.su/',
+      MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS: '10000',
+    })) {
+      const env = safeRuntimeEnvironments();
+      env[role]![key] = value;
+      expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+    }
+  });
+});

@@ -24,6 +24,33 @@ function poolWithQueries(
 }
 
 describe('community repositories', () => {
+  it.each([0, 1, 2])(
+    'requires exactly one existing tenant/public community mapping (%i rows)',
+    async (count) => {
+      const { pool, query } = poolWithQueries((sql, values) => {
+        expect(sql).toContain("external_system = 'LK_LEGACY'");
+        expect(sql).toContain("entity_type = 'community'");
+        expect(sql).toContain('tenant_id = $1');
+        expect(sql).toContain('internal_id = $2::uuid');
+        expect(sql).toContain('limit 2');
+        expect(values).toEqual([tenantId, userId]);
+        return {
+          rows: Array.from({ length: count }, (_, index) => ({
+            external_id: `private-${index}`,
+            internal_id: userId,
+          })),
+        };
+      });
+      expect(
+        await createCommunityLegacyBridgeRepository(pool).getCommunityExternalId?.(
+          tenantId,
+          userId,
+        ),
+      ).toBe(count === 1 ? 'private-0' : undefined);
+      expect(query.mock.calls.some(([sql]) => /insert|update|delete/i.test(sql))).toBe(false);
+    },
+  );
+
   it('resolves legacy viewer identity only inside a tenant transaction', async () => {
     const { pool, query, release } = poolWithQueries((text, values) => {
       if (text.includes('from identity.users')) {
@@ -253,5 +280,60 @@ describe('community repositories', () => {
     expect(stable.items[0]?.logoUrl).toBe(
       `/public/api/v1/media/community-logos/${tenantId}/${communityId}`,
     );
+  });
+});
+
+describe('read-only station stream batch mappings', () => {
+  it('uses one bounded tenant SELECT without alias insertion', async () => {
+    const ids = [userId, '11111111-1111-4111-8111-111111111111'];
+    const { pool, query } = poolWithQueries((sql, values) => {
+      expect(sql).toContain('tenant_id = $1');
+      expect(sql).toContain('any($2::uuid[])');
+      expect(sql).toContain('limit 51');
+      expect(sql).toContain("external_system = 'LK_LEGACY'");
+      expect(sql).toContain("entity_type = 'community'");
+      expect(values).toEqual([tenantId, ids]);
+      return {
+        rows: ids.map((id, index) => ({ internal_id: id, external_id: `private-${index}` })),
+      };
+    });
+    const result = await createCommunityLegacyBridgeRepository(pool).getCommunityExternalIds!(
+      tenantId,
+      ids,
+    );
+    expect([...result]).toEqual(ids.map((id, index) => [id, `private-${index}`]));
+    expect(query.mock.calls.filter(([sql]) => sql.includes('external_entity_map'))).toHaveLength(1);
+    expect(query.mock.calls.some(([sql]) => /insert|update|delete/i.test(sql))).toBe(false);
+  });
+  it.each(['missing', 'aliases', 'reverse collision', 'foreign'] as const)(
+    'rejects %s without partial mapping',
+    async (mode) => {
+      const ids = [userId, '11111111-1111-4111-8111-111111111111'];
+      let rows = ids.map((id, index) => ({ internal_id: id, external_id: `private-${index}` }));
+      if (mode === 'missing') rows = rows.slice(0, 1);
+      if (mode === 'aliases') rows = [rows[0]!, { ...rows[0]!, external_id: 'other' }];
+      if (mode === 'reverse collision') rows[1]!.external_id = rows[0]!.external_id;
+      if (mode === 'foreign') rows[1]!.internal_id = tenantId;
+      const { pool } = poolWithQueries(() => ({ rows }));
+      expect(
+        (await createCommunityLegacyBridgeRepository(pool).getCommunityExternalIds!(tenantId, ids))
+          .size,
+      ).toBe(0);
+    },
+  );
+  it('rejects unbounded duplicate or malformed input before acquiring a connection', async () => {
+    const { pool, query } = poolWithQueries(() => {
+      throw new Error('must not read');
+    });
+    for (const ids of [
+      [],
+      [userId, userId],
+      Array.from({ length: 51 }, () => userId),
+      ['not-uuid'],
+    ])
+      await expect(
+        createCommunityLegacyBridgeRepository(pool).getCommunityExternalIds!(tenantId, ids),
+      ).rejects.toThrow('COMMUNITY_MAPPING_INVALID');
+    expect(query).not.toHaveBeenCalled();
   });
 });

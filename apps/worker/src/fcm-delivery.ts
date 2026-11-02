@@ -1,3 +1,4 @@
+import { checkOrdinaryPushPolicy } from './ordinary-push-policy.js';
 import { fcmRolloutClaimAllowed } from './fcm-rollout-gate.js';
 import { withTenantTransaction } from '@phub/database';
 import type {
@@ -131,13 +132,58 @@ export async function runFcmDeliveryBatch(options: {
   let dead = 0;
   let stale = 0;
   for (const row of jobs) {
-    if (options.scenarioPolicyEnabled !== undefined) {
+    const policy = await checkOrdinaryPushPolicy({
+      pool: options.pool,
+      provider: 'FCM',
+      appId: options.appId,
+      environment: options.environment,
+      job: {
+        tenantId: options.tenantId,
+        deliveryId: row.id,
+        intentId: row.intent_id,
+        endpointId: row.endpoint_id,
+        providerAccountId: row.provider_account_id,
+        attemptNo: row.attempt_count + 1,
+      },
+    });
+    if (policy.outcome === 'BUSY') {
+      const deferred = await deferNotificationDeliveryWithoutAttempt({
+        pool: options.pool,
+        job: {
+          tenantId: options.tenantId,
+          deliveryId: row.id,
+          intentId: row.intent_id,
+          endpointId: row.endpoint_id,
+          providerAccountId: row.provider_account_id,
+          attemptNo: row.attempt_count + 1,
+          startedAt: new Date().toISOString(),
+        },
+        retryAfterMs: 30_000,
+        errorCode: 'FCM_ROLLOUT_GATE_BUSY',
+        ordinaryOnly: true,
+      });
+      if (deferred === 'retry') retried++;
+      else stale++;
+      continue;
+    }
+    if (policy.outcome === 'SUPPRESSED') {
+      dead++;
+      continue;
+    }
+    if (
+      policy.outcome === 'STALE' ||
+      (policy.outcome === 'SCENARIO' && options.scenarioPolicyEnabled !== true)
+    ) {
+      stale++;
+      continue;
+    }
+    if (policy.outcome === 'SCENARIO') {
       const decision = await checkScenarioPushDelivery({
         pool: options.pool,
         tenantId: options.tenantId,
         deliveryId: row.id,
         attemptNo: row.attempt_count + 1,
-        enabled: options.scenarioPolicyEnabled,
+        enabled: options.scenarioPolicyEnabled === true,
         dispatchFence: true,
         ...(options.gameReminderMaxSourceAgeMs === undefined
           ? {}
@@ -154,13 +200,16 @@ export async function runFcmDeliveryBatch(options: {
     let result: PushDeliveryResult;
     try {
       result =
-        row.endpoint_status === 'ACTIVE'
+        policy.outcome === 'SEND' || row.endpoint_status === 'ACTIVE'
           ? await options.adapter.send({
               tenantId: options.tenantId,
               deliveryId: row.id,
               providerAccountId: row.provider_account_id,
               platform: 'ANDROID',
-              endpoint: options.cipher.decrypt(row.address_ciphertext, row.encryption_key_id),
+              endpoint: options.cipher.decrypt(
+                policy.outcome === 'SEND' ? policy.endpoint.ciphertext : row.address_ciphertext,
+                policy.outcome === 'SEND' ? policy.endpoint.encryptionKeyId : row.encryption_key_id,
+              ),
               notification: {
                 id: row.notification_id,
                 title: 'ПадлхАБ',
@@ -187,7 +236,9 @@ export async function runFcmDeliveryBatch(options: {
       endpointId: row.endpoint_id,
       attemptNo: row.attempt_count + 1,
       startedAt,
-      ...(row.scenario_delivery ? { scenarioDelivery: true } : {}),
+      ...(policy.outcome === 'SCENARIO'
+        ? { scenarioDelivery: true }
+        : { dispatchedEndpoint: policy.endpoint }),
     };
     const outcome =
       result.outcome === 'retryable_failure' && result.errorCode === 'FCM_CIRCUIT_OPEN'

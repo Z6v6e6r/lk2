@@ -1,3 +1,6 @@
+import { request as httpsRequest } from 'node:https';
+import type { connect as connectTls } from 'node:tls';
+import { createStationHttpsAgent, isStationNotSubmitted } from './station-https-agent.js';
 import type {
   NotificationPushDeliveryPort,
   PushDeliveryRequest,
@@ -63,6 +66,8 @@ export class FcmDeliveryAdapter implements NotificationPushDeliveryPort {
       readonly timeoutMs: number;
       readonly accessTokenProvider: FcmAccessTokenProvider;
       readonly fetchImplementation?: typeof fetch;
+      readonly stationRequestImplementation?: typeof httpsRequest;
+      readonly stationConnectImplementation?: typeof connectTls;
       readonly now?: () => number;
       readonly circuitFailureThreshold?: number;
       readonly circuitResetMs?: number;
@@ -116,10 +121,72 @@ export class FcmDeliveryAdapter implements NotificationPushDeliveryPort {
     });
     try {
       return this.observe(await Promise.race([this.deliver(request, controller.signal), expired]));
-    } catch {
+    } catch (error) {
+      if (request.stationCanSubmit && isStationNotSubmitted(error))
+        return this.observe({ outcome: 'retryable_failure', errorCode: 'STATION_NOT_SUBMITTED' });
       return this.observe({ outcome: 'retryable_failure', errorCode: 'FCM_NETWORK_FAILURE' });
     } finally {
       if (timeout) clearTimeout(timeout);
+    }
+  }
+  /** Station-only socket custody: no HTTP bytes can leave before the ready-TLS gate. */
+  private async stationPost(
+    url: string,
+    token: string,
+    body: string,
+    signal: AbortSignal,
+    canSubmit: () => boolean,
+  ): Promise<Response> {
+    const agent = createStationHttpsAgent(
+      () => !signal.aborted && canSubmit(),
+      this.options.stationConnectImplementation,
+    );
+    try {
+      return await new Promise<Response>((resolve, reject) => {
+        const req = (this.options.stationRequestImplementation ?? httpsRequest)(
+          url,
+          {
+            agent,
+            method: 'POST',
+            signal,
+            headers: {
+              authorization: 'Bearer ' + token,
+              'content-type': 'application/json',
+              'content-length': Buffer.byteLength(body),
+            },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            let size = 0;
+            res.on('data', (chunk: Buffer) => {
+              size += chunk.length;
+              if (size > 16_384) {
+                res.destroy(new Error('FCM_RESPONSE_INVALID'));
+                return;
+              }
+              chunks.push(chunk);
+            });
+            res.once('error', reject);
+            res.once('aborted', () => reject(new Error('FCM_RESPONSE_ABORTED')));
+            res.once('end', () => {
+              try {
+                const headers = new Headers();
+                if (typeof res.headers['retry-after'] === 'string')
+                  headers.set('retry-after', res.headers['retry-after']);
+                resolve(
+                  new Response(Buffer.concat(chunks), { status: res.statusCode ?? 502, headers }),
+                );
+              } catch (error) {
+                reject(error instanceof Error ? error : new Error('FCM_RESPONSE_INVALID'));
+              }
+            });
+          },
+        );
+        req.once('error', reject);
+        req.end(body);
+      });
+    } finally {
+      agent.destroy();
     }
   }
   private async deliver(
@@ -128,23 +195,33 @@ export class FcmDeliveryAdapter implements NotificationPushDeliveryPort {
   ): Promise<PushDeliveryResult> {
     const token = await this.options.accessTokenProvider.getAccessToken();
     if (signal.aborted) throw new Error('FCM_TIMEOUT');
-    const response = await (this.options.fetchImplementation ?? fetch)(
-      'https://fcm.googleapis.com/v1/projects/' + this.options.projectId + '/messages:send',
-      {
-        method: 'POST',
-        redirect: 'error',
-        signal,
-        headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          message: {
-            token: request.endpoint,
-            data: request.data ?? {},
-            android: { collapse_key: request.deliveryId, priority: 'high', ttl: '86400s' },
-          },
-        }),
+    if (request.stationCanSubmit && !request.stationCanSubmit())
+      return { outcome: 'retryable_failure', errorCode: 'STATION_NOT_SUBMITTED' };
+    const url =
+      'https://fcm.googleapis.com/v1/projects/' + this.options.projectId + '/messages:send';
+    const bodyJson = JSON.stringify({
+      message: {
+        token: request.endpoint,
+        data: request.data ?? {},
+        android: { collapse_key: request.deliveryId, priority: 'high', ttl: '86400s' },
       },
-    );
+    });
+    const response = request.stationCanSubmit
+      ? await this.stationPost(url, token, bodyJson, signal, request.stationCanSubmit)
+      : await (this.options.fetchImplementation ?? fetch)(url, {
+          method: 'POST',
+          redirect: 'error',
+          signal,
+          headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+          body: bodyJson,
+        });
     if (signal.aborted) throw new Error('FCM_TIMEOUT');
+    if (request.stationCanSubmit && !request.stationCanSubmit())
+      return {
+        outcome: 'terminal_failure',
+        errorCode: 'STATION_PROVIDER_OUTCOME_UNKNOWN',
+        invalidate: false,
+      };
     // OAuth rejection must retire the matching cached credential even with a malformed error body.
     if (response.status === 401 || response.status === 403) {
       if (response.status === 401) this.options.accessTokenProvider.invalidateAccessToken?.(token);

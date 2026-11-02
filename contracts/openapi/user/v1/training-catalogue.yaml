@@ -1,0 +1,93 @@
+paths:
+  /{tenantKey}/trainings/catalog:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [bookings]
+      operationId: listServerTrainingCatalogue
+      summary: Read a tenant-bound server training catalogue
+      description: |
+        Authenticated PadlHub-only discovery. Initial requests require localDates, kinds and
+        availability; dates must be within today through day six in Europe/Moscow. CSV parameters
+        are unique and bounded. Continuation permits only cursor and the original limit.
+        The original source staleAt is absolute; a cursor never renews source freshness.
+        Partial days have no exact totals/facets. This does not quote price, confirm eligibility,
+        reserve capacity or prove attendance. Provider credentials and identifiers stay server-side.
+        Unknown keys, duplicate parameters, bodies and malformed dates are rejected.
+      parameters:
+        - in: query
+          name: cursor
+          schema: { type: string, format: uuid }
+        - in: query
+          name: localDates
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 7
+            uniqueItems: true
+            items: { type: string, format: date }
+        - in: query
+          name: kinds
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 3
+            uniqueItems: true
+            items: { type: string, enum: [COACH_GAME, GROUP_TRAINING, SPLIT] }
+        - in: query
+          name: categoryIds
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 50
+            uniqueItems: true
+            items: { type: string, format: uuid }
+        - in: query
+          name: stationIds
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 50
+            uniqueItems: true
+            items: { type: string, format: uuid }
+        - in: query
+          name: availability
+          schema: { type: string, enum: [INCLUDE_FULL, EXCLUDE_FULL] }
+        - in: query
+          name: levelFrom
+          schema: { type: string, enum: [D, D+, C, C+, B, B+, A] }
+        - in: query
+          name: levelTo
+          schema: { type: string, enum: [D, D+, C, C+, B, B+, A] }
+        - in: query
+          name: startsAfterLocal
+          schema: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        '200':
+          description: Complete or explicitly partial observation, never registration authority.
+          content:
+            application/json:
+              schema:
+                $ref: ./booking-screen-read-jobs.yaml#/components/schemas/EventCatalogPage
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
+        '410':
+          description: Original snapshot freshness expired; explicitly reload the catalogue.
+          content:
+            application/json:
+              schema: { $ref: ../../common/components.yaml#/components/schemas/ApiError }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }

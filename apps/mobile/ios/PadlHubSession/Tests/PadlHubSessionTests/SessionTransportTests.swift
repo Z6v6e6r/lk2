@@ -131,6 +131,24 @@ final class SessionTransportTests: XCTestCase {
     XCTAssertEqual(catalog.status, 401)
   }
 
+  func testMessagingCannotEscapePendingLogoutOrSignedOutSession() async throws {
+    let store = try stored()
+    let client = SessionTransport(configuration: try configuration(), store: store) { _ in
+      XCTFail("Messaging must not send while logged out or revocation is pending")
+      throw SessionFailure.network
+    }
+    let command = SessionRequest(operation: .messaging,
+      headers: ["Authorization": "Bearer synthetic", "Idempotency-Key": key],
+      body: "{\"clientMessageId\":\"\(key)\",\"body\":\"Test\"}",
+      messaging: MessagingCommand(resource: "sendMessage", id: key))
+    store.value?.logoutKey = key
+    let pending = try await client.request(command)
+    XCTAssertEqual(pending.status, 401)
+    store.value = nil
+    let signedOut = try await client.request(command)
+    XCTAssertEqual(signedOut.status, 401)
+  }
+
   private let origin = "https://lk2.padlhub.su"
   private let tenant = "local-padel"
   private let oldToken = String(repeating: "a", count: 43)

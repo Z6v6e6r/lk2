@@ -1,3 +1,5 @@
+import { QuarterCreatePanel } from './QuarterCreatePanel.js';
+import { quarterBrowserStorage, quarterStorageKey } from './quarter-create-attempt.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
@@ -115,7 +117,7 @@ function browserAttemptStorage(): Storage | undefined {
   }
 }
 
-export function CreateGamePage({
+function LegacyCreateGamePage({
   gateway,
   principal,
   navigate = (url) => window.location.assign(url),
@@ -629,6 +631,9 @@ export function CreateGamePage({
   return (
     <main className="games-page games-page--create">
       {pageHeader}
+      {paidCreateIntent ? (
+        <a href="/games/create?quarterCreate=1">Игра по подписке: четверть корта</a>
+      ) : null}
       <form className="game-create-form" onSubmit={(event) => void submit(event)} noValidate>
         {locationsError ? (
           <p className="games-message is-error" role="alert">
@@ -835,4 +840,19 @@ export function CreateGamePage({
       <MainBottomNavigation active="games" gamesDestination="games" />
     </main>
   );
+}
+
+export function CreateGamePage(
+  props: Parameters<typeof LegacyCreateGamePage>[0],
+): React.JSX.Element {
+  let quarter =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('quarterCreate') === '1';
+  try {
+    const storage = props.attemptStorage ?? quarterBrowserStorage();
+    quarter = quarter || Boolean(storage?.getItem(quarterStorageKey(props.principal)));
+  } catch {
+    quarter = true;
+  }
+  return quarter ? <QuarterCreatePanel {...props} /> : <LegacyCreateGamePage {...props} />;
 }
