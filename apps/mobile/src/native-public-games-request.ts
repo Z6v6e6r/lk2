@@ -1,3 +1,4 @@
+import { ApiClientError } from '@phub/api-sdk';
 /** Closed unauthenticated catalogue; no user or provider credentials cross it. */
 export function nativePublicGamesRequest(
   value: string,
@@ -7,7 +8,7 @@ export function nativePublicGamesRequest(
   const root = `${config.apiBaseUrl}/public/api/v1/${config.tenantKey}/games`;
   if (!value.startsWith(root)) return false;
   const deny = () => {
-    throw new Error('NATIVE_REQUEST_REJECTED');
+    throw new ApiClientError('NATIVE_REQUEST_REJECTED', 403, 'NATIVE_REQUEST_REJECTED', 'native');
   };
   const url = new URL(value),
     headers = new Headers(init?.headers);

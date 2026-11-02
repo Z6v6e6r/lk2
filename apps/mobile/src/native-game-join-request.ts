@@ -1,3 +1,4 @@
+import { ApiClientError } from '@phub/api-sdk';
 import type { NativeJoinRequest } from '../../web/src/native-game-join-attempt.js';
 import { nativeGameUuid, readNativeJoinBody } from '../../web/src/native-game-join-wire.js';
 export function nativeJoinIdentity(v: NativeJoinRequest) {
@@ -21,7 +22,7 @@ export function nativeJoinRequest(
   )
     return null;
   if (value.length > 8192 || /[%#\\]|\.\./.test(value.split('?')[0] ?? ''))
-    throw new Error('NATIVE_REQUEST_REJECTED');
+    throw new ApiClientError('NATIVE_REQUEST_REJECTED', 403, 'NATIVE_REQUEST_REJECTED', 'native');
   const url = new URL(value),
     path = url.pathname.slice(new URL(root).pathname.length),
     headers = new Headers(init?.headers),
@@ -36,7 +37,7 @@ export function nativeJoinRequest(
     url.password ||
     url.hash
   )
-    throw new Error('NATIVE_REQUEST_REJECTED');
+    throw new ApiClientError('NATIVE_REQUEST_REJECTED', 403, 'NATIVE_REQUEST_REJECTED', 'native');
   const resource: NativeJoinRequest['resource'] =
     m?.[2] === 'join'
       ? 'join'
@@ -63,7 +64,7 @@ export function nativeJoinRequest(
     [...headers].some(([k, v]) => !allowed.has(k) || v.length > 8192 || /[\r\n]/.test(v)) ||
     !/^Bearer [A-Za-z0-9._-]{8,8192}$/.test(headers.get('authorization') ?? '')
   )
-    throw new Error('NATIVE_REQUEST_REJECTED');
+    throw new ApiClientError('NATIVE_REQUEST_REJECTED', 403, 'NATIVE_REQUEST_REJECTED', 'native');
   if (resource === 'conditions') {
     if (
       method !== 'GET' ||
@@ -75,7 +76,7 @@ export function nativeJoinRequest(
       !Number.isSafeInteger(Number(query.expectedRevision)) ||
       !nativeGameUuid.test(query.subscriptionInstanceId ?? '')
     )
-      throw new Error('NATIVE_REQUEST_REJECTED');
+      throw new ApiClientError('NATIVE_REQUEST_REJECTED', 403, 'NATIVE_REQUEST_REJECTED', 'native');
     return { resource, resourceId: id, query };
   }
   if (
@@ -85,11 +86,15 @@ export function nativeJoinRequest(
     !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/.test(key) ||
     method !== (resource === 'join' || resource === 'reconcile' ? 'POST' : 'GET')
   )
-    throw new Error('NATIVE_REQUEST_REJECTED');
+    throw new ApiClientError('NATIVE_REQUEST_REJECTED', 403, 'NATIVE_REQUEST_REJECTED', 'native');
   if (resource === 'join') {
     if (typeof init?.body !== 'string' || headers.get('content-type') !== 'application/json')
-      throw new Error('NATIVE_REQUEST_REJECTED');
-    readNativeJoinBody(init.body);
+      throw new ApiClientError('NATIVE_REQUEST_REJECTED', 403, 'NATIVE_REQUEST_REJECTED', 'native');
+    try {
+      readNativeJoinBody(init.body);
+    } catch {
+      throw new ApiClientError('NATIVE_REQUEST_REJECTED', 403, 'NATIVE_REQUEST_REJECTED', 'native');
+    }
     return { resource, resourceId: id, key, body: init.body };
   }
   if (
@@ -97,6 +102,6 @@ export function nativeJoinRequest(
     headers.has('content-type') ||
     (resource === 'reconcile' && key !== `join-reconcile:${id}`)
   )
-    throw new Error('NATIVE_REQUEST_REJECTED');
+    throw new ApiClientError('NATIVE_REQUEST_REJECTED', 403, 'NATIVE_REQUEST_REJECTED', 'native');
   return { resource, resourceId: id, key };
 }
