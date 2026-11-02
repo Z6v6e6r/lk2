@@ -1,3 +1,7 @@
+import {
+  closedApplicationPackageFamily,
+  closedApplicationPackageArgument,
+} from './closed-application-package-family.js';
 // New migration-only enrollment. No application rollout, runtime ACL, env or send activation.
 import { createHash } from 'node:crypto';
 import descriptor from '../deploy/timeweb/closed-application-migrations-0103-0104.v1.json' with { type: 'json' };
@@ -174,7 +178,7 @@ export function validateClosedApplicationOperation(value, at) {
   ]);
   const image = value.publishedMigrator;
   if (
-    value.schema !== CLOSED_APPLICATION_OPERATION_SCHEMAS[profile] ||
+    !['HISTORICAL108', 'R1_PACKAGE119'].includes(closedApplicationPackageFamily(value)) ||
     value.profile !== 'beta' ||
     !same(value.target, CLOSED_APPLICATION_HOST_TARGET) ||
     !same(value.expectedDatabaseTarget, CLOSED_APPLICATION_DATABASE_TARGET) ||
@@ -273,7 +277,7 @@ export function closedApplicationCommand(operation, containerKind) {
   return [
     'node',
     'apps/migrator/dist/main.js',
-    CLOSED_APPLICATION_STAGE[operation.migrationProfile].argument,
+    closedApplicationPackageArgument(operation),
     Buffer.from(JSON.stringify(target)).toString('base64'),
   ];
 }

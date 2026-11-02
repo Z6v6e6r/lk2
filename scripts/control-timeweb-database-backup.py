@@ -174,12 +174,49 @@ CLOSED_APPLICATION_BACKUPS = {
 }
 
 
+# Explicit119-package/108-prefix family. Old schemas and their definitions are unchanged.
+for _r1_prefix_kind,_r1_prefix_old in (
+    ('game_start_0103','PHUB_TIMEWEB_GAME_START_PRE0103_BACKUP_NAMESPACE_V1'),
+    ('subject_link_0104','PHUB_TIMEWEB_SUBJECT_LINK_PRE0104_BACKUP_NAMESPACE_V1')):
+    _r1_prefix_definition=CLOSED_APPLICATION_BACKUPS[_r1_prefix_old]
+    CLOSED_APPLICATION_BACKUPS[_r1_prefix_old.replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1)]={
+        **_r1_prefix_definition,'family':'R1_PACKAGE119',
+        'migrationSchema':_r1_prefix_definition['migrationSchema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1),
+        'receiptSchema':_r1_prefix_definition['receiptSchema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1),
+        'terminalSchema':_r1_prefix_definition['terminalSchema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1),
+        'supervisorSchema':_r1_prefix_definition['supervisorSchema'].replace('PHUB_','PHUB_R1_',1),
+        'preimageSchema':_r1_prefix_definition['preimageSchema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1)}
+
+# Separate fixed R1 tail backup profiles; historical0103/0104 entries stay byte-exact.
+R1_TAIL_PREFIX_LEDGERS = {108: '3289f5f7021efce6da670cb7ecb848262c2e4e7b39c12aee91d05ff6583fe9e9', 109: '17fcb3e52e5918c6c7aab40a0a73a8707af1ed2aaee60c8851c4e883bbd592b0', 110: '8837c54c64993c58ad215ba76d14f797e3f8c3a4327ad07583fd24907fe0746a', 111: '527d07d1281b6ce7ce07d3341df9ee60dde82a63d01c5b048d22dc352313f200', 112: '6b44cc24949157d392a13c183cb87177d005346f7fe4005554ccac97670c66b9', 113: '624307206f3bfbfd65d26052c4efa06aa66f32729dafe9a7294385ae2eef4cf9', 114: '4d813a80130ff8b17031112f934d9272b351759eb100657406bc37b160ec37bb', 115: 'e24ea76929b5485bf2a6d7cfefc235d7f70dfd18fe05a56c01ec284c4c6cd4fd', 116: '74113db30901599590025387d338f7bbb12487d170352f11ac1094133c1a441e', 117: 'febc2bb5d723688e422057e441e745c49d394d4a38551aa19fd1b3b678cfff55', 118: '25d7e9bc85aafe167ca9dc39710eaa98b3e52591609e90230d7b680e0cca7e31'}
+for _r1_count,_r1_ledger in R1_TAIL_PREFIX_LEDGERS.items():
+    CLOSED_APPLICATION_BACKUPS[f'PHUB_TIMEWEB_R1_TAIL_PRE{_r1_count}_BACKUP_NAMESPACE_V1'] = {
+        'kind':'r1_tail108_119','mode':f'r1-tail-pre{_r1_count}','count':_r1_count,'ledger':_r1_ledger,
+        'migrationSchema':'PHUB_R1_TAIL108_119_OPERATION_V1',
+        'receiptSchema':f'PHUB_TIMEWEB_R1_TAIL_PRE{_r1_count}_BACKUP_RESTORE_V1',
+        'terminalSchema':f'PHUB_TIMEWEB_R1_TAIL_PRE{_r1_count}_BACKUP_TERMINAL_V1',
+        'supervisorSchema':f'PHUB_R1_TAIL_PRE{_r1_count}_SUPERVISOR_AUTHORITY_V1',
+        'preimageSchema':f'PHUB_TIMEWEB_R1_TAIL_PRE{_r1_count}_PREIMAGE_V1'}
+
+def is_r1_tail_backup(op):
+    return isinstance(op,dict) and op.get('schema') in CLOSED_APPLICATION_BACKUPS and CLOSED_APPLICATION_BACKUPS[op['schema']]['kind']=='r1_tail108_119'
+
+
+def closed_application_backup_mode(op):
+    mode=CLOSED_APPLICATION_BACKUPS[op['schema']]['mode']
+    if is_r1_tail_backup(op):
+        attempt=op['migrationIntent'].get('attemptId')
+        need(isinstance(attempt,str) and re.fullmatch(r'[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}',attempt) is not None,'R1_TAIL_BACKUP_ATTEMPT')
+        mode+='-'+attempt
+    return mode
+
+
 def is_closed_application_backup(op):
     return isinstance(op, dict) and op.get('schema') in CLOSED_APPLICATION_BACKUPS
 
 
 def closed_application_binding_sha(op):
-    intent = {key:value for key,value in op['migrationIntent'].items() if key not in ('expiresAt','confirmation')}
+    intent = {key:value for key,value in op['migrationIntent'].items() if key not in (('expiresAt','confirmation','backup') if is_r1_tail_backup(op) else ('expiresAt','confirmation'))}
     return digest(json.dumps(intent, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode())
 
 
@@ -1934,7 +1971,7 @@ def now_iso():
 
 
 def operation_mode(value):
-    if is_closed_application_backup(value):return CLOSED_APPLICATION_BACKUPS[value['schema']]['mode'], value['releaseId']
+    if is_closed_application_backup(value):return closed_application_backup_mode(value), value['releaseId']
     if value['schema'] == JOIN_POST105_SCHEMA:
         return 'join-post105', value['releaseId']
     if value['schema'] == NOTIFICATION_PRE105_SCHEMA:
@@ -2021,8 +2058,9 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         exact(value, common + ['profile','releaseId','controllerSourceCiRunId','expectedLedgerSha256','expectedDatabaseTarget',
                               'packageDescriptorSha256','catalogBuilderSha256','catalogVariant','migratorPrefetch','migrationIntent'])
         definition = CLOSED_APPLICATION_BACKUPS[schema]
-        mode,release_id = definition['mode'],value['releaseId']
+        mode,release_id = closed_application_backup_mode(value),value['releaseId']
         intent = value['migrationIntent']
+        if is_r1_tail_backup(value):need(isinstance(intent,dict) and intent.get('fromCount')==definition['count'],'R1_TAIL_BACKUP_PREFIX')
         validate_prefetch_binding(value['migratorPrefetch'])
         need(isinstance(intent,dict) and intent.get('migrationProfile')==definition['kind'] and intent.get('schema')==definition['migrationSchema']
              and value['profile']=='beta' and 'controllerPromotion' not in value
@@ -2400,6 +2438,8 @@ def _owner_acl_source_program(op):
     program="import fs from 'node:fs';import {attestLocationPhotoBackupSource} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-location-photo-profile.js';import {upgradeGit as git,readUpgradeFile as read,secureUpgradePath as secure} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));const present=p=>{try{fs.lstatSync(p);return true}catch(e){if(e.code==='ENOENT')return false;throw e}};attestLocationPhotoBackupSource(op,{git,read,secure,present});"
     if is_closed_application_backup(op):
         program="import fs from 'node:fs';import {attestClosedApplicationBackupSource} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-closed-application-runtime.js';import {upgradeGit as git,readUpgradeFile as read,secureUpgradePath as secure} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));const present=p=>{try{fs.lstatSync(p);return true}catch(e){if(e.code==='ENOENT')return false;throw e}};attestClosedApplicationBackupSource(op,{git,read,secure,present});"
+    if is_r1_tail_backup(op):
+        program="import fs from 'node:fs';import {attestR1TailBackupSource} from '/opt/phub/timeweb-beta/standard/source/scripts/r1-tail-migration-runtime.js';import {upgradeGit as git,readUpgradeFile as read,secureUpgradePath as secure} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));const present=p=>{try{fs.lstatSync(p);return true}catch(e){if(e.code==='ENOENT')return false;throw e}};attestR1TailBackupSource(op,{git,read,secure,present});"
     environment={key:ENV[key] for key in ['PATH','HOME','LANG','LC_ALL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_OPTIONAL_LOCKS','GIT_NO_REPLACE_OBJECTS','GIT_NO_LAZY_FETCH','GIT_NO_PROMISOR_FETCH','GIT_ALTERNATE_OBJECT_DIRECTORIES']}
     return program,environment
 
@@ -2488,7 +2528,10 @@ def notification_host_backup_authority(op):
     if is_closed_application_backup(op):
         validate_prefetch_binding(op.get('migratorPrefetch'))
         program,environment = _owner_acl_source_program(op)
-        program += "import {attestClosedApplicationMigratorPrefetchForBackup} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-closed-application-runtime.js';await attestClosedApplicationMigratorPrefetchForBackup(op);process.stdout.write('MIGRATOR_PREFETCH_VERIFIED');"
+        if is_r1_tail_backup(op):
+            program += "import {attestR1TailMigratorPrefetchForBackup} from '/opt/phub/timeweb-beta/standard/source/scripts/r1-tail-migration-runtime.js';await attestR1TailMigratorPrefetchForBackup(op);process.stdout.write('MIGRATOR_PREFETCH_VERIFIED');"
+        else:
+            program += "import {attestClosedApplicationMigratorPrefetchForBackup} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-closed-application-runtime.js';await attestClosedApplicationMigratorPrefetchForBackup(op);process.stdout.write('MIGRATOR_PREFETCH_VERIFIED');"
         need(command(['/usr/bin/node','--input-type=module','-e',program], 'CLOSED_APPLICATION_MIGRATOR_PREFETCH',
                      input_data=encoded(op),environment=environment,timeout=60)==b'MIGRATOR_PREFETCH_VERIFIED',
              'CLOSED_APPLICATION_MIGRATOR_PREFETCH')
@@ -2582,7 +2625,9 @@ def join_post105_recheck(p, op, journal):
 
 
 def notification_preimage(op):
-    if is_closed_application_backup(op):
+    if is_r1_tail_backup(op):
+        program="import fs from 'node:fs';import {readR1TailBackupDatabaseState} from '/opt/phub/timeweb-beta/standard/source/scripts/r1-tail-migration-runtime.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(readR1TailBackupDatabaseState(op)));"
+    elif is_closed_application_backup(op):
         program="import fs from 'node:fs';import {readClosedApplicationBackupDatabaseState} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-closed-application-runtime.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(readClosedApplicationBackupDatabaseState(op)));"
     elif op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA:
         program="import fs from 'node:fs';import {readLocationPhotoDatabaseState} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-worker-migration.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(readLocationPhotoDatabaseState(op,'pre')));"
@@ -2802,6 +2847,8 @@ def notification_terminal_tool_custody(op):
 
 
 def completed_notification_terminal_tool_custody(backup_op, backup_raw, rollout):
+    if isinstance(rollout,dict) and rollout.get('schema')=='PHUB_R1_TAIL108_119_OPERATION_V1':
+        return completed_r1_tail_terminal_tool_custody(backup_op,backup_raw,rollout)
     # This is a terminal data-proof read under NEW source authority, never old forward authority.
     app_request=ROOT/'operator/api-worker-upgrade.json'
     need(Path(__file__)==ROOT/'standard/source/scripts/control-timeweb-database-backup.py'
@@ -2823,6 +2870,37 @@ def completed_notification_terminal_tool_custody(backup_op, backup_raw, rollout)
     # pretending that its old commit is the currently enrolled controller.
     _tool_custody_local(backup_op)
 
+
+def completed_r1_tail_terminal_tool_custody(backup_op,backup_raw,tail):
+    # Read-only historical backup proof under exact new-source R1 authority.
+    need(Path(__file__)==ROOT/'standard/source/scripts/control-timeweb-database-backup.py'
+         and os.getuid()==os.getgid()==0 and sys.flags.isolated and sys.flags.no_site
+         and sys.flags.dont_write_bytecode and not sys.flags.optimize,'R1_TAIL_TERMINAL_ENTRY')
+    need(strict(read_secure(ROOT/'operator/r1-tail108-119-migration.json'))==tail,'R1_TAIL_TERMINAL_REQUEST')
+    if is_r1_tail_backup(backup_op):
+        program="import fs from 'node:fs';import {attestR1TailRetainedBackupSource} from '/opt/phub/timeweb-beta/standard/source/scripts/r1-tail-migration-runtime.js';const value=JSON.parse(fs.readFileSync(0,'utf8'));attestR1TailRetainedBackupSource(value.backup,value.tail);process.stdout.write('R1_TAIL_BACKUP_SOURCE_VERIFIED');"
+    else:
+        need(is_closed_application_backup(backup_op) and CLOSED_APPLICATION_BACKUPS[backup_op['schema']]['kind'] in ('game_start_0103','subject_link_0104'),'R1_TAIL_PREDECESSOR_KIND')
+        program="import fs from 'node:fs';import {attestR1TailPredecessorBackupSource} from '/opt/phub/timeweb-beta/standard/source/scripts/r1-tail-migration-runtime.js';const value=JSON.parse(fs.readFileSync(0,'utf8'));attestR1TailPredecessorBackupSource(value.backup,value.tail);process.stdout.write('R1_TAIL_BACKUP_SOURCE_VERIFIED');"
+    environment={key:ENV[key] for key in ['PATH','HOME','LANG','LC_ALL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_OPTIONAL_LOCKS','GIT_NO_REPLACE_OBJECTS','GIT_NO_LAZY_FETCH','GIT_NO_PROMISOR_FETCH','GIT_ALTERNATE_OBJECT_DIRECTORIES']}
+    need(command(['/usr/bin/node','--input-type=module','-e',program],'R1_TAIL_BACKUP_SOURCE',input_data=encoded({'backup':backup_op,'tail':tail}),environment=environment,timeout=60)==b'R1_TAIL_BACKUP_SOURCE_VERIFIED','R1_TAIL_BACKUP_SOURCE')
+    _tool_custody_local(backup_op)
+
+
+def r1_tail_retained_backup_main():
+    need(len(sys.argv)==4 and sys.argv[1] in ('--attest-r1-predecessor-backup','--attest-r1-tail-backup')
+         and sys.argv[2]==str(ROOT/'operator/r1-tail108-119-migration.json'),'R1_TAIL_TERMINAL_ENTRY')
+    path=Path(sys.argv[3])
+    need(re.fullmatch(r'/opt/phub/timeweb-beta/backups/[a-f0-9]{40}-[1-9][0-9]*-1-(?:game-start-pre0103|subject-link-pre0104|r1-tail-pre(?:108|109|11[0-8])-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})/backup-operation\.json',str(path)) is not None,'R1_TAIL_BACKUP_PATH')
+    tail=strict(read_secure(ROOT/'operator/r1-tail108-119-migration.json'));raw=read_secure(path);value=strict(raw)
+    file_sha=digest(read_secure(ROOT/('operator/tools/'+value['toolCommit']+'/control-timeweb-database-backup.py'),0o755))
+    op=validate_operation(value,time.time(),file_sha,allow_expired=True)
+    need(is_closed_application_backup(op) and path.parent==ROOT/'backups'/(op['releaseId']+'-'+closed_application_backup_mode(op))
+         and (is_r1_tail_backup(op)==(sys.argv[1]=='--attest-r1-tail-backup')),'R1_TAIL_BACKUP_BINDING')
+    need(os.uname().nodename=='msk-1-vm-z8ks' and os.uname().machine=='x86_64','HOST')
+    ips=command(['/usr/bin/hostname','-I'],'HOST').decode().split();need('100.77.212.57'in ips and '103.88.243.171'in ips,'HOST')
+    result=notification_backup_reference(op,raw,file_sha,completed_by=tail)
+    print(json.dumps(result,separators=(',',':')))
 
 def completed_notification_backup_main():
     need(sys.argv[1:]==['--attest-completed-notification-backup',str(ROOT/'operator/api-worker-upgrade.json')], 'COMPLETED_BACKUP_ENTRY')
@@ -4486,6 +4564,8 @@ def pre105_retirement_main():
 
 
 def main():
+    if len(sys.argv)==4 and sys.argv[1] in ('--attest-r1-predecessor-backup','--attest-r1-tail-backup'):
+        r1_tail_retained_backup_main();return
     if len(sys.argv)==3 and sys.argv[1]=='--attest-closed-retained':
         # Terminal, read-only custody for a completed first stage. The operator's
         # shared request may already contain the second-stage backup operation.

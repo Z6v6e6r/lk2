@@ -1,3 +1,7 @@
+import {
+  closedApplicationPackageFamily,
+  closedApplicationDescriptorPath,
+} from './closed-application-package-family.js';
 // Host binding for the two closed, individually authorized migration steps.
 // Importing this module performs no IO. The restore child's source check stays pure.
 import { execFileSync } from 'node:child_process';
@@ -39,7 +43,7 @@ import {
   validateClosedApplicationState,
 } from './timeweb-closed-application-profile.js';
 import {
-  CLOSED_APPLICATION_BACKUPS,
+  closedApplicationBackupDefinition,
   closedApplicationBackupBindingSha256,
   closedApplicationBackupDirectory,
   closedApplicationMigrationBinding,
@@ -150,7 +154,7 @@ function terminalProof(backup, backupBytes, receiptBytes, preimageBytes, deps, r
     fail('BACKUP_TERMINAL_UNKNOWN');
   }
   const receipt = parseStrictJson(receiptBytes),
-    definition = CLOSED_APPLICATION_BACKUPS[operation.migrationProfile];
+    definition = closedApplicationBackupDefinition(operation);
   exact(terminal, [
     'schema',
     'operationSha256',
@@ -218,6 +222,7 @@ export function attestClosedApplicationPrevious(operation, deps = dependencies) 
     paths = closedApplicationProductionPaths(previous);
   if (
     previous.migrationProfile !== 'game_start_0103' ||
+    closedApplicationPackageFamily(previous) !== closedApplicationPackageFamily(operation) ||
     paths.transactionRoot !== root ||
     previous.controllerSha !== operation.controllerSha ||
     previous.controllerTree !== operation.controllerTree ||
@@ -375,12 +380,8 @@ export function createClosedApplicationProductionBinding(operation) {
     inputs: (op, deps) => {
       const inputs = closedApplicationInputDigests(op);
       if (
-        hash(
-          deps.read(
-            `${SOURCE}/deploy/timeweb/closed-application-migrations-0103-0104.v1.json`,
-            0o644,
-          ),
-        ) !== inputs.packageDescriptorSha256 ||
+        hash(deps.read(`${SOURCE}/${closedApplicationDescriptorPath(op)}`, 0o644)) !==
+          inputs.packageDescriptorSha256 ||
         hash(deps.read(`${SOURCE}/scripts/closed-application-migration-catalog.js`, 0o644)) !==
           inputs.catalogBuilderSha256
       )

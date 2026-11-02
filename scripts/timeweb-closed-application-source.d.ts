@@ -10,3 +10,7 @@ export function attestClosedApplicationControllerSource(
     assertGitConfig?: (git: (args: string[]) => string) => unknown;
   },
 ): unknown;
+
+export const CLOSED_R1_CONTROLLER_BASE: Readonly<{ sha: string; tree: string }>;
+export const CLOSED_R1_CONTROLLER_FILES: readonly string[];
+export function validateClosedR1ControllerClosure(entries: unknown): unknown;

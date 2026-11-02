@@ -29,6 +29,42 @@ and tree `a76bc4ce1f472e2465a0bbb0075f1ec0efba294c`. Foreign runtime changes, sy
 deletions, dirty Git metadata and any other CI patch fail admission. This is not a generic
 controller-promotion exemption. A source change or base drift requires fresh review.
 
+## Explicit patched119 package for the R1 prefix
+
+The historical108 schemas, CLI arguments and871 source closure above remain unchanged. The R1
+release explicitly selects `PHUB_TIMEWEB_R1_GAME_START_0103_MIGRATION_OPERATION_V1` or
+`PHUB_TIMEWEB_R1_SUBJECT_LINK_0104_MIGRATION_OPERATION_V1` and the corresponding fixed
+`--r1-game-start-migration-0103` / `--r1-subject-link-migration-0104` image arguments.
+There is no selection by observed package length and no ordinary-mode fallback.
+
+`deploy/timeweb/closed-application-prefix108-package119.v1.json` pins the full119 inventory through
+`r1-tail108-119.v1.json`, the immutable108 descriptor bytes and the same106/107/108 checkpoints.
+The existing single-step hooks still execute only the selected0103 or0104;0105–0115 remain pending.
+An old108 argument rejects119; a new argument rejects108/120, omitted SQL and changed prefix/suffix.
+
+The new schema family uses the existing manual entry, shared executor, ACL/catalog checks,
+manifest verification and namespace backup producer. Controller source, source CI and published
+image remain one exact tuple. Its separately reviewed source closure starts at
+`27d8527f2f36e1a647012a86f92f4a51b9dd50eb`, tree
+`f144d66d2aaa3dfdb53177c62d35bcb7b327253f`; only the fixed prefix-compatibility files and later
+reviewed tail-catalog artifact promotion are allowed. Root dependencies, migration SQL, workflows
+and foreign application files are excluded. This inherits the patched lockfile; it does not reuse
+an old application-package image by pretending its source is a new controller.
+
+Backup requests explicitly use `PHUB_TIMEWEB_R1_GAME_START_PRE0103_BACKUP_NAMESPACE_V1` or
+`PHUB_TIMEWEB_R1_SUBJECT_LINK_PRE0104_BACKUP_NAMESPACE_V1`; their receipt/terminal/preimage schemas
+are distinct, while the fixed source/CI-scoped paths and106/107 ledgers are reused. Existing
+historical receipts remain valid for historical consumers. Stage proof schemas remain shared,
+with exact operation/plan hashes binding the declared package family and source. A0103/0104 chain
+cannot mix old and R1 families. The tail reader preserves its historical branch; an R1 predecessor
+must match the current119 tail source/tree/source CI/publication/image tuple.
+
+The existing explicitly owned PostgreSQL16 contour rehearses106→107→108 using all119 packaged
+files and the real restricted migrator login, proves that0105 is not applied, then exercises the
+fixed tail. This is synthetic CI evidence, not live migration or restore evidence. The tail's
+`UNREHEARSED` semantic catalog still denies forward tail admission until its CI export is
+independently reviewed and committed. Capacity and independent restore gates are unchanged.
+
 ## Sequence and ownership
 
 Use the canonical request paths returned by `closedApplicationProductionPaths`; do not
