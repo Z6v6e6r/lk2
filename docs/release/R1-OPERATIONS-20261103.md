@@ -1,10 +1,10 @@
 # R1 — операционная запись 2026-11-03
 
-## Операционный срез — 2026-11-03, после 09:24 MSK
+## Операционный срез — 2026-11-03, после 09:57 MSK
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
 
-Старая консоль исправлена владельцем. R1 восстановлен, R2 подтверждён как неисполненный. R3 был явно разрешён и запущен, но остановился до переключения source на установке зависимостей: npm отказался читать `/dev/null` одновременно как user и global config. Guarded recovery восстановил старый source/config; partial stage и все пакеты сохранены, active marker освобождён. `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в06:24:31UTC. Исправленный R4 подготовлен и проверен локально; его запуск ещё не выполнен. Приложения и БД не переключались.
+R1/R3 восстановлены, R2 подтверждён как неисполненный. R4 был разрешён и исполнен один раз: npm-fix позволил установить зависимости, но проверка operation остановилась до source exchange. Причина воспроизведена: сортировка вложенных JSON-ключей меняет ACL SQL digest. Guarded recovery восстановил старый source/config, сохранил partial stage и освободил active marker; `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в06:57:19UTC. Локальный R5 сохраняет исходные байты intent и порядок sourceProof в receipt;51 regression checks PASS. Новый пакет пока не установлен и не исполнен. Приложения и БД не переключались.
 
 ## Проверенный source
 
@@ -12,7 +12,7 @@
 
 [CI41576927809](https://github.com/Z6v6e6r/lk2/actions/runs/41576927809):9173 PASS/133 SKIP; отдельный PostgreSQL16 contour7/7, включая R1-tail privilege assertions. Mandatory game14physical+6guards, communications10+1, Rabbit4+1, notificationPG4 и notificationRabbit4 — zeroSKIP. Static/security/dependency gates и пять Docker builds PASS. Это CI, не публикация.
 
-LOCAL:28 unit PASS, scoped lint/types и scans PASS. Full macOS fixed-head run25FAIL/8792PASS/489SKIP в трёх существующих process/Git-custody suites; Git subset60/60 с исправленным только task TMPDIR/GID. Полный LOCAL gate не закрыт. Mock-preview setup остановился на npm ci до запуска БД/API/Web; rendered acceptance отсутствует.
+LOCAL:28 unit PASS, scoped lint/types и scans PASS. Full macOS fixed-head run25FAIL/8792PASS/489SKIP в трёх существующих process/Git-custody suites; Git subset60/60 с исправленным только task TMPDIR/GID. Полный LOCAL gate не закрыт. Свежая диагностика local preview подтвердила недоступность Docker daemon; БД/API/Web не запускались, rendered acceptance отсутствует.
 
 ## Выполненные операции
 
@@ -24,9 +24,17 @@ R3 был явно разрешён владельцем; staging и final readb
 
 Guarded recovery4b83b5a9 восстановил только старый config, сохранил partial stage и освободил owned marker. Canonical reconcile OLD_OR_RESTORED и свежие GitHub main/variable/no-runs проверки позволили вернуть true06:24:31UTC. Приложения и БД не менялись.
 
-Исправленный R4 создаёт отдельный пустой global npm config с exclusive/durable0600 publication, сохраняя явный user config `/dev/null`, task cache и `--ignore-scripts`.42 synthetic checks прошли. Три реальные offline regression проверки с официальным npm10.9.0 прошли: воспроизведение старой ошибки, успешная установка без lifecycle scripts и ambient HOME config, сохранность foreign file/symlink. Первоначальный fixture GID исправлен только в тесте. Два независимых review CLEAR;6 прежних Linux checks переиспользованы только для неизменных primitives. Новая live попытка не запускалась.
+Исправленный R4 создаёт отдельный пустой global npm config с exclusive/durable0600 publication, сохраняя явный user config `/dev/null`, task cache и `--ignore-scripts`.42 synthetic checks прошли. Три реальные offline regression проверки с официальным npm10.9.0 прошли: воспроизведение старой ошибки, успешная установка без lifecycle scripts и ambient HOME config, сохранность foreign file/symlink. Первоначальный fixture GID исправлен только в тесте. Два независимых review CLEAR;6 прежних Linux checks переиспользованы только для неизменных primitives. R4 затем был явно разрешён и выполнен: stage содержит необходимые зависимости, а pure imports проходят. Остановка произошла на последующей проверке operation; результат ниже.
 
 Draft PR575 commit7cb4b9b0 прошёл полный CI41587299496 SUCCESS. Новая редакция операционного отчёта требует собственного CI.
+
+### R4: подтверждённый отказ и восстановление
+
+R4 staged/execute прошёл однократно. Canonical reconcile подтвердил OLD_DISABLED/STAGE_INTENT; source exchange и helper publication не произошли. Guarded recovery `b805ccac` восстановил старый config, сохранил установленный stage и освободил marker. Canonical recovery `497f4386` и GitHub readback подтверждают возврат deliverytrue в06:57:19UTC.
+
+LOCAL reproduction на frozen b88: оригинальный intent проходит; вложенный intent после `sort_keys=True` даёт `CLOSED_APPLICATION_PROFILE_ACL_INPUTS`, поскольку SQL включает `JSON.stringify` ACL. Независимый review обнаружил тот же дефект на следующем шаге: сортировка `sourceProof` в helper receipt даёт `SOURCE_PROOF`.
+
+Локальный R5 передаёт исходные intent bytes через Base64 в обоих Node entry points и сохраняет порядок proof в receipt; хеш receipt берётся от тех же записанных байтов. Общая canonical serialization журналов и все validators остаются прежними. 51 LOCAL check PASS:42 synthetic,3 real offline npm10.9.0,5 intent-transport и1 actual frozen helper custody regression. При проверке helper filesystem adapters используют только owned LOCAL fixtures; это не доказательство installed custody. Пакет R5 не установлен и не исполнен; точное live-разрешение запрошено после двух CLEAR package reviews.
 
 ## Хеши доказательств
 
@@ -52,3 +60,5 @@ Read-only04:25:25UTC: API/Worker/Realtime702 и Web871 healthy, restartCount0. �
 После enrollment нужны свежие catalog/ACL/secret-digest inputs, backup с independent restore и цепочка106→107→108→119, actual-role acceptance, upgrade/recovery всех четырёх компонентов и business journeys. CUP first-restart queue custody, LK monthly effective binding и Viva attributable settlement/visit-return не подтверждены. Денежные операции не повторять по одному статусу отмены. Mobile signing/stores отложены владельцем.
 
 Нового merge, image publication, application deploy/restart, DB migration, live grant, provider payment/refund или store activation этим срезом не выполнено. Выполненные shared-state изменения ограничены controller recovery и временными циклами GitHub-флага; они завершены.
+
+Read-only R5 rehearsal на сохранённом R4 stage прошёл actual stage payload и source/CI/publication validation. Canonical source path/config подставлены только в памяти; это не installed attestation. Выходной SHA256 `dae370d5f78b4c5be15d0de7458b255e2c8d1581ddf57fa614db6889fd9cdc64`. Inventory07:12:56UTC включает400574 metadata rows; старые stages сохранены.

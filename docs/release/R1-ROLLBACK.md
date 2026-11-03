@@ -1,10 +1,10 @@
 # LK2 R1 — rollback и recovery readiness
 
-## Операционный срез — 2026-11-03, после 09:24 MSK
+## Операционный срез — 2026-11-03, после 09:57 MSK
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
 
-Старая консоль исправлена владельцем. R1 восстановлен, R2 подтверждён как неисполненный. R3 был явно разрешён и запущен, но остановился до переключения source на установке зависимостей: npm отказался читать `/dev/null` одновременно как user и global config. Guarded recovery восстановил старый source/config; partial stage и все пакеты сохранены, active marker освобождён. `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в06:24:31UTC. Исправленный R4 подготовлен и проверен локально; его запуск ещё не выполнен. Приложения и БД не переключались.
+R1/R3 восстановлены, R2 подтверждён как неисполненный. R4 был разрешён и исполнен один раз: npm-fix позволил установить зависимости, но проверка operation остановилась до source exchange. Причина воспроизведена: сортировка вложенных JSON-ключей меняет ACL SQL digest. Guarded recovery восстановил старый source/config, сохранил partial stage и освободил active marker; `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в06:57:19UTC. Локальный R5 сохраняет исходные байты intent и порядок sourceProof в receipt;51 regression checks PASS. Новый пакет пока не установлен и не исполнен. Приложения и БД не переключались.
 
 R1 controller recovery завершён с сохранением старого source/config и release owned marker. R2 не исполнялся, поэтому rollback не требовался; исходный deliverytrue возвращён после свежего proof и отсутствия GitHub launches. R3 также восстановлен: partial stage сохранён, исходный флагtrue возвращён06:24:31UTC. Временной hold сейчас отсутствует.
 
