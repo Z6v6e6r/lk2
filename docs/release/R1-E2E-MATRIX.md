@@ -1,5 +1,28 @@
 # LK2 R1 — E2E и acceptance matrix
 
+## Текущий срез — 2026-11-03, 12:00 UTC
+
+**APK подготовлен; полный функциональный прогон пока NO-GO.** Этот раздел имеет приоритет над историей ниже. Main LK2 `12aa12ed03d253725d1d92739bc2b7d1cd5e2cea`, tree `76f11804468943bd8563242740afab2964d10afd`; [main CI41623665865](https://github.com/Z6v6e6r/lk2/actions/runs/41623665865) SUCCESS, delivery41625825116 SKIPPED. Публикация [run41628421457](https://github.com/Z6v6e6r/lk2/actions/runs/41628421457) SUCCESS; canonical V2 manifest SHA256 `a73099e05bc4aa6f57655f0caff840872ecfc383393139ab3a4a95961cc748ee` проверен по artifact digest и независимой byte-identical пересборке.
+
+Controller/helper12aa установлен: `ENROLLED_NO_DEPLOY`, reconcile `NEW_ENABLED / ACTIVE_RELEASE_DONE`. Приложения API/Worker/Realtime702 и Web871, БД106. Prefetch12aa остановился до admission: snapshot преждевременно читал ещё отсутствующий файл миграции. Read-only проверка под штатными блокировками подтвердила исходные runtime/secret identities, pre-state и отсутствие intent/root/active/provision; pull не выполнялся. Delivery=true восстановлен11:57:08UTC. Исправление [PR578](https://github.com/Z6v6e6r/lk2/pull/578), head `3685c11712a17c35384a508241a1eaf3557fa3dc`:106 LOCAL tests, tools typecheck/lint, независимое review CLEAR; CI выполняется. Повторного запуска нет.
+
+| Уровень                  | Последнее доказательство                                                           | Что не доказано                                                                             |
+| ------------------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| LOCAL, PR577             | 116 PASS/1 SKIP focused after catalog-text fix; tools types/lint/format/scans PASS | Полный macOS run имел8860 PASS/48 FAIL/510 SKIP; его не считать green.                      |
+| CI, PR577/main           | PR41621925057 и main41623665865 SUCCESS; Android41621925055/iOS41621925319 SUCCESS | Publication, live grants и business acceptance.                                             |
+| LOCAL, enrollment12aa    | 42 synthetic +3 npm regression PASS; helper/source proof validated                 | Новый installed controller/source attestation.                                              |
+| LOCAL, request archive   | 10 tests PASS; два independent reviews                                             | Не application deployment.                                                                  |
+| STAGING, request archive | Fresh no-admission, exact archive, independent readback; flagtrue restored         | Migrations119 и backup/restore новой цепочки.                                               |
+| LOCAL/CI, CUP81          | 13 tests/build PASS; CI41627107109 и41627107113 SUCCESS; security/recovery CLEAR   | Live freeze, accepted-work custody, held import и restart.                                  |
+| LOCAL, APK               | 652 mobile +59 native JVM PASS; signature/config/build проверены                   | Instrumentation/device/push delivery NOT RUN.                                               |
+| PROVIDER / PRODUCTION    | Полная итоговая приёмка отсутствует                                                | Реальные payment/refund, booking, chat/reconnect, campaign/quiet-hours и recovery journeys. |
+
+[Phone checklist](R1-ANDROID-PHONE-ACCEPTANCE.md) остаётся NOT RUN до фактического прогона.
+
+---
+
+## Исторические контрольные точки
+
 ## Операционный срез — 2026-11-03, после R5 enrollment и сборки APK, 2026-11-03
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
@@ -19,7 +42,7 @@ R5 успешно завершён: `ENROLLED_NO_DEPLOY`, canonical reconcile `N
 
 ## Post119 audit correction — 2026-11-03 (MSK)
 
-This supplement takes precedence over conflicting historical readiness or execution claims below.
+Historical checkpoint; the current section above governs readiness.
 
 Required runtime cases added to the acceptance boundary: actual API/Worker role reads/writes plus cross-tenant refusals on new119 relations; row-lock privileges on existing parents; owned disposable rehearsals of each partial four-service activation, lost-ACK recovery and old-image/secret restoration with119 retained; Rabbit consumer readiness and reconnect canonical-HTTP recovery. Existing synthetic/CI suites are mapped in [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md); the required disposable rehearsals and actual runtime acceptance remain separate, unverified evidence levels and were not run in this audit.
 

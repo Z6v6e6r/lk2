@@ -1,5 +1,27 @@
 # LK2 R1 — аудит готовности к production release
 
+## Текущий срез — 2026-11-03, 12:00 UTC
+
+**APK подготовлен; полный функциональный прогон пока NO-GO.** Этот раздел имеет приоритет над историей ниже. Main LK2 `12aa12ed03d253725d1d92739bc2b7d1cd5e2cea`, tree `76f11804468943bd8563242740afab2964d10afd`; [main CI41623665865](https://github.com/Z6v6e6r/lk2/actions/runs/41623665865) SUCCESS, delivery41625825116 SKIPPED. Публикация [run41628421457](https://github.com/Z6v6e6r/lk2/actions/runs/41628421457) SUCCESS; canonical V2 manifest SHA256 `a73099e05bc4aa6f57655f0caff840872ecfc383393139ab3a4a95961cc748ee` проверен по artifact digest и независимой byte-identical пересборке.
+
+Controller/helper12aa установлен: `ENROLLED_NO_DEPLOY`, reconcile `NEW_ENABLED / ACTIVE_RELEASE_DONE`. Приложения API/Worker/Realtime702 и Web871, БД106. Prefetch12aa остановился до admission: snapshot преждевременно читал ещё отсутствующий файл миграции. Read-only проверка под штатными блокировками подтвердила исходные runtime/secret identities, pre-state и отсутствие intent/root/active/provision; pull не выполнялся. Delivery=true восстановлен11:57:08UTC. Исправление [PR578](https://github.com/Z6v6e6r/lk2/pull/578), head `3685c11712a17c35384a508241a1eaf3557fa3dc`:106 LOCAL tests, tools typecheck/lint, независимое review CLEAR; CI выполняется. Повторного запуска нет.
+
+| Область                                     | Статус               | Подтверждение / остаток                                                                                                                          |
+| ------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| API/Worker119 upgrade и runtime grants      | VERIFIED — SOURCE/CI | PR577 merged; CI прошёл, включая физический PostgreSQL. Ограниченный профиль сохраняет Web871 и Realtime702. Live grants/upgrade не выполнялись. |
+| Enrollment12aa и migrations119              | BLOCKED              | Enrollment12aa завершён; prefetch остановлен до admission на source-дефекте snapshot. После исправления нужны backup/restore и106→107→108→119.   |
+| Auth/Profile, booking, subscriptions, chats | PARTIAL              | Source/CI есть; согласованная runtime-приёмка ещё не выполнена.                                                                                  |
+| CUP                                         | BLOCKED              | PR81: pure union Map/Mongo,13 LOCAL tests/build, reviews; live final capture и custody уже принятых запросов перед restart не закрыты.           |
+| LK monthly / Viva                           | BLOCKED              | Effective binding и attributable денежный/visit-return результат не подтверждены.                                                                |
+| Android APK                                 | VERIFIED — LOCAL     | 1.13/code14,652 mobile +59 JVM tests; установка владельцем, device tests NOT RUN.                                                                |
+| Store/iOS release                           | DEFERRED             | Отдельный этап по решению владельца.                                                                                                             |
+
+Подробные источники и границы: [операционная запись](R1-OPERATIONS-20261103.md).
+
+---
+
+## Исторические контрольные точки
+
 ## Операционный срез — 2026-11-03, после R5 enrollment и сборки APK, 2026-11-03
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
@@ -16,7 +38,7 @@ R5 успешно завершён: `ENROLLED_NO_DEPLOY`, canonical reconcile `N
 
 ## Post119 audit correction — 2026-11-03 (MSK)
 
-This supplement takes precedence over conflicting historical readiness or execution claims below.
+Historical checkpoint; the current section above governs readiness.
 
 PR569 merged as `b1c32748451af4e79e73421d98db35eec076ba38`: the quarter CREATE link now matches `/games/new`. Exact PR full/Android/iOS CI41544085369/41544085364/41544085269 passed. A later source audit found two explicit activation prerequisites: runtime-role grants after119 and a fixed four-service upgrade/recovery executor. Initial-beta rendering is not sufficient for an already running beta. See [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md). This adds no production acceptance claim.
 

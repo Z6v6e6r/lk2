@@ -1,5 +1,29 @@
 # R1 — операционная запись 2026-11-03
 
+## Текущий срез — 2026-11-03, 12:00 UTC
+
+**APK подготовлен; полный функциональный прогон пока NO-GO.** Этот раздел имеет приоритет над историей ниже. Main LK2 `12aa12ed03d253725d1d92739bc2b7d1cd5e2cea`, tree `76f11804468943bd8563242740afab2964d10afd`; [main CI41623665865](https://github.com/Z6v6e6r/lk2/actions/runs/41623665865) SUCCESS, delivery41625825116 SKIPPED. Публикация [run41628421457](https://github.com/Z6v6e6r/lk2/actions/runs/41628421457) SUCCESS; canonical V2 manifest SHA256 `a73099e05bc4aa6f57655f0caff840872ecfc383393139ab3a4a95961cc748ee` проверен по artifact digest и независимой byte-identical пересборке.
+
+Controller/helper12aa установлен: `ENROLLED_NO_DEPLOY`, reconcile `NEW_ENABLED / ACTIVE_RELEASE_DONE`. Приложения API/Worker/Realtime702 и Web871, БД106. Prefetch12aa остановился до admission: snapshot преждевременно читал ещё отсутствующий файл миграции. Read-only проверка под штатными блокировками подтвердила исходные runtime/secret identities, pre-state и отсутствие intent/root/active/provision; pull не выполнялся. Delivery=true восстановлен11:57:08UTC. Исправление [PR578](https://github.com/Z6v6e6r/lk2/pull/578), head `3685c11712a17c35384a508241a1eaf3557fa3dc`:106 LOCAL tests, tools typecheck/lint, независимое review CLEAR; CI выполняется. Повторного запуска нет.
+
+## 11:41UTC — source577 и подготовка нового перехода
+
+[PR577](https://github.com/Z6v6e6r/lk2/pull/577) merged в12aa12ed; tree76f11804; main CI41623665865 SUCCESS и standard delivery41625825116 SKIPPED. После source-cycle true восстановлен11:14:54UTC. Новый API/Worker119 профиль сохраняет Web871/Realtime702, использует actual-role probes и CAS grants18relations; новые business flags OFF. Исправление PG catalog text прошло физический CI. Live grants/upgrade не выполнялись.
+
+Четыре неиспользуемых47c image refs удалены после exact-reference/container-identity проверки. Первая попытка остановилась до удаления на RepoTags shape; read-only reconcile сохранил evidence. Исправленный R2 завершён: runtime unchanged,13containers сохранены, free58,162,475,008bytes. Все backups и migrator/role-probe containers сохранены.
+
+Expired b88 request SHA256 a56a3e4ccbf5e9206e535451b964e5877cef16e83a304ff34615aa06b9b43e78 архивирован в game-start0103-expired-b88f2100-20261103. Fresh no-admission подтвердил ledger106, старые runtime/secret identities и отсутствие admission root; копия/intent/proof/receipt запечатаны до CAS удаления canonical name. Независимый archive readback прошёл; deliverytrue восстановлен11:29:08UTC. Это не pull, migration или application deploy.
+
+После точного разрешения владельца одна publication12aa завершена успешно. Enrollment12aa завершён с canonical reconcile и восстановлением флага. Prefetch остановлен до admission; отдельный read-only closure подтвердил неизменность приложений/БД и отсутствие pull. Исправление PR578 проходит CI.
+
+CUP [PR81](https://github.com/Z6v6e6r/ph-admin/pull/81), head248062b2803bc25aba0d55410d28738fcd352228: pure complete Map/Mongo union, deterministic bounded batches, retained private provenance;13 tests/build PASS, два reviews CLEAR, task branch pushed/Draft PR. Никаких raw queue exports в Git. После точного разрешения выполнен один diagnostic cycle: EXPORTED_INSPECTOR_CLOSED; MAX Map содержит3706 SENT,111 FAILED,0 PENDING/LEASED. Artifact SHA2569b216cf884c34b61d5e0a9117ecef8706537b0cf950a9791475b2369b9544ec6, raw остаётся приватно на сервере. soleClientProven/drainProven=false; restart/import/DB writes отсутствуют. Оба PR81 CI41627107109/41627107113 SUCCESS. До restart отдельно закрыть already accepted inbound/non-MAX writes; finalMap capture не заменяет этот контракт.
+
+Существующий Android36 AVD проверен в read-only/no-snapshot режиме: запуск остановлен до boot на hasSufficientDiskSpace. Instrumentation/device evidence не получено. Новых SDK, signing keys или очистки AVD не было.
+
+---
+
+## История операций
+
 ## Операционный срез — 2026-11-03, после R5 enrollment и сборки APK, 2026-11-03
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.

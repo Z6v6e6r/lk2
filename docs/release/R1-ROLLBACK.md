@@ -1,5 +1,23 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Текущий срез — 2026-11-03, 12:00 UTC
+
+**APK подготовлен; полный функциональный прогон пока NO-GO.** Этот раздел имеет приоритет над историей ниже. Main LK2 `12aa12ed03d253725d1d92739bc2b7d1cd5e2cea`, tree `76f11804468943bd8563242740afab2964d10afd`; [main CI41623665865](https://github.com/Z6v6e6r/lk2/actions/runs/41623665865) SUCCESS, delivery41625825116 SKIPPED. Публикация [run41628421457](https://github.com/Z6v6e6r/lk2/actions/runs/41628421457) SUCCESS; canonical V2 manifest SHA256 `a73099e05bc4aa6f57655f0caff840872ecfc383393139ab3a4a95961cc748ee` проверен по artifact digest и независимой byte-identical пересборке.
+
+Controller/helper12aa установлен: `ENROLLED_NO_DEPLOY`, reconcile `NEW_ENABLED / ACTIVE_RELEASE_DONE`. Приложения API/Worker/Realtime702 и Web871, БД106. Prefetch12aa остановился до admission: snapshot преждевременно читал ещё отсутствующий файл миграции. Read-only проверка под штатными блокировками подтвердила исходные runtime/secret identities, pre-state и отсутствие intent/root/active/provision; pull не выполнялся. Delivery=true восстановлен11:57:08UTC. Исправление [PR578](https://github.com/Z6v6e6r/lk2/pull/578), head `3685c11712a17c35384a508241a1eaf3557fa3dc`:106 LOCAL tests, tools typecheck/lint, независимое review CLEAR; CI выполняется. Повторного запуска нет.
+
+PR577 содержит совместимый API/Worker recovery с сохранением Web871/Realtime702, ledger119 и совместимых новых grants. Обратный ACL transition — отдельная операция; missing SQL ACK означает UNKNOWN, без replay. Не выполнять downmigration как часть image rollback.
+
+После cleanup сохранены текущие и rollback images,13 containers, старые backups и receipts. Удалены только четыре проверенных неиспользуемых image-cache refs; это не backup cleanup. Свободно58,162,475,008bytes сразу после удаления; фактическую ёмкость перепроверить после новых pulls/dump.
+
+Просроченный request сохранён в archive с proof/intent/receipt; исходный canonical name удалён после inode/byte CAS. Полный archive attestation прошёл. Автоматическое восстановление старого request и повторный prefetch запрещены.
+
+CUP recovery artifact должен понимать durable HELD state и использовать ту же новую MAX namespace; stock83 после импорта не допускается. Existing fire-and-forget writes и accepted requests остаются отдельной first-restart границей.
+
+---
+
+## Исторические контрольные точки
+
 ## Операционный срез — 2026-11-03, после R5 enrollment и сборки APK, 2026-11-03
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
@@ -12,7 +30,7 @@ R1 controller recovery завершён с сохранением старого
 
 ## Post119 audit correction — 2026-11-03 (MSK)
 
-This supplement takes precedence over conflicting historical readiness or execution claims below.
+Historical checkpoint; the current section above governs readiness.
 
 The application rollback contract is not yet complete for the current mixed-source beta. The initial renderer cannot restore previous services; chained API/Web and API/Worker operations are not one four-component recovery boundary. Preserve previous image/env/secret identities and journals; after new external operations, retain compatible original-operation recovery when restoring the previous per-component images (API/Worker/Realtime702, Web871). No down-migration or delivery-state conversion. Details: [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md).
 

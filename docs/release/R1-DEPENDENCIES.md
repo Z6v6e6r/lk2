@@ -1,5 +1,23 @@
 # LK2 R1 — зависимости и критический путь
 
+## Текущий срез — 2026-11-03, 12:00 UTC
+
+**APK подготовлен; полный функциональный прогон пока NO-GO.** Этот раздел имеет приоритет над историей ниже. Main LK2 `12aa12ed03d253725d1d92739bc2b7d1cd5e2cea`, tree `76f11804468943bd8563242740afab2964d10afd`; [main CI41623665865](https://github.com/Z6v6e6r/lk2/actions/runs/41623665865) SUCCESS, delivery41625825116 SKIPPED. Публикация [run41628421457](https://github.com/Z6v6e6r/lk2/actions/runs/41628421457) SUCCESS; canonical V2 manifest SHA256 `a73099e05bc4aa6f57655f0caff840872ecfc383393139ab3a4a95961cc748ee` проверен по artifact digest и независимой byte-identical пересборке.
+
+Controller/helper12aa установлен: `ENROLLED_NO_DEPLOY`, reconcile `NEW_ENABLED / ACTIVE_RELEASE_DONE`. Приложения API/Worker/Realtime702 и Web871, БД106. Prefetch12aa остановился до admission: snapshot преждевременно читал ещё отсутствующий файл миграции. Read-only проверка под штатными блокировками подтвердила исходные runtime/secret identities, pre-state и отсутствие intent/root/active/provision; pull не выполнялся. Delivery=true восстановлен11:57:08UTC. Исправление [PR578](https://github.com/Z6v6e6r/lk2/pull/578), head `3685c11712a17c35384a508241a1eaf3557fa3dc`:106 LOCAL tests, tools typecheck/lint, независимое review CLEAR; CI выполняется. Повторного запуска нет.
+
+1. Проверенный main12aa → одна публикация пяти AMD64 images/canonical V2 → fresh enrollment12aa.
+2. Тот же frozen source/controller → fresh106 backup/restore →107 → fresh107 backup/restore →108 → retained tail119. Между migration и API/Worker upgrade source не менять.
+3. Терминальные migration/cleanup/role-probe proofs → минимальные grants18relations → API/Worker119 upgrade → четырёхкомпонентный readback с неизменными Web871/Realtime702 → runtime acceptance/soak.
+4. Параллельно: CUP final capture + accepted-work custody + complete held union → guarded candidate/recovery; LK monthly binding; Viva settlement/visit-return attribution.
+5. После coherent backend acceptance → самостоятельная установка APK и полный phone checklist. Stores/iOS release остаются отдельным этапом.
+
+PR577 уже реализует ограниченный API/Worker профиль; историческое требование разработать новый четырёхсервисный executor ниже больше не является source-задачей. Совместимость всех четырёх компонентов остаётся runtime-проверкой.
+
+---
+
+## Исторические контрольные точки
+
 ## Операционный срез — 2026-11-03, после R5 enrollment и сборки APK, 2026-11-03
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
@@ -12,7 +30,7 @@ CUP queue custody, LK monthly binding и Viva settlement идут отдельн
 
 ## Post119 audit correction — 2026-11-03 (MSK)
 
-This supplement takes precedence over conflicting historical readiness or execution claims below.
+Historical checkpoint; the current section above governs readiness.
 
 The dependency order now explicitly includes **b88 migration success119 → exact runtime-role acceptance → fixed four-service upgrade/recovery admission → final application publication → runtime journeys**. Publication is deferred while executor admission is unresolved. Source-only main advancement remains separate from the retained b88 migration tuple. See [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md).
 

@@ -1,5 +1,21 @@
 # LK2 R1 — GO / NO-GO
 
+## Текущий срез — 2026-11-03, 12:00 UTC
+
+**APK подготовлен; полный функциональный прогон пока NO-GO.** Этот раздел имеет приоритет над историей ниже. Main LK2 `12aa12ed03d253725d1d92739bc2b7d1cd5e2cea`, tree `76f11804468943bd8563242740afab2964d10afd`; [main CI41623665865](https://github.com/Z6v6e6r/lk2/actions/runs/41623665865) SUCCESS, delivery41625825116 SKIPPED. Публикация [run41628421457](https://github.com/Z6v6e6r/lk2/actions/runs/41628421457) SUCCESS; canonical V2 manifest SHA256 `a73099e05bc4aa6f57655f0caff840872ecfc383393139ab3a4a95961cc748ee` проверен по artifact digest и независимой byte-identical пересборке.
+
+Controller/helper12aa установлен: `ENROLLED_NO_DEPLOY`, reconcile `NEW_ENABLED / ACTIVE_RELEASE_DONE`. Приложения API/Worker/Realtime702 и Web871, БД106. Prefetch12aa остановился до admission: snapshot преждевременно читал ещё отсутствующий файл миграции. Read-only проверка под штатными блокировками подтвердила исходные runtime/secret identities, pre-state и отсутствие intent/root/active/provision; pull не выполнялся. Delivery=true восстановлен11:57:08UTC. Исправление [PR578](https://github.com/Z6v6e6r/lk2/pull/578), head `3685c11712a17c35384a508241a1eaf3557fa3dc`:106 LOCAL tests, tools typecheck/lint, независимое review CLEAR; CI выполняется. Повторного запуска нет.
+
+**GO только для передачи готового тестового APK. NO-GO для заявления о полной готовности функционального прогона.**
+
+Для GO полного прогона нужны publication/enrollment12aa, backup/restore и migrations119, фактические runtime privileges, совместимый API/Worker rollout, CUP first-restart custody, monthly/provider проверки и coherent runtime acceptance. Device cases не объявлять выполненными заранее; владельцу не требуется USB.
+
+Source577, CI, архивирование просроченного request и восстановленный delivery flag закрыты. Они не заменяют live activation. Сам APK и deferred store signing не блокируют оставшиеся серверные работы.
+
+---
+
+## Исторические контрольные точки
+
 ## Операционный срез — 2026-11-03, после R5 enrollment и сборки APK, 2026-11-03
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
@@ -10,7 +26,7 @@ R5 успешно завершён: `ENROLLED_NO_DEPLOY`, canonical reconcile `N
 
 ## Post119 audit correction — 2026-11-03 (MSK)
 
-This supplement takes precedence over conflicting historical readiness or execution claims below.
+Historical checkpoint; the current section above governs readiness.
 
 **NO-GO remains.** PR569 closes the quarter-route source correction, not runtime acceptance. In addition to existing Timeweb/CUP/LK/provider gates, post119 runtime-role provisioning and a safe four-service upgrade/recovery executor remain unresolved. The initial-beta route is not an upgrade substitute. See [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md). Mobile signing/stores remain deferred by owner decision.
 
