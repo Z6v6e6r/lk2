@@ -1,10 +1,10 @@
 # R1 — операционная запись 2026-11-03
 
-## Операционный срез — 2026-11-03, после 09:57 MSK
+## Операционный срез — 2026-11-03, после R5 enrollment и сборки APK, 2026-11-03
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
 
-R1/R3 восстановлены, R2 подтверждён как неисполненный. R4 был разрешён и исполнен один раз: npm-fix позволил установить зависимости, но проверка operation остановилась до source exchange. Причина воспроизведена: сортировка вложенных JSON-ключей меняет ACL SQL digest. Guarded recovery восстановил старый source/config, сохранил partial stage и освободил active marker; `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в06:57:19UTC. Локальный R5 сохраняет исходные байты intent и порядок sourceProof в receipt;51 regression checks PASS. Новый пакет пока не установлен и не исполнен. Приложения и БД не переключались.
+R5 успешно завершён: `ENROLLED_NO_DEPLOY`, canonical reconcile `NEW_ENABLED / ACTIVE_RELEASE_DONE`, marker освобождён. Контроллер b88 и backup-helper установлены; `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в07:38:29UTC. Приложения и БД не переключались. Свежий read-only preflight07:39:27UTC: ledger106, свободно56.21GB. Тестовый APK1.13/code14 из main de451 собран и проверен:652 mobile +59 native JVM tests PASS. Самостоятельную установку и device acceptance выполняет владелец; полная серверная готовность ещё не достигнута.
 
 ## Проверенный source
 
@@ -62,3 +62,11 @@ Read-only04:25:25UTC: API/Worker/Realtime702 и Web871 healthy, restartCount0. �
 Нового merge, image publication, application deploy/restart, DB migration, live grant, provider payment/refund или store activation этим срезом не выполнено. Выполненные shared-state изменения ограничены controller recovery и временными циклами GitHub-флага; они завершены.
 
 Read-only R5 rehearsal на сохранённом R4 stage прошёл actual stage payload и source/CI/publication validation. Canonical source path/config подставлены только в памяти; это не installed attestation. Выходной SHA256 `dae370d5f78b4c5be15d0de7458b255e2c8d1581ddf57fa614db6889fd9cdc64`. Inventory07:12:56UTC включает400574 metadata rows; старые stages сохранены.
+
+## R5 выполнен; APK подготовлен
+
+Владелец разрешил R5. Пять файлов staged, delivery временно false07:37:23UTC; final manifest `d7df4db673ab4d8b7f7b0595056aedb4f5bf30d96364666df1dc5583fe4d80cb`. Once execute вернул `ENROLLED_NO_DEPLOY`; canonical reconcile подтвердил NEW_ENABLED/ACTIVE_RELEASE_DONE и released marker. Deliverytrue восстановлен07:38:29UTC. Application deployment, migration, grant, provider write и store activation не выполнялись.
+
+Fresh read-only preflight07:39:27UTC:106 applied migrations, DB13,997,005,847bytes, free56,208,875,520bytes, availableRAM9,355,427,840bytes. Предварительный расчёт существующего namespace-helper: image46,628,077,568bytes +reserve5,368,709,120bytes оставляют4,212,088,832bytes для dump. Это не backup/restore proof; реальный after-dump gate обязателен. Старое утверждение «43.49GB свободно» неактуально.
+
+APK `PadlHub-R1-test-1.13-de451e71.apk`, SHA256 `5cfa69dba0a1b86914467208756b6cdae5652bd03a20336362416cea63197dba`,27,050,008bytes. LOCAL mobile typecheck,652 tests, bundle/assembleDebug,59 app JVM tests и assembleDebugAndroidTest PASS. Первый offline Gradle запуск остановился на отсутствующем dependency cache; scoped online app-check завершился успешно. APK signature v2 проверена, Firebase client и HTTPS local-padel config включены, remote server.url отсутствует. Public health/ready/assetlinks HTTP200 и signer delegation проверены; это не business acceptance. Device installation/run не выполнялись по решению владельца; [phone checklist](R1-ANDROID-PHONE-ACCEPTANCE.md).

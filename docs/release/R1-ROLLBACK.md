@@ -1,12 +1,12 @@
 # LK2 R1 — rollback и recovery readiness
 
-## Операционный срез — 2026-11-03, после 09:57 MSK
+## Операционный срез — 2026-11-03, после R5 enrollment и сборки APK, 2026-11-03
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
 
-R1/R3 восстановлены, R2 подтверждён как неисполненный. R4 был разрешён и исполнен один раз: npm-fix позволил установить зависимости, но проверка operation остановилась до source exchange. Причина воспроизведена: сортировка вложенных JSON-ключей меняет ACL SQL digest. Guarded recovery восстановил старый source/config, сохранил partial stage и освободил active marker; `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в06:57:19UTC. Локальный R5 сохраняет исходные байты intent и порядок sourceProof в receipt;51 regression checks PASS. Новый пакет пока не установлен и не исполнен. Приложения и БД не переключались.
+R5 успешно завершён: `ENROLLED_NO_DEPLOY`, canonical reconcile `NEW_ENABLED / ACTIVE_RELEASE_DONE`, marker освобождён. Контроллер b88 и backup-helper установлены; `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в07:38:29UTC. Приложения и БД не переключались. Свежий read-only preflight07:39:27UTC: ledger106, свободно56.21GB. Тестовый APK1.13/code14 из main de451 собран и проверен:652 mobile +59 native JVM tests PASS. Самостоятельную установку и device acceptance выполняет владелец; полная серверная готовность ещё не достигнута.
 
-R1 controller recovery завершён с сохранением старого source/config и release owned marker. R2 не исполнялся, поэтому rollback не требовался; исходный deliverytrue возвращён после свежего proof и отсутствия GitHub launches. R3 также восстановлен: partial stage сохранён, исходный флагtrue возвращён06:24:31UTC. Временной hold сейчас отсутствует.
+R1 controller recovery завершён с сохранением старого source/config и release owned marker. R2 не исполнялся, поэтому rollback не требовался; исходный deliverytrue возвращён после свежего proof и отсутствия GitHub launches. R3 также восстановлен: partial stage сохранён, исходный флагtrue возвращён06:24:31UTC. R4 восстановлен с сохранением stage и возвратом true06:57:19UTC. R5 затем успешно enrolled b88; после canonical terminal readback flagtrue07:38:29UTC. Это установка контроллера, не application rollout. Временной hold сейчас отсутствует.
 
 Будущий application rollback должен отдельно сохранить API/Worker/Realtime702 и Web871, secret-set lineage и фактические env/config identities. Общий baseline descriptor и HTTP health не заменяют четыре previous-component records. Downmigration и преобразование delivery state не являются неявным rollback.
 
