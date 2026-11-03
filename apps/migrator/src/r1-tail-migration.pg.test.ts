@@ -36,6 +36,22 @@ import {
 import type { R1AclRow } from '../../../scripts/r1-tail-migration-acl.js';
 import { ownedClosedSchemaLocalFixtureUrl } from '../../../scripts/owned-closed-schema-test-target.js';
 import { applyR1TailSteps, assertR1TailRole, readR1TailLedger } from './r1-tail-migration.js';
+import {
+  assessR1RuntimePrivileges,
+  r1RuntimePrivilegeQuery,
+  r1RuntimePrivilegeRequirements,
+} from '../../../scripts/r1-runtime-privilege-audit.js';
+import type {
+  R1RuntimeComponent,
+  R1RuntimePrivilegeCapture,
+} from '../../../scripts/r1-runtime-privilege-audit.js';
+
+import {
+  R1_RUNTIME_GRANT_CATALOG_SQL,
+  planR1RuntimeGrants119,
+  r1RuntimeGrantTransaction119,
+} from '../../../scripts/r1-runtime-grants119.js';
+import type { R1Grant119Capture } from '../../../scripts/r1-runtime-grants119.js';
 
 // This suite is registered by the existing explicit, owned PG16 CI contour.
 // No normal DATABASE_URL is accepted. Catalog exports contain pg_catalog metadata only.
@@ -523,6 +539,126 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             await owner.query(r1TailAclTransaction(preparation, 'cleanup', await acl(owner)));
             expect(await acl(owner)).toEqual(preparation.preimage);
             expect(point(await catalog(owner))).toEqual(checkpoints['119']!.cleaned);
+            // Catalog evidence above stays unchanged. Exercise the new diagnostic only in
+            // this already-owned disposable119 fixture, after all golden comparisons.
+            const runtime = new Pool({
+              connectionString: url(execution.name, 'phub_runtime'),
+              max: 1,
+            });
+            pools.push(runtime);
+            async function inspect(component: R1RuntimeComponent) {
+              const connection = await runtime.connect();
+              try {
+                await connection.query(
+                  'begin transaction isolation level repeatable read read only',
+                );
+                await connection.query("set local search_path='pg_catalog'");
+                const query = r1RuntimePrivilegeQuery(component);
+                const result = await connection.query<{ capture: R1RuntimePrivilegeCapture }>(
+                  query,
+                );
+                expect(result.rows).toHaveLength(1);
+                return assessR1RuntimePrivileges(result.rows[0]!.capture, {
+                  component,
+                  databaseName: execution.name,
+                  roleName: 'phub_runtime',
+                });
+              } finally {
+                await connection.query('rollback');
+                connection.release();
+              }
+            }
+            expect((await inspect('api')).status).toBe('BLOCKED');
+            expect((await inspect('worker')).issues).toContainEqual(
+              expect.objectContaining({
+                code: 'PRIVILEGE_MISSING',
+                relation: 'notifications.station_message_sources',
+              }),
+            );
+            async function runtimeAcl() {
+              const result = await owner.query<{ capture: R1Grant119Capture }>(
+                `select (${R1_RUNTIME_GRANT_CATALOG_SQL}) as capture`,
+              );
+              return result.rows[0]!.capture;
+            }
+            // The golden fixture is a schema/ACL migration snapshot, not a full runtime
+            // parent privilege baseline. Supply synthetic parent capabilities separately;
+            // the new transaction must preserve them and never generate parent grants.
+            for (const component of ['api', 'worker'] as const) {
+              for (const requirement of r1RuntimePrivilegeRequirements(component).filter(
+                (r) => !r.tenantTable,
+              )) {
+                const column = (
+                  await owner.query<{ name: string }>(
+                    'select attname as name from pg_catalog.pg_attribute where attrelid=$1::regclass and attnum>0 and not attisdropped order by attnum limit 1',
+                    [requirement.relation],
+                  )
+                ).rows[0]!.name;
+                await owner.query(
+                  `grant select,update(${quote(column)}) on ${qualified(requirement.relation)} to phub_runtime`,
+                );
+              }
+            }
+            const grantPreimage = await runtimeAcl();
+            const grantPlan = planR1RuntimeGrants119(grantPreimage);
+            await owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply'));
+            expect(await runtimeAcl()).toEqual(grantPlan.postimage);
+            await expect(
+              owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply')),
+            ).rejects.toThrow('R1_RUNTIME_GRANT_PREIMAGE_DRIFT');
+            await owner.query('rollback');
+            await owner.query(r1RuntimeGrantTransaction119(grantPlan, 'recover'));
+            expect(await runtimeAcl()).toEqual(grantPreimage);
+            await owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply'));
+            for (const component of ['api', 'worker'] as const) {
+              expect(await inspect(component)).toMatchObject({
+                status: 'SATISFIED',
+                activationAllowed: false,
+                issues: [],
+              });
+            }
+            await owner.query(
+              'revoke update(completed_at) on identity.external_subject_link_commands from phub_runtime',
+            );
+            expect((await inspect('api')).issues).toContainEqual(
+              expect.objectContaining({
+                code: 'COLUMN_UPDATE_MISSING',
+                relation: 'identity.external_subject_link_commands',
+                privilege: 'completed_at',
+              }),
+            );
+            await owner.query(
+              'grant update(completed_at) on identity.external_subject_link_commands to phub_runtime',
+            );
+            // Prove that incomplete column grants request review, never an automatic grant.
+            await owner.query('revoke update on games.quarter_create_attempts from phub_runtime');
+            await owner.query(
+              'grant update(state) on games.quarter_create_attempts to phub_runtime',
+            );
+            expect((await inspect('api')).issues).toContainEqual(
+              expect.objectContaining({
+                code: 'COLUMN_SCOPE_REVIEW_REQUIRED',
+                relation: 'games.quarter_create_attempts',
+                privilege: 'UPDATE',
+                review: true,
+              }),
+            );
+            // Revoked CREATE does not remove an owner's ALTER/DROP/regrant authority.
+            await owner.query('alter schema commerce owner to phub_runtime');
+            await owner.query('revoke create on schema commerce from phub_runtime');
+            expect(
+              (
+                await owner.query<{ allowed: boolean }>(
+                  "select has_schema_privilege('phub_runtime','commerce','CREATE') as allowed",
+                )
+              ).rows[0]!.allowed,
+            ).toBe(false);
+            expect((await inspect('api')).issues).toContainEqual(
+              expect.objectContaining({
+                code: 'UNSAFE_SCHEMA_OR_OWNER_OR_DDL',
+                relation: 'commerce.monthly_purchase_attempts',
+              }),
+            );
           } finally {
             executor.release();
             owner.release();

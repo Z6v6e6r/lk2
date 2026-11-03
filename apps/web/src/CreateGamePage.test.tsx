@@ -341,11 +341,14 @@ describe('CreateGamePage durable create recovery', () => {
     const secondKey = createGame.mock.calls[0]?.[1]?.idempotencyKey;
     expect(secondKey).toBeTruthy();
     expect(secondKey).not.toBe(pending.idempotencyKey);
-    expect(loadCreateGameAttemptLedger(principal, window.localStorage).resolvedAttempts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ gameId, idempotencyKey: pending.idempotencyKey }),
-        expect.objectContaining({ gameId: secondGameId, idempotencyKey: secondKey }),
-      ]),
+    // The gateway call precedes the asynchronous durable-ledger write.
+    await waitFor(() =>
+      expect(loadCreateGameAttemptLedger(principal, window.localStorage).resolvedAttempts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ gameId, idempotencyKey: pending.idempotencyKey }),
+          expect.objectContaining({ gameId: secondGameId, idempotencyKey: secondKey }),
+        ]),
+      ),
     );
     expect(window.location.pathname + window.location.search).toBe('/games/new');
   });
