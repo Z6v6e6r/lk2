@@ -1,10 +1,16 @@
 # LK2 R1 — GO / NO-GO
 
-## Текущий срез — 2026-11-03, 12:00 UTC
+## Текущий срез — 2026-11-03, 13:38 UTC
 
-**APK подготовлен; полный функциональный прогон пока NO-GO.** Этот раздел имеет приоритет над историей ниже. Main LK2 `12aa12ed03d253725d1d92739bc2b7d1cd5e2cea`, tree `76f11804468943bd8563242740afab2964d10afd`; [main CI41623665865](https://github.com/Z6v6e6r/lk2/actions/runs/41623665865) SUCCESS, delivery41625825116 SKIPPED. Публикация [run41628421457](https://github.com/Z6v6e6r/lk2/actions/runs/41628421457) SUCCESS; canonical V2 manifest SHA256 `a73099e05bc4aa6f57655f0caff840872ecfc383393139ab3a4a95961cc748ee` проверен по artifact digest и независимой byte-identical пересборке.
+**APK проверен на эмуляторе; полный функциональный прогон пока NO-GO.** Main LK2 `599d9df5a96df623b5f264f55065e1d1fe970ab3`, tree `a0717294d475b11fc0ec18f9e8b8886015958c1f`: [PR578](https://github.com/Z6v6e6r/lk2/pull/578) merged, [main CI41642631213](https://github.com/Z6v6e6r/lk2/actions/runs/41642631213) SUCCESS, delivery41645215332 SKIPPED. Delivery=true восстановлен13:33:08UTC. Локальный ENOSPC после отправки merge закрыт read-only сверкой parents/tree/main; merge не повторялся. Publication599 подготовлена, отдельное разрешение запрошено; dispatch ещё не выполнялся.
 
-Controller/helper12aa установлен: `ENROLLED_NO_DEPLOY`, reconcile `NEW_ENABLED / ACTIVE_RELEASE_DONE`. Приложения API/Worker/Realtime702 и Web871, БД106. Prefetch12aa остановился до admission: snapshot преждевременно читал ещё отсутствующий файл миграции. Read-only проверка под штатными блокировками подтвердила исходные runtime/secret identities, pre-state и отсутствие intent/root/active/provision; pull не выполнялся. Delivery=true восстановлен11:57:08UTC. Исправление [PR578](https://github.com/Z6v6e6r/lk2/pull/578), head `3685c11712a17c35384a508241a1eaf3557fa3dc`:106 LOCAL tests, tools typecheck/lint, независимое review CLEAR; CI выполняется. Повторного запуска нет.
+Установлен controller/helper12aa (`ENROLLED_NO_DEPLOY`), API/Worker/Realtime702, Web871, БД106. Prefetch12aa остановился до admission; pull/миграция отсутствуют. Source-причина исправлена в578, но истёкший canonical request12aa ещё сохраняется. Перед новым host-переходом нужны guarded retirement этого request, immutable publication599, enrollment и штатные backup/restore/migration/runtime gates.
+
+LOCAL Android36: тот же APK SHA256 `5cfa69dba0a1b86914467208756b6cdae5652bd03a20336362416cea63197dba` установлен в отдельный read-only/no-snapshot emulator. Основной прогон77PASS/1SKIP; targeted2PASS закрыл optional native TLS probe и получил3скриншота. Итого78уникальных тестовPASS, без реального входа, отправки SMS, booking или платежей. Native GET context подтвердил401 без cookie; это не authenticated/provider/device acceptance. Эмулятор завершён, физический телефон не использовался.
+
+Monthly: authenticated read подтвердил отсутствие custody binding; epoch/inventory и соответствие серверного tenant/Viva binding установлены read-only. Candidate4830665e/contract275c19ae построены поверх актуального flow9ed37134 и сохраняют FPR; только5functions+11API nodes. LOCAL composition/review PASS; apply, trust configuration и provider acceptance не выполнены. Частные идентификаторы остаются вне Git.
+
+CUP PR81 head `9b1e0d43830bb57d09fb4b24639baab9f6f305b5`:33LOCAL testsPASS, CI41643844786/41643844842SUCCESS. Добавлен durable snapshot-before-timer-fence primitive; два reviewCLEAR. Полный first-restart operator/receipt integration ещё не завершён; CUP83 не перезапускался, queue import не выполнялся. Детали и история ниже не заменяют этот текущий срез.
 
 **GO только для передачи готового тестового APK. NO-GO для заявления о полной готовности функционального прогона.**
 
