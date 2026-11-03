@@ -16,3 +16,4 @@ export const CLOSED_R1_CONTROLLER_FILES: readonly string[];
 export function validateClosedR1ControllerClosure(entries: unknown): unknown;
 
 export function validateClosedR1NativeJoinPrerequisite(entries: unknown): ReadonlySet<string>;
+export function validateClosedR1PhonePrerequisite(entries: unknown): ReadonlySet<string>;

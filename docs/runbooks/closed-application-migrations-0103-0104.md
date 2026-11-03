@@ -67,6 +67,23 @@ independently reviewed and committed. Capacity and independent restore gates are
 
 ## Sequence and ownership
 
+The retained API/Worker release `702625eb669643c52bf69f55bc65c2e3e74f5ef9` omits three
+activation switches and its configuration parser defaults them to false. Admission recognizes
+that case only for the pinned API/Worker image digests and exact historical parser/startup
+source hashes. It checks sealed env files and actual container environments independently.
+Explicit true, blank, malformed or duplicate values still fail; another image, revision,
+changed source blob or unavailable Git object cannot use this exception. The earlier
+pre-capability ancestor rule remains unchanged. This is an OFF-state compatibility proof,
+not permission to change flags, recreate containers or enable delivery.
+
+Current-main source admission also pins the already merged quarter-court CREATE route and
+deterministic training-date test as an exact two-blob prerequisite. Those application files
+are not editable controller paths. Listed R1 Markdown evidence may change only as regular
+non-executable files; SQL inventory, catalog, source/CI/publication tuple and all migration
+prerequisites remain enforced. A new controller source still requires its own successful CI,
+immutable publication and enrollment before use. Retain any request rejected before prefetch
+intent; reconcile its no-admission state rather than replaying it under changed source.
+
 Use the canonical request paths returned by `closedApplicationProductionPaths`; do not
 reuse the photo/notification request. With the reviewed source already enrolled, the
 manual entry is:
