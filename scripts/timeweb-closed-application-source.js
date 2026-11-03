@@ -46,6 +46,7 @@ export const CLOSED_R1_CONTROLLER_FILES = Object.freeze([
   'scripts/timeweb-closed-application-source.test.ts',
   'scripts/timeweb-closed-application-runtime.js',
   'scripts/timeweb-closed-application-runtime.test.ts',
+  'scripts/timeweb-closed-application-controller.test.ts',
   'scripts/timeweb-closed-application.fixture.ts',
   'scripts/control-timeweb-database-backup.py',
   'scripts/test-timeweb-database-backup.py',

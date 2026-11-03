@@ -101,6 +101,10 @@ SQL, executable paths or arbitrary Docker arguments.
 For each stage, in order:
 
 1. Seal the exact migration intent and a separate 20–60 minute prefetch authorization.
+   The runtime snapshot does not require the future migration request while no matching
+   migration/probe container exists. If such a container is present, its exact request
+   hash remains mandatory for custody validation. Never stage a migration request merely
+   to satisfy a prefetch read: the phase-exclusion check correctly rejects that overlap.
    Recheck source CI/publication, runtime/env OFF switches, secret digests, target and
    pre-state. Persist the intent before the one image pull. Attestation never writes;
    reconciliation can seal a missing receipt only if both immutable image refs already
