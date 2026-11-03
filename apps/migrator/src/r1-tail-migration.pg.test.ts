@@ -36,6 +36,15 @@ import {
 import type { R1AclRow } from '../../../scripts/r1-tail-migration-acl.js';
 import { ownedClosedSchemaLocalFixtureUrl } from '../../../scripts/owned-closed-schema-test-target.js';
 import { applyR1TailSteps, assertR1TailRole, readR1TailLedger } from './r1-tail-migration.js';
+import {
+  assessR1RuntimePrivileges,
+  r1RuntimePrivilegeQuery,
+  r1RuntimePrivilegeRequirements,
+} from '../../../scripts/r1-runtime-privilege-audit.js';
+import type {
+  R1RuntimeComponent,
+  R1RuntimePrivilegeCapture,
+} from '../../../scripts/r1-runtime-privilege-audit.js';
 
 // This suite is registered by the existing explicit, owned PG16 CI contour.
 // No normal DATABASE_URL is accepted. Catalog exports contain pg_catalog metadata only.
@@ -523,6 +532,117 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             await owner.query(r1TailAclTransaction(preparation, 'cleanup', await acl(owner)));
             expect(await acl(owner)).toEqual(preparation.preimage);
             expect(point(await catalog(owner))).toEqual(checkpoints['119']!.cleaned);
+            // Catalog evidence above stays unchanged. Exercise the new diagnostic only in
+            // this already-owned disposable119 fixture, after all golden comparisons.
+            const runtime = new Pool({
+              connectionString: url(execution.name, 'phub_runtime'),
+              max: 1,
+            });
+            pools.push(runtime);
+            async function inspect(component: R1RuntimeComponent) {
+              const connection = await runtime.connect();
+              try {
+                await connection.query(
+                  'begin transaction isolation level repeatable read read only',
+                );
+                await connection.query("set local search_path='pg_catalog'");
+                const query = r1RuntimePrivilegeQuery(component);
+                const result = await connection.query<{ capture: R1RuntimePrivilegeCapture }>(
+                  query,
+                );
+                expect(result.rows).toHaveLength(1);
+                return assessR1RuntimePrivileges(result.rows[0]!.capture, {
+                  component,
+                  databaseName: execution.name,
+                  roleName: 'phub_runtime',
+                });
+              } finally {
+                await connection.query('rollback');
+                connection.release();
+              }
+            }
+            expect((await inspect('api')).status).toBe('BLOCKED');
+            expect((await inspect('worker')).issues).toContainEqual(
+              expect.objectContaining({
+                code: 'PRIVILEGE_MISSING',
+                relation: 'notifications.station_message_sources',
+              }),
+            );
+            await owner.query(
+              'revoke update,delete on identity.external_subject_link_commands from phub_runtime',
+            );
+            for (const component of ['api', 'worker'] as const) {
+              for (const requirement of r1RuntimePrivilegeRequirements(component)) {
+                await owner.query(
+                  `grant ${requirement.privileges.join(',')} on ${qualified(requirement.relation)} to phub_runtime`,
+                );
+                for (const column of requirement.updateColumns) {
+                  await owner.query(
+                    `grant update(${quote(column)}) on ${qualified(requirement.relation)} to phub_runtime`,
+                  );
+                }
+                if (requirement.rowLock) {
+                  const column = (
+                    await owner.query<{ name: string }>(
+                      'select attname as name from pg_catalog.pg_attribute where attrelid=$1::regclass and attnum>0 and not attisdropped order by attnum limit 1',
+                      [requirement.relation],
+                    )
+                  ).rows[0]!.name;
+                  await owner.query(
+                    `grant update(${quote(column)}) on ${qualified(requirement.relation)} to phub_runtime`,
+                  );
+                }
+              }
+            }
+            for (const component of ['api', 'worker'] as const) {
+              expect(await inspect(component)).toMatchObject({
+                status: 'SATISFIED',
+                activationAllowed: false,
+                issues: [],
+              });
+            }
+            await owner.query(
+              'revoke update(completed_at) on identity.external_subject_link_commands from phub_runtime',
+            );
+            expect((await inspect('api')).issues).toContainEqual(
+              expect.objectContaining({
+                code: 'COLUMN_UPDATE_MISSING',
+                relation: 'identity.external_subject_link_commands',
+                privilege: 'completed_at',
+              }),
+            );
+            await owner.query(
+              'grant update(completed_at) on identity.external_subject_link_commands to phub_runtime',
+            );
+            // Prove that incomplete column grants request review, never an automatic grant.
+            await owner.query('revoke update on games.quarter_create_attempts from phub_runtime');
+            await owner.query(
+              'grant update(state) on games.quarter_create_attempts to phub_runtime',
+            );
+            expect((await inspect('api')).issues).toContainEqual(
+              expect.objectContaining({
+                code: 'COLUMN_SCOPE_REVIEW_REQUIRED',
+                relation: 'games.quarter_create_attempts',
+                privilege: 'UPDATE',
+                review: true,
+              }),
+            );
+            // Revoked CREATE does not remove an owner's ALTER/DROP/regrant authority.
+            await owner.query('alter schema commerce owner to phub_runtime');
+            await owner.query('revoke create on schema commerce from phub_runtime');
+            expect(
+              (
+                await owner.query<{ allowed: boolean }>(
+                  "select has_schema_privilege('phub_runtime','commerce','CREATE') as allowed",
+                )
+              ).rows[0]!.allowed,
+            ).toBe(false);
+            expect((await inspect('api')).issues).toContainEqual(
+              expect.objectContaining({
+                code: 'UNSAFE_SCHEMA_OR_OWNER_OR_DDL',
+                relation: 'commerce.monthly_purchase_attempts',
+              }),
+            );
           } finally {
             executor.release();
             owner.release();
