@@ -70,6 +70,8 @@ export function readApiWorkerCapsule(bytes: Buffer): {
 };
 export interface ApiWorkerTransitionOps {
   secretMode?: 'preserve';
+  containApi?(): Promise<void>;
+  installRuntimeGrants?(): Promise<void>;
   preserveAndroid?: boolean;
   prepareDeliveryGate?(): Promise<void>;
   attestGatePreparation?(): Promise<void>;
@@ -172,3 +174,5 @@ export function readNotificationTerminalCapsule(
   operationBytes: Buffer,
   receiptBytes: Buffer,
 ): { op: unknown; plan: unknown };
+
+export function assertR1ApiWorkerInactive(bytes: Buffer | string): void;

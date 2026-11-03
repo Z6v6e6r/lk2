@@ -1,9 +1,11 @@
+import { r1ApiWorker119Fixture } from './timeweb-r1-api-worker119.fixture.js';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import * as fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  r1Source: vi.fn(),
   read: vi.fn(),
   secure: vi.fn(),
   git: vi.fn(),
@@ -34,6 +36,9 @@ const mocks = vi.hoisted(() => ({
   close: vi.fn(),
   fsync: vi.fn(),
   unlink: vi.fn(),
+}));
+vi.mock('./timeweb-r1-api-worker119-source.js', () => ({
+  attestR1ApiWorker119Source: mocks.r1Source,
 }));
 vi.mock('./timeweb-api-web-upgrade.js', () => ({
   readUpgradeFile: mocks.read,
@@ -1063,4 +1068,55 @@ describe('production adapter with all host/network operations intercepted', () =
     ).rejects.toThrow('flock busy');
     expect(mocks.docker).not.toHaveBeenCalled();
   });
+});
+
+describe('R1 deploy selects the currently installed mixed baseline', () => {
+  it.each([false, true])(
+    'binds Web871 descriptor independently of API702 (drift=%s)',
+    async (drift) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-03T00:30:00Z'));
+      const f = orphan(),
+        op = r1ApiWorker119Fixture();
+      f.files.set(
+        `${root}/operator/api-worker-upgrade.json`,
+        Buffer.from(JSON.stringify(op) + '\n'),
+      );
+      f.files.set(
+        '/etc/phub/timeweb-beta-standard-delivery.json',
+        Buffer.from(JSON.stringify({ schema: 1, enabled: true, controllerSha: op.controllerSha })),
+      );
+      const original = mocks.git.getMockImplementation()!;
+      mocks.git.mockImplementation((args: string[]) => {
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return op.controllerSha;
+        if (args[0] === 'rev-parse' && args[1]?.endsWith('^{tree}')) return op.controllerTree;
+        if (args[0] === 'diff') return '';
+        return original(args) as string;
+      });
+      const values = Object.fromEntries(
+        (
+          [
+            ['api', op.expectedApi],
+            ['worker', op.expectedWorker],
+            ['web', op.expectedWeb],
+            ['realtime', op.expectedRealtime],
+          ] as const
+        ).map(([service, identity]) => [
+          service.toUpperCase() + '_IMAGE_DIGEST',
+          identity.image.split('@')[1],
+        ]),
+      );
+      if (drift) values.WORKER_IMAGE_DIGEST = 'sha256:' + 'f'.repeat(64);
+      mocks.baseline.mockReturnValue({ values });
+      mocks.mkdir.mockImplementation(() => {
+        throw Error('REACHED_POST_BASELINE');
+      });
+      await expect(
+        runManualApiWorkerUpgrade('deploy', `${root}/operator/api-worker-upgrade.json`),
+      ).rejects.toThrow(drift ? 'R1_INSTALLED_BASELINE_DRIFT' : 'REACHED_POST_BASELINE');
+      expect(mocks.baseline).toHaveBeenCalledWith(op.expectedWeb.releaseId);
+      expect(op.expectedWeb.releaseId).not.toBe(op.expectedApi.releaseId);
+      expect(mocks.durable).not.toHaveBeenCalled();
+    },
+  );
 });

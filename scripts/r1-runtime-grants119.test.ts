@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { R1_TAIL } from './r1-tail-migration-profile.js';
 import { r1RuntimePrivilegeRequirements } from './r1-runtime-privilege-audit.js';
-import { planR1RuntimeGrants119, r1RuntimeGrantTransaction119 } from './r1-runtime-grants119.js';
+import {
+  planR1RuntimeGrants119,
+  r1RuntimeGrantTransaction119,
+  r1RuntimeGrantCatalog119,
+} from './r1-runtime-grants119.js';
 import type { R1Grant119Capture, R1Grant119Acl } from './r1-runtime-grants119.js';
 function capture(): R1Grant119Capture {
   const names = [
@@ -15,6 +19,7 @@ function capture(): R1Grant119Capture {
   ].sort();
   return {
     databaseName: 'r1_fixture',
+    systemIdentifier: '7679125609183186977',
     recovery: false,
     roleSafe: true,
     ledger: structuredClone(R1_TAIL.inventory),
@@ -141,5 +146,29 @@ describe('fixed R1 runtime119 grants', () => {
     expect(
       p.changes.some((c) => c.relation === x.tables[0]!.relation && c.privilege === 'SELECT'),
     ).toBe(false);
+  });
+});
+
+describe('post-grant semantic catalog binding', () => {
+  it('changes only reviewed ACL values and rejects preimage substitution', () => {
+    const plan = planR1RuntimeGrants119(capture());
+    const table = plan.preimage.tables[0]!;
+    const catalog = [
+      { key: 'relation:' + table.relation, value: { acl: [], owner: 'MIGRATOR', rls: true } },
+      ...table.columns.map((c) => ({
+        key: 'column:' + table.relation + ':' + c.name,
+        value: { acl: [], type: 'uuid' },
+      })),
+      {
+        key: 'relation:identity.users',
+        value: { acl: [['RUNTIME', 'MIGRATOR', 'SELECT', false]], owner: 'MIGRATOR' },
+      },
+    ];
+    const next = r1RuntimeGrantCatalog119(catalog, plan);
+    expect(next[0]!.value.acl).not.toEqual([]);
+    expect(next.at(-1)).toEqual(catalog.at(-1));
+    expect(catalog[0]!.value.acl).toEqual([]);
+    catalog[0]!.value.acl = [['RUNTIME', 'MIGRATOR', 'DELETE', false]] as never;
+    expect(() => r1RuntimeGrantCatalog119(catalog, plan)).toThrow();
   });
 });

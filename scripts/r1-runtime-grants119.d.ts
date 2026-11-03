@@ -1,6 +1,7 @@
 export type R1Grant119Acl = [string, string, string, boolean][];
 export interface R1Grant119Capture {
   databaseName: string;
+  systemIdentifier: string;
   recovery: boolean;
   roleSafe: boolean;
   ledger: { filename: string; checksum: string }[];
@@ -36,3 +37,8 @@ export function r1RuntimeGrantTransaction119(
   plan: R1Grant119Plan,
   phase: 'apply' | 'recover',
 ): string;
+
+export function r1RuntimeGrantCatalog119(
+  catalog: Array<{ key: string; value: Record<string, unknown> }>,
+  plan: ReturnType<typeof planR1RuntimeGrants119>,
+): Array<{ key: string; value: Record<string, unknown> }>;

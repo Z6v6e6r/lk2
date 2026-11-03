@@ -37,15 +37,19 @@ const exact = (v, keys) =>
 const acl = (expression, owner) =>
   `(select coalesce(jsonb_agg(jsonb_build_array(pg_catalog.pg_get_userbyid(a.grantor),case when a.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(a.grantee) end,a.privilege_type,a.is_grantable) order by pg_catalog.pg_get_userbyid(a.grantor) collate "C",case when a.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(a.grantee) end collate "C",a.privilege_type collate "C",a.is_grantable),'[]'::jsonb) from pg_catalog.aclexplode(${owner ? `coalesce(${expression},pg_catalog.acldefault('r',${owner}))` : expression}) a)`;
 export const R1_RUNTIME_GRANT_CATALOG_SQL = `select jsonb_build_object(
- 'databaseName',current_database(),'recovery',pg_catalog.pg_is_in_recovery(),
+ 'databaseName',current_database(),'systemIdentifier',(select system_identifier::text from pg_catalog.pg_control_system()),'recovery',pg_catalog.pg_is_in_recovery(),
  'roleSafe',exists(select 1 from pg_catalog.pg_roles r where r.rolname='phub_runtime' and not(r.rolsuper or r.rolcreaterole or r.rolcreatedb or r.rolreplication or r.rolbypassrls) and not exists(select 1 from pg_catalog.pg_auth_members m where m.member=r.oid)),
  'ledger',(select jsonb_agg(jsonb_build_object('filename',filename,'checksum',checksum) order by filename collate "C") from public.schema_migrations),
  'tables',(select jsonb_agg(jsonb_build_object('relation',n.nspname||'.'||c.relname,'owner',pg_catalog.pg_get_userbyid(c.relowner),'kind',c.relkind::text,'rls',c.relrowsecurity,'forceRls',c.relforcerowsecurity,
  'schemaUsage',pg_catalog.has_schema_privilege('phub_runtime',n.oid,'USAGE'),'schemaCreate',pg_catalog.has_schema_privilege('phub_runtime',n.oid,'CREATE'),'schemaOwnerAssumable',pg_catalog.pg_has_role('phub_runtime',n.nspowner,'MEMBER'),
  'acl',${acl('c.relacl', 'c.relowner')},'columns',(select jsonb_agg(jsonb_build_object('name',col.attname,'acl',${acl('col.attacl')}) order by col.attname collate "C") from pg_catalog.pg_attribute col where col.attrelid=c.oid and col.attnum>0 and not col.attisdropped)) order by n.nspname collate "C",c.relname collate "C") from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname||'.'||c.relname=any(array[${names.map(literal).join(',')}]::text[])))`;
 function validate(snapshot) {
-  exact(snapshot, ['databaseName', 'recovery', 'roleSafe', 'ledger', 'tables']);
+  exact(snapshot, ['databaseName', 'systemIdentifier', 'recovery', 'roleSafe', 'ledger', 'tables']);
   ident(snapshot.databaseName);
+  need(
+    typeof snapshot.systemIdentifier === 'string' &&
+      /^[1-9][0-9]*$/.test(snapshot.systemIdentifier),
+  );
   need(snapshot.recovery === false && snapshot.roleSafe === true);
   r1PackagedInventory(snapshot.ledger);
   need(Array.isArray(snapshot.tables) && snapshot.tables.length === names.length);
@@ -173,13 +177,62 @@ export function r1RuntimeGrantTransaction119(plan, phase) {
     : [...plan.changes]
         .reverse()
         .map((c) => ({ ...c, action: c.action === 'grant' ? 'revoke' : 'grant' }));
-  return `begin;set local search_path='pg_catalog';set local lock_timeout='5s';set local statement_timeout='30s';
+  const transactionCatalog = R1_RUNTIME_GRANT_CATALOG_SQL.replace(
+    '(select system_identifier::text from pg_catalog.pg_control_system())',
+    "current_setting('phub.r1_grant_system_identifier')",
+  );
+  return `begin;select set_config('phub.r1_grant_system_identifier',(select system_identifier::text from pg_catalog.pg_control_system()),true);set local search_path='pg_catalog';set local lock_timeout='5s';set local statement_timeout='30s';
 set local role phub_migrator;
+do $r1grants$ begin
 lock table public.schema_migrations in share mode;
 ${names.map((n) => `lock table ${qualified(n)} in share row exclusive mode;`).join('\n')}
-do $r1grants$ begin
-if (${R1_RUNTIME_GRANT_CATALOG_SQL}) is distinct from ${literal(encode(before))}::jsonb then raise exception 'R1_RUNTIME_GRANT_PREIMAGE_DRIFT';end if;
+if (${transactionCatalog}) is distinct from ${literal(encode(before))}::jsonb then raise exception 'R1_RUNTIME_GRANT_PREIMAGE_DRIFT';end if;
 ${changes.map((c) => statement(c.action, c.relation, c.column, c.privilege)).join('\n')}
-if (${R1_RUNTIME_GRANT_CATALOG_SQL}) is distinct from ${literal(encode(after))}::jsonb then raise exception 'R1_RUNTIME_GRANT_POSTIMAGE_DRIFT';end if;
+if (${transactionCatalog}) is distinct from ${literal(encode(after))}::jsonb then raise exception 'R1_RUNTIME_GRANT_POSTIMAGE_DRIFT';end if;
 end $r1grants$;commit;`;
+}
+
+// Translate only the exact table/column ACLs in a reviewed grant plan into the existing
+// semantic catalog representation. All non-ACL fields and all other relations survive.
+export function r1RuntimeGrantCatalog119(catalog, grantPlan) {
+  need(r1Same(grantPlan, planR1RuntimeGrants119(grantPlan.preimage)));
+  const result = structuredClone(catalog);
+  const normalized = (acl, relation) =>
+    acl
+      .map(([grantor, grantee, privilege, grantable]) => [
+        relation && grantee === 'phub_runtime'
+          ? 'RUNTIME'
+          : relation && grantee === 'phub_migrator'
+            ? 'MIGRATOR'
+            : grantee,
+        relation && grantor === 'phub_migrator' ? 'MIGRATOR' : grantor,
+        privilege,
+        grantable,
+      ])
+      .sort((a, b) => {
+        for (let i = 0; i < 3; i++) {
+          if (a[i] < b[i]) return -1;
+          if (a[i] > b[i]) return 1;
+        }
+        return 0;
+      });
+  for (const table of grantPlan.postimage.tables) {
+    const previous = grantPlan.preimage.tables.find((x) => x.relation === table.relation);
+    const relation = result.find((x) => x.key === 'relation:' + table.relation);
+    if (!relation) continue; // The separate grant snapshot covers all18; tail catalog has its own fixed scope.
+    need(r1Same(relation.value.acl, normalized(previous.acl, true)));
+    relation.value.acl = normalized(table.acl, true);
+    for (const col of table.columns) {
+      const row = result.find((x) => x.key === 'column:' + table.relation + ':' + col.name);
+      need(
+        row &&
+          r1Same(
+            row.value.acl,
+            normalized(previous.columns.find((x) => x.name === col.name).acl, false),
+          ),
+      );
+      row.value.acl = normalized(col.acl, false);
+    }
+  }
+  return result;
 }

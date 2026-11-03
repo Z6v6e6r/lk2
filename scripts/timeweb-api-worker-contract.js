@@ -1,3 +1,49 @@
+import { planR1RuntimeGrants119 } from './r1-runtime-grants119.js';
+import { r1Same, r1Encode, r1Hash } from './r1-tail-migration-profile.js';
+import {
+  isR1ApiWorker119,
+  validateR1ApiWorker119Operation,
+  validateR1ApiWorker119Ledger,
+  R1_API_WORKER119_PLAN,
+  R1_API_WORKER119_RECEIPT,
+  R1_API_WORKER119_INSTALLED,
+} from './timeweb-r1-api-worker119-profile.js';
+export const isProtectedApiWorkerRollout = (op) =>
+  isNotificationRollout(op) || isR1ApiWorker119(op);
+export const isPreservingApiWorkerRollout = (op) =>
+  isPreservedNotificationRollout(op) || isR1ApiWorker119(op);
+export const apiWorkerMigratorImage = (op) =>
+  isR1ApiWorker119(op)
+    ? op.publishedMigratorImage
+    : isPreservedNotificationRollout(op)
+      ? op.completedMigration.migratorImage
+      : op.migratorImage;
+export const apiWorkerCompletedReference = (op) =>
+  isR1ApiWorker119(op) ? op.completedTail : op.completedMigration;
+export const apiWorkerPlanSchema = (op) =>
+  isR1ApiWorker119(op)
+    ? R1_API_WORKER119_PLAN
+    : isPreservedNotificationRollout(op)
+      ? PRESERVED_NOTIFICATION_PLAN_SCHEMA
+      : isNotificationRollout(op)
+        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2'
+        : 'PHUB_TIMEWEB_API_WORKER_PLAN_V1';
+export const apiWorkerReceiptSchema = (op) =>
+  isR1ApiWorker119(op)
+    ? R1_API_WORKER119_RECEIPT
+    : isPreservedNotificationRollout(op)
+      ? PRESERVED_NOTIFICATION_RECEIPT_SCHEMA
+      : isNotificationRollout(op)
+        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2'
+        : 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1';
+export const apiWorkerInstalledKind = (op) =>
+  isR1ApiWorker119(op)
+    ? R1_API_WORKER119_INSTALLED
+    : isPreservedNotificationRollout(op)
+      ? 'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID'
+      : isNotificationRollout(op)
+        ? 'API_WORKER_NOTIFICATION_0105'
+        : 'API_WORKER';
 import {
   isPreservedNotificationRollout,
   PRESERVED_NOTIFICATION_PLAN_SCHEMA,
@@ -577,7 +623,8 @@ export function sameApiWorkerDeploymentIdentity(actual, expected, profile = 'pro
   );
 }
 export function validateApiWorkerOperation(op, now) {
-  if (isNotificationRollout(op)) return validateNotificationOperation(op, now);
+  if (isR1ApiWorker119(op)) return validateR1ApiWorker119Operation(op, now);
+  if (isProtectedApiWorkerRollout(op)) return validateNotificationOperation(op, now);
   exact(op, [
     'schema',
     'target',
@@ -676,7 +723,11 @@ export function validateApiWorkerControllerDelta(entries) {
     fail('CONTROLLER_DELTA');
 }
 export function validateApiWorkerLedger(applied, packaged, operation) {
-  if (isNotificationRollout(operation)) {
+  if (isR1ApiWorker119(operation)) {
+    validateR1ApiWorker119Operation(operation);
+    return validateR1ApiWorker119Ledger(applied, packaged);
+  }
+  if (isProtectedApiWorkerRollout(operation)) {
     validateNotificationOperation(operation);
     if (
       !Array.isArray(applied) ||
@@ -713,8 +764,8 @@ export function validateApiWorkerLedger(applied, packaged, operation) {
 }
 
 export function validateApiWorkerReceipt(receipt, planSha256, operation) {
-  const notification = isNotificationRollout(operation),
-    preserving = isPreservedNotificationRollout(operation);
+  const notification = isProtectedApiWorkerRollout(operation),
+    preserving = isPreservingApiWorkerRollout(operation);
   const terminal = receipt.status === 'RECONCILED' ? receipt.reconciledStatus : receipt.status;
   exact(receipt, [
     'schema',
@@ -727,6 +778,9 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
       ? [
           'installedBaselineSha256',
           'observationSha256',
+          ...(isR1ApiWorker119(operation)
+            ? ['runtimeGrantIntentSha256', 'runtimeGrantTerminalSha256']
+            : []),
           ...(preserving ? ['fcmDrainSha256', 'fcmGateHeldSha256', 'fcmGateReleasedSha256'] : []),
           ...(notification
             ? ['observationPolicySha256']
@@ -739,6 +793,9 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
     'PREPARED',
     'WORKER_STOP_INTENT',
     'WORKER_STOPPED',
+    ...(isR1ApiWorker119(operation)
+      ? ['API_STOP_INTENT', 'API_STOPPED', 'GRANTS_INTENT', 'GRANTS_VERIFIED']
+      : []),
     'SECRET_SWAP_INTENT',
     'SECRETS_ACTIVE',
     'API_INTENT',
@@ -757,12 +814,7 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
     'ABORTED',
   ];
   if (
-    receipt.schema !==
-      (notification
-        ? preserving
-          ? PRESERVED_NOTIFICATION_RECEIPT_SCHEMA
-          : 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2'
-        : 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1') ||
+    receipt.schema !== apiWorkerReceiptSchema(operation) ||
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
     !Number.isFinite(Date.parse(receipt.observedAt)) ||
@@ -789,6 +841,9 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
     ![
       'installedBaselineSha256',
       'observationSha256',
+      ...(isR1ApiWorker119(operation)
+        ? ['runtimeGrantIntentSha256', 'runtimeGrantTerminalSha256']
+        : []),
       ...(preserving ? ['fcmDrainSha256', 'fcmGateHeldSha256', 'fcmGateReleasedSha256'] : []),
       ...(notification
         ? ['observationPolicySha256']
@@ -806,8 +861,8 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
 }
 
 export function assertPlan(plan, op, operationBytes) {
-  const notification = isNotificationRollout(op),
-    preserving = isPreservedNotificationRollout(op);
+  const notification = isProtectedApiWorkerRollout(op),
+    preserving = isPreservingApiWorkerRollout(op);
   exact(plan, [
     'schema',
     'operationSha256',
@@ -827,6 +882,7 @@ export function assertPlan(plan, op, operationBytes) {
     'packagedLedger',
     'unchangedImages',
     'createdAt',
+    ...(isR1ApiWorker119(op) ? ['runtimeGrants', 'previousWorkerGate'] : []),
     ...(notification
       ? [
           'migrationProof',
@@ -838,12 +894,7 @@ export function assertPlan(plan, op, operationBytes) {
       : []),
   ]);
   if (
-    plan.schema !==
-      (notification
-        ? preserving
-          ? PRESERVED_NOTIFICATION_PLAN_SCHEMA
-          : 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2'
-        : 'PHUB_TIMEWEB_API_WORKER_PLAN_V1') ||
+    plan.schema !== apiWorkerPlanSchema(op) ||
     plan.operationSha256 !== hash(operationBytes) ||
     plan.controllerSha !== op.controllerSha ||
     (op.controllerPromotion === undefined
@@ -874,6 +925,9 @@ export function assertPlan(plan, op, operationBytes) {
     ![
       `${ROOT}/releases/${op.expectedApi.releaseId}/release.env`,
       `${ROOT}/releases/${op.expectedApi.releaseId}/installed-components.env`,
+      ...(isR1ApiWorker119(op)
+        ? [`${ROOT}/releases/${op.expectedWeb.releaseId}/installed-components.env`]
+        : []),
     ].includes(plan.baselinePath) ||
     !['composeSha256', 'baselineSha256'].every((k) => HASH.test(plan[k] ?? ''))
   )
@@ -888,13 +942,51 @@ export function assertPlan(plan, op, operationBytes) {
   if (!Object.values(plan.unchangedImages).every((v) => /^sha256:[a-f0-9]{64}$/.test(v)))
     fail('PLAN_IMAGES');
   validateApiWorkerLedger(plan.packagedLedger, plan.packagedLedger, op);
+  if (isR1ApiWorker119(op)) {
+    if (
+      !r1Same(plan.runtimeGrants, planR1RuntimeGrants119(plan.runtimeGrants.preimage)) ||
+      plan.runtimeGrants.preimage.databaseName !== 'phub_beta' ||
+      plan.runtimeGrants.preimage.systemIdentifier !== '7679125609183186977'
+    )
+      fail('R1_GRANT_PLAN');
+    if (plan.previousWorkerGate !== null) {
+      const g = plan.previousWorkerGate;
+      exact(g, ['receiptPath', 'directory', 'override', 'binding', 'configHash']);
+      const tx = `${ROOT}/backups/${op.expectedApi.releaseId}-api-worker`;
+      exact(g.binding, ['operationSha256', 'planSha256', 'releaseId', 'workerImage']);
+      if (
+        g.receiptPath !== tx + '/rollout-receipt.json' ||
+        g.directory !== tx + '/fcm-delivery-gate' ||
+        g.override !== tx + '/candidate-worker-gate.compose.json' ||
+        !HASH.test(g.configHash ?? '') ||
+        !HASH.test(g.binding.operationSha256 ?? '') ||
+        !HASH.test(g.binding.planSha256 ?? '') ||
+        g.binding.releaseId !== op.expectedApi.releaseId ||
+        g.binding.workerImage !== op.expectedWorker.image
+      )
+        fail('R1_PREVIOUS_GATE');
+    }
+    for (const [service, key] of [
+      ['web', 'expectedWeb'],
+      ['realtime', 'expectedRealtime'],
+    ]) {
+      const want = op[key],
+        found = plan.excluded.filter((x) => x.id === want.id);
+      if (
+        found.length !== 1 ||
+        ['image', 'imageId', 'restarts', 'startedAt'].some((k) => found[0][k] !== want[k]) ||
+        plan.unchangedImages[service.toUpperCase() + '_IMAGE_DIGEST'] !== want.image.split('@')[1]
+      )
+        fail('R1_EXCLUDED');
+    }
+  }
+
   if (notification) {
     validateNotificationObservationPolicy(plan.observationPolicy);
     if (
       !same(plan.previousSecrets, plan.candidateSecrets) ||
       plan.fcmCredentialSource !== op.expectedFcmSource ||
-      plan.migratorImage !==
-        (preserving ? op.completedMigration.migratorImage : op.migratorImage) ||
+      plan.migratorImage !== apiWorkerMigratorImage(op) ||
       !same(plan.previousSecrets.files, op.candidateSecretHashes)
     )
       fail('PRESERVE_SECRETS');
@@ -907,18 +999,28 @@ export function assertPlan(plan, op, operationBytes) {
       'target',
       ...(preserving ? ['completedMigrationSha256', 'installedMigratorImage'] : []),
     ]);
-    for (const k of ['migrationPlanSha256', 'migrationSuccessSha256', 'migrationReceiptSha256'])
-      if (plan.migrationProof[k] !== op[k]) fail('MIGRATION_PROOF');
+    for (const [k, file] of [
+      ['migrationPlanSha256', 'plan.json'],
+      ['migrationSuccessSha256', 'migration-success.json'],
+      ['migrationReceiptSha256', 'migration-receipt.json'],
+    ])
+      if (plan.migrationProof[k] !== (isR1ApiWorker119(op) ? op.completedTail.files[file] : op[k]))
+        fail('MIGRATION_PROOF');
     if (!HASH.test(plan.migrationProof.catalogSha256 ?? '')) fail('MIGRATION_PROOF');
     if (
       preserving &&
       (!same(plan.androidGate, op.androidGate) ||
-        plan.completedMigrationSha256 !== hash(JSON.stringify(op.completedMigration) + '\n') ||
+        plan.completedMigrationSha256 !==
+          hash(JSON.stringify(apiWorkerCompletedReference(op)) + '\n') ||
         plan.migrationProof.completedMigrationSha256 !== plan.completedMigrationSha256 ||
-        plan.migrationProof.installedMigratorImage !== op.completedMigration.migratorImage ||
-        plan.migrationProof.catalogSha256 !== op.completedMigration.catalogSha256 ||
-        !same(plan.migrationProof.target, op.completedMigration.target) ||
-        !same(plan.migrationProof.backup, op.completedMigration.backup))
+        plan.migrationProof.installedMigratorImage !== apiWorkerMigratorImage(op) ||
+        (!isR1ApiWorker119(op) &&
+          plan.migrationProof.catalogSha256 !== op.completedMigration.catalogSha256) ||
+        !same(
+          plan.migrationProof.target,
+          isR1ApiWorker119(op) ? op.completedTail.backup.target : op.completedMigration.target,
+        ) ||
+        !same(plan.migrationProof.backup, apiWorkerCompletedReference(op).backup))
     )
       fail('COMPLETED_MIGRATION');
   }
@@ -942,23 +1044,14 @@ export function validateInstalledApiWorkerEvidence({
     values.PHUB_RELEASE_SOURCE_SHA !== undefined ||
     values.PHUB_RELEASE_SOURCE_TREE !== undefined ||
     Object.entries(plan.unchangedImages).some(([k, v]) => values[k] !== v) ||
-    values.PHUB_COMPONENT_ROLLOUT_KIND !==
-      (isPreservedNotificationRollout(op)
-        ? 'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID'
-        : isNotificationRollout(op)
-          ? 'API_WORKER_NOTIFICATION_0105'
-          : 'API_WORKER') ||
+    values.PHUB_COMPONENT_ROLLOUT_KIND !== apiWorkerInstalledKind(op) ||
     values.PHUB_COMPONENT_ROLLOUT_RECEIPT !==
       `${ROOT}/backups/${releaseId}-api-worker/rollout-receipt.json` ||
     values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID !==
-      (isNotificationRollout(op) ? plan.previousSecrets.releaseId : releaseId) ||
-    (isNotificationRollout(op) &&
-      values.MIGRATOR_IMAGE_DIGEST !==
-        (isPreservedNotificationRollout(op)
-          ? op.completedMigration.migratorImage
-          : op.migratorImage
-        ).split('@')[1]) ||
-    (isPreservedNotificationRollout(op) &&
+      (isProtectedApiWorkerRollout(op) ? plan.previousSecrets.releaseId : releaseId) ||
+    (isProtectedApiWorkerRollout(op) &&
+      values.MIGRATOR_IMAGE_DIGEST !== apiWorkerMigratorImage(op).split('@')[1]) ||
+    (isPreservingApiWorkerRollout(op) &&
       values.PHUB_WORKER_DELIVERY_GATE_RECEIPT !==
         `${ROOT}/backups/${releaseId}-api-worker/rollout-receipt.json`) ||
     receipt.installedBaselineSha256 !== hash(bytes) ||
@@ -973,15 +1066,35 @@ export function validateInstalledApiWorkerEvidence({
     )
       fail('INSTALLED');
   const observation = parseStrictJson(evidence['observation.json']);
-  if (isNotificationRollout(op)) {
+  if (isProtectedApiWorkerRollout(op)) {
     validateNotificationObservation(observation, hash(operationBytes), hash(planBytes));
-    const preserving = isPreservedNotificationRollout(op);
+    const preserving = isPreservingApiWorkerRollout(op);
     exact(evidence, [
       'observation.json',
+      ...(isR1ApiWorker119(op) ? ['runtime-grant-intent.json', 'runtime-grant-terminal.json'] : []),
       ...(preserving
         ? ['fcm-drain.json', 'fcm-delivery-gate/held.json', 'fcm-delivery-gate/released.json']
         : []),
     ]);
+    if (isR1ApiWorker119(op)) {
+      const identity = {
+        schema: 'PHUB_R1_RUNTIME_GRANT_EXECUTION_V1',
+        operationSha256: hash(operationBytes),
+        planSha256: hash(planBytes),
+        grantPlanSha256: r1Hash(r1Encode(plan.runtimeGrants)),
+      };
+      for (const [name, key, expected] of [
+        ['runtime-grant-intent.json', 'runtimeGrantIntentSha256', identity],
+        [
+          'runtime-grant-terminal.json',
+          'runtimeGrantTerminalSha256',
+          { ...identity, status: 'COMMITTED_CHILD_EXIT_ZERO' },
+        ],
+      ]) {
+        if (!r1Encode(expected).equals(evidence[name]) || hash(evidence[name]) !== receipt[key])
+          fail('INSTALLED_RUNTIME_GRANTS');
+      }
+    }
     if (preserving) {
       validateFcmDrainProof(parseStrictJson(evidence['fcm-drain.json']), op, hash(planBytes));
       const binding = fcmGateBinding(op, hash(operationBytes), hash(planBytes));

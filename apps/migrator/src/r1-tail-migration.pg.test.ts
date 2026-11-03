@@ -50,6 +50,7 @@ import {
   R1_RUNTIME_GRANT_CATALOG_SQL,
   planR1RuntimeGrants119,
   r1RuntimeGrantTransaction119,
+  r1RuntimeGrantCatalog119,
 } from '../../../scripts/r1-runtime-grants119.js';
 import type { R1Grant119Capture } from '../../../scripts/r1-runtime-grants119.js';
 
@@ -601,8 +602,15 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             }
             const grantPreimage = await runtimeAcl();
             const grantPlan = planR1RuntimeGrants119(grantPreimage);
+            const beforeGrantCatalog = await catalog(owner);
             await owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply'));
             expect(await runtimeAcl()).toEqual(grantPlan.postimage);
+            expect(await catalog(owner)).toEqual(
+              r1RuntimeGrantCatalog119(
+                beforeGrantCatalog as unknown as Parameters<typeof r1RuntimeGrantCatalog119>[0],
+                grantPlan,
+              ),
+            );
             await expect(
               owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply')),
             ).rejects.toThrow('R1_RUNTIME_GRANT_PREIMAGE_DRIFT');

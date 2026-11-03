@@ -1,3 +1,4 @@
+import { r1RuntimeGrantCatalog119 } from './r1-runtime-grants119.js';
 import { closedApplicationPackageFamily } from './closed-application-package-family.js';
 // Fixed R1 tail host binding. Reuses enrolled executor, secure files and owner/ACL backup custody.
 import { execFileSync } from 'node:child_process';
@@ -68,6 +69,7 @@ import {
   validateR1TailOperation,
   runR1TailAdapter,
   r1TailPaths,
+  validateR1TailCompletedEvidence,
   R1_TAIL_ROOT as ROOT,
   R1_TAIL_REQUEST,
 } from './r1-tail-migration-controller.js';
@@ -472,6 +474,67 @@ function readBackup(op, fresh) {
   )
     r1Stop('BACKUP_TERMINAL');
   return proof;
+}
+// Fixed retained attempt directory, never the mutable operator request. All reads
+// use existing root-owned custody. Backup terminal attestation is read-only and must
+// remain bound to the enrolled source; no migration reconcile or marker writes here.
+export function readCompletedR1TailEvidence(
+  reference,
+  dependencies = { read, backup: readBackup },
+) {
+  const root = r1TailPaths(reference).root;
+  const files = [
+    'request.json',
+    'preparation.json',
+    'plan.json',
+    'migration-receipt.json',
+    'migration-success.json',
+    'cleanup.json',
+    'role-proof.json',
+  ];
+  const blobs = Object.fromEntries(
+    files.map((name) => [name, dependencies.read(root + '/' + name)]),
+  );
+  const result = validateR1TailCompletedEvidence(reference, blobs, r1Hash(ROLE_SOURCE));
+  if (!r1Same(dependencies.backup(result.operation, false), reference.backup))
+    r1Stop('COMPLETED_BACKUP_TERMINAL');
+  return result;
+}
+// Fresh read-only deployment prerequisite, separate from historical completion evidence.
+// Both retained executors must be terminal. This never reconciles or releases old locks.
+export function attestCompletedR1TailRuntime(reference, grants = null) {
+  const completed = readCompletedR1TailEvidence(reference),
+    op = completed.operation;
+  const operationSha = reference.files['request.json'];
+  for (const [kind, expectedId] of [
+    ['migration', completed.receipt.containerId],
+    ['role', completed.roleProof.containerId],
+  ]) {
+    const row = lookup(op, kind, operationSha);
+    if (
+      !row ||
+      row.Id !== expectedId ||
+      row.State.Status !== 'exited' ||
+      row.State.ExitCode !== 0 ||
+      row.State.Running ||
+      row.State.Restarting ||
+      row.State.Paused
+    )
+      r1Stop('COMPLETED_EXECUTOR_NOT_TERMINAL');
+  }
+  const current = sql(R1_TAIL_STATE_SQL);
+  const expectedCatalog = grants
+    ? r1RuntimeGrantCatalog119(completed.cleanup.catalog, grants)
+    : completed.cleanup.catalog;
+  if (
+    !r1Same(current.catalog, expectedCatalog) ||
+    !r1Same(current.security, completed.cleanup.security)
+  )
+    r1Stop('COMPLETED_CURRENT_DATABASE_DRIFT');
+  // Exact ACL delta is checked above; validate every other target/catalog/hazard invariant
+  // against the already authenticated cleanup catalog, rather than weakening migration rules.
+  validateR1TailState(op, { ...current, catalog: completed.cleanup.catalog }, 'cleaned', 119);
+  return completed;
 }
 function migrationCommand(op) {
   return [

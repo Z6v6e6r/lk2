@@ -13,6 +13,8 @@ import {
   r1LedgerCount,
 } from './r1-tail-migration-profile.js';
 import { parseStrictJson } from './strict-json.js';
+import { validateR1TailState } from './r1-tail-migration-state.js';
+import { validateR1TailPreparation } from './r1-tail-migration-acl.js';
 const HASH = /^[a-f0-9]{64}$/;
 const SHA = /^[a-f0-9]{40}$/;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -160,7 +162,7 @@ export function validateR1TailOperation(op, at) {
     r1Stop('AUTHORITY');
   return op;
 }
-function validateRecord(value, operationSha256, planSha256) {
+export function validateR1TailRecord(value, operationSha256, planSha256) {
   r1Exact(value, [
     'schema',
     'operationSha256',
@@ -198,6 +200,117 @@ function validateRecord(value, operationSha256, planSha256) {
     r1Stop('RECEIPT');
   return value;
 }
+// Historical terminal evidence is independent of current application identities. The
+// caller authenticates retained paths and backup custody; this function has no effects.
+export function validateR1TailCompletedEvidence(reference, blobs, expectedRoleSourceSha256) {
+  const files = [
+    'request.json',
+    'preparation.json',
+    'plan.json',
+    'migration-receipt.json',
+    'migration-success.json',
+    'cleanup.json',
+    'role-proof.json',
+  ];
+  r1Exact(reference, ['schema', 'attemptId', 'controllerSha', 'controllerTree', 'files', 'backup']);
+  if (
+    reference.schema !== 'PHUB_R1_TAIL_COMPLETED_V1' ||
+    !HASH.test(expectedRoleSourceSha256 ?? '')
+  )
+    r1Stop('COMPLETED_REFERENCE');
+  r1TailPaths(reference);
+  r1Exact(reference.files, files);
+  r1Exact(blobs, files);
+  for (const name of files)
+    if (
+      !Buffer.isBuffer(blobs[name]) ||
+      !HASH.test(reference.files[name] ?? '') ||
+      r1Hash(blobs[name]) !== reference.files[name]
+    )
+      r1Stop('COMPLETED_FILE_HASH');
+  const op = validateR1TailOperation(parseStrictJson(blobs['request.json']));
+  if (
+    op.attemptId !== reference.attemptId ||
+    op.controllerSha !== reference.controllerSha ||
+    op.controllerTree !== reference.controllerTree
+  )
+    r1Stop('COMPLETED_SOURCE');
+  r1Exact(reference.backup, [
+    'path',
+    'sha256',
+    'operationSha256',
+    'preimageSha256',
+    'target',
+    'sourceLedgerSha256',
+  ]);
+  if (
+    reference.backup.path !==
+      op.backup.operationPath.replace(/backup-operation\.json$/u, 'database-backup-receipt.json') ||
+    reference.backup.sha256 !== op.backup.receiptSha256 ||
+    reference.backup.operationSha256 !== op.backup.operationSha256 ||
+    reference.backup.preimageSha256 !== op.backup.preimageSha256 ||
+    !r1Same(reference.backup.target, op.expectedDatabaseTarget) ||
+    reference.backup.sourceLedgerSha256 !== R1_TAIL.checkpoints[String(op.fromCount)]
+  )
+    r1Stop('COMPLETED_BACKUP_BINDING');
+  const capsule = parseStrictJson(blobs['preparation.json']);
+  r1Exact(capsule, ['operation', 'plan']);
+  if (
+    capsule.operation !== blobs['request.json'].toString('base64') ||
+    capsule.plan !== blobs['plan.json'].toString('base64')
+  )
+    r1Stop('COMPLETED_CAPSULE');
+  const plan = parseStrictJson(blobs['plan.json']);
+  r1Exact(plan, [
+    'schema',
+    'operationSha256',
+    'runtime',
+    'secrets',
+    'preimage',
+    'backup',
+    'inventorySha256',
+    'catalogsSha256',
+    'preparation',
+  ]);
+  if (
+    plan.schema !== 'PHUB_R1_TAIL_PLAN_V1' ||
+    plan.operationSha256 !== reference.files['request.json'] ||
+    plan.inventorySha256 !== r1Hash(r1Encode(R1_TAIL)) ||
+    plan.catalogsSha256 !== op.catalogsSha256 ||
+    r1Hash(r1Encode(plan.runtime)) !== op.expectedRuntimeSha256 ||
+    r1Hash(r1Encode(plan.secrets)) !== op.expectedSecretsSha256 ||
+    r1Hash(r1Encode(plan.preimage.security)) !== op.expectedSecuritySha256 ||
+    !r1Same(plan.backup, reference.backup)
+  )
+    r1Stop('COMPLETED_PLAN');
+  validateR1TailState(op, plan.preimage, 'cleaned', op.fromCount);
+  validateR1TailPreparation(plan.preparation, plan.preimage.security);
+  const receipt = validateR1TailRecord(
+    parseStrictJson(blobs['migration-receipt.json']),
+    reference.files['request.json'],
+    reference.files['plan.json'],
+  );
+  if (
+    receipt.status !== 'SUCCESS' ||
+    receipt.count !== 119 ||
+    receipt.containerId === null ||
+    !blobs['migration-success.json'].equals(r1Encode(receipt)) ||
+    receipt.stateSha256 !== reference.files['cleanup.json']
+  )
+    r1Stop('COMPLETED_TERMINAL');
+  const cleanup = parseStrictJson(blobs['cleanup.json']);
+  validateR1TailState(op, cleanup, 'cleaned', 119);
+  if (!r1Same(cleanup.security, plan.preparation.preimage)) r1Stop('COMPLETED_CLEANUP');
+  const role = parseStrictJson(blobs['role-proof.json']);
+  r1Exact(role, ['containerId', 'operationSha256', 'sourceSha256']);
+  if (
+    !HASH.test(role.containerId ?? '') ||
+    role.operationSha256 !== reference.files['request.json'] ||
+    role.sourceSha256 !== expectedRoleSourceSha256
+  )
+    r1Stop('COMPLETED_ROLE_PROOF');
+  return { operation: op, plan, receipt, cleanup, roleProof: role };
+}
 // Every effect is supplied by trusted source code. Reconcile has no create/start/forward-grant calls.
 export async function runR1TailAdapter(mode, bytes, ops) {
   if (!['deploy', 'reconcile'].includes(mode)) r1Stop('MODE');
@@ -221,7 +334,7 @@ export async function runR1TailAdapter(mode, bytes, ops) {
       observedAt: new Date(ops.time()).toISOString(),
       ...extra,
     };
-    validateRecord(record, operationSha256, r1Hash(planBytes));
+    validateR1TailRecord(record, operationSha256, r1Hash(planBytes));
     await ops.writeReceipt(r1Encode(record));
   };
   const fresh = async () => {
@@ -319,7 +432,7 @@ export async function runR1TailAdapter(mode, bytes, ops) {
     )
       r1Stop('PLAN_DRIFT');
     await ops.loadPlan(plan, planBytes, operationSha256);
-    record = validateRecord(
+    record = validateR1TailRecord(
       parseStrictJson(await ops.receipt()),
       operationSha256,
       r1Hash(planBytes),
