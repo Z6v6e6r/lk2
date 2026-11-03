@@ -1,7 +1,30 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import descriptor from '../deploy/timeweb/r1-tail108-119.v1.json';
 import { r1Encode, r1Hash } from './r1-tail-migration-profile.js';
-import { runR1TailAdapter, validateR1TailOperation } from './r1-tail-migration-controller.js';
+import {
+  runR1TailAdapter,
+  validateR1TailOperation,
+  validateR1TailCompletedEvidence,
+} from './r1-tail-migration-controller.js';
+
+// Byte-custody unit tests use a synthetic catalog. The production validator calls
+// the real catalog/ACL guards, covered by their existing unit and owned PG16 suites.
+vi.mock('./r1-tail-migration-state.js', () => ({
+  validateR1TailState: (
+    _op: unknown,
+    state: { ledger: unknown[] },
+    phase: string,
+    count: number,
+  ) => {
+    expect(phase).toBe('cleaned');
+    expect(state.ledger).toHaveLength(count);
+  },
+}));
+vi.mock('./r1-tail-migration-acl.js', () => ({
+  validateR1TailPreparation: (p: { preimage: unknown }, preimage: unknown) => {
+    expect(p.preimage).toEqual(preimage);
+  },
+}));
 
 const at = Date.parse('2026-11-02T09:00:00.000Z');
 const runtime = { identity: 'synthetic fixed runtime' },
@@ -340,5 +363,139 @@ describe('fixed R1 tail durable failure and no-replay contract', () => {
       },
     ])
       expect(() => validateR1TailOperation(op, at)).toThrow();
+  });
+});
+
+function completedFixture() {
+  const op = operation();
+  const backup = {
+    path: op.backup.operationPath.replace('backup-operation.json', 'database-backup-receipt.json'),
+    sha256: op.backup.receiptSha256,
+    operationSha256: op.backup.operationSha256,
+    preimageSha256: op.backup.preimageSha256,
+    target: op.expectedDatabaseTarget,
+    sourceLedgerSha256: descriptor.checkpoints['108'],
+  };
+  const request = r1Encode(op),
+    cleanup = r1Encode(prefix(119));
+  const plan = r1Encode({
+    schema: 'PHUB_R1_TAIL_PLAN_V1',
+    operationSha256: r1Hash(request),
+    runtime,
+    secrets,
+    preimage: prefix(108),
+    backup,
+    inventorySha256: r1Hash(r1Encode(descriptor)),
+    catalogsSha256: op.catalogsSha256,
+    preparation: { preimage: security },
+  });
+  const receipt = r1Encode({
+    schema: 'PHUB_R1_TAIL_RECEIPT_V1',
+    operationSha256: r1Hash(request),
+    planSha256: r1Hash(plan),
+    status: 'SUCCESS',
+    containerId: '9'.repeat(64),
+    count: 119,
+    stateSha256: r1Hash(cleanup),
+    observedAt: new Date(at).toISOString(),
+  });
+  const roleSource = 'e'.repeat(64);
+  const blobs: Record<string, Buffer> = {
+    'request.json': request,
+    'plan.json': plan,
+    'preparation.json': r1Encode({
+      operation: request.toString('base64'),
+      plan: plan.toString('base64'),
+    }),
+    'migration-receipt.json': receipt,
+    'migration-success.json': receipt,
+    'cleanup.json': cleanup,
+    'role-proof.json': r1Encode({
+      containerId: '8'.repeat(64),
+      operationSha256: r1Hash(request),
+      sourceSha256: roleSource,
+    }),
+  };
+  const ref = {
+    schema: 'PHUB_R1_TAIL_COMPLETED_V1' as const,
+    attemptId: op.attemptId,
+    controllerSha: op.controllerSha,
+    controllerTree: op.controllerTree,
+    files: Object.fromEntries(Object.entries(blobs).map(([name, bytes]) => [name, r1Hash(bytes)])),
+    backup,
+  };
+  return { op, ref, blobs, roleSource };
+}
+describe('read-only completed119 custody independent of current apps', () => {
+  it('accepts a retained terminal after execution expiry without current runtime inputs', () => {
+    const f = completedFixture();
+    expect(validateR1TailCompletedEvidence(f.ref, f.blobs, f.roleSource)).toMatchObject({
+      receipt: { status: 'SUCCESS', count: 119 },
+    });
+  });
+  it.each([
+    'request.json',
+    'plan.json',
+    'preparation.json',
+    'migration-receipt.json',
+    'migration-success.json',
+    'cleanup.json',
+    'role-proof.json',
+  ])('rejects raw byte drift in %s', (name) => {
+    const f = completedFixture();
+    f.blobs[name] = Buffer.concat([f.blobs[name]!, Buffer.from(' ')]);
+    expect(() => validateR1TailCompletedEvidence(f.ref, f.blobs, f.roleSource)).toThrow(
+      'COMPLETED_FILE_HASH',
+    );
+  });
+  it.each(['PARTIAL', 'ABORTED', 'PREPARED'])(
+    'rejects authenticated non-success status%s',
+    (status) => {
+      const f = completedFixture();
+      const receipt = JSON.parse(f.blobs['migration-receipt.json']!.toString()) as Record<
+        string,
+        unknown
+      >;
+      receipt.status = status;
+      for (const name of ['migration-receipt.json', 'migration-success.json']) {
+        f.blobs[name] = r1Encode(receipt);
+        f.ref.files[name] = r1Hash(f.blobs[name]);
+      }
+      expect(() => validateR1TailCompletedEvidence(f.ref, f.blobs, f.roleSource)).toThrow(
+        'COMPLETED_TERMINAL',
+      );
+    },
+  );
+  it('rejects118, wrong role source, substituted attempt/source and backup custody', () => {
+    for (const change of ['118', 'role', 'attempt', 'source', 'backup']) {
+      const f = completedFixture();
+      if (change === '118') {
+        const r = JSON.parse(f.blobs['migration-receipt.json']!.toString()) as Record<
+          string,
+          unknown
+        >;
+        r.count = 118;
+        for (const n of ['migration-receipt.json', 'migration-success.json']) {
+          f.blobs[n] = r1Encode(r);
+          f.ref.files[n] = r1Hash(f.blobs[n]);
+        }
+      }
+      if (change === 'role') f.roleSource = 'f'.repeat(64);
+      if (change === 'attempt') f.ref.attemptId = '00000000-0000-4000-8000-000000000002';
+      if (change === 'source') f.ref.controllerSha = 'b'.repeat(40);
+      if (change === 'backup') f.ref.backup.sha256 = '0'.repeat(64);
+      expect(() => validateR1TailCompletedEvidence(f.ref, f.blobs, f.roleSource)).toThrow();
+    }
+  });
+  it('rejects a rehashed capsule that no longer contains exact retained bytes', () => {
+    const f = completedFixture();
+    f.blobs['preparation.json'] = r1Encode({
+      operation: f.blobs['request.json']!.toString('base64'),
+      plan: Buffer.from('{}').toString('base64'),
+    });
+    f.ref.files['preparation.json'] = r1Hash(f.blobs['preparation.json']);
+    expect(() => validateR1TailCompletedEvidence(f.ref, f.blobs, f.roleSource)).toThrow(
+      'COMPLETED_CAPSULE',
+    );
   });
 });

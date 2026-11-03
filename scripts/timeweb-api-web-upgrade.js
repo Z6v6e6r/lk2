@@ -1,4 +1,8 @@
 import {
+  isR1ApiWorker119,
+  R1_API_WORKER119_INSTALLED,
+} from './timeweb-r1-api-worker119-profile.js';
+import {
   fcmGateBinding,
   fcmGateComposeOverride,
   readFcmDeliveryGate,
@@ -1455,7 +1459,8 @@ export function readInstalledWorkerGate(receiptPath, installedWorkerImage) {
     opBytes = read(`${tx}/operation.json`),
     op = parseStrictJson(opBytes),
     planBytes = read(`${tx}/plan.json`);
-  if (!isPreservedNotificationRollout(op)) fail('installed_worker_gate_profile');
+  if (!isPreservedNotificationRollout(op) && !isR1ApiWorker119(op))
+    fail('installed_worker_gate_profile');
   const descriptor = read(`${ROOT}/releases/${release}/installed-components.env`),
     values = parseEnv(descriptor);
   validateInstalledApiWorkerEvidence({
@@ -1468,6 +1473,9 @@ export function readInstalledWorkerGate(receiptPath, installedWorkerImage) {
     evidence: Object.fromEntries(
       [
         'observation.json',
+        ...(isR1ApiWorker119(op)
+          ? ['runtime-grant-intent.json', 'runtime-grant-terminal.json']
+          : []),
         'fcm-drain.json',
         'fcm-delivery-gate/held.json',
         'fcm-delivery-gate/released.json',
@@ -1520,6 +1528,7 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
         'API_WORKER',
         'API_WORKER_NOTIFICATION_0105',
         'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID',
+        R1_API_WORKER119_INSTALLED,
       ].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
     ) {
       const transaction = `${ROOT}/backups/${releaseId}-api-worker`;
@@ -1539,11 +1548,17 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           ([
             'API_WORKER_NOTIFICATION_0105',
             'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID',
+            R1_API_WORKER119_INSTALLED,
           ].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
             ? [
                 'observation.json',
-                ...(values.PHUB_COMPONENT_ROLLOUT_KIND ===
-                'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID'
+                ...(values.PHUB_COMPONENT_ROLLOUT_KIND === R1_API_WORKER119_INSTALLED
+                  ? ['runtime-grant-intent.json', 'runtime-grant-terminal.json']
+                  : []),
+                ...([
+                  'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID',
+                  R1_API_WORKER119_INSTALLED,
+                ].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
                   ? [
                       'fcm-drain.json',
                       'fcm-delivery-gate/held.json',
