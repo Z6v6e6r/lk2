@@ -7,6 +7,7 @@ import {
   validateClosedR1ControllerClosure,
 } from './timeweb-closed-application-source.js';
 import { validateClosedApplicationControllerClosure } from './timeweb-closed-application-source.js';
+import { parseApiWorkerControllerDiff } from './timeweb-api-worker-upgrade.js';
 
 function closure() {
   const paths = [
@@ -105,6 +106,30 @@ const r1Entries = CLOSED_R1_CONTROLLER_FILES.map((path) => ({
   oldOid: 'a'.repeat(40),
   newOid: 'b'.repeat(40),
 }));
+const phonePair = [
+  {
+    path: 'apps/web/src/CreateGamePage.tsx',
+    oldOid: '96db2b6e8d65a1f7ba48ff18e6055bebb882bc66',
+    newOid: '8ff52b8b1170396f8e3cc48d6d5fd4c543b1a0eb',
+  },
+  {
+    path: 'apps/web/src/TrainingsPage.test.tsx',
+    oldOid: '208f0c772b76f9d9a89b1cfeefd9071cb7595f62',
+    newOid: 'a40331a45324f83fa6141ccad991d4338b24d053',
+  },
+].map((row) => ({ ...row, status: 'M', oldMode: '100644', newMode: '100644' }));
+it('pins the already merged phone route and training test blobs', () => {
+  for (const row of phonePair) {
+    expect(CLOSED_R1_CONTROLLER_FILES).not.toContain(row.path);
+    const bytes = readFileSync(row.path);
+    expect(
+      createHash('sha1')
+        .update('blob ' + bytes.length + '\0')
+        .update(bytes)
+        .digest('hex'),
+    ).toBe(row.newOid);
+  }
+});
 it('pins the actual reviewed native JOIN blobs outside the editable allowlist', () => {
   for (const row of nativeJoinPair) {
     expect(CLOSED_R1_CONTROLLER_FILES).not.toContain(row.path);
@@ -184,6 +209,61 @@ for (const validator of ['closed', 'tail'] as const) {
           { ...nativeJoinPair[0], path: 'apps/web/src/App.tsx' },
         ]),
       ).toThrow();
+    });
+  });
+  describe(`${validator} current R1 phone prerequisites`, () => {
+    it('preserves prior admission and accepts the exact complete phone pair', () => {
+      expect(() => validate([...r1Entries, ...nativeJoinPair])).not.toThrow();
+      expect(() => validate([...r1Entries, ...nativeJoinPair, ...phonePair])).not.toThrow();
+    });
+    it('admits the actual committed source closure', () => {
+      const result = spawnSync(
+        '/usr/bin/git',
+        [
+          'diff',
+          '--no-renames',
+          '--raw',
+          '--abbrev=40',
+          '-z',
+          '27d8527f2f36e1a647012a86f92f4a51b9dd50eb',
+          'HEAD',
+        ],
+        { encoding: 'utf8' },
+      );
+      expect(result.status).toBe(0);
+      expect(() => validate(parseApiWorkerControllerDiff(result.stdout))).not.toThrow();
+    });
+    it.each(
+      [
+        [phonePair[0]!],
+        [phonePair[1]!],
+        [...phonePair, phonePair[0]!],
+        ...[
+          { oldOid: 'd'.repeat(40) },
+          { newOid: 'd'.repeat(40) },
+          { oldMode: '100755' },
+          { newMode: '120000' },
+          { status: 'A' },
+          { status: 'D' },
+          { status: 'R100' },
+          { extra: true },
+        ].map((mutation) => [{ ...phonePair[0]!, ...mutation }, phonePair[1]!]),
+      ].map((rows, index) => [index, rows] as const),
+    )('rejects altered phone prerequisite %s', (_index, rows) => {
+      expect(() => validate([...r1Entries, ...rows])).toThrow();
+    });
+    it('admits only listed regular markdown evidence, not executable or foreign docs', () => {
+      const base = r1Entries.filter((row) => !row.path.startsWith('docs/release/'));
+      const report = r1Entries.find((row) => row.path === 'docs/release/R1-READINESS.md')!;
+      expect(() => validate([...base, report])).not.toThrow();
+      for (const mutation of [
+        { newMode: '100755' },
+        { newMode: '120000' },
+        { status: 'D' },
+        { path: 'docs/release/R1-READINESS.js' },
+        { path: 'docs/release/UNRELATED.md' },
+      ])
+        expect(() => validate([...base, { ...report, ...mutation }])).toThrow();
     });
   });
 }

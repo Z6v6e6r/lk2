@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
 import {
   CLOSED_APPLICATION_DATABASE_TARGET,
   CLOSED_APPLICATION_OPERATION_SCHEMAS,
@@ -132,6 +136,161 @@ describe('closed host migration operation building blocks', () => {
 });
 
 describe('closed runtime no-activation proof', () => {
+  const retainedRevision = '702625eb669643c52bf69f55bc65c2e3e74f5ef9';
+  const retainedSources = Object.fromEntries(
+    ['packages/config/src/index.ts', 'apps/api/src/main.ts', 'apps/worker/src/main.ts'].map(
+      (path) => [
+        `${retainedRevision}:${path}`,
+        execFileSync('/usr/bin/git', ['show', `${retainedRevision}:${path}`], {
+          encoding: 'utf8',
+          env: {
+            PATH: process.env.PATH,
+            GIT_CONFIG_NOSYSTEM: '1',
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_NO_REPLACE_OBJECTS: '1',
+            GIT_NO_LAZY_FETCH: '1',
+            GIT_NO_PROMISOR_FETCH: '1',
+          },
+        }),
+      ],
+    ),
+  );
+  const retainedGit = (args: string[]) => {
+    if (args.length !== 2 || args[0] !== 'show' || !retainedSources[args[1]!])
+      throw Error('UNEXPECTED_GIT_READ');
+    return retainedSources[args[1]!]!;
+  };
+  function retainedOperation() {
+    const op = closedApplicationOperationFixture('game_start_0103');
+    for (const [service, imageId] of [
+      ['api', 'sha256:9e21147cd07700db19169e0a41b8d4b60873be90741067d17684bc676cd45838'],
+      ['worker', 'sha256:32d5795114c20d900c22802dec27a3b8200c2bef755c94eba4b2a477152c92ec'],
+    ] as const) {
+      Object.assign(op[service === 'api' ? 'expectedApi' : 'expectedWorker'], {
+        revision: retainedRevision,
+        imageId,
+        image: `ghcr.io/z6v6e6r/phub-${service}@${imageId}`,
+      });
+    }
+    return op;
+  }
+  it('proves the retained parser defaults the three switches off without IO', () => {
+    const exports: Record<string, (env: Record<string, string>) => Record<string, unknown>> = {};
+    const require = createRequire(import.meta.url);
+    const code = ts.transpileModule(
+      retainedSources[`${retainedRevision}:packages/config/src/index.ts`]!,
+      { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+    ).outputText;
+    runInNewContext(
+      code,
+      {
+        exports,
+        require: (name: string) => {
+          if (name === 'node:fs')
+            return {
+              readFileSync: () => {
+                throw Error('UNEXPECTED_IO');
+              },
+            };
+          if (!['node:crypto', 'node:net', 'zod'].includes(name)) throw Error('UNEXPECTED_IMPORT');
+          return require(name) as unknown;
+        },
+        process: { env: {} },
+      },
+      { timeout: 1000 },
+    );
+    const env = {
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'synthetic-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'synthetic-refresh-secret-at-least-32-characters',
+    };
+    expect(exports.loadConfig!(env).AUTH_PHONE_SUBJECT_LINK_ENABLED).toBe(false);
+    expect(exports.loadWorkerConfig!(env)).toMatchObject({
+      NOTIFICATION_SCENARIOS_ENABLED: false,
+      LEGACY_GAME_REMINDERS_SOURCE_ENABLED: false,
+    });
+    expect(retainedSources[`${retainedRevision}:apps/api/src/main.ts`]).toContain('loadConfig()');
+    expect(retainedSources[`${retainedRevision}:apps/worker/src/main.ts`]).toContain(
+      'loadWorkerConfig(process.env)',
+    );
+  });
+  it('admits absence in both env files and actual container arrays only for the retained images', () => {
+    for (const env of [
+      { api: [], worker: [] },
+      { api: Buffer.from('PATH=/synthetic\n'), worker: Buffer.from('PATH=/synthetic\n') },
+    ])
+      expect(assertClosedApplicationRuntimeOff(retainedOperation(), env, retainedGit)).toBe(true);
+  });
+  it.each([
+    ['api', 'AUTH_PHONE_SUBJECT_LINK_ENABLED'],
+    ['worker', 'NOTIFICATION_SCENARIOS_ENABLED'],
+    ['worker', 'LEGACY_GAME_REMINDERS_SOURCE_ENABLED'],
+  ] as const)('never converts an explicit %s/%s value to default OFF', (service, key) => {
+    for (const value of ['true', '1', '', 'TRUE', 'unexpected']) {
+      const env = { api: [] as string[], worker: [] as string[] };
+      env[service] = [`${key}=${value}`];
+      expect(() =>
+        assertClosedApplicationRuntimeOff(retainedOperation(), env, retainedGit),
+      ).toThrow('RUNTIME_FLAGS');
+    }
+    const env = { api: [] as string[], worker: [] as string[] };
+    env[service] = [`${key}=false`, `${key}=false`];
+    expect(() => assertClosedApplicationRuntimeOff(retainedOperation(), env, retainedGit)).toThrow(
+      'RUNTIME_ENV',
+    );
+  });
+  it('rejects missing or modified parser/startup blobs and lookup failures', () => {
+    for (const path of Object.keys(retainedSources)) {
+      expect(() =>
+        assertClosedApplicationRuntimeOff(retainedOperation(), { api: [], worker: [] }, (args) =>
+          args[1] === path ? retainedGit(args) + '\n// changed' : retainedGit(args),
+        ),
+      ).toThrow('RUNTIME_FLAGS');
+    }
+    expect(() =>
+      assertClosedApplicationRuntimeOff(retainedOperation(), { api: [], worker: [] }),
+    ).toThrow('RUNTIME_FLAGS');
+    expect(() =>
+      assertClosedApplicationRuntimeOff(retainedOperation(), { api: [], worker: [] }, () => {
+        throw Error('MISSING_OBJECT');
+      }),
+    ).toThrow('RUNTIME_FLAGS');
+  });
+  it.each(['expectedApi', 'expectedWorker'] as const)(
+    'pins %s revision and both image identities',
+    (key) => {
+      for (const changed of [
+        { revision: 'd'.repeat(40) },
+        { imageId: 'sha256:' + 'd'.repeat(64) },
+        { image: 'ghcr.io/z6v6e6r/phub-other@sha256:' + 'd'.repeat(64) },
+      ]) {
+        const op = retainedOperation();
+        Object.assign(op[key], changed);
+        expect(() =>
+          assertClosedApplicationRuntimeOff(op, { api: [], worker: [] }, retainedGit),
+        ).toThrow('RUNTIME_FLAGS');
+      }
+    },
+  );
+  it('does not let a safe file environment hide activation in an actual container', () => {
+    const op = retainedOperation();
+    expect(assertClosedApplicationRuntimeOff(op, { api: [], worker: [] }, retainedGit)).toBe(true);
+    expect(() =>
+      assertClosedApplicationRuntimeOff(
+        op,
+        {
+          api: [],
+          worker: ['NOTIFICATION_SCENARIOS_ENABLED=true'],
+        },
+        retainedGit,
+      ),
+    ).toThrow('RUNTIME_FLAGS');
+  });
   it('checks file bytes and container arrays without exposing other environment values', () => {
     const op = closedApplicationOperationFixture('game_start_0103');
     const env = {

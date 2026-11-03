@@ -2,6 +2,7 @@ import {
   CLOSED_R1_CONTROLLER_BASE,
   CLOSED_R1_CONTROLLER_FILES,
   validateClosedR1NativeJoinPrerequisite,
+  validateClosedR1PhonePrerequisite,
 } from './timeweb-closed-application-source.js';
 // Separate exact-source enrollment. Historical108 source guards stay unchanged.
 import { assertControllerPromotionGitConfig } from './verify-source-ci.js';
@@ -48,9 +49,12 @@ export function validateR1TailSourceDelta(entries) {
   )
     r1Stop('SOURCE_DELTA');
   const nativePrerequisite = validateClosedR1NativeJoinPrerequisite(entries);
+  const phonePrerequisite = validateClosedR1PhonePrerequisite(entries);
   for (const row of entries) {
     if (
-      (!allowed.has(row.path) && !nativePrerequisite.has(row.path)) ||
+      (!allowed.has(row.path) &&
+        !nativePrerequisite.has(row.path) &&
+        !phonePrerequisite.has(row.path)) ||
       !['A', 'M'].includes(row.status) ||
       row.newMode !== '100644' ||
       !/^[a-f0-9]{40}$/.test(row.newOid ?? '') ||

@@ -661,8 +661,23 @@ export function createClosedApplicationKernelProfile(operation) {
     writeProof: (effects, name, bytes) => effects.writeClosedApplicationProof(name, bytes),
   });
 }
-// Only inspect activation switches; never return or log any environment values.
-// Missing new switches are admitted solely on a proven ancestor before their introduction.
+// The retained 702 release parses these three switches with default(false). Bind that
+// compatibility case to its actual immutable images and complete parser/startup sources;
+// a revision label or a similarly named boolean is not proof of the running behavior.
+const RETAINED_OFF_RUNTIME = Object.freeze({
+  revision: '702625eb669643c52bf69f55bc65c2e3e74f5ef9',
+  configSha256: 'b06e80123324aa60451ce2f4278d3e736a2035b11c8ef284ff3f371c43c512ff',
+  api: Object.freeze({
+    imageId: 'sha256:9e21147cd07700db19169e0a41b8d4b60873be90741067d17684bc676cd45838',
+    startupSha256: 'b01693f25c374c19be9e267b381daa6bf1383aaa6bf48ffdbabcf535965a3f56',
+  }),
+  worker: Object.freeze({
+    imageId: 'sha256:32d5795114c20d900c22802dec27a3b8200c2bef755c94eba4b2a477152c92ec',
+    startupSha256: 'dd189bd1b3fa8e561075fd57e58cbdc9207dc53082a9a9cfd1d1024b1de79f33',
+  }),
+});
+// Inspect activation switches only; never return or log environment values. This runs
+// independently for both sealed env files and the inspected containers' actual Config.Env.
 export function assertClosedApplicationRuntimeOff(operation, environments, git) {
   const selected = new Set([
     'NOTIFICATION_SCENARIOS_ENABLED',
@@ -693,6 +708,29 @@ export function assertClosedApplicationRuntimeOff(operation, environments, git) 
     const values = flags[service];
     if (Object.hasOwn(values, key)) {
       if (!['false', '0'].includes(values[key])) fail('RUNTIME_FLAGS');
+      return;
+    }
+    const identity = operation[service === 'api' ? 'expectedApi' : 'expectedWorker'];
+    if (identity?.revision === RETAINED_OFF_RUNTIME.revision) {
+      const pin = RETAINED_OFF_RUNTIME[service];
+      if (
+        typeof git !== 'function' ||
+        identity.imageId !== pin.imageId ||
+        identity.image !== `ghcr.io/z6v6e6r/phub-${service}@${pin.imageId}`
+      )
+        fail('RUNTIME_FLAGS');
+      try {
+        // The hardened Git reader trims stdout. Hash the same representation explicitly.
+        if (
+          hash(git(['show', `${identity.revision}:packages/config/src/index.ts`]).trim()) !==
+            RETAINED_OFF_RUNTIME.configSha256 ||
+          hash(git(['show', `${identity.revision}:apps/${service}/src/main.ts`]).trim()) !==
+            pin.startupSha256
+        )
+          fail('RUNTIME_FLAGS');
+      } catch {
+        fail('RUNTIME_FLAGS');
+      }
       return;
     }
     if (!introduction || typeof git !== 'function') fail('RUNTIME_FLAGS');

@@ -56,6 +56,17 @@ export const CLOSED_R1_CONTROLLER_FILES = Object.freeze([
   'scripts/r1-tail-migration-profile.test.ts',
   'docs/runbooks/closed-application-migrations-0103-0104.md',
   'docs/runbooks/r1-tail108-119-migration.md',
+  // Non-executable release evidence does not alter the controller or migration package.
+  'docs/release/R1-READINESS.md',
+  'docs/release/R1-BLOCKERS.md',
+  'docs/release/R1-DEPENDENCIES.md',
+  'docs/release/R1-E2E-MATRIX.md',
+  'docs/release/R1-RELEASE-RUNBOOK.md',
+  'docs/release/R1-ROLLBACK.md',
+  'docs/release/R1-GO-NOGO.md',
+  'docs/release/R1-POST119-RUNTIME-ACCEPTANCE.md',
+  'docs/release/R1-OPERATIONS-20261103.md',
+  'docs/release/R1-ANDROID-PHONE-ACCEPTANCE.md',
 ]);
 // Exact P0 JOIN lifetime correction, independently reviewed with its regression test.
 // These paths remain outside the editable controller allowlist. Admit the complete
@@ -95,10 +106,48 @@ export function validateClosedR1NativeJoinPrerequisite(entries) {
     fail('R1_NATIVE_JOIN');
   return new Set(rows.map((row) => row.path));
 }
+// Already merged #569/#572: quarter-court command routing and deterministic training
+// date tests. These application paths remain outside the editable controller list.
+const PHONE_PREREQUISITE = Object.freeze({
+  'apps/web/src/CreateGamePage.tsx': {
+    oldOid: '96db2b6e8d65a1f7ba48ff18e6055bebb882bc66',
+    newOid: '8ff52b8b1170396f8e3cc48d6d5fd4c543b1a0eb',
+  },
+  'apps/web/src/TrainingsPage.test.tsx': {
+    oldOid: '208f0c772b76f9d9a89b1cfeefd9071cb7595f62',
+    newOid: 'a40331a45324f83fa6141ccad991d4338b24d053',
+  },
+});
+export function validateClosedR1PhonePrerequisite(entries) {
+  if (!Array.isArray(entries)) fail('R1_PHONE_PREREQUISITE');
+  const rows = entries.filter((row) => row && Object.hasOwn(PHONE_PREREQUISITE, row.path));
+  if (rows.length === 0) return new Set();
+  if (
+    rows.length !== 2 ||
+    new Set(rows.map((row) => row.path)).size !== 2 ||
+    rows.some((row) => {
+      const pin = PHONE_PREREQUISITE[row.path];
+      return (
+        !same(
+          Object.keys(row).sort(),
+          ['oldMode', 'newMode', 'oldOid', 'newOid', 'status', 'path'].sort(),
+        ) ||
+        row.status !== 'M' ||
+        row.oldMode !== '100644' ||
+        row.newMode !== '100644' ||
+        row.oldOid !== pin.oldOid ||
+        row.newOid !== pin.newOid
+      );
+    })
+  )
+    fail('R1_PHONE_PREREQUISITE');
+  return new Set(rows.map((row) => row.path));
+}
 export function validateClosedR1ControllerClosure(entries) {
   const paths = new Set();
   if (!Array.isArray(entries) || !entries.length) fail('R1_DELTA');
   const nativePrerequisite = validateClosedR1NativeJoinPrerequisite(entries);
+  const phonePrerequisite = validateClosedR1PhonePrerequisite(entries);
   for (const row of entries) {
     if (
       !row ||
@@ -107,7 +156,9 @@ export function validateClosedR1ControllerClosure(entries) {
         ['oldMode', 'newMode', 'oldOid', 'newOid', 'status', 'path'].sort(),
       ) ||
       paths.has(row.path) ||
-      (!CLOSED_R1_CONTROLLER_FILES.includes(row.path) && !nativePrerequisite.has(row.path)) ||
+      (!CLOSED_R1_CONTROLLER_FILES.includes(row.path) &&
+        !nativePrerequisite.has(row.path) &&
+        !phonePrerequisite.has(row.path)) ||
       !['A', 'M'].includes(row.status) ||
       row.newMode !== '100644' ||
       !/^[a-f0-9]{40}$/.test(row.newOid ?? '') ||
