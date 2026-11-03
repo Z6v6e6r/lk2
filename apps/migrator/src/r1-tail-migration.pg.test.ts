@@ -46,6 +46,13 @@ import type {
   R1RuntimePrivilegeCapture,
 } from '../../../scripts/r1-runtime-privilege-audit.js';
 
+import {
+  R1_RUNTIME_GRANT_CATALOG_SQL,
+  planR1RuntimeGrants119,
+  r1RuntimeGrantTransaction119,
+} from '../../../scripts/r1-runtime-grants119.js';
+import type { R1Grant119Capture } from '../../../scripts/r1-runtime-grants119.js';
+
 // This suite is registered by the existing explicit, owned PG16 CI contour.
 // No normal DATABASE_URL is accepted. Catalog exports contain pg_catalog metadata only.
 function ownedTarget(): string | undefined {
@@ -568,32 +575,41 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
                 relation: 'notifications.station_message_sources',
               }),
             );
-            await owner.query(
-              'revoke update,delete on identity.external_subject_link_commands from phub_runtime',
-            );
+            async function runtimeAcl() {
+              const result = await owner.query<{ capture: R1Grant119Capture }>(
+                `select (${R1_RUNTIME_GRANT_CATALOG_SQL}) as capture`,
+              );
+              return result.rows[0]!.capture;
+            }
+            // The golden fixture is a schema/ACL migration snapshot, not a full runtime
+            // parent privilege baseline. Supply synthetic parent capabilities separately;
+            // the new transaction must preserve them and never generate parent grants.
             for (const component of ['api', 'worker'] as const) {
-              for (const requirement of r1RuntimePrivilegeRequirements(component)) {
+              for (const requirement of r1RuntimePrivilegeRequirements(component).filter(
+                (r) => !r.tenantTable,
+              )) {
+                const column = (
+                  await owner.query<{ name: string }>(
+                    'select attname as name from pg_catalog.pg_attribute where attrelid=$1::regclass and attnum>0 and not attisdropped order by attnum limit 1',
+                    [requirement.relation],
+                  )
+                ).rows[0]!.name;
                 await owner.query(
-                  `grant ${requirement.privileges.join(',')} on ${qualified(requirement.relation)} to phub_runtime`,
+                  `grant select,update(${quote(column)}) on ${qualified(requirement.relation)} to phub_runtime`,
                 );
-                for (const column of requirement.updateColumns) {
-                  await owner.query(
-                    `grant update(${quote(column)}) on ${qualified(requirement.relation)} to phub_runtime`,
-                  );
-                }
-                if (requirement.rowLock) {
-                  const column = (
-                    await owner.query<{ name: string }>(
-                      'select attname as name from pg_catalog.pg_attribute where attrelid=$1::regclass and attnum>0 and not attisdropped order by attnum limit 1',
-                      [requirement.relation],
-                    )
-                  ).rows[0]!.name;
-                  await owner.query(
-                    `grant update(${quote(column)}) on ${qualified(requirement.relation)} to phub_runtime`,
-                  );
-                }
               }
             }
+            const grantPreimage = await runtimeAcl();
+            const grantPlan = planR1RuntimeGrants119(grantPreimage);
+            await owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply'));
+            expect(await runtimeAcl()).toEqual(grantPlan.postimage);
+            await expect(
+              owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply')),
+            ).rejects.toThrow('R1_RUNTIME_GRANT_PREIMAGE_DRIFT');
+            await owner.query('rollback');
+            await owner.query(r1RuntimeGrantTransaction119(grantPlan, 'recover'));
+            expect(await runtimeAcl()).toEqual(grantPreimage);
+            await owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply'));
             for (const component of ['api', 'worker'] as const) {
               expect(await inspect(component)).toMatchObject({
                 status: 'SATISFIED',
