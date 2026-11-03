@@ -1,12 +1,12 @@
 # LK2 R1 — зависимости и критический путь
 
-## Операционный срез — 2026-11-03, 09:02 MSK
+## Операционный срез — 2026-11-03, после 09:24 MSK
 
 Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
 
-Старая консоль исправлена владельцем. Первый enrollment восстановлен штатным recovery; второй не запускался на сервере — это подтверждено свежим чтением. Оба временных цикла закрыты, `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в05:55:05UTC. Активного enrollment marker нет. Пакеты R1/R2 сохранены. Пакет R3 подготовлен локально, но запись его нового каталога отклонена автоматической проверкой до исполнения; точное разрешение запрошено. Приложения и БД не переключались.
+Старая консоль исправлена владельцем. R1 восстановлен, R2 подтверждён как неисполненный. R3 был явно разрешён и запущен, но остановился до переключения source на установке зависимостей: npm отказался читать `/dev/null` одновременно как user и global config. Guarded recovery восстановил старый source/config; partial stage и все пакеты сохранены, active marker освобождён. `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в06:24:31UTC. Исправленный R4 подготовлен и проверен локально; его запуск ещё не выполнен. Приложения и БД не переключались.
 
-Критический путь: R3 admission → проверенный enrollment b88 → свежие DB/catalog/ACL inputs → namespace backup и independent restore →106→107→108→119 → actual API/Worker privileges → fixed four-component upgrade/recovery → точный application artifact → runtime/provider journeys.
+Критический путь: R4 admission после npm-fix → проверенный enrollment b88 → свежие DB/catalog/ACL inputs → namespace backup и independent restore →106→107→108→119 → actual API/Worker privileges → fixed four-component upgrade/recovery → точный application artifact → runtime/provider journeys.
 
 CUP queue custody, LK monthly binding и Viva settlement идут отдельными зависимостями. PR574 прошёл полный CI и остаётся Draft; его source-готовность не закрывает live acceptance. Старая консоль и возврат delivery-флага больше не являются блокерами.
 
