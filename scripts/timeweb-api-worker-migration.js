@@ -3473,7 +3473,7 @@ function productionOps(op, owner, ignoredRestore = null, closedBinding = null) {
         stop('PREFETCH_CREDENTIAL_DRIFT');
       return image().Id;
     },
-    snapshot: (operationSha = hash(read(requestPath))) => {
+    snapshot: (operationSha) => {
       const rows = ids([]).map(inspect),
         excluded = [];
       let api, worker, pg, apiEnv, workerEnv;
@@ -3513,7 +3513,10 @@ function productionOps(op, owner, ignoredRestore = null, closedBinding = null) {
           ).some((kind) => row.Name === `/${kind === 'migration' ? name : `${name}-role-${kind}`}`)
         ) {
           const kind = row.Config.Labels?.['phub.migration-kind'];
-          validateMigrationContainer(row, row.Id, operationSha, row.State.Status, spec(kind));
+          // Prefetch and its backup run before the migration request exists. Read its
+          // bytes only when a migration/probe container actually needs custody proof.
+          const custodySha = operationSha === undefined ? hash(read(requestPath)) : operationSha;
+          validateMigrationContainer(row, row.Id, custodySha, row.State.Status, spec(kind));
           continue;
         }
         const service = row.Config.Labels?.['com.docker.compose.service'];

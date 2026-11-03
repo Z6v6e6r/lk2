@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import type * as ChildProcess from 'node:child_process';
+import type * as ApiWebUpgrade from './timeweb-api-web-upgrade.js';
+import { createClosedApplicationProductionBinding } from './timeweb-closed-application-runtime.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   closedApplicationRequestPath,
   closedApplicationPreviousRequestHashes,
@@ -280,3 +283,104 @@ describe('closed production binding and entry custody', () => {
     ).toThrow('PREFETCH_METADATA_PATH');
   });
 });
+
+const io = vi.hoisted(() => ({ execute: vi.fn(), read: vi.fn() }));
+vi.mock('node:child_process', async (original) => ({
+  ...(await original<typeof ChildProcess>()),
+  execFileSync: io.execute,
+}));
+vi.mock('./timeweb-api-web-upgrade.js', async (original) => ({
+  ...(await original<typeof ApiWebUpgrade>()),
+  readUpgradeFile: io.read,
+}));
+
+function fixture(kind: 'game_start_0103' | 'subject_link_0104') {
+  const operation = closedApplicationOperationFixture(kind, 'R1_PACKAGE119');
+  const rows = ['api', 'worker', 'postgres'].map((service) => {
+    const identity =
+      service === 'api'
+        ? operation.expectedApi
+        : service === 'worker'
+          ? operation.expectedWorker
+          : operation.expectedPostgres;
+    return {
+      Id: identity.id,
+      Image: identity.imageId,
+      Name: `/synthetic-${service}`,
+      RestartCount: identity.restarts,
+      State: {
+        Status: 'running',
+        Running: true,
+        StartedAt: identity.startedAt,
+        Health: { Status: 'healthy' },
+      },
+      Config: {
+        Image: identity.image,
+        Env: ['SYNTHETIC_ONLY=true'],
+        Labels: {
+          'com.docker.compose.service': service,
+          'com.docker.compose.project': 'phub-timeweb-beta',
+          'phub.release-id': identity.releaseId,
+          'org.opencontainers.image.revision': identity.revision,
+          'phub.migration-kind': 'migration',
+        },
+      },
+      HostConfig: {},
+      Mounts: [],
+      NetworkSettings: {},
+    };
+  });
+  io.execute.mockImplementation((command: string, args: string[]) => {
+    expect(command).toBe('/usr/bin/docker');
+    if (JSON.stringify(args) === JSON.stringify(['ps', '-aq', '--no-trunc']))
+      return rows.map((row) => row.Id).join('\n');
+    if (args[0] === 'container' && args[1] === 'inspect')
+      return JSON.stringify(rows.filter((row) => row.Id === args[2]));
+    throw Error('UNEXPECTED_PROCESS_EFFECT');
+  });
+  io.read.mockImplementation((path: string) => {
+    if (path === '/etc/phub/timeweb-beta-standard-delivery.json') return Buffer.from('{}');
+    throw Object.assign(Error('MIGRATION_REQUEST_NOT_STAGED'), { code: 'ENOENT' });
+  });
+  const assertRuntimeFlags = vi.fn();
+  const effects = createClosedApplicationProductionEffects(
+    operation,
+    {
+      assertOwned: () => {
+        throw Error('WRITE_FORBIDDEN');
+      },
+    },
+    { ...createClosedApplicationProductionBinding(operation), assertRuntimeFlags },
+  );
+  return { operation, rows, effects, assertRuntimeFlags };
+}
+
+beforeEach(() => vi.resetAllMocks());
+describe.each(['game_start_0103', 'subject_link_0104'] as const)(
+  '%s production snapshot before migration admission',
+  (kind) => {
+    it('reads the running services without requiring a future migration request', () => {
+      const { operation, effects, assertRuntimeFlags } = fixture(kind);
+      expect(effects.snapshot()).toMatchObject({
+        api: { identity: operation.expectedApi },
+        worker: { identity: operation.expectedWorker },
+        postgres: operation.expectedPostgres,
+      });
+      expect(io.read.mock.calls).toEqual([['/etc/phub/timeweb-beta-standard-delivery.json']]);
+      expect(assertRuntimeFlags).toHaveBeenCalledOnce();
+    });
+    it('still refuses a migration container without its request custody', () => {
+      const { operation, effects, rows } = fixture(kind);
+      rows[0]!.Name = `/${closedApplicationProductionPaths(operation).containerName}`;
+      expect(() => effects.snapshot()).toThrow('MIGRATION_REQUEST_NOT_STAGED');
+      expect(io.read).toHaveBeenCalledWith(closedApplicationProductionPaths(operation).requestPath);
+    });
+    it('still refuses an unhealthy application before reading controller configuration', () => {
+      const { effects, rows, assertRuntimeFlags } = fixture(kind);
+      rows[0]!.State.Health.Status = 'unhealthy';
+      expect(() => effects.snapshot()).toThrow('UNHEALTHY');
+      expect(io.read).not.toHaveBeenCalled();
+      expect(assertRuntimeFlags).not.toHaveBeenCalled();
+    });
+  },
+);
