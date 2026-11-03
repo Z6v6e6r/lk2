@@ -606,10 +606,7 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             await owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply'));
             expect(await runtimeAcl()).toEqual(grantPlan.postimage);
             expect(await catalog(owner)).toEqual(
-              r1RuntimeGrantCatalog119(
-                beforeGrantCatalog as unknown as Parameters<typeof r1RuntimeGrantCatalog119>[0],
-                grantPlan,
-              ),
+              r1RuntimeGrantCatalog119(beforeGrantCatalog, grantPlan),
             );
             await expect(
               owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply')),

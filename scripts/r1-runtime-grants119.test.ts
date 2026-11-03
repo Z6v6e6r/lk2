@@ -150,25 +150,50 @@ describe('fixed R1 runtime119 grants', () => {
 });
 
 describe('post-grant semantic catalog binding', () => {
-  it('changes only reviewed ACL values and rejects preimage substitution', () => {
-    const plan = planR1RuntimeGrants119(capture());
-    const table = plan.preimage.tables[0]!;
+  it('preserves PostgreSQL text serialization and changes only reviewed ACL values', () => {
+    const input = capture();
+    const table = input.tables[0]!;
+    table.acl = [['phub_migrator', 'phub_migrator', 'SELECT', false]];
+    table.columns[0]!.acl = [['phub_migrator', 'phub_runtime', 'SELECT', false]];
+    const plan = planR1RuntimeGrants119(input);
     const catalog = [
-      { key: 'relation:' + table.relation, value: { acl: [], owner: 'MIGRATOR', rls: true } },
-      ...table.columns.map((c) => ({
+      {
+        key: 'relation:' + table.relation,
+        value:
+          '{"acl": [["MIGRATOR", "MIGRATOR", "SELECT", false]], "rls": true, "owner": "MIGRATOR"}',
+      },
+      ...table.columns.map((c, i) => ({
         key: 'column:' + table.relation + ':' + c.name,
-        value: { acl: [], type: 'uuid' },
+        value:
+          i === 0
+            ? '{"acl": [["phub_runtime", "phub_migrator", "SELECT", false]], "type": "uuid"}'
+            : '{"acl": [], "type": "uuid"}',
       })),
       {
         key: 'relation:identity.users',
-        value: { acl: [['RUNTIME', 'MIGRATOR', 'SELECT', false]], owner: 'MIGRATOR' },
+        value: '{"acl": [["RUNTIME", "MIGRATOR", "SELECT", false]], "owner": "MIGRATOR"}',
       },
     ];
+    const original = structuredClone(catalog);
     const next = r1RuntimeGrantCatalog119(catalog, plan);
-    expect(next[0]!.value.acl).not.toEqual([]);
+    expect((JSON.parse(next[0]!.value) as { acl: R1Grant119Acl }).acl).toContainEqual([
+      'RUNTIME',
+      'MIGRATOR',
+      'SELECT',
+      false,
+    ]);
+    expect(next[0]!.value).toContain(', "rls": true, "owner": "MIGRATOR"}');
     expect(next.at(-1)).toEqual(catalog.at(-1));
-    expect(catalog[0]!.value.acl).toEqual([]);
-    catalog[0]!.value.acl = [['RUNTIME', 'MIGRATOR', 'DELETE', false]] as never;
-    expect(() => r1RuntimeGrantCatalog119(catalog, plan)).toThrow();
+    expect(catalog).toEqual(original);
+    expect(next[1]!.value).toContain('["phub_runtime", "phub_migrator", "SELECT", false]');
+    catalog[0]!.value = '{"acl": [["RUNTIME", "MIGRATOR", "DELETE", false]]}';
+    expect(() => r1RuntimeGrantCatalog119(catalog, plan)).toThrow('R1_RUNTIME_GRANT_BOUNDARY');
+  });
+  it('rejects object-valued or malformed catalog rows instead of accepting a synthetic shape', () => {
+    const plan = planR1RuntimeGrants119(capture());
+    const key = 'relation:' + plan.preimage.tables[0]!.relation;
+    for (const value of [{ acl: [] }, '{"acl": []', '{"acl": [], "acl": []}']) {
+      expect(() => r1RuntimeGrantCatalog119([{ key, value: value as string }], plan)).toThrow();
+    }
   });
 });

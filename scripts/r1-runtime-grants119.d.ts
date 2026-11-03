@@ -39,6 +39,6 @@ export function r1RuntimeGrantTransaction119(
 ): string;
 
 export function r1RuntimeGrantCatalog119(
-  catalog: Array<{ key: string; value: Record<string, unknown> }>,
+  catalog: Array<{ key: string; value: string }>,
   plan: ReturnType<typeof planR1RuntimeGrants119>,
-): Array<{ key: string; value: Record<string, unknown> }>;
+): Array<{ key: string; value: string }>;

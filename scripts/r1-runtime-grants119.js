@@ -216,22 +216,40 @@ export function r1RuntimeGrantCatalog119(catalog, grantPlan) {
         }
         return 0;
       });
+  // The frozen PostgreSQL catalog stores value::text, not parsed JSON objects.
+  // Replace only its top-level ACL token; preserve every other byte (including
+  // PostgreSQL jsonb key order and spacing) for the existing catalog attestation.
+  const pgAcl = (entries) =>
+    '[' +
+    entries.map((entry) => '[' + entry.map((x) => JSON.stringify(x)).join(', ') + ']').join(', ') +
+    ']';
+  const replaceAcl = (row, before, after) => {
+    need(row && typeof row.value === 'string');
+    const parsed = JSON.parse(row.value);
+    need(r1Same(parsed.acl, before));
+    const token = '"acl": ' + pgAcl(before);
+    const offset = row.value.indexOf(token);
+    need(offset >= 0 && row.value.indexOf(token, offset + token.length) < 0);
+    const next =
+      row.value.slice(0, offset) +
+      '"acl": ' +
+      pgAcl(after) +
+      row.value.slice(offset + token.length);
+    need(r1Same(JSON.parse(next), { ...parsed, acl: after }));
+    row.value = next;
+  };
   for (const table of grantPlan.postimage.tables) {
     const previous = grantPlan.preimage.tables.find((x) => x.relation === table.relation);
     const relation = result.find((x) => x.key === 'relation:' + table.relation);
     if (!relation) continue; // The separate grant snapshot covers all18; tail catalog has its own fixed scope.
-    need(r1Same(relation.value.acl, normalized(previous.acl, true)));
-    relation.value.acl = normalized(table.acl, true);
+    replaceAcl(relation, normalized(previous.acl, true), normalized(table.acl, true));
     for (const col of table.columns) {
       const row = result.find((x) => x.key === 'column:' + table.relation + ':' + col.name);
-      need(
-        row &&
-          r1Same(
-            row.value.acl,
-            normalized(previous.columns.find((x) => x.name === col.name).acl, false),
-          ),
+      replaceAcl(
+        row,
+        normalized(previous.columns.find((x) => x.name === col.name).acl, false),
+        normalized(col.acl, false),
       );
-      row.value.acl = normalized(col.acl, false);
     }
   }
   return result;
