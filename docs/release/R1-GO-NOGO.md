@@ -1,5 +1,11 @@
 # LK2 R1 — GO / NO-GO
 
+## Post119 audit correction — 2026-11-03 (MSK)
+
+This supplement takes precedence over conflicting historical readiness or execution claims below.
+
+**NO-GO remains.** PR569 closes the quarter-route source correction, not runtime acceptance. In addition to existing Timeweb/CUP/LK/provider gates, post119 runtime-role provisioning and a safe four-service upgrade/recovery executor remain unresolved. The initial-beta route is not an upgrade substitute. See [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md). Mobile signing/stores remain deferred by owner decision.
+
 ## Актуальный срез — 2026-11-03 (MSK)
 
 Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.

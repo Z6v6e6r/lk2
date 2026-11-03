@@ -1,5 +1,11 @@
 # LK2 R1 — rollback и recovery readiness
 
+## Post119 audit correction — 2026-11-03 (MSK)
+
+This supplement takes precedence over conflicting historical readiness or execution claims below.
+
+The application rollback contract is not yet complete for the current mixed-source beta. The initial renderer cannot restore previous services; chained API/Web and API/Worker operations are not one four-component recovery boundary. Preserve previous image/env/secret identities and journals; after new external operations, retain compatible original-operation recovery when restoring the previous per-component images (API/Worker/Realtime702, Web871). No down-migration or delivery-state conversion. Details: [post119 acceptance](R1-POST119-RUNTIME-ACCEPTANCE.md).
+
 ## Актуальный срез — 2026-11-03 (MSK)
 
 Этот раздел имеет приоритет над историческими контрольными точками ниже. SOURCE/LOCAL/CI не заменяют STAGING/PROVIDER/PRODUCTION.
