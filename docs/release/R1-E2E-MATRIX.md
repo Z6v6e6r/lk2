@@ -1,5 +1,20 @@
 # LK2 R1 — E2E и acceptance matrix
 
+## Операционный срез — 2026-11-03, 09:02 MSK
+
+Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
+
+Старая консоль исправлена владельцем. Первый enrollment восстановлен штатным recovery; второй не запускался на сервере — это подтверждено свежим чтением. Оба временных цикла закрыты, `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в05:55:05UTC. Активного enrollment marker нет. Пакеты R1/R2 сохранены. Пакет R3 подготовлен локально, но запись его нового каталога отклонена автоматической проверкой до исполнения; точное разрешение запрошено. Приложения и БД не переключались.
+
+| Уровень               | Результат                                                                                                         | Ограничение                                                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| LOCAL, PR574          | 28 unit PASS; scoped lint/types/scans PASS; Git-custody subset60/60                                               | Full macOS:25 FAIL/8792 PASS/489 SKIP, три существующих process/Git-custody suites. Не полный LOCAL PASS.                 |
+| CI41576927809         | 9173 PASS/133 SKIP; PostgreSQL16 7/7; mandatory physical game/comms/Rabbit cases zeroSKIP; пять image builds PASS | Не image publication или runtime acceptance.                                                                              |
+| LOCAL, enrollment R3  | 42/42; два независимых review CLEAR                                                                               | 6 физических Linux-проверок повторно использованы из R2: меняется только namespace, методы неизменны. Не объявлять rerun. |
+| STAGING, read-only    | API/Worker/Realtime702 и Web871 healthy, restart0; Web lineage проверена                                          | Метаданные не доказывают бизнес-сценарии R1.                                                                              |
+| STAGING, controller   | R1 recovery и R2 unexecuted proof; deliverytrue restored                                                          | Приложения и миграции не запускались.                                                                                     |
+| PROVIDER / PRODUCTION | Обязательная итоговая приёмка отсутствует                                                                         | Денежные результаты, очередь CUP, роли и устройства остаются открытыми.                                                   |
+
 ## Post119 audit correction — 2026-11-03 (MSK)
 
 This supplement takes precedence over conflicting historical readiness or execution claims below.

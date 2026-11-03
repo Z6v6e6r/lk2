@@ -1,5 +1,19 @@
 # LK2 R1 — аудит готовности к production release
 
+## Операционный срез — 2026-11-03, 09:02 MSK
+
+Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
+
+Старая консоль исправлена владельцем. Первый enrollment восстановлен штатным recovery; второй не запускался на сервере — это подтверждено свежим чтением. Оба временных цикла закрыты, `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в05:55:05UTC. Активного enrollment marker нет. Пакеты R1/R2 сохранены. Пакет R3 подготовлен локально, но запись его нового каталога отклонена автоматической проверкой до исполнения; точное разрешение запрошено. Приложения и БД не переключались.
+
+| Область                        | Статус                     | Доказательство / остаток                                                                                                       |
+| ------------------------------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Runtime privilege audit        | VERIFIED — SOURCE/LOCAL/CI | Draft PR574, head4306aba5; 28 unit tests, полный CI9173 PASS/133 SKIP, отдельный PostgreSQL16 7/7. Live grants не выполнялись. |
+| Controller recovery            | VERIFIED — STAGING         | R1 восстановлен; R2 подтверждён как неисполненный; исходный флаг true восстановлен. Это не deployment R1.                      |
+| Миграции и application rollout | BLOCKED                    | Enrollment R3, backup/independent restore,106→107→108→119, фактические права и четырёхкомпонентный recovery ещё впереди.       |
+| CUP / LK / Viva                | BLOCKED                    | Сохранение очереди перед первым restart, monthly binding, подтверждение денежного результата и visit-return.                   |
+| Устройства и stores            | UNKNOWN / DEFERRED         | Физическая push-приёмка отсутствует; signing/stores отложены владельцем.                                                       |
+
 ## Post119 audit correction — 2026-11-03 (MSK)
 
 This supplement takes precedence over conflicting historical readiness or execution claims below.

@@ -1,5 +1,15 @@
 # LK2 R1 — release preparation и controlled handoff
 
+## Операционный срез — 2026-11-03, 09:02 MSK
+
+Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
+
+Старая консоль исправлена владельцем. Первый enrollment восстановлен штатным recovery; второй не запускался на сервере — это подтверждено свежим чтением. Оба временных цикла закрыты, `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в05:55:05UTC. Активного enrollment marker нет. Пакеты R1/R2 сохранены. Пакет R3 подготовлен локально, но запись его нового каталога отклонена автоматической проверкой до исполнения; точное разрешение запрошено. Приложения и БД не переключались.
+
+Следующий переход — только подготовленный R3 после точного разрешения и свежих предусловий. Static review выполняется до финального GET; затем final GET → sealing manifest → exclusive staging → once-only execute идут одной командой, сохраняя90s/120s guards. Любая неоднозначность требует read-only reconcile, без автоматического replay. R1/R2 не перезаписывать.
+
+После enrollment остаются существующие backup/restore и migration gates. Сохранять b88 migration artifact отдельно от будущего application artifact. Не заменять canonical executor прямым Compose/SSH или initial-install renderer.
+
 ## Post119 audit correction — 2026-11-03 (MSK)
 
 This supplement takes precedence over conflicting historical readiness or execution claims below.

@@ -1,5 +1,13 @@
 # LK2 R1 — GO / NO-GO
 
+## Операционный срез — 2026-11-03, 09:02 MSK
+
+Этот раздел и [операционная запись](R1-OPERATIONS-20261103.md) заменяют конфликтующие исторические статусы ниже. **NO-GO для production release.** LK2 main `de451e712c08aae46fdc47ae162c20ce038657bd`; миграционный пакет отдельно зафиксирован на `b88f2100e0d77b8c3bbb3a75ced70f2fd97dcefd`.
+
+Старая консоль исправлена владельцем. Первый enrollment восстановлен штатным recovery; второй не запускался на сервере — это подтверждено свежим чтением. Оба временных цикла закрыты, `LK2_STANDARD_DELIVERY_ENABLED=true` подтверждён в05:55:05UTC. Активного enrollment marker нет. Пакеты R1/R2 сохранены. Пакет R3 подготовлен локально, но запись его нового каталога отклонена автоматической проверкой до исполнения; точное разрешение запрошено. Приложения и БД не переключались.
+
+**NO-GO.** Закрыты восстановление controller config и возврат временного delivery-флага. Не закрыты enrollment/migrations, независимый restore, actual-role acceptance, безопасный upgrade/recovery четырёх компонентов, CUP/LK/Viva и обязательные runtime journeys. Успешный PR574 CI не даёт GO. Подписанные Android/iOS сборки и stores отложены владельцем.
+
 ## Post119 audit correction — 2026-11-03 (MSK)
 
 This supplement takes precedence over conflicting historical readiness or execution claims below.
