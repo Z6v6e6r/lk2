@@ -2,6 +2,10 @@ import {
   closedApplicationPackageFamily,
   closedApplicationPackageArgument,
 } from './closed-application-package-family.js';
+import {
+  closedApplicationBackupGenerationSuffix,
+  validateClosedApplicationOperation,
+} from './timeweb-closed-application-profile.js';
 import { isPreservedNotificationRollout } from './timeweb-notification-android-gates.js';
 import { assertCompletedNotificationInputs } from './timeweb-notification-completed-migration.js';
 // Closed migration-only mode of the enrolled standard runner. No env swap or FCM key access.
@@ -449,7 +453,7 @@ export function closedApplicationProductionPaths(operation) {
     candidate,
     transactionRoot: `${ROOT}/backups/${operation.controllerSha}-${operation.controllerSourceCiRunId}-1-${stage.slug}-migration`,
     containerName: `phub-timeweb-migration-${operation.publishedMigrator.sourceSha.slice(0, 12)}-${operation.publishedMigrator.publicationRunId}-1-${stage.slug}`,
-    prefetchRoot: `${ROOT}/standard/${stage.slug}-prefetch/${candidate}`,
+    prefetchRoot: `${ROOT}/standard/${stage.slug}-prefetch/${candidate}${closedApplicationBackupGenerationSuffix(operation)}`,
     prefetchRequestPath: `${ROOT}/operator/${stage.slug}-migrator-prefetch.json`,
   });
 }
@@ -3205,7 +3209,9 @@ function productionOps(op, owner, ignoredRestore = null, closedBinding = null) {
     : locationPhoto
       ? 'location-photo-prefetch'
       : 'notification-prefetch';
-  const prefetchRoot = `${ROOT}/standard/${prefetchGroup}/${candidate}`;
+  const prefetchRoot = closed
+    ? closedPaths.prefetchRoot
+    : `${ROOT}/standard/${prefetchGroup}/${candidate}`;
   const prefetchFile = (name) => `${prefetchRoot}/${name}.json`;
   const path = (name) => `${tx}/${name}`,
     name = closed
@@ -3432,6 +3438,7 @@ function productionOps(op, owner, ignoredRestore = null, closedBinding = null) {
         prefetchFile('intent'),
         bytes,
         closed ? closedBinding.kind : undefined,
+        closed ? op : undefined,
       );
     },
     prefetchReceipt: () =>
@@ -3441,6 +3448,7 @@ function productionOps(op, owner, ignoredRestore = null, closedBinding = null) {
         prefetchFile('receipt'),
         bytes,
         closed ? closedBinding.kind : undefined,
+        closed ? op : undefined,
       ),
     prefetchImagePresent: () => {
       // The index ref alone is not enough for the location-photo package: reconcile must be able to
@@ -4017,21 +4025,25 @@ export async function runManualLocationPhotoMigration(mode, requestPath) {
 
 // Fixed owned cache metadata only, under the existing executor lock. Partial
 // incoming bytes can resume only as an exact prefix of the original sealed value.
-export function sealNotificationPrefetchMetadata(path, bytes, closedKind) {
+export function sealNotificationPrefetchMetadata(path, bytes, closedKind, closedOperation) {
   if (closedKind !== undefined && !Object.hasOwn(closedProductionStages, closedKind))
     stop('PREFETCH_METADATA_PATH');
   const group =
     closedKind === undefined
       ? '(?:notification|location-photo)'
       : closedProductionStages[closedKind].slug;
-  if (
-    !new RegExp(
+  let admittedPath;
+  if (closedOperation !== undefined) {
+    const operation = validateClosedApplicationOperation(closedOperation);
+    if (closedKind !== operation.migrationProfile) stop('PREFETCH_METADATA_PATH');
+    const root = closedApplicationProductionPaths(operation).prefetchRoot;
+    admittedPath = path === `${root}/intent.json` || path === `${root}/receipt.json`;
+  } else {
+    admittedPath = new RegExp(
       `^${ROOT}/standard/${group}-prefetch/[a-f0-9]{40}-[1-9][0-9]*-1/(?:intent|receipt)\\.json$`,
-    ).test(path) ||
-    !Buffer.isBuffer(bytes) ||
-    !bytes.length ||
-    bytes.length > 4 * 1024 * 1024
-  )
+    ).test(path);
+  }
+  if (!admittedPath || !Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 4 * 1024 * 1024)
     stop('PREFETCH_METADATA_PATH');
   secure(dirname(path), 0o700);
   const stage = path + '.incoming';

@@ -324,6 +324,7 @@ export function sealNotificationPrefetchMetadata(
   path: string,
   bytes: Buffer,
   closedKind?: 'game_start_0103' | 'subject_link_0104',
+  closedOperation?: unknown,
 ): void;
 
 export interface ClosedProductionFiles {

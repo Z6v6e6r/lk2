@@ -5,6 +5,7 @@ import descriptor from '../deploy/timeweb/closed-application-migrations-0103-010
 import {
   CLOSED_APPLICATION_DATABASE_TARGET,
   CLOSED_APPLICATION_HOST_TARGET,
+  closedApplicationMigrationBackupDirectory,
   validateClosedApplicationOperation,
   validateClosedApplicationState,
 } from './timeweb-closed-application-profile.js';
@@ -52,8 +53,7 @@ export function closedApplicationBackupDefinition(operation) {
     operation.migrationProfile
   ];
 }
-const HASH = /^[a-f0-9]{64}$/,
-  ROOT = '/opt/phub/timeweb-beta';
+const HASH = /^[a-f0-9]{64}$/;
 const canonical = (value) =>
   JSON.stringify(value, (_key, item) =>
     item && typeof item === 'object' && !Array.isArray(item)
@@ -153,7 +153,7 @@ export function validateClosedApplicationBackupOperation(value, at) {
 }
 export function closedApplicationBackupDirectory(operation) {
   validateClosedApplicationBackupOperation(operation);
-  return `${ROOT}/backups/${operation.releaseId}-${closedApplicationBackupDefinition(operation.migrationIntent).mode}`;
+  return closedApplicationMigrationBackupDirectory(operation.migrationIntent);
 }
 export function validateClosedApplicationBackupReceipt(
   operation,

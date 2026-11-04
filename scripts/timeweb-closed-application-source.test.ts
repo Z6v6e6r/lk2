@@ -169,6 +169,25 @@ for (const validator of ['closed', 'tail'] as const) {
     expect(result.stdout.trim()).toBe('PASS');
   }
   describe(`${validator} exact native JOIN prerequisite`, () => {
+    it('admits only the two named regular generation declarations and refuses mode/deletion/foreign declaration changes', () => {
+      for (const path of [
+        'scripts/timeweb-api-worker-migration.d.ts',
+        'scripts/timeweb-closed-application-profile.d.ts',
+      ]) {
+        expect(CLOSED_R1_CONTROLLER_FILES).toContain(path);
+        expect(() => validate(r1Entries)).not.toThrow();
+        const row = r1Entries.find((entry) => entry.path === path)!;
+        for (const change of [
+          { newMode: '120000' },
+          { newMode: '100755' },
+          { status: 'D', newOid: '0'.repeat(40) },
+          { path: 'scripts/foreign-controller.d.ts' },
+        ])
+          expect(() =>
+            validate(r1Entries.map((entry) => (entry === row ? { ...entry, ...change } : entry))),
+          ).toThrow();
+      }
+    });
     it('preserves the prior source and admits only the complete reviewed pair', () => {
       expect(() => validate(r1Entries)).not.toThrow();
       expect(() => validate([...r1Entries, ...nativeJoinPair])).not.toThrow();

@@ -282,17 +282,78 @@ describe('closed production binding and entry custody', () => {
       ),
     ).toThrow('PREFETCH_METADATA_PATH');
   });
+  it('scopes generated prefetch effects and metadata sealing to the same validated R1 intent', () => {
+    const base = closedApplicationOperationFixture('game_start_0103', 'R1_PACKAGE119');
+    const a = { ...base, backupGeneration: 'a'.repeat(32) },
+      b = { ...base, backupGeneration: 'b'.repeat(32) };
+    const old = closedApplicationProductionPaths(base),
+      first = closedApplicationProductionPaths(a),
+      next = closedApplicationProductionPaths(b);
+    expect(first.prefetchRoot).toBe(old.prefetchRoot + '-generation-' + a.backupGeneration);
+    expect(next.prefetchRoot).not.toBe(first.prefetchRoot);
+    expect(first.transactionRoot).toBe(old.transactionRoot);
+    expect(first.containerName).toBe(old.containerName);
+    expect(() =>
+      sealNotificationPrefetchMetadata(
+        first.prefetchRoot + '/receipt.json',
+        Buffer.from('synthetic'),
+        'game_start_0103',
+      ),
+    ).toThrow('PREFETCH_METADATA_PATH');
+    expect(() =>
+      sealNotificationPrefetchMetadata(
+        first.prefetchRoot + '/receipt.json',
+        Buffer.from('synthetic'),
+        'game_start_0103',
+        b,
+      ),
+    ).toThrow('PREFETCH_METADATA_PATH');
+    const custody = io.secure;
+    custody.mockImplementation(() => {
+      throw Error('EXPECTED_SEALER_CUSTODY_STOP');
+    });
+    try {
+      const effects = createClosedApplicationProductionEffects(
+        a,
+        {
+          assertOwned: () => {
+            throw Error('LIVE_EFFECT_FORBIDDEN');
+          },
+        },
+        binding(a),
+      );
+      const prefetch = effects as unknown as { writePrefetchReceipt(bytes: Buffer): void };
+      expect(() => prefetch.writePrefetchReceipt(Buffer.from('synthetic'))).toThrow(
+        'EXPECTED_SEALER_CUSTODY_STOP',
+      );
+      expect(custody).toHaveBeenLastCalledWith(first.prefetchRoot, 0o700);
+      expect(() =>
+        sealNotificationPrefetchMetadata(
+          first.prefetchRoot + '/intent.json',
+          Buffer.from('synthetic'),
+          'game_start_0103',
+          a,
+        ),
+      ).toThrow('EXPECTED_SEALER_CUSTODY_STOP');
+    } finally {
+      custody.mockRestore();
+    }
+  });
 });
 
-const io = vi.hoisted(() => ({ execute: vi.fn(), read: vi.fn() }));
+const io = vi.hoisted(() => ({ execute: vi.fn(), read: vi.fn(), secure: vi.fn() }));
 vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof ChildProcess>()),
   execFileSync: io.execute,
 }));
-vi.mock('./timeweb-api-web-upgrade.js', async (original) => ({
-  ...(await original<typeof ApiWebUpgrade>()),
-  readUpgradeFile: io.read,
-}));
+vi.mock('./timeweb-api-web-upgrade.js', async (original) => {
+  const actual = await original<typeof ApiWebUpgrade>();
+  return {
+    ...actual,
+    readUpgradeFile: io.read,
+    secureUpgradePath: io.secure,
+  };
+});
 
 function fixture(kind: 'game_start_0103' | 'subject_link_0104') {
   const operation = closedApplicationOperationFixture(kind, 'R1_PACKAGE119');

@@ -2,12 +2,23 @@ import {
   CLOSED_R1_OPERATION_SCHEMAS,
   type ClosedPackageFamily,
 } from './closed-application-package-family.js';
-import { closedApplicationBackupDefinition } from './timeweb-closed-application-backup.js';
+import { createHash } from 'node:crypto';
+import inventory from '../deploy/timeweb/r1-tail108-119.v1.json';
+import descriptor from '../deploy/timeweb/closed-application-migrations-0103-0104.v1.json';
+import { closedApplicationProductionPaths } from './timeweb-api-worker-migration.js';
+import {
+  closedApplicationBackupBindingSha256,
+  closedApplicationBackupDefinition,
+  closedApplicationBackupDirectory,
+} from './timeweb-closed-application-backup.js';
 import {
   CLOSED_APPLICATION_DATABASE_TARGET,
   CLOSED_APPLICATION_POSTGRES_CONTAINER,
   CLOSED_APPLICATION_HOST_TARGET,
   CLOSED_APPLICATION_OPERATION_SCHEMAS,
+  closedApplicationInputDigests,
+  closedApplicationRoleProbeSource,
+  closedApplicationSchemas,
   type ClosedApplicationKind,
   type ClosedApplicationOperation,
   type ClosedRuntimeIdentity,
@@ -168,5 +179,226 @@ export function closedBackupFixture(
       imageId: intent.publishedMigrator.imageId,
     },
     migrationIntent: intent,
+  };
+}
+
+/** Synthetic transport/custody fixture only. Consumers must explicitly mock the
+ * unchanged catalog golden-row boundary for catalog:[]. No DB/restore is run;
+ * operation, generation, binding, hashes, plan, receipt and path checks stay real. */
+export function closedApplicationCustodyFixture(kind: ClosedApplicationKind, generation?: string) {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value) + '\n');
+  const hash = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
+  const base = closedBackupFixture(kind, 'R1_PACKAGE119');
+  const operation = {
+    ...base.migrationIntent,
+    ...(generation === undefined ? {} : { backupGeneration: generation }),
+  };
+  const definition = closedApplicationBackupDefinition(operation),
+    schemas = closedApplicationSchemas(kind);
+  const state = (phase: 'pre' | 'bootstrap' | 'post' | 'cleanup') => {
+    const count = ['pre', 'bootstrap'].includes(phase)
+      ? definition.preCount
+      : definition.preCount + 1;
+    const acl = closedApplicationAclPlan(kind, operation.expectedPrivilegePreimage);
+    const tables =
+      count >= 107
+        ? [
+            'notifications.legacy_game_reminder_source_status',
+            'notifications.legacy_game_reminder_sources',
+            'notifications.legacy_game_reminder_recipients',
+          ]
+        : [];
+    if (count === 108) tables.push('identity.external_subject_link_commands');
+    return {
+      schema: 'PHUB_CLOSED_APPLICATION_DATABASE_STATE_V1',
+      migrationProfile: kind,
+      phase,
+      target: operation.expectedDatabaseTarget,
+      rolesSafe: true,
+      ledger: inventory.inventory.slice(0, count),
+      catalog: [],
+      acl: ['bootstrap', 'post'].includes(phase) ? acl.bootstrap : acl.preimage,
+      newTableRows: Object.fromEntries(tables.map((name) => [name, 0])),
+      hazards: { migrationLockHeld: false, longTransactions: 0, conflictingLocks: 0 },
+      footprint: ['notifications.scenario_contexts', 'notifications.scenario_runs'].map((name) => ({
+        name,
+        bytes: 0,
+        rows: 0,
+      })),
+      gameStartDuplicates: 0,
+    };
+  };
+  const prestate = state('pre'),
+    paths = closedApplicationProductionPaths(operation);
+  const prefix = kind === 'game_start_0103' ? 'PHUB_GAME_START_0103' : 'PHUB_SUBJECT_LINK_0104';
+  const prefetchRequestBytes = encode({
+    schema: prefix + '_PREFETCH_OPERATION_V1',
+    migrationIntent: operation,
+    expiresAt: operation.expiresAt,
+    confirmation: `PULL_${kind.toUpperCase()}_MIGRATOR_ONLY_NO_DATABASE_MUTATION`,
+  });
+  const input = { runtimeSha256: '1'.repeat(64), secretSetSha256: '2'.repeat(64), prestate };
+  const prefetchIntentBytes = encode({
+    schema: prefix + '_PREFETCH_INTENT_V1',
+    requestBase64: prefetchRequestBytes.toString('base64'),
+    input,
+    retainedImageIds: [],
+  });
+  const prefetchReceiptBytes = encode({
+    schema: prefix + '_PREFETCH_RECEIPT_V1',
+    requestSha256: hash(prefetchRequestBytes),
+    migrationBindingSha256: closedApplicationBackupBindingSha256(operation),
+    intentSha256: hash(prefetchIntentBytes),
+    imageId: operation.publishedMigrator.imageId,
+    input,
+    retainedImageIds: [],
+  });
+  const toolBytes = Buffer.from('SYNTHETIC BACKUP TOOL'),
+    installationBytes = Buffer.from('SYNTHETIC INSTALLATION');
+  const backup = {
+    ...base,
+    migrationIntent: operation,
+    toolFileSha256: hash(toolBytes),
+    toolInstallationSha256: hash(installationBytes),
+    migratorPrefetch: {
+      requestSha256: hash(prefetchRequestBytes),
+      receiptSha256: hash(prefetchReceiptBytes),
+      migratorImage: operation.publishedMigrator.image,
+      imageId: operation.publishedMigrator.imageId,
+    },
+  };
+  const directory = closedApplicationBackupDirectory(backup),
+    backupBytes = encode(backup);
+  const security = { schema: 'PHUB_NOTIFICATION_BACKUP_SECURITY_V1', objects: [], roles: [] };
+  const preimageBytes = encode({
+    schema: definition.preimageSchema,
+    state: prestate,
+    target: operation.expectedDatabaseTarget,
+    security,
+  });
+  const receipt = {
+    schema: definition.receiptSchema,
+    baselineReleaseId: operation.expectedApi.releaseId,
+    completedAt: '2026-10-27T07:30:00.000Z',
+    backupFile: directory + '/database.pgcustom',
+    backupSha256: '9'.repeat(64),
+    restoreVerified: true,
+    restoreImage: operation.expectedPostgres.image,
+    restoredLedgerSha256: definition.ledgerSha256,
+    sourceLedgerSha256: definition.ledgerSha256,
+    operationSha256: hash(backupBytes),
+    target: operation.expectedDatabaseTarget,
+    preimageSha256: hash(preimageBytes),
+    packageDescriptorSha256: operation.packageDescriptorSha256,
+    aclRecovery: 'ISOLATED_OWNER_ACL_RESTORE_VERIFIED',
+    securityPreimageSha256: hash(encode(security)),
+    restoredSecuritySha256: hash(encode(security)),
+    roleClosureSha256: hash(encode(security.roles)),
+    migratorPrefetch: backup.migratorPrefetch,
+    migrationProfile: kind,
+    catalogVariant: operation.catalogVariant,
+    catalogBuilderSha256: operation.catalogBuilderSha256,
+    migrationBindingSha256: closedApplicationBackupBindingSha256(operation),
+  };
+  const receiptBytes = encode(receipt),
+    backupProof = {
+      path: directory + '/database-backup-receipt.json',
+      sha256: hash(receiptBytes),
+      operationSha256: hash(backupBytes),
+      preimageSha256: hash(preimageBytes),
+      target: operation.expectedDatabaseTarget,
+      migrationProfile: kind,
+      sourceLedgerSha256: definition.ledgerSha256,
+      catalogVariant: operation.catalogVariant,
+    };
+  const terminalBytes = encode({
+    schema: definition.terminalSchema,
+    operationSha256: hash(backupBytes),
+    receiptSha256: hash(receiptBytes),
+    preimageSha256: hash(preimageBytes),
+    target: operation.expectedDatabaseTarget,
+    sourceLedgerSha256: definition.ledgerSha256,
+    storageCleanupVerified: true,
+    reconciled: true,
+    migratorPrefetch: backup.migratorPrefetch,
+    migrationProfile: kind,
+    catalogVariant: operation.catalogVariant,
+    catalogBuilderSha256: operation.catalogBuilderSha256,
+    migrationBindingSha256: closedApplicationBackupBindingSha256(operation),
+  });
+  const operationBytes = encode(operation),
+    checkpoint = descriptor.checkpoints[definition.preCount === 106 ? '106' : '107'];
+  const postCheckpoint = descriptor.checkpoints[definition.preCount === 106 ? '107' : '108'];
+  const runtime = (identity: ClosedRuntimeIdentity) => ({
+    identity,
+    status: 'running',
+    health: 'healthy',
+    fingerprint: '3'.repeat(64),
+  });
+  const plan = {
+    schema: schemas.plan,
+    operationSha256: hash(operationBytes),
+    controllerSha: operation.controllerSha,
+    controllerTree: operation.controllerTree,
+    controllerSourceCiRunId: operation.controllerSourceCiRunId,
+    publishedMigrator: operation.publishedMigrator,
+    imageId: operation.publishedMigrator.imageId,
+    preLedgerSha256: checkpoint.ledgerSha256,
+    postLedgerSha256: postCheckpoint.ledgerSha256,
+    secretSet: {
+      releaseId: operation.expectedSecretSetReleaseId,
+      device: 1,
+      inode: 1,
+      files: operation.expectedSecretSetFiles,
+    },
+    runtime: {
+      api: runtime(operation.expectedApi),
+      worker: runtime(operation.expectedWorker),
+      postgres: operation.expectedPostgres,
+      controllerConfigSha256: '4'.repeat(64),
+      excluded: [runtime(operation.expectedPostgres)],
+    },
+    backup: backupProof,
+    inputs: closedApplicationInputDigests(operation),
+    roleProbeSourceSha256: hash(closedApplicationRoleProbeSource(kind)),
+    preimage: prestate,
+  };
+  const files = new Map<string, Buffer>([
+    [directory + '/backup-operation.json', backupBytes],
+    [directory + '/database-backup-receipt.json', receiptBytes],
+    [directory + '/preimage-proof.json', preimageBytes],
+    ['/opt/phub/timeweb-beta/operator/database-backup-restore.json', backupBytes],
+    [
+      `/opt/phub/timeweb-beta/operator/tools/${operation.controllerSha}/control-timeweb-database-backup.py`,
+      toolBytes,
+    ],
+    [
+      `/opt/phub/timeweb-beta/operator/tools/${operation.controllerSha}/installation-receipt.json`,
+      installationBytes,
+    ],
+    [paths.prefetchRequestPath, prefetchRequestBytes],
+    [paths.prefetchRoot + '/intent.json', prefetchIntentBytes],
+    [paths.prefetchRoot + '/receipt.json', prefetchReceiptBytes],
+  ]);
+  return {
+    operation,
+    operationBytes,
+    backup,
+    backupBytes,
+    directory,
+    receipt,
+    receiptBytes,
+    preimageBytes,
+    backupProof,
+    terminalBytes,
+    plan,
+    planBytes: encode(plan),
+    state,
+    paths,
+    files,
+    prefetchRequestBytes,
+    prefetchIntentBytes,
+    prefetchReceiptBytes,
+    input,
   };
 }
