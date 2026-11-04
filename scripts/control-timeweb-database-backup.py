@@ -203,7 +203,16 @@ def is_r1_tail_backup(op):
 
 
 def closed_application_backup_mode(op):
-    mode=CLOSED_APPLICATION_BACKUPS[op['schema']]['mode']
+    definition=CLOSED_APPLICATION_BACKUPS[op['schema']]
+    mode=definition['mode']
+    intent=op['migrationIntent']
+    need(isinstance(intent,dict),'CLOSED_APPLICATION_BACKUP_INTENT')
+    if 'backupGeneration' in intent:
+        generation=intent['backupGeneration']
+        need(definition.get('family')=='R1_PACKAGE119' and definition['kind'] in ('game_start_0103','subject_link_0104')
+             and intent.get('schema')==definition['migrationSchema'] and intent.get('migrationProfile')==definition['kind']
+             and isinstance(generation,str) and re.fullmatch(r'[a-f0-9]{32}',generation) is not None,'CLOSED_APPLICATION_BACKUP_GENERATION')
+        mode+='-generation-'+generation
     if is_r1_tail_backup(op):
         attempt=op['migrationIntent'].get('attemptId')
         need(isinstance(attempt,str) and re.fullmatch(r'[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}',attempt) is not None,'R1_TAIL_BACKUP_ATTEMPT')
@@ -2891,7 +2900,7 @@ def r1_tail_retained_backup_main():
     need(len(sys.argv)==4 and sys.argv[1] in ('--attest-r1-predecessor-backup','--attest-r1-tail-backup')
          and sys.argv[2]==str(ROOT/'operator/r1-tail108-119-migration.json'),'R1_TAIL_TERMINAL_ENTRY')
     path=Path(sys.argv[3])
-    need(re.fullmatch(r'/opt/phub/timeweb-beta/backups/[a-f0-9]{40}-[1-9][0-9]*-1-(?:game-start-pre0103|subject-link-pre0104|r1-tail-pre(?:108|109|11[0-8])-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})/backup-operation\.json',str(path)) is not None,'R1_TAIL_BACKUP_PATH')
+    need(re.fullmatch(r'/opt/phub/timeweb-beta/backups/[a-f0-9]{40}-[1-9][0-9]*-1-(?:(?:game-start-pre0103|subject-link-pre0104)(?:-generation-[a-f0-9]{32})?|r1-tail-pre(?:108|109|11[0-8])-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})/backup-operation\.json',str(path)) is not None,'R1_TAIL_BACKUP_PATH')
     tail=strict(read_secure(ROOT/'operator/r1-tail108-119-migration.json'));raw=read_secure(path);value=strict(raw)
     file_sha=digest(read_secure(ROOT/('operator/tools/'+value['toolCommit']+'/control-timeweb-database-backup.py'),0o755))
     op=validate_operation(value,time.time(),file_sha,allow_expired=True)
@@ -4571,12 +4580,12 @@ def main():
         # shared request may already contain the second-stage backup operation.
         need(sys.flags.optimize==0 and sys.flags.isolated==1 and os.getuid()==0, 'CLOSED_RETAINED_ENTRY')
         path=Path(sys.argv[2])
-        need(re.fullmatch(r'/opt/phub/timeweb-beta/backups/[a-f0-9]{40}-[1-9][0-9]*-1-game-start-pre0103/backup-operation\.json',str(path)) is not None, 'CLOSED_RETAINED_PATH')
+        need(re.fullmatch(r'/opt/phub/timeweb-beta/backups/[a-f0-9]{40}-[1-9][0-9]*-1-game-start-pre0103(?:-generation-[a-f0-9]{32})?/backup-operation\.json',str(path)) is not None, 'CLOSED_RETAINED_PATH')
         file=Path(__file__);file_sha=digest(read_secure(file,0o755))
         raw=read_secure(path);op=validate_operation(strict(raw),time.time(),file_sha,allow_expired=True)
         need(is_closed_application_backup(op) and CLOSED_APPLICATION_BACKUPS[op['schema']]['kind']=='game_start_0103'
              and file==ROOT/('operator/tools/'+op['toolCommit']+'/control-timeweb-database-backup.py')
-             and path.parent==ROOT/'backups'/(op['releaseId']+'-game-start-pre0103'), 'CLOSED_RETAINED_BINDING')
+             and path.parent==ROOT/'backups'/(op['releaseId']+'-'+closed_application_backup_mode(op)), 'CLOSED_RETAINED_BINDING')
         need(os.uname().nodename=='msk-1-vm-z8ks' and os.uname().machine=='x86_64', 'HOST')
         ips=command(['/usr/bin/hostname','-I'],'HOST').decode().split()
         need('100.77.212.57' in ips and '103.88.243.171' in ips,'HOST')

@@ -137,6 +137,25 @@ export function closedApplicationInputDigests(operation) {
     cleanupSha256: acl.cleanupSha256,
   };
 }
+// Pure path derivation shared by plan, producer and retained readers. Do not call
+// the full operation validator here: plan validation already uses this helper.
+export function closedApplicationBackupGenerationSuffix(operation) {
+  if (Object.hasOwn(operation, 'backupGeneration')) {
+    if (
+      closedApplicationPackageFamily(operation) !== 'R1_PACKAGE119' ||
+      typeof operation.backupGeneration !== 'string' ||
+      operation.backupGeneration.length !== 32 ||
+      !/^[a-f0-9]{32}$/.test(operation.backupGeneration)
+    )
+      fail('BACKUP_GENERATION');
+    return `-generation-${operation.backupGeneration}`;
+  }
+  return '';
+}
+export function closedApplicationMigrationBackupDirectory(operation) {
+  const stage = CLOSED_APPLICATION_STAGE[kind(operation.migrationProfile)];
+  return `${ROOT}/backups/${operation.controllerSha}-${operation.controllerSourceCiRunId}-1-${stage.backupMode}${closedApplicationBackupGenerationSuffix(operation)}`;
+}
 export function validateClosedApplicationOperation(value, at) {
   exact(value, [
     'schema',
@@ -163,8 +182,10 @@ export function validateClosedApplicationOperation(value, at) {
     'previousMigrationSuccess',
     'expiresAt',
     'confirmation',
+    ...(Object.hasOwn(value ?? {}, 'backupGeneration') ? ['backupGeneration'] : []),
   ]);
   const profile = kind(value.migrationProfile);
+  closedApplicationMigrationBackupDirectory(value);
   exact(value.target, ['hostname', 'serverId', 'projectId']);
   exact(value.expectedDatabaseTarget, ['databaseName', 'systemIdentifier']);
   exact(value.publishedMigrator, [
@@ -582,7 +603,7 @@ export function validateClosedApplicationPlan(value, bytes) {
   ]);
   if (
     value.backup.path !==
-      `${ROOT}/backups/${operation.controllerSha}-${operation.controllerSourceCiRunId}-1-${CLOSED_APPLICATION_STAGE[profile].backupMode}/database-backup-receipt.json` ||
+      `${closedApplicationMigrationBackupDirectory(operation)}/database-backup-receipt.json` ||
     !['sha256', 'operationSha256', 'preimageSha256'].every((key) =>
       HASH.test(value.backup[key] ?? ''),
     ) ||

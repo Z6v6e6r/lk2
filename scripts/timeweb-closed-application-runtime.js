@@ -32,6 +32,7 @@ import {
   CLOSED_APPLICATION_STAGE,
   assertClosedApplicationRuntimeOff,
   closedApplicationInputDigests,
+  closedApplicationMigrationBackupDirectory,
   closedApplicationSchemas,
   closedApplicationStateSql,
   createClosedApplicationKernelProfile,
@@ -190,8 +191,7 @@ function terminalProof(backup, backupBytes, receiptBytes, preimageBytes, deps, r
 
 export function readClosedApplicationBackupProof(operation, options = {}, deps = dependencies) {
   validateClosedApplicationOperation(operation);
-  const mode = CLOSED_APPLICATION_STAGE[operation.migrationProfile].backupMode;
-  const directory = `${ROOT}/backups/${operation.controllerSha}-${operation.controllerSourceCiRunId}-1-${mode}`;
+  const directory = closedApplicationMigrationBackupDirectory(operation);
   deps.secure(directory, 0o700);
   const backupBytes = deps.read(`${directory}/backup-operation.json`),
     backup = parseStrictJson(backupBytes);
@@ -351,7 +351,7 @@ export function attestClosedApplicationPrevious(operation, deps = dependencies) 
     )
   )
     fail('PREVIOUS_BACKUP');
-  const backupPath = `${ROOT}/backups/${previous.controllerSha}-${previous.controllerSourceCiRunId}-1-game-start-pre0103/backup-operation.json`;
+  const backupPath = `${closedApplicationMigrationBackupDirectory(previous)}/backup-operation.json`;
   return {
     schema: 'PHUB_CLOSED_APPLICATION_PREVIOUS_REQUESTS_V1',
     status: 'RECONCILED_SUCCESS',

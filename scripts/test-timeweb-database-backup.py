@@ -77,6 +77,14 @@ def closed_application_operation(kind):
     return op
 
 
+def r1_closed_application_operation(kind,generation=None):
+    op=closed_application_operation(kind)
+    op['schema']=op['schema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1)
+    op['migrationIntent']['schema']=op['migrationIntent']['schema'].replace('PHUB_TIMEWEB_','PHUB_TIMEWEB_R1_',1)
+    if generation is not None:op['migrationIntent']['backupGeneration']=generation
+    return op
+
+
 class ClosedApplicationBackupProfileTests(unittest.TestCase):
     def test_each_profile_has_a_distinct_preledger_canonical_namespace_and_schema_family(self):
         plans=[]
@@ -236,6 +244,59 @@ class ClosedApplicationSourcePrelaunchTests(unittest.TestCase):
             self.assertNotIn('DOCKER_HOST',environment)
 
 class ClosedR1Package119BackupTests(unittest.TestCase):
+    def test_optional_generation_paths_bind_before_hashes_and_absence_preserves_exact_old_bytes(self):
+        for kind in ('game_start_0103','subject_link_0104'):
+            old=r1_closed_application_operation(kind);raw=m.encoded(old);mode=m.closed_application_backup_mode(old)
+            self.assertEqual(m.validate_operation(old,NOW,'2'*64),old);self.assertEqual(m.encoded(old),raw)
+            self.assertEqual(mode,m.CLOSED_APPLICATION_BACKUPS[old['schema']]['mode'])
+            paths=[];bindings=[]
+            for generation in ('0'*32,'a'*32):
+                op=r1_closed_application_operation(kind,generation)
+                self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+                self.assertEqual(m.closed_application_backup_mode(op),mode+'-generation-'+generation)
+                plan=m.disk_plan(op,m.encoded(op),m.disk_sizing(4096,8*1024**3,64*1024**3))
+                self.assertTrue(plan['canonical'].endswith(mode+'-generation-'+generation));paths.append(plan['canonical'])
+                bindings.append(m.closed_application_binding_sha(op))
+                renewed=copy.deepcopy(op);renewed['migrationIntent']['expiresAt']='2026-10-10T17:00:00.000Z'
+                self.assertEqual(m.closed_application_binding_sha(renewed),bindings[-1])
+            self.assertNotEqual(paths[0],paths[1]);self.assertNotEqual(bindings[0],bindings[1])
+
+    def test_generation_rejects_malformed_legacy_outer_and_tail_inputs(self):
+        for kind in ('game_start_0103','subject_link_0104'):
+            for generation in (None,False,1,'','A'*32,'a'*31,'a'*33,'a'*32+'\n','../'+'a'*29):
+                op=r1_closed_application_operation(kind);op['migrationIntent']['backupGeneration']=generation
+                with self.subTest(kind=kind,generation=generation),self.assertRaisesRegex(m.Stop,'BACKUP_GENERATION'):
+                    m.validate_operation(op,NOW,'2'*64)
+            legacy=closed_application_operation(kind);legacy['migrationIntent']['backupGeneration']='a'*32
+            with self.assertRaisesRegex(m.Stop,'BACKUP_GENERATION'):m.validate_operation(legacy,NOW,'2'*64)
+            outer=r1_closed_application_operation(kind);outer['backupGeneration']='a'*32
+            with self.assertRaises(m.Stop):m.validate_operation(outer,NOW,'2'*64)
+        tail=R1TailBackupPrefixTests().operation();tail['migrationIntent']['backupGeneration']='a'*32
+        with self.assertRaisesRegex(m.Stop,'BACKUP_GENERATION'):m.closed_application_backup_mode(tail)
+
+    def test_distinct_generation_directories_preserve_old_evidence_and_same_generation_refuses_replay(self):
+        with tempfile.TemporaryDirectory(prefix='phub-generation-custody-') as directory:
+            root=Path(directory);(root/'backups').mkdir();(root/'standard').mkdir()
+            old=r1_closed_application_operation('game_start_0103')
+            canonical=root/'backups'/(old['releaseId']+'-'+m.closed_application_backup_mode(old));canonical.mkdir()
+            evidence=canonical/'database-backup-receipt.json';evidence.write_bytes(b'IMMUTABLE VERIFIED SYNTHETIC BACKUP')
+            before=(evidence.read_bytes(),evidence.stat().st_mtime_ns,evidence.stat().st_ino)
+            with patch.object(m,'ROOT',root),patch.object(m,'LOCK',root/'standard/active'),patch.object(m,'disk_prerequisites'):
+                for generation in ('a'*32,'b'*32):
+                    op=r1_closed_application_operation('game_start_0103',generation)
+                    target=root/'backups'/(op['releaseId']+'-'+m.closed_application_backup_mode(op))
+                    self.assertFalse(target.exists())
+                    # Stop before any source/host IO. The real canonical no-replay gate
+                    # must admit a new path and reject its existing next invocation.
+                    with patch.object(m,'secure',side_effect=m.Stop('AFTER_NAMESPACE_ADMISSION')):
+                        with self.assertRaisesRegex(m.Stop,'AFTER_NAMESPACE_ADMISSION'):
+                            m.namespace_initialize(op,m.encoded(op),'2'*64)
+                    target.mkdir();(target/'synthetic-receipt').write_bytes(generation.encode())
+                    with patch.object(m,'secure') as secure:
+                        with self.assertRaisesRegex(m.Stop,'EXISTING_STATE'):
+                            m.namespace_initialize(op,m.encoded(op),'2'*64)
+                        secure.assert_not_called()
+                    self.assertEqual((evidence.read_bytes(),evidence.stat().st_mtime_ns,evidence.stat().st_ino),before)
     def test_explicit119_schemas_preserve106_107_ledgers_and_refuse_mixed_families(self):
         for kind in ('game_start_0103','subject_link_0104'):
             old=closed_application_operation(kind);op=copy.deepcopy(old)
@@ -283,6 +344,48 @@ class R1TailBackupPrefixTests(unittest.TestCase):
 
 
 class ClosedApplicationRetainedEntryTests(unittest.TestCase):
+    def test_generated_first_stage_retained_entry_binds_exact_generation_and_never_reads_shared_request(self):
+        op=r1_closed_application_operation('game_start_0103','a'*32);raw=m.encoded(op)
+        path=m.ROOT/'backups'/(op['releaseId']+'-'+m.closed_application_backup_mode(op))/'backup-operation.json'
+        tool=m.ROOT/('operator/tools/'+op['toolCommit']+'/control-timeweb-database-backup.py');reads=[]
+        def read(target,mode=0o600):
+            reads.append(target);self.assertIn(target,(path,tool));return b'synthetic tool' if target==tool else raw
+        with patch.object(sys,'argv',['controller','--attest-closed-retained',str(path)]),patch.object(m.os,'getuid',return_value=0),\
+             patch.object(m,'__file__',str(tool)),patch.object(m,'read_secure',side_effect=read),\
+             patch.object(m,'validate_operation',return_value=op),\
+             patch.object(m.os,'uname',return_value=SimpleNamespace(nodename='msk-1-vm-z8ks',machine='x86_64')),\
+             patch.object(m,'command',return_value=b'100.77.212.57 103.88.243.171'),\
+             patch.object(m,'notification_backup_reference',return_value={'status':'READ_ONLY_TERMINAL'}) as verifier,\
+             patch('sys.stdout',new_callable=io.StringIO):
+            m.main();verifier.assert_called_once_with(op,raw,m.digest(b'synthetic tool'))
+        self.assertNotIn(m.REQUEST,reads)
+        wrong=path.parent.parent/(op['releaseId']+'-game-start-pre0103-generation-'+'b'*32)/'backup-operation.json'
+        with patch.object(sys,'argv',['controller','--attest-closed-retained',str(wrong)]),patch.object(m.os,'getuid',return_value=0),\
+             patch.object(m,'__file__',str(tool)),patch.object(m,'read_secure',side_effect=lambda p,*a:b'synthetic tool' if p==tool else raw),\
+             patch.object(m,'validate_operation',return_value=op):
+            with self.assertRaisesRegex(m.Stop,'CLOSED_RETAINED_BINDING'):m.main()
+
+    def test_tail_predecessor_retained_reader_accepts_generated0103_and0104_but_rejects_generation_mismatch(self):
+        for kind in ('game_start_0103','subject_link_0104'):
+            op=r1_closed_application_operation(kind,'a'*32);raw=m.encoded(op)
+            path=m.ROOT/'backups'/(op['releaseId']+'-'+m.closed_application_backup_mode(op))/'backup-operation.json'
+            tail={'synthetic':'R1_TAIL_REQUEST'};tail_path=m.ROOT/'operator/r1-tail108-119-migration.json'
+            tool=m.ROOT/('operator/tools/'+op['toolCommit']+'/control-timeweb-database-backup.py')
+            def read(target,mode=0o600):
+                self.assertIn(target,(path,tool,tail_path))
+                return m.encoded(tail) if target==tail_path else b'synthetic tool' if target==tool else raw
+            with patch.object(sys,'argv',['controller','--attest-r1-predecessor-backup',str(tail_path),str(path)]),\
+                 patch.object(m,'read_secure',side_effect=read),patch.object(m,'validate_operation',return_value=op),\
+                 patch.object(m.os,'uname',return_value=SimpleNamespace(nodename='msk-1-vm-z8ks',machine='x86_64')),\
+                 patch.object(m,'command',return_value=b'100.77.212.57 103.88.243.171'),\
+                 patch.object(m,'notification_backup_reference',return_value={'status':'READ_ONLY_TERMINAL'}) as verifier,\
+                 patch('sys.stdout',new_callable=io.StringIO):
+                m.r1_tail_retained_backup_main();verifier.assert_called_once_with(op,raw,m.digest(b'synthetic tool'),completed_by=tail)
+            wrong=path.parent.parent/(op['releaseId']+'-'+m.CLOSED_APPLICATION_BACKUPS[op['schema']]['mode']+'-generation-'+'b'*32)/'backup-operation.json'
+            with patch.object(sys,'argv',['controller','--attest-r1-predecessor-backup',str(tail_path),str(wrong)]),\
+                 patch.object(m,'read_secure',side_effect=lambda p,*a:m.encoded(tail) if p==tail_path else b'synthetic tool' if p==tool else raw),\
+                 patch.object(m,'validate_operation',return_value=op):
+                with self.assertRaisesRegex(m.Stop,'R1_TAIL_BACKUP_BINDING'):m.r1_tail_retained_backup_main()
     def test_retained_entry_reads_only_canonical_first_stage_and_terminal_verifier(self):
         op=closed_application_operation('game_start_0103');raw=m.encoded(op)
         path=m.ROOT/'backups'/(op['releaseId']+'-game-start-pre0103')/'backup-operation.json'

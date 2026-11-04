@@ -55,6 +55,7 @@ export interface ClosedApplicationOperation extends ClosedAdditiveOperation {
     readonly operationSha256: string;
   };
   readonly confirmation: string;
+  readonly backupGeneration?: string;
 }
 export const CLOSED_APPLICATION_HOST_TARGET: ClosedApplicationOperation['target'];
 export const CLOSED_APPLICATION_DATABASE_TARGET: ClosedApplicationOperation['expectedDatabaseTarget'];
@@ -75,6 +76,12 @@ export function validateClosedRuntimeIdentity(
 export function closedApplicationInputDigests(
   operation: ClosedApplicationOperation,
 ): Readonly<Record<string, string>>;
+export function closedApplicationMigrationBackupDirectory(
+  operation: ClosedApplicationOperation,
+): string;
+export function closedApplicationBackupGenerationSuffix(
+  operation: ClosedApplicationOperation,
+): string;
 export function validateClosedApplicationOperation(
   value: unknown,
   at?: number,

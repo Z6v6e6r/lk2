@@ -59,6 +59,29 @@ with exact operation/plan hashes binding the declared package family and source.
 cannot mix old and R1 families. The tail reader preserves its historical branch; an R1 predecessor
 must match the current119 tail source/tree/source CI/publication/image tuple.
 
+R1_PACKAGE119 intents for0103/0104 may select `backupGeneration`: exactly32 lowercase
+hexadecimal characters, chosen before sealing any prefetch/backup/request hashes. It belongs only
+inside `migrationIntent`; the outer backup schema is unchanged. Historical108 rejects the field.
+When absent, request bytes/binding and canonical paths retain their existing representation.
+When present, the backup directory gains `-generation-<id>` after its mode, and the closed
+prefetch directory gains the same suffix after its candidate. Migration transaction roots,
+container names, shared request paths and tail UUID namespaces do not change.
+
+A new generation requires a new matching prefetch intent/receipt and a separately authorized
+fresh dump/restore. Existing generation roots remain immutable: the same generation cannot repeat
+the producer or pull; its exact evidence may only be attested/reconciled. Generation participates
+in the existing migration binding; expiry-only renewal cannot change it or reuse another
+generation's receipt. Fresh admission still rejects a restore receipt older than one hour.
+Never restamp, move, archive, delete or overwrite an old verified backup to renew freshness.
+Retained0103 and tail predecessor readers bind the exact saved generation from each operation.
+The shared completed backup/prefetch requests require the separately reviewed operational handoff
+before staging another exact intent; this source change performs no request archival or enrollment.
+The R1 controller type closure additionally admits exactly
+`scripts/timeweb-api-worker-migration.d.ts` and
+`scripts/timeweb-closed-application-profile.d.ts` as regular non-executable declarations.
+Symlinks, executable modes, deletions and foreign declaration paths remain refused; no wildcard
+or additional runtime-file admission is introduced.
+
 The existing explicitly owned PostgreSQL16 contour rehearses106→107→108 using all119 packaged
 files and the real restricted migrator login, proves that0105 is not applied, then exercises the
 fixed tail. This is synthetic CI evidence, not live migration or restore evidence. The tail's

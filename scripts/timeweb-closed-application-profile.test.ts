@@ -8,6 +8,7 @@ import {
   CLOSED_APPLICATION_DATABASE_TARGET,
   CLOSED_APPLICATION_OPERATION_SCHEMAS,
   closedApplicationInputDigests,
+  closedApplicationMigrationBackupDirectory,
   closedApplicationCommand,
   closedApplicationSchemas,
   closedApplicationRoleProbeSource,
@@ -19,6 +20,46 @@ import {
 import { closedApplicationOperationFixture } from './timeweb-closed-application.fixture.js';
 
 describe('closed host migration operation building blocks', () => {
+  it.each(['game_start_0103', 'subject_link_0104'] as const)(
+    'admits optional R1-only32hex backup generation for%s without changing legacy path/bytes',
+    (kind) => {
+      for (const family of ['HISTORICAL108', 'R1_PACKAGE119'] as const) {
+        const original = closedApplicationOperationFixture(kind, family);
+        const before = JSON.stringify(original);
+        expect(validateClosedApplicationOperation(original)).toBe(original);
+        expect(JSON.stringify(original)).toBe(before);
+        expect(closedApplicationMigrationBackupDirectory(original)).toBe(
+          `/opt/phub/timeweb-beta/backups/${original.controllerSha}-${original.controllerSourceCiRunId}-1-${kind === 'game_start_0103' ? 'game-start-pre0103' : 'subject-link-pre0104'}`,
+        );
+        for (const generation of ['0'.repeat(32), 'a'.repeat(32)]) {
+          const next = { ...original, backupGeneration: generation };
+          if (family === 'HISTORICAL108')
+            expect(() => validateClosedApplicationOperation(next)).toThrow('BACKUP_GENERATION');
+          else {
+            expect(validateClosedApplicationOperation(next)).toBe(next);
+            expect(closedApplicationMigrationBackupDirectory(next)).toBe(
+              `${closedApplicationMigrationBackupDirectory(original)}-generation-${generation}`,
+            );
+          }
+        }
+      }
+      const original = closedApplicationOperationFixture(kind, 'R1_PACKAGE119');
+      for (const backupGeneration of [
+        undefined,
+        null,
+        1,
+        '',
+        'A'.repeat(32),
+        'a'.repeat(31),
+        'a'.repeat(33),
+        'a'.repeat(32) + '\n',
+        '../' + 'a'.repeat(29),
+      ])
+        expect(() => validateClosedApplicationOperation({ ...original, backupGeneration })).toThrow(
+          'BACKUP_GENERATION',
+        );
+    },
+  );
   it.each(['game_start_0103', 'subject_link_0104'] as const)(
     'pins target/source/input identity and fixed %s command',
     (profile) => {
