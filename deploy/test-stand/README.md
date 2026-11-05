@@ -24,7 +24,7 @@ no backup or custody. Wiping it is always allowed.
 | Command                     | What it does                                                   |
 | --------------------------- | -------------------------------------------------------------- |
 | `./deploy.sh <sha>`         | migrate forward, grant `phub_runtime`, start, smoke            |
-| `./deploy.sh --reset <sha>` | wipe all stand data, then deploy on a fresh database           |
+| `./deploy.sh --reset <sha>` | wipe all stand data (keeps the TLS certificate), redeploy fresh |
 | `./deploy.sh --rollback`    | redeploy the previous successful tag (migrations stay applied) |
 | `./deploy.sh --status`      | containers and recent tags                                     |
 

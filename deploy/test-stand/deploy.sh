@@ -99,8 +99,13 @@ RUNTIME_PASSWORD=$(cat .secrets/runtime-password)
 
 # --- reset: drop all stand data ---------------------------------------------------------------
 if [[ $mode == reset ]]; then
-  log "RESET: removing stand containers and volumes (all test data)"
-  compose --profile tools down -v --remove-orphans
+  log "RESET: removing stand containers and data volumes (all test data; TLS certificate kept)"
+  compose --profile tools down --remove-orphans
+  # caddy_data keeps the issued certificate: re-issuing on every reset delays the smoke and spends
+  # the Let's Encrypt duplicate-certificate quota (5 per week for one domain).
+  for volume in postgres_data redis_data rabbitmq_data minio_data; do
+    docker volume rm -f "phub-test_$volume" >/dev/null
+  done
   : > "$HISTORY"; rm -f "$CURRENT"
 fi
 
@@ -123,12 +128,20 @@ log "starting application"
 compose up -d --wait --remove-orphans api worker realtime web caddy
 
 log "smoke"
-ok=1
-for path in /health/ready /realtime/health/ready /; do
-  code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$TEST_STAND_DOMAIN$path" || true)
-  log "  $path -> $code"
-  [[ $code == 200 ]] || ok=0
+# Caddy may still be obtaining a certificate on a fresh host, so retry for up to about 90 s.
+for attempt in $(seq 1 18); do
+  ok=1
+  for path in /health/ready /realtime/health/ready /; do
+    code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://$TEST_STAND_DOMAIN$path" || true)
+    if [[ $code != 200 ]]; then
+      ok=0
+      log "  attempt $attempt: $path -> $code"
+    fi
+  done
+  [[ $ok == 1 ]] && break
+  sleep 5
 done
+log "  smoke attempt $attempt: $([[ $ok == 1 ]] && echo ok || echo failed)"
 if [[ $ok != 1 ]]; then
   log "smoke failed; recent API logs:"; compose logs --tail 40 api || true
   die "deploy of $PHUB_TAG failed smoke; run ./deploy.sh --rollback to return to the previous tag"
