@@ -530,6 +530,7 @@ const lifecycleRuntime = config.NOTIFICATION_LIFECYCLE_VIVA_ENABLED
         channel: config.VIVA_AUTH_CHANNEL,
         timeoutMs: config.VIVA_TIMEOUT_MS,
         devPhoneE164: config.AUTH_DEV_PHONE_E164,
+        devExtraPhonesE164: config.AUTH_DEV_EXTRA_PHONES_E164,
         devOtpCode: config.AUTH_DEV_OTP_CODE,
       }),
     }

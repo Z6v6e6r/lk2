@@ -161,6 +161,37 @@ describe('VivaIdentityProvider', () => {
     expect(identity).not.toHaveProperty('refreshToken');
   });
 
+  it('accepts configured extra mock phones as distinct synthetic players', async () => {
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      devExtraPhonesE164: ['+79990000002', '+79990000003'],
+    });
+    const second = { ...input, phoneE164: '+79990000002' } as const;
+    await expect(provider.requestPhoneCode(second)).resolves.toBeUndefined();
+    const primary = await provider.verifyPhoneCode({
+      ...input,
+      phoneE164: '+79990000001',
+      code: '0000',
+    });
+    const identity = await provider.verifyPhoneCode({ ...second, code: '0000' });
+    expect(identity).toMatchObject({ phoneE164: '+79990000002', displayName: 'Тестовый игрок 2' });
+    if (!('subject' in identity) || !('subject' in primary)) throw new Error('expected subjects');
+    expect(identity.subject).not.toBe(primary.subject);
+    await expect(provider.verifyPhoneCode({ ...second, code: '1111' })).rejects.toMatchObject({
+      code: 'AUTH_CODE_INVALID',
+    } satisfies Partial<IdentityProviderError>);
+    await expect(
+      provider.requestPhoneCode({ ...input, phoneE164: '+79990000004' }),
+    ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' } satisfies Partial<IdentityProviderError>);
+  });
+
+  it('rejects an extra phone when none is configured', async () => {
+    const provider = new VivaIdentityProvider(options());
+    await expect(
+      provider.verifyPhoneCode({ ...input, phoneE164: '+79990000002', code: '0000' }),
+    ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' } satisfies Partial<IdentityProviderError>);
+  });
+
   it('rejects an invalid mock code with a stable PadlHub error', async () => {
     const provider = new VivaIdentityProvider(options());
     await expect(provider.verifyPhoneCode({ ...input, code: '1111' })).rejects.toMatchObject({
