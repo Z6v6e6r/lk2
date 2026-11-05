@@ -880,6 +880,35 @@ describe('PadlHub web authentication', () => {
     expect(getHomeBase).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps one backed-off Home retry chain while the projection stays unavailable', async () => {
+    vi.useFakeTimers();
+    const getHomeBase = vi
+      .fn<AuthGateway['getHomeBase']>()
+      .mockRejectedValue(new Error('HOME_BASE_PROJECTION_NOT_READY'));
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getHomeBase,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(getHomeBase).toHaveBeenCalledOnce();
+    // Focus and the 30 s refresh must not start parallel chains while a retry is scheduled.
+    for (let second = 0; second < 60; second += 1) {
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+    }
+
+    // One chain: 0, 0.4, 1.4, 3.4, 8.4, 18.4, 38.4 s.
+    expect(getHomeBase).toHaveBeenCalledTimes(7);
+  });
+
   it('restores an HttpOnly-cookie-backed session before showing protected home', async () => {
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 

@@ -1962,6 +1962,10 @@ export function App({
     let homeRetryTimer: number | undefined;
     let homeLoaded = false;
     const refreshHome = (attempt = 0): void => {
+      // A scheduled retry already owns the next read; focus and interval refreshes must not start
+      // parallel retry chains (each would restart at the shortest delay).
+      if (attempt === 0 && homeRetryTimer !== undefined) return;
+      homeRetryTimer = undefined;
       void gateway.getHomeBase().then(
         (dashboard) => {
           if (active) {
@@ -2004,7 +2008,7 @@ export function App({
       if (document.visibilityState === 'visible') refreshHomeContent();
     };
     refreshHomeContent();
-    const homeRefreshInterval = window.setInterval(refreshHome, HOME_REFRESH_INTERVAL_MS);
+    const homeRefreshInterval = window.setInterval(() => refreshHome(), HOME_REFRESH_INTERVAL_MS);
     const notificationRefreshInterval = window.setInterval(
       refreshNotificationBadge,
       NOTIFICATIONS_REFRESH_INTERVAL_MS,
