@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { webcrypto } from 'node:crypto';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
@@ -101,6 +101,13 @@ it('declining confirmation sends no command', async () => {
 });
 it('late initial card cannot resurrect CANCEL after a confirmed cancellation', async () => {
   const request = setup('ORGANIZER', true, false, true);
+  // Hold the initial GET before racing a refresh against its late response.
+  // A rendered refresh button alone does not prove the initial effect has dispatched.
+  await waitFor(() =>
+    expect(
+      request.mock.calls.filter(([v]) => v.path.endsWith('/games/' + publicGame.id)),
+    ).toHaveLength(1),
+  );
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   fireEvent.click(await screen.findByRole('button', { name: 'Обновить статус игры' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Отменить игру' }));
