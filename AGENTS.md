@@ -32,8 +32,19 @@ precedence over conflicting release text below and in `docs/release/**`.
 - **Money:** Viva CURRENCY/DEPOSIT refunds and training visit-return stay disabled by flag in the
   first version; refunds are handled manually. Existing CRITICAL gates for payment, booking and
   identity code changes still apply.
-- Merging to `main` still needs the owner's approval in the PR unless the owner grants standing
-  authority for green FAST/SAFE PRs.
+- **Standing merge authority (owner decision, 2026-11-06):** the task owner may merge its own
+  non-draft PR into `main` without a separate owner approval when the PR description declares the
+  tier FAST or SAFE, no touched boundary is CRITICAL, and every required CI check is green on the
+  exact head being merged. A PR that touches any CRITICAL boundary still needs the owner's approval
+  in the PR. This covers merging only; it grants no image publication, workflow dispatch or deploy
+  beyond the automatic test-stand deploy above.
+- **lk2.padlhub.su has no real users yet (owner, 2026-11-06).** Until real users or real personal
+  data arrive there, treat it as the disposable `beta` lane of ADR-0026, not as production: its data
+  is synthetic/disposable and production custody evidence (backup ledger, enrollment, manifests) is
+  not required for it. The executable path is still the existing Timeweb workflow, so each promotion
+  to lk2 needs the owner's approval until the `beta` lane automation is implemented and reviewed as
+  a CRITICAL deploy-mechanism change. When real users are onboarded, this bullet must be removed and
+  lk2 returns to the `production` lane.
 
 ## Task intent and authority
 
