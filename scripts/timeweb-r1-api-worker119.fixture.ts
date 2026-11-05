@@ -142,8 +142,8 @@ export function r1ApiWorker119PlanFixture() {
     roleSafe: true,
     schemas: [...new Set(names.map((name) => name.split('.')[0]!))].sort().map((name) => ({
       name,
-      owner: 'schema_owner',
-      acl: '{schema_owner=UC/schema_owner,phub_runtime=U/schema_owner}',
+      owner: 'phub_beta',
+      acl: '{phub_beta=UC/phub_beta,phub_runtime=U/phub_beta}',
       migratorUsage: name !== 'games',
       migratorCreate: false,
     })),

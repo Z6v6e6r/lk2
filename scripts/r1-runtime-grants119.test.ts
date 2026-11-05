@@ -24,8 +24,8 @@ function capture(): R1Grant119Capture {
     roleSafe: true,
     schemas: [...new Set(names.map((name) => name.split('.')[0]!))].sort().map((name) => ({
       name,
-      owner: 'schema_owner',
-      acl: '{schema_owner=UC/schema_owner,phub_runtime=U/schema_owner}',
+      owner: 'phub_beta',
+      acl: '{phub_beta=UC/phub_beta,phub_runtime=U/phub_beta}',
       migratorUsage: name !== 'games',
       migratorCreate: false,
     })),
@@ -134,10 +134,10 @@ describe('fixed R1 runtime119 grants', () => {
     for (const phase of ['apply', 'recover'] as const) {
       const sql = r1RuntimeGrantTransaction119(p, phase);
       expect(sql).toContain(
-        'set local role "schema_owner";grant USAGE on schema "games" to phub_migrator;reset role;',
+        'set local role phub_beta;grant USAGE on schema "games" to phub_migrator;reset role;',
       );
       expect(sql).toContain(
-        'set local role "schema_owner";revoke USAGE on schema "games" from phub_migrator;reset role;',
+        'set local role phub_beta;revoke USAGE on schema "games" from phub_migrator;reset role;',
       );
       expect(sql.match(/grant USAGE on schema/g)).toHaveLength(1);
       expect(sql.match(/revoke USAGE on schema/g)).toHaveLength(1);
@@ -156,12 +156,13 @@ describe('fixed R1 runtime119 grants', () => {
       'USAGE on schema',
     );
   });
-  it.each(['missing', 'owner', 'null-acl', 'order', 'type', 'old-plan'])(
+  it.each(['missing', 'owner', 'foreign-owner', 'null-acl', 'order', 'type', 'old-plan'])(
     'refuses incomplete or forged schema custody: %s',
     (kind) => {
       const x = capture();
       if (kind === 'missing') x.schemas.pop();
       if (kind === 'owner') x.schemas[0]!.owner = 'owner; reset role';
+      if (kind === 'foreign-owner') x.schemas[0]!.owner = 'foreign_owner';
       if (kind === 'null-acl') x.schemas[0]!.acl = null as unknown as string;
       if (kind === 'order') x.schemas.reverse();
       if (kind === 'type') x.schemas[0]!.migratorUsage = 'false' as unknown as boolean;

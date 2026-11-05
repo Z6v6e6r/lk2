@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { r1RuntimePrivilegeRequirements } from './r1-runtime-privilege-audit.js';
 import { r1PackagedInventory, r1Same } from './r1-tail-migration-profile.js';
 const ROLE = 'phub_runtime',
-  OWNER = 'phub_migrator';
+  OWNER = 'phub_migrator',
+  SCHEMA_OWNER = 'phub_beta';
 const requirements = new Map();
 for (const component of ['api', 'worker'])
   for (const row of r1RuntimePrivilegeRequirements(component)) {
@@ -65,7 +66,7 @@ function validate(snapshot) {
   for (const [i, row] of snapshot.schemas.entries()) {
     exact(row, ['name', 'owner', 'acl', 'migratorUsage', 'migratorCreate']);
     need(row.name === schemas[i]);
-    ident(row.owner);
+    need(row.owner === SCHEMA_OWNER);
     // Existing runtime USAGE requires an explicit ACL here. Refuse null rather than
     // materialize a default ACL that GRANT/REVOKE could not restore byte-for-byte.
     need(
@@ -211,7 +212,7 @@ export function r1RuntimeGrantTransaction119(plan, phase) {
     missingUsage
       .map(
         (row) =>
-          `set local role ${ident(row.owner)};${action} USAGE on schema ${ident(row.name)} ${action === 'grant' ? 'to' : 'from'} phub_migrator;reset role;`,
+          `set local role ${SCHEMA_OWNER};${action} USAGE on schema ${ident(row.name)} ${action === 'grant' ? 'to' : 'from'} phub_migrator;reset role;`,
       )
       .join('\n');
   const check = (snapshot, code, omitSchemas = false) =>
