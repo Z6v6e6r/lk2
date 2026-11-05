@@ -23,6 +23,8 @@ export interface VivaIdentityProviderOptions {
   readonly oauthScopes: string;
   readonly timeoutMs: number;
   readonly devPhoneE164: string;
+  /** Extra mock-only synthetic phones; ignored outside mode 'mock'. */
+  readonly devExtraPhonesE164?: readonly string[];
   readonly devOtpCode: string;
   readonly circuitFailureThreshold?: number;
   readonly circuitCooldownMs?: number;
@@ -636,6 +638,13 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     };
   }
 
+  /** Position of a mock-mode synthetic phone: 0 for the primary one, -1 when not accepted. */
+  private mockPhoneIndex(phoneE164: string): number {
+    if (phoneE164 === this.options.devPhoneE164) return 0;
+    const extra = (this.options.devExtraPhonesE164 ?? []).indexOf(phoneE164);
+    return extra < 0 ? -1 : extra + 1;
+  }
+
   public async requestPhoneCode(input: {
     readonly phoneE164: string;
     readonly providerTenantKey: string;
@@ -644,7 +653,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     const startedAt = Date.now();
     this.ensureAvailable();
     if (this.options.mode === 'mock') {
-      if (input.phoneE164 !== this.options.devPhoneE164) {
+      if (this.mockPhoneIndex(input.phoneE164) < 0) {
         this.emit({ operation: 'request_code', outcome: 'invalid' }, startedAt);
         throw new IdentityProviderError('AUTH_CODE_INVALID');
       }
@@ -696,7 +705,8 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     const startedAt = Date.now();
     this.ensureAvailable();
     if (this.options.mode === 'mock') {
-      if (input.phoneE164 !== this.options.devPhoneE164 || input.code !== this.options.devOtpCode) {
+      const phoneIndex = this.mockPhoneIndex(input.phoneE164);
+      if (phoneIndex < 0 || input.code !== this.options.devOtpCode) {
         this.emit({ operation: 'verify_code', outcome: 'invalid' }, startedAt);
         throw new IdentityProviderError('AUTH_CODE_INVALID');
       }
@@ -706,7 +716,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         issuer: `${this.issuer}/mock`,
         subject,
         phoneE164: input.phoneE164,
-        displayName: 'Игрок ПадлхАБ',
+        displayName: phoneIndex === 0 ? 'Игрок ПадлхАБ' : `Тестовый игрок ${phoneIndex + 1}`,
       };
     }
 
