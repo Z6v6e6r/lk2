@@ -610,6 +610,9 @@ describe.sequential('CI test diagnostics supervisor', () => {
         encoding: 'utf8',
         env: {
           ...testEnvironment(directory),
+          // The shutdown deadline uses whole-second SECONDS, so a 1 s budget can expire almost
+          // immediately on a loaded runner and turn the watchdog's own SIGKILL into a forced kill.
+          CI_TEST_HELPER_SHUTDOWN_SECONDS: '5',
           CI_TEST_WATCHDOG_SIGKILL_ON_STOP: 'true',
         },
         timeout: 10_000,
