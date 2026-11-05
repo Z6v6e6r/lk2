@@ -1528,6 +1528,48 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/residency:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [profiles]
+      operationId: getClientResidency
+      summary: Read the verified user's current residency status
+      description: |
+        One server-owned answer for the authenticated tenant and user. Identity and station
+        context come only from the verified route and PadlHub JWT; the request accepts no user,
+        tenant, provider or product selector. ACTIVE means a complete provider read found a valid
+        instance of the exact configured Viva residency product. NONE means a complete read proved
+        that no such instance exists. UNAVAILABLE means no trustworthy conclusion was possible and
+        names the reason; it is never reported as absence. The status is never inferred from a
+        subscription name, class category or the mere presence of any subscription. The holder
+        name and avatar reuse the existing PadlHub profile presentation. This read creates no
+        visit, booking, write-off or other Viva change and returns no provider identifiers.
+      responses:
+        '200':
+          description: Normalized residency status and the freshness of the source read.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Cache-Control:
+              schema:
+                type: string
+                enum: ['private, no-store']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientResidencyStatus'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/profile/contacts:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -6594,6 +6636,54 @@ components:
             Server-owned capability: the client hands the provider profile phone back to the
             authenticated profile endpoint only when the server asks for it. Clients never choose
             data sources themselves.
+    ClientResidencyStatus:
+      type: object
+      additionalProperties: false
+      required: [state, validFrom, validUntil, checkedAt, unavailableReason, holder]
+      properties:
+        state:
+          type: string
+          enum: [ACTIVE, NONE, UNAVAILABLE]
+        validFrom:
+          type: [string, 'null']
+          format: date
+          description: First validity day of the matched residency instance; null when unknown.
+        validUntil:
+          type: [string, 'null']
+          format: date
+          description: Last validity day of the matched or most recent instance; null when unknown.
+        checkedAt:
+          type: [string, 'null']
+          format: date-time
+          description: Timestamp of the last complete provider read; null when no trusted read happened.
+        unavailableReason:
+          type: [string, 'null']
+          enum:
+            - PRODUCT_NOT_CONFIGURED
+            - SOURCE_NOT_CONFIGURED
+            - SOURCE_DISABLED
+            - IDENTITY_MAPPING_MISSING
+            - IDENTITY_RESOLUTION_UNAVAILABLE
+            - SOURCE_UNAVAILABLE
+            - SOURCE_TIMEOUT
+            - SOURCE_RESPONSE_INVALID
+            - SOURCE_PARTIAL
+            - PRODUCT_IDENTITY_MISSING
+            - OWNERSHIP_CONFLICT
+            - CIRCUIT_OPEN
+            - null
+        holder:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [displayName, avatarUrl]
+          properties:
+            displayName:
+              type: string
+              minLength: 1
+              maxLength: 200
+            avatarUrl:
+              type: [string, 'null']
+              description: Stable PadlHub profile-photo delivery path or null.
     UserProfile:
       $ref: '#/components/schemas/HomeProfile'
     ProfileProviderPhoneRequest:

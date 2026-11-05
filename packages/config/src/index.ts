@@ -640,6 +640,8 @@ const environmentSchema = z.object({
   VIVA_OAUTH_SCOPES: z.string().min(1).default('openid'),
   VIVA_DELEGATION_ENCRYPTION_KEY: z.string().optional(),
   VIVA_DELEGATION_KEY_VERSION: z.string().min(1).default('v1'),
+  /** Exact Viva subscription product the operator created for client residency. */
+  VIVA_RESIDENCY_PRODUCT_ID: z.string().trim().uuid().or(z.literal('')).default(''),
   PUBLIC_OFFER_VERSION: z.string().min(1).default('pending'),
   PERSONAL_DATA_POLICY_VERSION: z.string().min(1).default('pending'),
   OTEL_SERVICE_NAMESPACE: z.string().default('phub'),
@@ -1546,6 +1548,14 @@ export function loadConfig(
   }
   if (parsed.data.VIVA_DIRECT_READ_ENABLED && !parsed.data.VIVA_OAUTH_ENABLED) {
     throw new Error('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  }
+  if (parsed.data.VIVA_RESIDENCY_PRODUCT_ID) {
+    if (parsed.data.VIVA_MODE !== 'sandbox' && parsed.data.VIVA_MODE !== 'production') {
+      throw new Error('VIVA_RESIDENCY_PRODUCT_ID requires VIVA_MODE=sandbox or production');
+    }
+    if (!parsed.data.VIVA_API_URL || !parsed.data.VIVA_API_KEY) {
+      throw new Error('VIVA_RESIDENCY_PRODUCT_ID requires VIVA_API_URL and VIVA_API_KEY');
+    }
   }
   if (
     parsed.data.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED &&

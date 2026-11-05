@@ -45,6 +45,13 @@ and projects only a signed PadlHub delivery URL. Provider URL and validators rem
 storage, and the local media mapping changes in the same transaction as the Home profile outbox
 component.
 
+Client residency is a read-only status over `VIVA_PRIMARY` subscriptions. It introduces no local
+write owner and no dual write: the [residency read](residency.md) resolves the mapped client and
+the exact configured product, then returns a normalized state. It never infers residency from a
+subscription name, category or the presence of any subscription, and it performs no provider
+mutation. Persisting a last-known observation would be a derived read model and needs a separate
+decision and migration.
+
 Trainer avatars follow the same ownership rule. `catalog.trainers` is a Viva-primary local
 projection, while provider identity, source URL and PadlHub object key remain in
 `integration.trainer_avatar_sync`. The local WebP is a derived availability cache, not an
