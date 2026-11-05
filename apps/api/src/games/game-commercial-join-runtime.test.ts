@@ -9,7 +9,18 @@ import {
   createGameCommercialJoinRuntime,
   type GameCommercialJoinOwnerBoundary,
 } from './game-commercial-join-runtime.js';
-import { createJoinConditionsFixture, fixtureId } from './game-join-conditions.test-fixture.js';
+import {
+  createJoinConditionsFixture,
+  fixtureId,
+  fixtureActor,
+} from './game-join-conditions.test-fixture.js';
+
+import {
+  executeCommercialJoin,
+  commercialJoinRequestHash,
+  type CommercialJoinAttemptView,
+  type CommercialJoinRepositoryPort,
+} from './game-commercial-join.js';
 
 const baseUrl = 'https://owner.example.test';
 const config = {
@@ -34,6 +45,8 @@ function boundary(
     readonly mapped?: boolean;
     readonly providerSubscriptionId?: string | undefined;
     readonly issued?: unknown[];
+    readonly durationMinutes?: 60 | 90;
+    readonly startsAt?: string;
   } = {},
 ) {
   const boundary: GameCommercialJoinOwnerBoundary = {
@@ -65,8 +78,8 @@ function boundary(
                 providerExerciseId: fixtureId(3),
                 targetMappingId: fixtureId(4),
                 targetVersion: '1',
-                startsAt: new Date(Date.now() + 3_600_000).toISOString(),
-                durationMinutes: 90,
+                startsAt: overrides.startsAt ?? new Date(Date.now() + 3_600_000).toISOString(),
+                durationMinutes: overrides.durationMinutes ?? 90,
                 capacity: 4,
                 admissible: overrides.admissible ?? true,
               },
@@ -549,4 +562,149 @@ describe('managed JOIN runtime wire selection', () => {
     expect(issue).toHaveBeenCalledOnce();
     expect(read).toHaveBeenCalledOnce();
   });
+});
+
+describe('60-minute second participant through the real commercial runtime', () => {
+  it.each([0, 210_000])(
+    'preserves the %i owner price and exact legacy delegation with replay',
+    async (amountMinor) => {
+      const fixture = createJoinConditionsFixture(amountMinor, 30_000, 60);
+      const now = Date.now();
+      if (amountMinor > 0)
+        fixture.setQuotes({
+          quotes: [
+            {
+              subscriptionId: fixture.row.provider_subscription_id,
+              selectionKey: JSON.stringify([
+                'EXISTING_GAME',
+                'pay_synthetic_existing_game',
+                '2099-09-21T07:00:00+03:00',
+                60,
+              ]),
+              status: 'AVAILABLE',
+              basePriceMinor: 300_000,
+              amountMinor,
+              freeMinutes: 0,
+              paidMinutes: 60,
+              reasonCode: null,
+              evaluatedAt: now,
+              expiresAt: now + 30_000,
+            },
+          ],
+        });
+      const order: string[] = [];
+      const operationId = fixtureId(900);
+      let prior: CommercialJoinAttemptView | null = null;
+      const begin = vi.fn<CommercialJoinRepositoryPort['beginPaidJoin']>(async (input) => {
+        await Promise.resolve();
+        order.push('reserve');
+        prior = {
+          commandId: operationId,
+          gameId: input.gameId,
+          requestHash: input.requestHash,
+          state: 'IN_PROGRESS',
+          result: null,
+          errorCode: null,
+          reservation: {
+            id: fixtureId(901),
+            state: 'ACTIVE',
+            expiresAt: new Date(now + 900_000).toISOString(),
+          },
+          receipt: null,
+        };
+        return {
+          outcome: 'reserved',
+          operationId,
+          reservationId: fixtureId(901),
+          revision: 9,
+          expiresAt: new Date(now + 900_000).toISOString(),
+        };
+      });
+      const repo = {
+        ...rosterRepository(),
+        beginPaidJoin: begin,
+        getPaidJoinAttempt: () => Promise.resolve(prior),
+      };
+      const preflight = vi.fn(
+        async (request: { target: { id: string; expectedRevision: number } }) => {
+          await Promise.resolve();
+          order.push('preflight');
+          return {
+            contractVersion: 2 as const,
+            nonBinding: true as const,
+            operationId,
+            action: 'JOIN_GAME' as const,
+            target: request.target,
+            management: 'LEGACY' as const,
+          };
+        },
+      );
+      const v1 = vi.fn(async () => {
+        await Promise.resolve();
+        order.push('owner');
+        return {
+          contractVersion: 1 as const,
+          status: 'PENDING' as const,
+          reason: 'OWNER_PENDING',
+          asOf: new Date().toISOString(),
+          operationId,
+        };
+      });
+      const managedAdmit = vi.fn();
+      const preflightIssuer = vi.fn().mockResolvedValue('synthetic-delegation');
+      const admissionIssuer = vi.fn().mockResolvedValue('synthetic-delegation');
+      const b = boundary({ durationMinutes: 60, startsAt: fixture.row.starts_at });
+      const runtime = createGameCommercialJoinRuntime({
+        ...dependencies(),
+        rosterRepository: repo,
+        conditionsOwner: fixture.owner,
+        ownerBoundary: {
+          ...b,
+          delegationIssuer: {
+            ...b.delegationIssuer,
+            issueManagedJoinPreflight: preflightIssuer,
+            issueBookedOperationAdmission: admissionIssuer,
+          },
+          managedJoinClient: { preflight, admit: managedAdmit, read: vi.fn() },
+          admissionTransport: { admit: v1 },
+        },
+      })!;
+      const command = {
+        ...fixtureActor,
+        tenantKey: 'synthetic',
+        expectedRevision: 8,
+        correlationId: 'fixture-60',
+        idempotencyKey: ['fixture', '60', String(amountMinor)].join('-'),
+        operationId,
+        priceConsent: { amountMinor, currency: 'RUB' as const },
+      };
+      const input = { ...command, requestHash: commercialJoinRequestHash(command) };
+      const deps = { repository: repo, conditionsOwner: fixture.owner, owner: runtime.owner };
+      expect(await executeCommercialJoin(input, deps)).toMatchObject({ kind: 'accepted' });
+      expect(order).toEqual(
+        amountMinor === 0 ? ['preflight', 'reserve', 'owner'] : ['reserve', 'owner'],
+      );
+      expect(begin.mock.calls[0]?.[0]).toMatchObject({
+        providerBinding: { durationMinutes: 60 },
+        price: {
+          amountMinor,
+          freeMinutes: amountMinor === 0 ? 60 : 0,
+          paidMinutes: amountMinor === 0 ? 0 : 60,
+        },
+      });
+      expect(begin.mock.calls[0]?.[0]).not.toHaveProperty('managedJoin');
+      expect(admissionIssuer.mock.calls[0]?.[0]).toMatchObject({
+        durationMinutes: 60,
+        startsAt: fixture.row.starts_at,
+      });
+      if (amountMinor === 0)
+        expect(preflightIssuer.mock.calls[0]?.[0]).toMatchObject({ durationMinutes: 60 });
+      else expect(preflightIssuer).not.toHaveBeenCalled();
+      await executeCommercialJoin(input, deps);
+      expect(begin).toHaveBeenCalledOnce();
+      expect(v1).toHaveBeenCalledOnce();
+      expect(preflight).toHaveBeenCalledTimes(amountMinor === 0 ? 1 : 0);
+      expect(managedAdmit).not.toHaveBeenCalled();
+    },
+  );
 });

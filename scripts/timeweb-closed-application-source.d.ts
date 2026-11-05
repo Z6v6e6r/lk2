@@ -17,3 +17,5 @@ export function validateClosedR1ControllerClosure(entries: unknown): unknown;
 
 export function validateClosedR1NativeJoinPrerequisite(entries: unknown): ReadonlySet<string>;
 export function validateClosedR1PhonePrerequisite(entries: unknown): ReadonlySet<string>;
+
+export function validateClosedR1Join60Prerequisite(entries: unknown): ReadonlySet<string>;

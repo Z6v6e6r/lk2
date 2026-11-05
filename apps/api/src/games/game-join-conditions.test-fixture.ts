@@ -16,7 +16,11 @@ export const fixtureActor = {
   gameId: fixtureId(4),
   subscriptionInstanceId: fixtureId(5),
 };
-export function createJoinConditionsFixture(amountMinor = 70_000, ttlMs = 30_000) {
+export function createJoinConditionsFixture(
+  amountMinor = 70_000,
+  ttlMs = 30_000,
+  durationMinutes: 60 | 90 = 90,
+) {
   const raw = 'pay_synthetic_existing_game';
   const version = 'synthetic-owner-source-1';
   const alias = (id: string) => ({
@@ -33,7 +37,7 @@ export function createJoinConditionsFixture(amountMinor = 70_000, ttlMs = 30_000
     provider_client_id: fixtureId(7),
     provider_subscription_id: fixtureId(6),
     starts_at: '2099-09-21T04:00:00Z',
-    ends_at: '2099-09-21T05:30:00Z',
+    ends_at: new Date(Date.parse('2099-09-21T04:00:00Z') + durationMinutes * 60_000).toISOString(),
     aliases: [
       alias(raw),
       alias(createHash('sha256').update(`phub-local-public-clone-v1:game:${raw}`).digest('hex')),
@@ -143,7 +147,7 @@ export function createJoinConditionsFixture(amountMinor = 70_000, ttlMs = 30_000
             basePriceMinor: 300_000,
             amountMinor: denial ? null : amountMinor,
             freeMinutes: denial ? 0 : 60,
-            paidMinutes: denial ? 0 : 30,
+            paidMinutes: denial ? 0 : body.target.durationMinutes - 60,
             reasonCode: denial,
             evaluatedAt: timestamp,
             expiresAt: timestamp + ttlMs,

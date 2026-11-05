@@ -21,6 +21,7 @@ export function createGameJoinConditionsOwner(options: {
     readonly providerClientId: string;
     readonly providerSubscriptionId: string;
     readonly startsAt: string;
+    readonly durationMinutes: 60 | 90;
     readonly signal: AbortSignal;
     readonly correlationId: string;
   }) => Promise<{ readonly fingerprint: string }>;
@@ -63,6 +64,7 @@ export function createGameJoinConditionsOwner(options: {
         providerClientId: context.providerClientId,
         providerSubscriptionId: context.providerSubscriptionId,
         startsAt: context.startsAt,
+        durationMinutes: context.durationMinutes,
         signal,
         correlationId: actor.correlationId,
       });

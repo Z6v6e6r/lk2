@@ -16,7 +16,7 @@ export interface GameJoinConditionsContext {
   readonly providerClientId: string;
   readonly providerSubscriptionId: string;
   readonly startsAt: string;
-  readonly durationMinutes: 90;
+  readonly durationMinutes: 60 | 90;
 }
 interface ContextRow {
   readonly revision: string | number;
@@ -137,11 +137,12 @@ export function createGameJoinConditionsContextRepository(
         const revision = Number(row.revision);
         const start = new Date(row.starts_at),
           end = new Date(row.ends_at);
+        const durationMinutes = (end.getTime() - start.getTime()) / 60_000;
         if (
           !Number.isSafeInteger(revision) ||
           revision < 1 ||
           !Number.isFinite(start.getTime()) ||
-          end.getTime() - start.getTime() !== 90 * 60_000 ||
+          (durationMinutes !== 60 && durationMinutes !== 90) ||
           !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
             row.provider_client_id,
           ) ||
@@ -161,7 +162,7 @@ export function createGameJoinConditionsContextRepository(
           providerClientId: row.provider_client_id,
           providerSubscriptionId: row.provider_subscription_id,
           startsAt,
-          durationMinutes: 90,
+          durationMinutes,
         };
       } finally {
         // A read-only rollback ends the snapshot even on a safe refusal. No durable changes.

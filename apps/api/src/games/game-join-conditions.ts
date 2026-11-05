@@ -40,7 +40,7 @@ export interface Lk1GamePreviewSelection extends GameJoinConditionsActor {
   readonly providerClientId: string;
   readonly providerTenantKey: string;
   readonly startsAt: string;
-  readonly durationMinutes: 90;
+  readonly durationMinutes: 60 | 90;
   /** Existing, actor-bound LK1 user context held only by the server. Never a system token. */
   readonly authorization: string;
   readonly providerMode: 'MOCK' | 'LIVE';
@@ -116,7 +116,7 @@ export async function readGameJoinConditions(
         }
         if (
           !selection.sourceVersion ||
-          selection.durationMinutes !== 90 ||
+          (selection.durationMinutes !== 60 && selection.durationMinutes !== 90) ||
           !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(selection.legacyGameId) ||
           !uuid.safeParse(selection.legacySubscriptionId).success ||
           !/^Bearer \S+$/i.test(selection.authorization) ||
@@ -135,7 +135,7 @@ export async function readGameJoinConditions(
           'EXISTING_GAME',
           selection.legacyGameId,
           selection.startsAt,
-          90,
+          selection.durationMinutes,
         ]);
         if (
           quote.subscriptionId !== selection.legacySubscriptionId ||
@@ -154,8 +154,8 @@ export async function readGameJoinConditions(
               quote.basePriceMinor === null ||
               quote.amountMinor === null ||
               quote.amountMinor > quote.basePriceMinor ||
-              quote.freeMinutes + quote.paidMinutes !== 90)) ||
-          quote.freeMinutes + quote.paidMinutes > 90
+              quote.freeMinutes + quote.paidMinutes !== selection.durationMinutes)) ||
+          quote.freeMinutes + quote.paidMinutes > selection.durationMinutes
         ) {
           throw new GameJoinConditionsError('GAME_JOIN_CONDITIONS_RESPONSE_INVALID');
         }
