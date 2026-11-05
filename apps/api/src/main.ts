@@ -64,7 +64,6 @@ import {
   createPhoneSubjectLinkRepository,
   createPromotionEngagementRepository,
   createRealtimeAuthorizationRepository,
-  createResidencyRepository,
   createTrainerAvatarRepository,
   createUpcomingBookingsRepository,
   createSubscriptionRuntimeActorContextRepository,
@@ -100,6 +99,7 @@ import { createGameJoinConditionsRuntime } from './games/game-join-conditions-ru
 import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
 import { createGameCommercialCreateRuntime } from './games/game-create-commercial-runtime.js';
 import { createGameJoinConditionsContextRepository } from '../../../packages/database/src/game-join-conditions-context-repository.js';
+import { createResidencyRepository } from '../../../packages/database/src/residency-repository.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';

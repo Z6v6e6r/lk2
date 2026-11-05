@@ -84,7 +84,6 @@ export * from './realtime-authorization-repository.js';
 export * from './promotion-engagement-repository.js';
 export * from './trainer-avatar-repository.js';
 export * from './upcoming-bookings-repository.js';
-export * from './residency-repository.js';
 export * from './subscription-runtime-actor-context-repository.js';
 export type {
   BookedOperationAdmissionAction,
