@@ -111,7 +111,9 @@ fi
 
 log "deploying tag $PHUB_TAG to https://$TEST_STAND_DOMAIN"
 echo "$PHUB_TAG" > "$CURRENT"
-compose --profile tools pull --quiet
+# Image tags are immutable commit SHAs: pull only what is missing, so --rollback to an image already
+# on the host works without registry credentials (the workflow's ghcr login expires with its job).
+compose --profile tools pull --quiet --policy missing
 compose up -d --wait postgres redis rabbitmq minio
 
 log "migrating"

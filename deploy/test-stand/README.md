@@ -54,3 +54,17 @@ Viva sandbox credentials in `stand.env` for provider journeys.
 
 Not verified here: the full compose run and Caddy TLS (container registries were unreachable from
 the verification environment). The first real deploy is that check.
+
+## Game notifications on a fresh stand
+
+`stand-runtime.sql` opens in-app notifications, but game notification rules are a separate audited
+ruleset. After a `--reset`, provision it once through an SSH tunnel to the stand PostgreSQL, using
+the synthetic operator `00000000-0000-4000-8000-00000000a001` (it needs `admin` +
+`notifications.manage` in `identity.user_access_profiles`):
+
+```sh
+DATABASE_URL=postgres://postgres:<stand password>@127.0.0.1:<tunnel port>/phub \
+  npm run notifications:game:provision -- --tenant-key=local-padel \
+  --actor-id=00000000-0000-4000-8000-00000000a001 \
+  --idempotency-key=test-stand-game-ruleset-v1 --confirm=APPLY_GAME_NOTIFICATION_RULESET
+```
