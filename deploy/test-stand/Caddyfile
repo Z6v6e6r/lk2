@@ -9,7 +9,7 @@
 		-Server
 	}
 
-	@api path /health/* /public/api/* /user/api/*
+	@api path /health/* /public/api/* /user/api/* /admin/api/*
 	handle @api {
 		reverse_proxy api:3000
 	}
