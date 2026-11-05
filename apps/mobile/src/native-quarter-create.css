@@ -15,3 +15,10 @@
   outline: 2px solid currentColor;
   outline-offset: 2px;
 }
+
+/* The quarter-create and tournament shortcuts are authenticated entry points: hide them while the
+   shared App shows the sign-in or session-restore screen. */
+body:has(.auth-layout, .app-shell-loading) .native-quarter-navigation,
+body:has(.auth-layout, .app-shell-loading) .android-tournament-navigation {
+  display: none;
+}
