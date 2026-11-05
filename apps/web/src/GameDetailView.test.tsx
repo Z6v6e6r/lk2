@@ -107,7 +107,7 @@ describe('GameDetailView', () => {
   });
 
   it('does not invite joining the open seats of a cancelled game', () => {
-    const openGame = {
+    const openGame: GameCard = {
       ...game,
       capacity: { total: 4, occupied: 2, reserved: 0, open: 2, waitlistCount: 0 },
       participants: game.participants.slice(0, 2),
@@ -123,7 +123,9 @@ describe('GameDetailView', () => {
     const view = render(<GameDetailView {...props} game={openGame} />);
     let panel = screen.getByRole('region', { name: 'Участники игры' });
     expect(within(panel).getAllByText('Можно присоединиться')).toHaveLength(2);
-    view.rerender(<GameDetailView {...props} game={{ ...openGame, displayState: 'CANCELLED' }} />);
+    view.rerender(
+      <GameDetailView {...props} game={{ ...openGame, displayState: 'CANCELLED' as const }} />,
+    );
     panel = screen.getByRole('region', { name: 'Участники игры' });
     expect(within(panel).getAllByText('Свободное место')).toHaveLength(2);
     expect(within(panel).queryByText('Можно присоединиться')).toBeNull();
