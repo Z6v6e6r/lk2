@@ -22,6 +22,8 @@ public struct SessionConfiguration: Sendable {
     var origins = ["https://lk2.padlhub.su"]
     #if DEBUG
       origins.append("https://lk.nano.padlhub.su")
+      // Disposable test stand (deploy/test-stand); Debug builds only.
+      origins.append("https://test.lk2.padlhub.su")
     #endif
     guard origins.contains(origin),
       tenant.range(of: "^[a-z0-9][a-z0-9-]{1,62}$", options: .regularExpression) != nil

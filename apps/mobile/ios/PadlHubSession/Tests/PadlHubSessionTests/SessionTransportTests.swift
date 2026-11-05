@@ -211,15 +211,23 @@ final class SessionTransportTests: XCTestCase {
   }
 
   func testStagingOriginIsDebugOnly() throws {
-    #if DEBUG
-      XCTAssertNoThrow(
-        try SessionConfiguration(
-          origin: "https://lk.nano.padlhub.su", tenant: tenant, appVersion: "1", appBuild: "1"))
-    #else
+    for origin in ["https://lk.nano.padlhub.su", "https://test.lk2.padlhub.su"] {
+      #if DEBUG
+        XCTAssertNoThrow(
+          try SessionConfiguration(origin: origin, tenant: tenant, appVersion: "1", appBuild: "1"))
+      #else
+        XCTAssertThrowsError(
+          try SessionConfiguration(origin: origin, tenant: tenant, appVersion: "1", appBuild: "1"))
+      #endif
+    }
+    for origin in [
+      "http://test.lk2.padlhub.su", "https://test.lk2.padlhub.su/", "https://test.lk2.padlhub.su:443",
+      "https://test.lk2.padlhub.su.evil.invalid", "https://evil.test.lk2.padlhub.su",
+      "https://test2.lk2.padlhub.su", "https://TEST.lk2.padlhub.su", "https://user@test.lk2.padlhub.su",
+    ] {
       XCTAssertThrowsError(
-        try SessionConfiguration(
-          origin: "https://lk.nano.padlhub.su", tenant: tenant, appVersion: "1", appBuild: "1"))
-    #endif
+        try SessionConfiguration(origin: origin, tenant: tenant, appVersion: "1", appBuild: "1"))
+    }
   }
 
   func testHeadersBodyAndChallengeAreDefaultDeny() throws {

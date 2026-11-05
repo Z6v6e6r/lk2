@@ -24,7 +24,8 @@ final class AndroidSessionPolicy {
 
     AndroidSessionPolicy(String origin, String tenant, String version, String build, boolean debug) throws Failure {
         if (!("https://lk2.padlhub.su".equals(origin)
-            || (debug && "https://lk.nano.padlhub.su".equals(origin)))
+            || (debug && ("https://lk.nano.padlhub.su".equals(origin)
+                || "https://test.lk2.padlhub.su".equals(origin))))
             || tenant == null || !tenant.matches("[a-z0-9][a-z0-9-]{1,62}")) {
             throw new Failure("NATIVE_CONFIGURATION_REQUIRED");
         }

@@ -55,9 +55,13 @@ public class AndroidSessionTest {
     }
 
     @Test public void configAndCallerArePinnedToReviewedOrigins() throws Exception {
-        for (String origin : Arrays.asList("http://lk2.padlhub.su", ORIGIN + "/", ORIGIN + ":443", ORIGIN + ".evil.invalid", "https://lk.nano.padlhub.su"))
+        for (String origin : Arrays.asList("http://lk2.padlhub.su", ORIGIN + "/", ORIGIN + ":443", ORIGIN + ".evil.invalid", "https://lk.nano.padlhub.su", "https://test.lk2.padlhub.su"))
             fails("NATIVE_CONFIGURATION_REQUIRED", () -> new AndroidSessionPolicy(origin, "local-padel", "test", "2", false));
         new AndroidSessionPolicy("https://lk.nano.padlhub.su", "local-padel", "test", "2", true);
+        new AndroidSessionPolicy("https://test.lk2.padlhub.su", "local-padel", "test", "2", true);
+        for (String origin : Arrays.asList("http://test.lk2.padlhub.su", "https://test.lk2.padlhub.su/", "https://test.lk2.padlhub.su:443",
+                "https://test.lk2.padlhub.su.evil.invalid", "https://evil.test.lk2.padlhub.su", "https://test2.lk2.padlhub.su"))
+            fails("NATIVE_CONFIGURATION_REQUIRED", () -> new AndroidSessionPolicy(origin, "local-padel", "test", "2", true));
         assertTrue(PadlHubAndroidSessionPlugin.bundledOrigin(Uri.parse("https://localhost/profile")));
         for (String uri : Arrays.asList("http://localhost", "https://localhost.evil.invalid", "https://user@localhost", "https://localhost:444", "file:///asset", ORIGIN))
             assertFalse(PadlHubAndroidSessionPlugin.bundledOrigin(Uri.parse(uri)));
