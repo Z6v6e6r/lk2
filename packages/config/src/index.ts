@@ -825,24 +825,11 @@ export function loadConfig(
     parsed.data.WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS,
   );
 
-  if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_READ_ENABLED) {
-    throw new Error('GAMES_READ_ENABLED is staging-only until the Games production gate passes');
-  }
   if (
     parsed.data.GAMES_TEST_COURTS_ENABLED &&
     (parsed.data.APP_ENV !== 'staging' || !parsed.data.GAMES_COMMANDS_ENABLED)
   ) {
     throw new Error('GAMES_TEST_COURTS_ENABLED requires staging and GAMES_COMMANDS_ENABLED=true');
-  }
-  if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_COMMANDS_ENABLED) {
-    throw new Error(
-      'GAMES_COMMANDS_ENABLED is staging-only until the Games production gate passes',
-    );
-  }
-  if (parsed.data.APP_ENV === 'production' && parsed.data.GAME_COMMERCIAL_CREATE_ENABLED) {
-    throw new Error(
-      'GAME_COMMERCIAL_CREATE_ENABLED is allowed only in local, ci or staging until the LK1 reserve/confirm approval',
-    );
   }
   if (parsed.data.GAME_COMMERCIAL_CREATE_ENABLED) {
     if (!parsed.data.GAMES_READ_ENABLED || !parsed.data.GAMES_COMMANDS_ENABLED) {
@@ -1042,9 +1029,6 @@ export function loadConfig(
       );
   }
   if (parsed.data.SUBSCRIPTION_POLICY_REGISTRY_ENABLED) {
-    if (parsed.data.APP_ENV === 'production') {
-      throw new Error('SUBSCRIPTION_POLICY_REGISTRY_ENABLED is not activated for production');
-    }
     if (
       !parsed.data.SUBSCRIPTION_POLICY_REGISTRY_BASE_URL ||
       !parsed.data.SUBSCRIPTION_POLICY_REGISTRY_INTEGRATION_TOKEN
@@ -1055,9 +1039,6 @@ export function loadConfig(
     }
   }
   if (parsed.data.LEGACY_GAME_COMMAND_BRIDGE_ENABLED) {
-    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
-      throw new Error('LEGACY_GAME_COMMAND_BRIDGE_ENABLED is allowed only in local or staging');
-    }
     if (!parsed.data.GAMES_COMMANDS_ENABLED || !parsed.data.GAMES_READ_ENABLED) {
       throw new Error(
         'LEGACY_GAME_COMMAND_BRIDGE_ENABLED requires GAMES_COMMANDS_ENABLED and GAMES_READ_ENABLED',
@@ -1101,9 +1082,6 @@ export function loadConfig(
   ) {
     throw new Error('GAMES_RESULTS_WRITE_MODE=local_primary requires GAMES_COMMANDS_ENABLED=true');
   }
-  if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_RESULTS_WRITE_MODE !== 'disabled') {
-    throw new Error('Games results cutover is staging-only until the production gate passes');
-  }
   if (
     parsed.data.CUP_RATING_CONSUMER_ENABLED &&
     (!parsed.data.CUP_RATING_API_URL || !parsed.data.CUP_RATING_SERVICE_TOKEN)
@@ -1122,9 +1100,6 @@ export function loadConfig(
     );
   }
   if (parsed.data.PARTICIPATION_COMMANDS_ENABLED) {
-    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
-      throw new Error('PARTICIPATION_COMMANDS_ENABLED is allowed only in local or staging');
-    }
     if (
       !parsed.data.PARTICIPATION_COMMAND_TOKEN ||
       !parsed.data.PARTICIPATION_COMMAND_TENANT_KEY ||
@@ -1134,11 +1109,6 @@ export function loadConfig(
         'PARTICIPATION_COMMANDS_ENABLED requires token, tenant key, and principal key',
       );
     }
-  }
-  if (parsed.data.APP_ENV === 'production' && parsed.data.ACTIVITY_HISTORY_ENABLED) {
-    throw new Error(
-      'ACTIVITY_HISTORY_ENABLED is staging-only until the activity history production gate passes',
-    );
   }
   if (parsed.data.ACTIVITY_HISTORY_SYNC_ENABLED && !parsed.data.ACTIVITY_HISTORY_ENABLED) {
     throw new Error('ACTIVITY_HISTORY_SYNC_ENABLED requires ACTIVITY_HISTORY_ENABLED=true');
@@ -1161,9 +1131,6 @@ export function loadConfig(
     }
     if (!parsed.data.GAMES_READ_ENABLED) {
       throw new Error('ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED requires GAMES_READ_ENABLED=true');
-    }
-    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
-      throw new Error('ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED is allowed only in local or staging');
     }
     if (
       parsed.data.APP_ENV === 'local' &&
@@ -1190,9 +1157,6 @@ export function loadConfig(
     }
   }
   if (parsed.data.LEGACY_GAMES_ROSTER_SYNC_ENABLED) {
-    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
-      throw new Error('LEGACY_GAMES_ROSTER_SYNC_ENABLED is allowed only in local or staging');
-    }
     if (!parsed.data.GAMES_READ_ENABLED) {
       throw new Error('LEGACY_GAMES_ROSTER_SYNC_ENABLED requires GAMES_READ_ENABLED=true');
     }
@@ -1235,9 +1199,6 @@ export function loadConfig(
     }
   }
   if (parsed.data.HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED) {
-    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
-      throw new Error('HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED is allowed only in local or staging');
-    }
     if (!parsed.data.HOME_VIVA_SYNC_ENABLED) {
       throw new Error('HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED requires HOME_VIVA_SYNC_ENABLED=true');
     }
@@ -1268,11 +1229,6 @@ export function loadConfig(
         'HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED requires LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY',
       );
     }
-  }
-  if (parsed.data.APP_ENV === 'production' && parsed.data.OUTBOX_PUBLISH_MODE === 'leased') {
-    throw new Error(
-      'OUTBOX_PUBLISH_MODE=leased is staging-only until the outbox lease production gate passes',
-    );
   }
   if (
     parsed.data.OUTBOX_PUBLISH_MODE === 'leased' &&
@@ -1746,11 +1702,6 @@ export function loadConfig(
     ) {
       throw new Error('JWT_REALTIME_SECRET must be distinct from API and refresh secrets');
     }
-  }
-  if (parsed.data.APP_ENV === 'production' && parsed.data.COMMUNITIES_REALTIME_ENABLED) {
-    throw new Error(
-      'COMMUNITIES_REALTIME_ENABLED is staging-only until durable event recovery and fan-out pass the production gate',
-    );
   }
   if (parsed.data.COMMUNITY_MEDIA_ENABLED) {
     if (parsed.data.COMMUNITIES_READ_MODE !== 'local') {

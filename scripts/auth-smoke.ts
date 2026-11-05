@@ -57,9 +57,23 @@ const verified = await jsonResponse<{
   user: { id: string };
   context: { userId: string; displayName: string };
 }>(verifyResponse, 200);
-const verifyBody = JSON.stringify(verified);
-if (/refreshToken|issuer|subject|viva/i.test(verifyBody)) {
-  throw new Error('Authentication response crossed the provider/session boundary');
+// Check field names, not a substring of the serialized body: harmless capability names such as
+// `runtimeCapabilities.phoneSubjectLink` must not trip the provider/session boundary check.
+const forbiddenAuthField = /^(refreshToken|issuer|subject|sub|iss)$|viva/i;
+function forbiddenFieldNames(value: unknown, path = ''): string[] {
+  if (Array.isArray(value))
+    return value.flatMap((item, index) => forbiddenFieldNames(item, `${path}[${index}]`));
+  if (value === null || typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([key, child]) => [
+    ...(forbiddenAuthField.test(key) ? [`${path}.${key}`] : []),
+    ...forbiddenFieldNames(child, `${path}.${key}`),
+  ]);
+}
+const forbiddenFields = forbiddenFieldNames(verified);
+if (forbiddenFields.length > 0) {
+  throw new Error(
+    `Authentication response crossed the provider/session boundary: ${forbiddenFields.join(', ')}`,
+  );
 }
 if (verified.user.id !== verified.context.userId) throw new Error('User context is inconsistent');
 const firstCookie = cookieFrom(verifyResponse);
