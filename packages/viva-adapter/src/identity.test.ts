@@ -175,6 +175,7 @@ describe('VivaIdentityProvider', () => {
     });
     const identity = await provider.verifyPhoneCode({ ...second, code: '0000' });
     expect(identity).toMatchObject({ phoneE164: '+79990000002', displayName: 'Тестовый игрок 2' });
+    if (!('subject' in identity) || !('subject' in primary)) throw new Error('expected subjects');
     expect(identity.subject).not.toBe(primary.subject);
     await expect(provider.verifyPhoneCode({ ...second, code: '1111' })).rejects.toMatchObject({
       code: 'AUTH_CODE_INVALID',
