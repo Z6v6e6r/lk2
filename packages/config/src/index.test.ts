@@ -256,7 +256,7 @@ describe('loadConfig', () => {
         PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
         PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'legacy-lk-writer',
       }),
-    ).toThrow('allowed only in local or staging');
+    ).not.toThrow('allowed only in local or staging'); // first-version mode: no APP_ENV feature lock
   });
 
   it('provides a credential-free target fingerprint and keeps attestation local-only', () => {
@@ -372,7 +372,7 @@ describe('loadConfig', () => {
     });
   });
 
-  it('keeps Communities realtime staging-only until durable recovery is proven', () => {
+  it('keeps Communities realtime behind its own flag', () => {
     expect(
       loadConfig({
         ...validEnvironment,
@@ -399,7 +399,7 @@ describe('loadConfig', () => {
         PROMOTIONS_READ_MODE: 'legacy',
         COMMUNITIES_REALTIME_ENABLED: 'true',
       }),
-    ).toThrow('COMMUNITIES_REALTIME_ENABLED is staging-only');
+    ).not.toThrow('COMMUNITIES_REALTIME_ENABLED is staging-only'); // first-version mode: no APP_ENV feature lock
     expect(() =>
       loadConfig({
         ...validEnvironment,
@@ -600,7 +600,7 @@ describe('loadConfig', () => {
     ).toThrow('REALTIME_DATABASE_POOL_WARM_CONNECTIONS must not exceed REALTIME_DATABASE_POOL_MAX');
   });
 
-  it('keeps leased outbox publication explicit, staging-only and lease-safe', () => {
+  it('keeps leased outbox publication explicit and lease-safe', () => {
     expect(
       loadConfig({
         ...validEnvironment,
@@ -614,7 +614,7 @@ describe('loadConfig', () => {
         APP_ENV: 'production',
         OUTBOX_PUBLISH_MODE: 'leased',
       }),
-    ).toThrow('OUTBOX_PUBLISH_MODE=leased is staging-only');
+    ).not.toThrow('OUTBOX_PUBLISH_MODE=leased is staging-only'); // first-version mode: no APP_ENV feature lock
     expect(() =>
       loadConfig({
         ...validEnvironment,
@@ -807,16 +807,16 @@ describe('loadConfig', () => {
     ).toMatchObject({ SUPPORT_STATIONS_ENABLED: true });
   });
 
-  it('keeps Games reads off by default and staging-only during the rollout gate', () => {
+  it('keeps Games reads off by default', () => {
     expect(
       loadConfig({ ...validEnvironment, APP_ENV: 'staging', GAMES_READ_ENABLED: 'true' }),
     ).toMatchObject({ GAMES_READ_ENABLED: true });
     expect(() =>
       loadConfig({ ...validEnvironment, APP_ENV: 'production', GAMES_READ_ENABLED: 'true' }),
-    ).toThrow('GAMES_READ_ENABLED is staging-only');
+    ).not.toThrow('GAMES_READ_ENABLED is staging-only'); // first-version mode: no APP_ENV feature lock
   });
 
-  it('keeps Games commands off by default and rejects them in production', () => {
+  it('keeps Games commands off by default', () => {
     expect(
       loadConfig({
         ...validEnvironment,
@@ -839,10 +839,10 @@ describe('loadConfig', () => {
         APP_ENV: 'production',
         GAMES_COMMANDS_ENABLED: 'true',
       }),
-    ).toThrow('GAMES_COMMANDS_ENABLED is staging-only');
+    ).not.toThrow('GAMES_COMMANDS_ENABLED is staging-only'); // first-version mode: no APP_ENV feature lock
   });
 
-  it('keeps the managed commercial CREATE contour default-off, WARN-only and out of production', () => {
+  it('keeps the managed commercial CREATE contour default-off and WARN-only', () => {
     expect(loadConfig(validEnvironment)).toMatchObject({
       GAME_COMMERCIAL_CREATE_ENABLED: false,
       GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: 'ADVISORY',
@@ -863,7 +863,7 @@ describe('loadConfig', () => {
         APP_ENV: 'production',
         GAME_COMMERCIAL_CREATE_ENABLED: 'true',
       }),
-    ).toThrow('allowed only in local, ci or staging');
+    ).not.toThrow('allowed only in local, ci or staging'); // first-version mode: no APP_ENV feature lock
     expect(() =>
       loadConfig({
         ...validEnvironment,
@@ -948,7 +948,7 @@ describe('loadConfig', () => {
         LEGACY_GAME_IDENTITY_VERIFY_URL: 'https://cup.example.test/api/internal/lk/identity/verify',
         LEGACY_GAME_IDENTITY_VERIFY_TOKEN: 'cup-verifier-token-at-least-32-characters',
       }),
-    ).toThrow('GAMES_READ_ENABLED is staging-only');
+    ).not.toThrow('GAMES_READ_ENABLED is staging-only'); // first-version mode: no APP_ENV feature lock
   });
 
   it('permits the anonymized public roster bridge in read-only local and staging runtimes', () => {
@@ -957,7 +957,7 @@ describe('loadConfig', () => {
         ...validEnvironment,
         LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
       }),
-    ).toThrow('allowed only in local or staging');
+    ).not.toThrow('allowed only in local or staging'); // first-version mode: no APP_ENV feature lock
     expect(() =>
       loadConfig({
         ...validEnvironment,
@@ -1148,7 +1148,7 @@ describe('loadConfig', () => {
         LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
         LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'ci-padel',
       }),
-    ).toThrow('allowed only in local or staging');
+    ).not.toThrow('allowed only in local or staging'); // first-version mode: no APP_ENV feature lock
   });
 
   it('keeps the dedicated legacy reminder source off by default and requires exact dependencies', () => {
@@ -1689,7 +1689,7 @@ describe('loadConfig', () => {
     ).toThrow('COMMUNITIES_READ_MODE=mock is forbidden in production');
   });
 
-  it('keeps the CUP policy registry default-off and requires complete non-production config', () => {
+  it('keeps the CUP policy registry default-off and requires complete config', () => {
     expect(loadConfig(validEnvironment)).toMatchObject({
       SUBSCRIPTION_POLICY_REGISTRY_ENABLED: false,
     });
@@ -1707,7 +1707,7 @@ describe('loadConfig', () => {
       SUBSCRIPTION_POLICY_REGISTRY_ENABLED: true,
       SUBSCRIPTION_POLICY_REGISTRY_TIMEOUT_MS: 3_000,
     });
-    expect(() => loadConfig({ ...enabled, APP_ENV: 'production' })).toThrow(
+    expect(() => loadConfig({ ...enabled, APP_ENV: 'production' })).not.toThrow(
       'not activated for production',
     );
   });
