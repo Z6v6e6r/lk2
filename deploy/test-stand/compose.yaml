@@ -51,7 +51,8 @@ services:
     networks: [stand]
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # Built from upstream source by the Test stand workflow; see minio.Dockerfile.
+    image: ghcr.io/z6v6e6r/phub-test-stand-minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: server /data
     env_file: [.secrets/minio.env]
