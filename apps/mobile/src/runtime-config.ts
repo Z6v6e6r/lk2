@@ -1,7 +1,10 @@
-// Existing staging origin. Adding a native API target requires review; builds have no default target.
+// Reviewed native API targets. Adding one requires review; builds have no default target.
+// Staging and the disposable test stand are additionally gated to Debug builds by the native
+// session policies (AndroidSessionPolicy, iOS SessionConfiguration).
 export const ANDROID_API_ORIGINS = [
   'https://lk2.padlhub.su',
   'https://lk.nano.padlhub.su',
+  'https://test.lk2.padlhub.su',
 ] as const;
 
 export interface MobileRuntimeConfig {

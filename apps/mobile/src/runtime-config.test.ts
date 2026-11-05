@@ -19,6 +19,12 @@ describe('Android API configuration', () => {
         .apiBaseUrl,
     ).toBe('https://lk.nano.padlhub.su');
   });
+  it('accepts the exact HTTPS test stand origin', () => {
+    expect(
+      resolveMobileRuntimeConfig({ ...native, apiBaseUrl: 'https://test.lk2.padlhub.su' })
+        .apiBaseUrl,
+    ).toBe('https://test.lk2.padlhub.su');
+  });
   it.each([
     'http://lk.nano.padlhub.su',
     'https://lk.nano.padlhub.su.attacker.test',
@@ -30,6 +36,11 @@ describe('Android API configuration', () => {
     'https://lk.nano.padlhub.su#token',
     'https://localhost',
     'http://127.0.0.1:3000',
+    'http://test.lk2.padlhub.su',
+    'https://test.lk2.padlhub.su.attacker.test',
+    'https://evil.test.lk2.padlhub.su',
+    'https://test.lk2.padlhub.su:8443',
+    'https://test.lk2.padlhub.su/api',
   ])('rejects an untrusted or non-origin value: %s', (apiBaseUrl) => {
     expect(() => resolveMobileRuntimeConfig({ ...native, apiBaseUrl })).toThrow(
       'MOBILE_API_ORIGIN_INVALID',

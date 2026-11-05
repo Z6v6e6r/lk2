@@ -124,7 +124,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 ```
 
 Release accepts only `https://lk2.padlhub.su`; Debug additionally permits the repository's
-staging origin `https://lk.nano.padlhub.su`. Credentials, paths, ports, alternate hosts and
+staging origin `https://lk.nano.padlhub.su` and the disposable test stand
+`https://test.lk2.padlhub.su` ([deploy/test-stand](../../deploy/test-stand/README.md)). Credentials, paths, ports, alternate hosts and
 tenant keys outside the OpenAPI pattern `[a-z0-9][a-z0-9-]{1,62}` are rejected. Confirm the
 actual target tenant from authorized configuration before live account testing. No real OTP,
 live authenticated API call or provider operation is part of local synthetic verification.
