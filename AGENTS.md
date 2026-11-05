@@ -13,6 +13,28 @@ These rules are mandatory for every change in this repository.
 - CI, staging and production runbooks govern those evidence levels. They do not turn an ordinary
   local implementation into a release operation.
 
+## First-version mode (owner decision, 2026-11-05)
+
+Until the first LK2 version (web + Android APK, then iOS) is in users' hands, this section takes
+precedence over conflicting release text below and in `docs/release/**`.
+
+- **Goal:** test and fix the current `main` on the disposable test stand, then ship. LK1 stays the
+  primary product meanwhile.
+- **Test stand** (`deploy/test-stand`, workflow `Test stand`): every green push to `main` deploys
+  there automatically. Deploys, `--reset` and `--rollback` on the stand are pre-authorized and need
+  no approval packet, custody, backup, manifest or evidence report. It holds synthetic data only.
+- **Production lane and R1 custody work are paused:** Timeweb enrollment/backup/ledger custody,
+  CUP83 custody, four-service upgrade executors and similar release machinery are not worked on
+  unless the owner asks. Do not add checkpoints to `docs/release/R1-*.md`; status lives in one short
+  page.
+- **Work selection:** defects found on the test stand first, then the scenarios in
+  `docs/release/R1-E2E-MATRIX.md`. No new branches for unrelated features.
+- **Money:** Viva CURRENCY/DEPOSIT refunds and training visit-return stay disabled by flag in the
+  first version; refunds are handled manually. Existing CRITICAL gates for payment, booking and
+  identity code changes still apply.
+- Merging to `main` still needs the owner's approval in the PR unless the owner grants standing
+  authority for green FAST/SAFE PRs.
+
 ## Task intent and authority
 
 Determine the requested outcome before selecting a risk tier or skill. Explicit task restrictions

@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import {
   CLOSED_R1_CONTROLLER_FILES,
   validateClosedR1ControllerClosure,
 } from './timeweb-closed-application-source.js';
 import { validateClosedApplicationControllerClosure } from './timeweb-closed-application-source.js';
-import { parseApiWorkerControllerDiff } from './timeweb-api-worker-upgrade.js';
 
 function closure() {
   const paths = [
@@ -118,30 +115,10 @@ const phonePair = [
     newOid: 'a40331a45324f83fa6141ccad991d4338b24d053',
   },
 ].map((row) => ({ ...row, status: 'M', oldMode: '100644', newMode: '100644' }));
-it('pins the already merged phone route and training test blobs', () => {
-  for (const row of phonePair) {
-    expect(CLOSED_R1_CONTROLLER_FILES).not.toContain(row.path);
-    const bytes = readFileSync(row.path);
-    expect(
-      createHash('sha1')
-        .update('blob ' + bytes.length + '\0')
-        .update(bytes)
-        .digest('hex'),
-    ).toBe(row.newOid);
-  }
-});
-it('pins the actual reviewed native JOIN blobs outside the editable allowlist', () => {
-  for (const row of nativeJoinPair) {
-    expect(CLOSED_R1_CONTROLLER_FILES).not.toContain(row.path);
-    const bytes = readFileSync(row.path);
-    expect(
-      createHash('sha1')
-        .update('blob ' + bytes.length + '\0')
-        .update(bytes)
-        .digest('hex'),
-    ).toBe(row.newOid);
-  }
-});
+// First-version mode (AGENTS.md, 2026-11-05): tests that pinned the bytes of product files
+// (CreateGamePage, NativeGameJoin, TrainingsPage) or required HEAD to equal the frozen R1
+// candidate were removed. They bound main to a paused production release instead of testing
+// behavior; the validators below keep their synthetic-input coverage.
 for (const validator of ['closed', 'tail'] as const) {
   function validate(entries: unknown) {
     if (validator === 'closed') return validateClosedR1ControllerClosure(entries);
@@ -238,23 +215,6 @@ for (const validator of ['closed', 'tail'] as const) {
     it('preserves prior admission and accepts the exact complete phone pair', () => {
       expect(() => validate([...r1Entries, ...nativeJoinPair])).not.toThrow();
       expect(() => validate([...r1Entries, ...nativeJoinPair, ...phonePair])).not.toThrow();
-    });
-    it('admits the actual committed source closure', () => {
-      const result = spawnSync(
-        '/usr/bin/git',
-        [
-          'diff',
-          '--no-renames',
-          '--raw',
-          '--abbrev=40',
-          '-z',
-          '27d8527f2f36e1a647012a86f92f4a51b9dd50eb',
-          'HEAD',
-        ],
-        { encoding: 'utf8' },
-      );
-      expect(result.status).toBe(0);
-      expect(() => validate(parseApiWorkerControllerDiff(result.stdout))).not.toThrow();
     });
     it.each(
       [

@@ -1,0 +1,105 @@
+name: Test stand
+
+# Builds the five LK2 images for each main commit whose CI ("Pull request checks") succeeded and
+# deploys them to the disposable test stand. A manual run deploys the chosen SHA.
+# Not a production route: no custody, no backup, broad runtime grants. See deploy/test-stand/README.md.
+on:
+  workflow_run:
+    workflows: ['Pull request checks']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to deploy (default: the selected ref)'
+        required: false
+      reset:
+        description: Wipe the stand database before deploying
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  CANDIDATE_SHA: ${{ inputs.sha || github.event.workflow_run.head_sha || github.sha }}
+
+concurrency:
+  group: test-stand
+  cancel-in-progress: false
+
+jobs:
+  images:
+    # Only a green main push CI run (or an explicit manual run) reaches the stand.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [api, worker, realtime, web, migrator]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: apps/${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/z6v6e6r/phub-${{ matrix.service }}:${{ env.CANDIDATE_SHA }}
+          build-args: |
+            PHUB_RELEASE=${{ env.CANDIDATE_SHA }}
+          cache-from: type=gha,scope=test-stand-${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=test-stand-${{ matrix.service }}
+
+  deploy:
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: test-stand
+    env:
+      HOST: ${{ secrets.TEST_STAND_SSH_HOST }}
+      SSH_USER: ${{ secrets.TEST_STAND_SSH_USER }}
+      SSH_KEY: ${{ secrets.TEST_STAND_SSH_KEY }}
+      TAG: ${{ inputs.sha || github.event.workflow_run.head_sha || github.sha }}
+      RESET: ${{ inputs.reset && '--reset' || '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+      - name: Skip when the stand is not configured
+        id: configured
+        run: |
+          if [ -z "$HOST" ] || [ -z "$SSH_KEY" ]; then
+            echo "TEST_STAND_SSH_HOST/TEST_STAND_SSH_KEY are not set; images are published, deploy skipped."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Copy stand files and deploy
+        if: steps.configured.outputs.ok == 'true'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_stand && chmod 600 ~/.ssh/id_stand
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          target="${SSH_USER:-root}@$HOST"
+          ssh -i ~/.ssh/id_stand "$target" 'mkdir -p ~/phub-test-stand'
+          # stand.env, .secrets/ and .deploy-history live only on the host and are never overwritten.
+          scp -i ~/.ssh/id_stand deploy/test-stand/{compose.yaml,Caddyfile,deploy.sh,grant-runtime.sql,stand.env.example,README.md} \
+            "$target:phub-test-stand/"
+          printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/id_stand "$target" \
+            "docker login ghcr.io -u ${{ github.actor }} --password-stdin >/dev/null && cd ~/phub-test-stand && chmod +x deploy.sh && ./deploy.sh $RESET $TAG"

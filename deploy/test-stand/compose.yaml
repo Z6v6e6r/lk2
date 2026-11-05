@@ -1,0 +1,161 @@
+# Disposable LK2 test stand: one host, current main, synthetic data.
+# Not a production topology. Run through deploy.sh, which renders .secrets/ and picks the image tag.
+name: phub-test
+
+x-app: &app
+  restart: unless-stopped
+  env_file:
+    - stand.env
+    - .secrets/runtime.env
+  networks: [stand]
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    rabbitmq: { condition: service_healthy }
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: [.secrets/postgres.env]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d phub']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [stand]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [stand]
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    restart: unless-stopped
+    env_file: [.secrets/rabbitmq.env]
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [stand]
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: server /data
+    env_file: [.secrets/minio.env]
+    volumes: [minio_data:/data]
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [stand]
+
+  # Applies every pending migration as the PostgreSQL superuser (as local development and CI do).
+  migrator:
+    image: ghcr.io/z6v6e6r/phub-migrator:${PHUB_TAG:?PHUB_TAG is required}
+    profiles: [tools]
+    restart: 'no'
+    env_file: [.secrets/migrator.env]
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [stand]
+
+  api:
+    <<: *app
+    image: ghcr.io/z6v6e6r/phub-api:${PHUB_TAG:?PHUB_TAG is required}
+    env_file:
+      - stand.env
+      - .secrets/runtime.env
+      - .secrets/api.env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    <<: *app
+    image: ghcr.io/z6v6e6r/phub-worker:${PHUB_TAG:?PHUB_TAG is required}
+    environment:
+      WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED: 'true'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  realtime:
+    <<: *app
+    image: ghcr.io/z6v6e6r/phub-realtime:${PHUB_TAG:?PHUB_TAG is required}
+    environment:
+      REALTIME_EXPECTED_REPLICAS: '1'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  web:
+    image: ghcr.io/z6v6e6r/phub-web:${PHUB_TAG:?PHUB_TAG is required}
+    restart: unless-stopped
+    networks: [stand]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      TEST_STAND_DOMAIN: ${TEST_STAND_DOMAIN:?TEST_STAND_DOMAIN is required}
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [api, realtime, web]
+    networks: [stand]
+
+networks:
+  stand:
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+  caddy_data:
