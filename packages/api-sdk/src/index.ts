@@ -179,6 +179,7 @@ export type CommunityMediaFinalizeRequest = components['schemas']['CommunityMedi
 export type CommunityMediaStatus = components['schemas']['CommunityMediaStatus'];
 export type ClientRoutingPlan = components['schemas']['ClientRoutingPlan'];
 export type UserProfile = components['schemas']['UserProfile'];
+export type ClientResidencyStatus = components['schemas']['ClientResidencyStatus'];
 export type PlayerProfileView = components['schemas']['PlayerProfileView'];
 export type ProfileActionCapability = components['schemas']['ProfileActionCapability'];
 export type ProfileContacts = components['schemas']['ProfileContacts'];
@@ -1020,6 +1021,11 @@ export class PadlHubApiClient {
 
   public getUserProfile(): Promise<UserProfile> {
     return this.request<UserProfile>('/profile');
+  }
+
+  /** One server-owned answer for the verified user's configured residency product. */
+  public getClientResidency(): Promise<ClientResidencyStatus> {
+    return this.request<ClientResidencyStatus>('/residency');
   }
 
   public async syncUserProfilePhoto(input: {

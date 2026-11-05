@@ -85,6 +85,7 @@ import {
   VivaHomeSourceAdapter,
   VivaIdentityProvider,
   VivaExerciseRecommendationSourceAdapter,
+  VivaResidencySourceAdapter,
 } from '@phub/viva-adapter';
 import {
   ManagedSubscriptionRuntimeQuoteClient,
@@ -93,10 +94,12 @@ import {
 import Redis from 'ioredis';
 
 import { buildApp } from './app.js';
+import { ClientResidencyService } from './residency/client-residency-service.js';
 import { createGameJoinConditionsRuntime } from './games/game-join-conditions-runtime.js';
 import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
 import { createGameCommercialCreateRuntime } from './games/game-create-commercial-runtime.js';
 import { createGameJoinConditionsContextRepository } from '../../../packages/database/src/game-join-conditions-context-repository.js';
+import { createResidencyRepository } from '../../../packages/database/src/residency-repository.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
@@ -332,6 +335,38 @@ const tournamentSummarySource = config.GAMES_READ_ENABLED
     })
   : undefined;
 const profileSummaryRepository = createProfileSummaryRepository(pool);
+const residencyRepository = createResidencyRepository(pool);
+const residencySource =
+  (config.VIVA_MODE === 'sandbox' || config.VIVA_MODE === 'production') &&
+  Boolean(config.VIVA_API_URL) &&
+  Boolean(config.VIVA_API_KEY)
+    ? new VivaResidencySourceAdapter({
+        mode: config.VIVA_MODE,
+        apiBaseUrl: config.VIVA_API_URL as string,
+        apiKey: config.VIVA_API_KEY as string,
+        productId: config.VIVA_RESIDENCY_PRODUCT_ID,
+        timeoutMs: config.VIVA_TIMEOUT_MS,
+        maxAttempts: 2,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 30_000,
+        onMetric: (metric) => logger.info({ metric }, 'Viva residency read'),
+      })
+    : undefined;
+const clientResidencyService = new ClientResidencyService({
+  productConfigured: Boolean(config.VIVA_RESIDENCY_PRODUCT_ID),
+  ...(residencySource
+    ? { source: residencySource }
+    : {
+        sourceUnavailableReason:
+          config.VIVA_MODE === 'mock' || config.VIVA_MODE === 'disabled'
+            ? ('SOURCE_DISABLED' as const)
+            : ('SOURCE_NOT_CONFIGURED' as const),
+      }),
+  resolveVivaClientId: (input) => residencyRepository.resolveVivaClientId(input),
+  profileRepository: profileSummaryRepository,
+  photoRepository: profileSummaryRepository,
+  onMetric: (metric) => logger.info({ metric }, 'client residency read'),
+});
 const gameRosterRepository = config.GAMES_COMMANDS_ENABLED
   ? createGameRosterRepository(pool, {
       testCourtsEnabled: config.GAMES_TEST_COURTS_ENABLED,
@@ -1017,6 +1052,7 @@ const app = await buildApp({
   profileReachabilityRepository: createProfileReachabilityRepository(pool),
   profileLevelHistoryRepository: createProfileLevelHistoryRepository(pool),
   profileSummaryRepository,
+  clientResidencyService,
   ...(promotionEngagementSink
     ? {
         promotionEngagementRepository: createPromotionEngagementRepository(pool),

@@ -104,6 +104,28 @@ export const CLOSED_R1_CONTROLLER_FILES = Object.freeze([
   'docs/release/R1-RUNTIME-PRIVILEGE-AUDIT.md',
   'docs/release/R1-OPERATIONS-20261103.md',
   'docs/release/R1-ANDROID-PHONE-ACCEPTANCE.md',
+  // Server-owned client residency read (#581): one authenticated, read-only Viva
+  // residency method with its exact API source, adapter, local repository, public
+  // contract, SDK, configuration and the matching non-executable ADR/domain evidence.
+  // Only these reviewed paths are admitted; no dependency, SQL or workflow file is added.
+  'apps/api/src/app.ts',
+  'apps/api/src/main.ts',
+  'apps/api/src/residency/client-residency-routes.ts',
+  'apps/api/src/residency/client-residency-routes.test.ts',
+  'apps/api/src/residency/client-residency-service.ts',
+  'apps/api/src/residency/client-residency-service.test.ts',
+  'packages/api-sdk/src/index.ts',
+  'packages/config/src/index.ts',
+  'packages/config/src/index.test.ts',
+  'packages/database/src/residency-repository.ts',
+  'packages/viva-adapter/src/index.ts',
+  'packages/viva-adapter/src/residency-source.ts',
+  'packages/viva-adapter/src/residency-source.test.ts',
+  'contracts/openapi/user/v1/openapi.yaml',
+  '.env.example',
+  'docs/adr/0027-client-residency-read.md',
+  'docs/domains/residency.md',
+  'docs/domains/ownership-matrix.md',
 ]);
 // Exact P0 JOIN lifetime correction, independently reviewed with its regression test.
 // These paths remain outside the editable controller allowlist. Admit the complete

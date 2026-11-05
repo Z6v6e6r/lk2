@@ -1878,3 +1878,26 @@ it('monthly purchase admission remains default-off and requires a complete dedic
       loadConfig({ ...validEnvironment, MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS: timeout }),
     ).toThrow();
 });
+
+it('keeps residency product configuration explicit and never enables a mock fallback', () => {
+  expect(loadConfig(validEnvironment).VIVA_RESIDENCY_PRODUCT_ID).toBe('');
+  const productId = '0f2a7c4e-1b3d-4e5f-8a90-123456789abc';
+  const configured = {
+    ...validEnvironment,
+    VIVA_MODE: 'sandbox',
+    VIVA_API_URL: 'https://api.vivacrm.test',
+    VIVA_API_KEY: 'synthetic-server-key',
+    VIVA_RESIDENCY_PRODUCT_ID: productId,
+  };
+  expect(loadConfig(configured).VIVA_RESIDENCY_PRODUCT_ID).toBe(productId);
+  expect(() => loadConfig({ ...configured, VIVA_MODE: 'mock' })).toThrow(
+    'VIVA_RESIDENCY_PRODUCT_ID requires VIVA_MODE=sandbox or production',
+  );
+  expect(() => loadConfig({ ...configured, VIVA_API_URL: '' })).toThrow(
+    'VIVA_RESIDENCY_PRODUCT_ID requires VIVA_API_URL and VIVA_API_KEY',
+  );
+  expect(() => loadConfig({ ...configured, VIVA_API_KEY: undefined })).toThrow(
+    'VIVA_RESIDENCY_PRODUCT_ID requires VIVA_API_URL and VIVA_API_KEY',
+  );
+  expect(() => loadConfig({ ...configured, VIVA_RESIDENCY_PRODUCT_ID: 'invented-id' })).toThrow();
+});

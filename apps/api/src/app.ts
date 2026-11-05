@@ -188,6 +188,8 @@ import type { StationSupportRepository } from './support/station-support-reposit
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerAndroidPushRoutes } from './notifications/android-push-routes.js';
+import { registerClientResidencyRoutes } from './residency/client-residency-routes.js';
+import type { ClientResidencyService } from './residency/client-residency-service.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
 import { registerProfileFriendshipRoutes } from './profile/profile-friendship-routes.js';
 import { registerProfileLevelHistoryRoutes } from './profile/profile-level-history-routes.js';
@@ -365,6 +367,8 @@ export interface BuildAppOptions {
   readonly profileReachabilityRepository?: ProfileReachabilityRepository;
   readonly profileLevelHistoryRepository?: ProfileLevelHistoryRepository;
   readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'>;
+  /** One server-side answer for the verified user's configured residency product. */
+  readonly clientResidencyService?: ClientResidencyService;
   readonly promotionEngagementRepository?: PromotionEngagementRepository;
   readonly promotionEngagementSink?: PromotionEngagementSink;
   readonly profilePhotoMediaRepository?: Pick<
@@ -1618,6 +1622,13 @@ export async function buildApp(options: BuildAppOptions) {
   registerProfileLevelHistoryRoutes(app as unknown as FastifyInstance, {
     ...(options.profileLevelHistoryRepository
       ? { repository: options.profileLevelHistoryRepository }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerClientResidencyRoutes(app as unknown as FastifyInstance, {
+    ...(options.clientResidencyService ? { service: options.clientResidencyService } : {}),
+    ...(typeof options.authService?.getUserContext === 'function'
+      ? { getUserContext: options.authService.getUserContext.bind(options.authService) }
       : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
