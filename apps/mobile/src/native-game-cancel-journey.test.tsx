@@ -102,7 +102,15 @@ it('declining confirmation sends no command', async () => {
 it('late initial card cannot resurrect CANCEL after a confirmed cancellation', async () => {
   const request = setup('ORGANIZER', true, false, true);
   vi.spyOn(window, 'confirm').mockReturnValue(true);
-  fireEvent.click(await screen.findByRole('button', { name: 'Обновить статус игры' }));
+  const refresh = await screen.findByRole('button', { name: 'Обновить статус игры' });
+  // The button can be committed before the mount effect runs; a refresh clicked then is a no-op.
+  // Wait until the mount effect has issued the deferred initial read so the refresh is a second one.
+  await vi.waitFor(() =>
+    expect(
+      request.mock.calls.filter(([v]) => v.path.endsWith('/games/' + publicGame.id)),
+    ).toHaveLength(1),
+  );
+  fireEvent.click(refresh);
   fireEvent.click(await screen.findByRole('button', { name: 'Отменить игру' }));
   await screen.findByText('Игра отменена.');
   await act(async () => {
