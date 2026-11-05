@@ -122,9 +122,12 @@ export function createOwnedHubSubscriptionReader(options: {
     readonly providerClientId: string;
     readonly providerSubscriptionId: string;
     readonly startsAt: string;
+    readonly durationMinutes: 60 | 90;
     readonly signal: AbortSignal;
     readonly correlationId: string;
   }): Promise<{ readonly fingerprint: string }> => {
+    if (input.durationMinutes !== 60 && input.durationMinutes !== 90)
+      throw new GameSubscriptionSelectionError('JOIN_SELECTION_VARIANT_UNAVAILABLE');
     if (Date.now() < retryAfter)
       throw new GameSubscriptionSelectionError('JOIN_SELECTION_CIRCUIT_OPEN');
     const get = async (path: string): Promise<unknown> => {
@@ -214,7 +217,7 @@ export function createOwnedHubSubscriptionReader(options: {
         .map(purchaseDay);
       const dates = [...new Set(purchases)];
       const eventDay = input.startsAt.slice(0, 10);
-      const eventEnd = Date.parse(input.startsAt) + 90 * 60_000;
+      const eventEnd = Date.parse(input.startsAt) + input.durationMinutes * 60_000;
       const expiryEnd = Date.parse(row.expirationDate + 'T23:59:59.999+03:00');
       const activation = lifecycleInstant(row.activationDate);
       const today = purchaseDay(new Date().toISOString())!;

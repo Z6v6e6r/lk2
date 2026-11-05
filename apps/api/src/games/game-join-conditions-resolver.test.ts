@@ -16,6 +16,63 @@ const read = (fixture: ReturnType<typeof createJoinConditionsFixture>, input = a
   readGameJoinConditions(fixture.owner, input, input.correlationId);
 
 describe('production resolver with inert SQL and provider transports', () => {
+  it('resolves a quarter-created 60-minute game for the second subscription holder', async () => {
+    const fixture = createJoinConditionsFixture(0, 30000, 60);
+    const result = await read(fixture);
+    expect(result).toMatchObject({
+      eligibility: 'AVAILABLE',
+      subscriptionApplied: true,
+      price: { amountMinor: 0, confirmed: false },
+      freeMinutes: 60,
+      paidMinutes: 0,
+    });
+    expect(fixture.calls.filter((call) => call.kind === 'LK1_ADVISORY_READ')).toHaveLength(1);
+    expect(fixture.calls.filter((call) => call.kind === 'GET')).toHaveLength(4);
+  });
+  it.each([59, 61, 89, 91, 120, 60.5, 0, -60])(
+    'refuses unsupported stored duration %s before provider reads',
+    async (minutes) => {
+      const fixture = createJoinConditionsFixture(0, 30000, 60);
+      fixture.row.ends_at = new Date(
+        Date.parse(fixture.row.starts_at) + minutes * 60000,
+      ).toISOString();
+      await expect(read(fixture)).rejects.toMatchObject({
+        code: 'GAME_JOIN_CONDITIONS_MAPPING_UNAVAILABLE',
+      });
+      expect(fixture.calls.every((call) => call.kind === 'SQL_READ')).toBe(true);
+    },
+  );
+  it('checks expiry against the actual 60-minute end without admitting a 90-minute overrun', async () => {
+    const short = createJoinConditionsFixture(0, 30000, 60);
+    short.row.starts_at = '2099-09-21T19:45:00Z';
+    short.row.ends_at = '2099-09-21T20:45:00Z';
+    short.setSubscription({ expirationDate: '2099-09-21' });
+    expect((await read(short)).eligibility).toBe('AVAILABLE');
+    const long = createJoinConditionsFixture();
+    long.row.starts_at = short.row.starts_at;
+    long.row.ends_at = '2099-09-21T21:15:00Z';
+    long.setSubscription({ expirationDate: '2099-09-21' });
+    await expect(read(long)).rejects.toMatchObject({ code: 'JOIN_SELECTION_VARIANT_UNAVAILABLE' });
+    expect(long.calls.some((call) => call.kind === 'LK1_ADVISORY_READ')).toBe(false);
+  });
+  it('refuses duration drift after the 60-minute quote', async () => {
+    const fixture = createJoinConditionsFixture(0, 30000, 60);
+    fixture.afterPreview(() => {
+      fixture.row.ends_at = '2099-09-21T05:30:00Z';
+    });
+    await expect(read(fixture)).rejects.toMatchObject({
+      code: 'GAME_JOIN_CONDITIONS_REVISION_CHANGED',
+    });
+  });
+  it.each([{ clientId: fixtureId(99) }, { visitsLeft: 0 }, { productId: fixtureId(99) }])(
+    'keeps ownership, remaining visits and exact product checks for 60-minute targets %#',
+    async (change) => {
+      const fixture = createJoinConditionsFixture(0, 30000, 60);
+      fixture.setSubscription(change);
+      await expect(read(fixture)).rejects.toBeDefined();
+      expect(fixture.calls.some((call) => call.kind === 'LK1_ADVISORY_READ')).toBe(false);
+    },
+  );
   it('proves the existing Spring page contract without inventing number/hasNext fields', async () => {
     const fixture = createJoinConditionsFixture();
     fixture.setPage({ totalElements: 1, totalPages: 1, last: true });

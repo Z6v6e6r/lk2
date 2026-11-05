@@ -109,6 +109,72 @@ function dependencies(
 }
 
 describe('commercial JOIN orchestration', () => {
+  it('preflights and reserves a second participant in a 60-minute game, then never redispatches a repeated key', async () => {
+    const fixture = createJoinConditionsFixture(0, 30000, 60);
+    const order: string[] = [];
+    const consent = { amountMinor: 0, currency: 'RUB' as const };
+    const input = {
+      ...envelope,
+      priceConsent: consent,
+      requestHash: commercialJoinRequestHash({ ...envelope, priceConsent: consent }),
+    };
+    let prior: CommercialJoinAttemptView | null = null;
+    const begin = vi.fn<CommercialJoinRepositoryPort['beginPaidJoin']>(() => {
+      order.push('reserve');
+      prior = {
+        commandId: operationId,
+        gameId: input.gameId,
+        requestHash: input.requestHash,
+        state: 'IN_PROGRESS',
+        result: null,
+        errorCode: null,
+        reservation: {
+          id: reservationId,
+          state: 'ACTIVE',
+          expiresAt: new Date(Date.now() + 900000).toISOString(),
+        },
+        receipt: null,
+      };
+      return resolved({
+        outcome: 'reserved',
+        operationId,
+        reservationId,
+        revision: 9,
+        expiresAt: new Date(Date.now() + 900000).toISOString(),
+      });
+    });
+    const prepareManaged = vi.fn(() => {
+      order.push('preflight');
+      return resolved({
+        outcome: 'prepared' as const,
+        binding: { ...frozenBinding, startsAt: fixture.row.starts_at, durationMinutes: 60 },
+      });
+    });
+    const execute = vi.fn(() => {
+      order.push('owner');
+      return resolved({ status: 'PENDING' as const });
+    });
+    const repo = repository({
+      beginPaidJoin: begin,
+      getPaidJoinAttempt: () => resolved(prior),
+    }).repository;
+    const deps = {
+      ...dependencies(repo, { execute, read: () => resolved(null) }, fixture),
+      owner: { prepareManaged, execute, read: () => resolved(null) },
+    };
+    expect(await executeCommercialJoin(input, deps)).toMatchObject({ kind: 'accepted' });
+    expect(order).toEqual(['preflight', 'reserve', 'owner']);
+    expect(begin.mock.calls[0]?.[0]).toMatchObject({
+      actorUserId: fixtureActor.userId,
+      providerBinding: { durationMinutes: 60 },
+      price: { amountMinor: 0 },
+    });
+    expect(begin.mock.calls[0]?.[0]).not.toHaveProperty('managedJoin');
+    await executeCommercialJoin(input, deps);
+    expect(prepareManaged).toHaveBeenCalledOnce();
+    expect(begin).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
+  });
   it('requires an explicit price selection before any reservation', async () => {
     const { calls, repository: repo } = repository();
     const result = await executeCommercialJoin(

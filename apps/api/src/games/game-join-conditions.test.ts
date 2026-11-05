@@ -66,6 +66,58 @@ afterEach(async () => {
 });
 
 describe('one owner-resolved existing JOIN advisory', () => {
+  it.each([
+    { keyDuration: 90, freeMinutes: 60, paidMinutes: 0 },
+    { keyDuration: 60, freeMinutes: 60, paidMinutes: 30 },
+    { keyDuration: 60, freeMinutes: 30, paidMinutes: 0 },
+  ])('rejects a mismatched target/minutes for 60-minute quote %#', async (value) => {
+    const current = owner({
+      quotes: [
+        {
+          ...quote,
+          amountMinor: 0,
+          selectionKey: JSON.stringify([
+            'EXISTING_GAME',
+            selection.legacyGameId,
+            selection.startsAt,
+            value.keyDuration,
+          ]),
+          freeMinutes: value.freeMinutes,
+          paidMinutes: value.paidMinutes,
+        },
+      ],
+    });
+    current.resolveSelection.mockResolvedValue({ ...selection, durationMinutes: 60 });
+    await expect(readGameJoinConditions(current, actor, actor.correlationId)).rejects.toMatchObject(
+      {
+        code: 'GAME_JOIN_CONDITIONS_RESPONSE_INVALID',
+      },
+    );
+  });
+  it('preserves an owner-priced60-minute charge after free allowance is consumed', async () => {
+    const current = owner({
+      quotes: [
+        {
+          ...quote,
+          amountMinor: 210000,
+          selectionKey: JSON.stringify([
+            'EXISTING_GAME',
+            selection.legacyGameId,
+            selection.startsAt,
+            60,
+          ]),
+          freeMinutes: 0,
+          paidMinutes: 60,
+        },
+      ],
+    });
+    current.resolveSelection.mockResolvedValue({ ...selection, durationMinutes: 60 });
+    expect(await readGameJoinConditions(current, actor, actor.correlationId)).toMatchObject({
+      price: { amountMinor: 210000, confirmed: false },
+      freeMinutes: 0,
+      paidMinutes: 60,
+    });
+  });
   it('accepts MAX_SAFE_INTEGER revision and refuses overflow before owner work', async () => {
     const app = Fastify();
     apps.push(app);
