@@ -36,7 +36,7 @@ each deploy.
 
 ## What runs
 
-PostgreSQL 16, Redis, RabbitMQ, MinIO, API, Worker, Realtime, Web and Caddy (automatic HTTPS).
+PostgreSQL 16, Redis, RabbitMQ, MinIO (built from upstream source, see `minio.Dockerfile`), API, Worker, Realtime, Web and Caddy (automatic HTTPS).
 Migrations run as the PostgreSQL superuser, exactly as in local development and CI; the
 application connects as `phub_runtime` (non-owner, no `BYPASSRLS`), so row-level security stays on.
 
