@@ -146,6 +146,7 @@ describe('closed host runtime no-effects gates', () => {
         const acl = closedApplicationAclPlan(
           'game_start_0103',
           f.operation.expectedPrivilegePreimage,
+          'R1_PACKAGE119',
         );
         const readback = {
           schema: 'PHUB_CLOSED_APPLICATION_MIGRATOR_READBACK_V1',

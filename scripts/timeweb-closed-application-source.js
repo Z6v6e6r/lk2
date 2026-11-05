@@ -23,6 +23,9 @@ export const CLOSED_R1_CONTROLLER_BASE = Object.freeze({
   tree: 'f144d66d2aaa3dfdb53177c62d35bcb7b327253f',
 });
 export const CLOSED_R1_CONTROLLER_FILES = Object.freeze([
+  'scripts/closed-application-migration-acl.js',
+  'scripts/closed-application-migration-acl.d.ts',
+  'scripts/closed-application-migration-acl.test.ts',
   'deploy/timeweb/closed-application-prefix108-package119.v1.json',
   'deploy/timeweb/r1-tail108-119-catalogs.v1.json',
   'scripts/closed-application-package-family.js',

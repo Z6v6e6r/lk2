@@ -1,3 +1,4 @@
+import type { ClosedPackageFamily } from './closed-application-package-family.js';
 import type {
   ClosedAdditiveOperation,
   ClosedAdditiveProfile,
@@ -106,14 +107,21 @@ export function validateClosedApplicationManifest(
   manifest: unknown,
   bytes: Buffer,
 ): unknown;
-export function closedApplicationRoleProbeSource(profile: ClosedApplicationKind): string;
+export function closedApplicationRoleProbeSource(
+  profile: ClosedApplicationKind,
+  family?: ClosedPackageFamily,
+): string;
 export function validateClosedApplicationRoleReadback(
   operation: ClosedApplicationOperation,
   value: unknown,
   phase: string,
   target?: ClosedApplicationOperation['expectedDatabaseTarget'],
 ): unknown;
-export function closedApplicationStateSql(profile: ClosedApplicationKind, phase: string): string;
+export function closedApplicationStateSql(
+  profile: ClosedApplicationKind,
+  phase: string,
+  family?: ClosedPackageFamily,
+): string;
 export function validateClosedApplicationState(
   operation: ClosedApplicationOperation,
   value: unknown,

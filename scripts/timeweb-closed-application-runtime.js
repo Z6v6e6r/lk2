@@ -115,7 +115,11 @@ export function readClosedApplicationDatabaseState(operation, phase, deps) {
   );
   if (!same(target, operation.expectedDatabaseTarget)) fail('DATABASE_TARGET');
   const state = deps.postgresSql(
-    closedApplicationStateSql(operation.migrationProfile, phase),
+    closedApplicationStateSql(
+      operation.migrationProfile,
+      phase,
+      closedApplicationPackageFamily(operation),
+    ),
     true,
     operation.expectedPostgres.id,
   );
@@ -390,9 +394,17 @@ export function createClosedApplicationProductionBinding(operation) {
     },
     readState: readClosedApplicationDatabaseState,
     bootstrapSql: (op) =>
-      closedApplicationAclPlan(op.migrationProfile, op.expectedPrivilegePreimage).bootstrapSql,
+      closedApplicationAclPlan(
+        op.migrationProfile,
+        op.expectedPrivilegePreimage,
+        closedApplicationPackageFamily(op),
+      ).bootstrapSql,
     cleanupSql: (op) =>
-      closedApplicationAclPlan(op.migrationProfile, op.expectedPrivilegePreimage).cleanupSql,
+      closedApplicationAclPlan(
+        op.migrationProfile,
+        op.expectedPrivilegePreimage,
+        closedApplicationPackageFamily(op),
+      ).cleanupSql,
     attestPrevious: attestClosedApplicationPrevious,
     assertRuntimeFlags: (op, environments, deps) =>
       assertClosedApplicationRuntimeOff(op, environments, deps.git),

@@ -4,6 +4,13 @@ export interface R1Grant119Capture {
   systemIdentifier: string;
   recovery: boolean;
   roleSafe: boolean;
+  schemas: {
+    name: string;
+    owner: string;
+    acl: string;
+    migratorUsage: boolean;
+    migratorCreate: boolean;
+  }[];
   ledger: { filename: string; checksum: string }[];
   tables: {
     relation: string;
@@ -19,7 +26,7 @@ export interface R1Grant119Capture {
   }[];
 }
 export interface R1Grant119Plan {
-  schema: 'PHUB_R1_RUNTIME_GRANTS119_V1';
+  schema: 'PHUB_R1_RUNTIME_GRANTS119_V2';
   preimage: R1Grant119Capture;
   preimageSha256: string;
   postimage: R1Grant119Capture;

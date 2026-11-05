@@ -22,6 +22,13 @@ function capture(): R1Grant119Capture {
     systemIdentifier: '7679125609183186977',
     recovery: false,
     roleSafe: true,
+    schemas: [...new Set(names.map((name) => name.split('.')[0]!))].sort().map((name) => ({
+      name,
+      owner: 'phub_beta',
+      acl: '{phub_beta=UC/phub_beta,phub_runtime=U/phub_beta}',
+      migratorUsage: name !== 'games',
+      migratorCreate: false,
+    })),
     ledger: structuredClone(R1_TAIL.inventory),
     tables: names.map((relation) => ({
       relation,
@@ -119,6 +126,53 @@ describe('fixed R1 runtime119 grants', () => {
     if (kind === 'duplicate-column') r.columns.push(r.columns[0]!);
     expect(() => planR1RuntimeGrants119(x)).toThrow();
   });
+  it('temporarily supplies only missing schema usage and preserves all existing schema grants', () => {
+    const input = capture();
+    const p = planR1RuntimeGrants119(input);
+    expect(p.schema).toBe('PHUB_R1_RUNTIME_GRANTS119_V2');
+    expect(p.postimage.schemas).toEqual(input.schemas);
+    for (const phase of ['apply', 'recover'] as const) {
+      const sql = r1RuntimeGrantTransaction119(p, phase);
+      expect(sql).toContain(
+        'set local role phub_beta;grant USAGE on schema "games" to phub_migrator;reset role;',
+      );
+      expect(sql).toContain(
+        'set local role phub_beta;revoke USAGE on schema "games" from phub_migrator;reset role;',
+      );
+      expect(sql.match(/grant USAGE on schema/g)).toHaveLength(1);
+      expect(sql.match(/revoke USAGE on schema/g)).toHaveLength(1);
+      expect(sql.indexOf('grant USAGE')).toBeLessThan(sql.indexOf('set local role phub_migrator'));
+      expect(sql.indexOf('revoke USAGE')).toBeGreaterThan(sql.indexOf('end $r1grants$'));
+      expect(sql.indexOf('R1_RUNTIME_GRANT_PREIMAGE_DRIFT')).toBeLessThan(
+        sql.indexOf('grant USAGE'),
+      );
+      expect(sql.lastIndexOf('R1_RUNTIME_GRANT_POSTIMAGE_DRIFT')).toBeGreaterThan(
+        sql.indexOf('revoke USAGE'),
+      );
+      expect(sql).not.toMatch(/grant CREATE|cascade|alter schema/iu);
+    }
+    input.schemas.find((x) => x.name === 'games')!.migratorUsage = true;
+    expect(r1RuntimeGrantTransaction119(planR1RuntimeGrants119(input), 'apply')).not.toContain(
+      'USAGE on schema',
+    );
+  });
+  it.each(['missing', 'owner', 'foreign-owner', 'null-acl', 'order', 'type', 'old-plan'])(
+    'refuses incomplete or forged schema custody: %s',
+    (kind) => {
+      const x = capture();
+      if (kind === 'missing') x.schemas.pop();
+      if (kind === 'owner') x.schemas[0]!.owner = 'owner; reset role';
+      if (kind === 'foreign-owner') x.schemas[0]!.owner = 'foreign_owner';
+      if (kind === 'null-acl') x.schemas[0]!.acl = null as unknown as string;
+      if (kind === 'order') x.schemas.reverse();
+      if (kind === 'type') x.schemas[0]!.migratorUsage = 'false' as unknown as boolean;
+      if (kind === 'old-plan') {
+        const p = planR1RuntimeGrants119(x);
+        p.schema = 'PHUB_R1_RUNTIME_GRANTS119_V1' as typeof p.schema;
+        expect(() => r1RuntimeGrantTransaction119(p, 'apply')).toThrow();
+      } else expect(() => planR1RuntimeGrants119(x)).toThrow();
+    },
+  );
   it('reconstructs statements and rejects forged plans or arbitrary identifiers', () => {
     const p = planR1RuntimeGrants119(capture());
     p.changes[0]!.relation = 'public.users';
