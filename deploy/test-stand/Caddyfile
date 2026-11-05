@@ -1,0 +1,40 @@
+{
+	admin off
+}
+
+{$TEST_STAND_DOMAIN} {
+	encode zstd gzip
+	header {
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	@api path /health/* /public/api/* /user/api/*
+	handle @api {
+		reverse_proxy api:3000
+	}
+
+	# Path-style object URLs (S3_PUBLIC_ENDPOINT + /<bucket>/...). The Host header is passed through
+	# unchanged so presigned URLs signed for this domain verify at MinIO.
+	handle /{$TEST_STAND_S3_BUCKET:phub-local}/* {
+		reverse_proxy minio:9000
+	}
+
+	handle /realtime/health/live {
+		rewrite * /health/live
+		reverse_proxy realtime:3001
+	}
+
+	handle /realtime/health/ready {
+		rewrite * /health/ready
+		reverse_proxy realtime:3001
+	}
+
+	handle /realtime/* {
+		reverse_proxy realtime:3001
+	}
+
+	handle {
+		reverse_proxy web:8080
+	}
+}
