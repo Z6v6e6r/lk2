@@ -81,6 +81,11 @@ services:
       - stand.env
       - .secrets/runtime.env
       - .secrets/api.env
+    environment:
+      # The stand is HTTPS-only behind Caddy. Native Android/iOS session bridges accept only a
+      # Secure refresh cookie, so this overrides the host-owned stand.env (never overwritten by
+      # deploys) that may still carry the old `false`.
+      AUTH_COOKIE_SECURE: 'true'
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
