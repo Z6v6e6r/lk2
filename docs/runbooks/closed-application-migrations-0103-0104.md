@@ -231,29 +231,3 @@ This source correction requires a newly reviewed controller/migrator source tupl
 fresh matching backup/probe/input hashes. Previously sealed b989 operations and their
 backup generations are immutable and must not be reinterpreted using the new ACL plan.
 A source test or disposable PG16 rehearsal is not permission to mutate a live ACL.
-
-## Exact JOIN60 source prerequisite
-
-The JOIN60 correction admits the following complete group only: exact old/new Git blobs,
-regular `M 100644 → 100644`, no duplicate, missing, added, renamed or extra-field rows.
-These application and test paths remain outside the editable controller allowlist.
-The prior source without this group remains accepted.
-
-| Path                                                               | Old blob (fixed 27d base)                  | Reviewed new blob                          |
-| ------------------------------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
-| `apps/api/src/games/game-commercial-join.test.ts`                  | `6350c1d9d1e213a02351327e372c11ef930b1d88` | `23fa1a6b8fd83042645ef82d96dc2329942dd34d` |
-| `apps/api/src/games/game-join-conditions-owner.ts`                 | `3ea378e81b3ab71cb263e0f1b9fc14d0a3650ef0` | `bae4a56b46088d9445f30a0956406832e65f3c24` |
-| `apps/api/src/games/game-join-conditions-resolver.test.ts`         | `6ae655278baadea2c9cbcaeca30894c047f88c4e` | `4d810ff830dd5d03adf1e083e253a6458e8312f7` |
-| `apps/api/src/games/game-join-conditions.test-fixture.ts`          | `4af7f33ddf6a193e5b57440d920582081e4f6436` | `3b93df7f80095bea1542922b8bfd9eb2588f71fd` |
-| `apps/api/src/games/game-join-conditions.test.ts`                  | `020305559f9a351f50db8c4eb22cbf7f96d364bd` | `2dd7c344ad9f929495d1f1e50e47d5c2b639b0ac` |
-| `apps/api/src/games/game-join-conditions.ts`                       | `fcedef03338f747145d08ac0796f0440d73e885a` | `f8c9e62ec57ca639bd8ad33f8b4f3fd09f997fa9` |
-| `docs/contracts/game-join-conditions.md`                           | `b5009d30579e65caef133116bfb2f58cd2b0be36` | `af199d739153277becdbca1df6c0499108ed0d4f` |
-| `packages/database/src/game-join-conditions-context-repository.ts` | `e4b084d60905099f1babdae0915f6cc6c8ed08ef` | `2945dc681ee0eca5e9a6df8ed5a2f77fb21bd3a3` |
-| `packages/viva-adapter/src/game-subscription-selection.ts`         | `d3f3518ade36ffc400c5ea7e1fe8064d5f52ba7f` | `055441ccc3363db241af1d378eadc3c23f5e62dd` |
-| `apps/api/src/games/game-commercial-join-runtime.test.ts`          | `c5a7bbc5fd82da33a84044bb48ffef0fea6a158c` | `6e4e6d98463188d5feaff59551365a40c7b0f514` |
-
-A merged JOIN60 source is a new immutable source/artifact tuple. Obtain its successful
-source CI, publication, canonical manifest, enrollment and fresh target evidence before
-execution; never relabel the existing 2d042 artifacts or backup freshness. The same
-106→107→108→119 migration/ACL semantics apply. Rollout leaves commercial activation
-separate and disabled until its exact product/configuration admission.

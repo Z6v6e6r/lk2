@@ -142,70 +142,6 @@ it('pins the actual reviewed native JOIN blobs outside the editable allowlist', 
     ).toBe(row.newOid);
   }
 });
-const join60Group = [
-  {
-    path: 'apps/api/src/games/game-commercial-join.test.ts',
-    oldOid: '6350c1d9d1e213a02351327e372c11ef930b1d88',
-    newOid: '23fa1a6b8fd83042645ef82d96dc2329942dd34d',
-  },
-  {
-    path: 'apps/api/src/games/game-join-conditions-owner.ts',
-    oldOid: '3ea378e81b3ab71cb263e0f1b9fc14d0a3650ef0',
-    newOid: 'bae4a56b46088d9445f30a0956406832e65f3c24',
-  },
-  {
-    path: 'apps/api/src/games/game-join-conditions-resolver.test.ts',
-    oldOid: '6ae655278baadea2c9cbcaeca30894c047f88c4e',
-    newOid: '4d810ff830dd5d03adf1e083e253a6458e8312f7',
-  },
-  {
-    path: 'apps/api/src/games/game-join-conditions.test-fixture.ts',
-    oldOid: '4af7f33ddf6a193e5b57440d920582081e4f6436',
-    newOid: '3b93df7f80095bea1542922b8bfd9eb2588f71fd',
-  },
-  {
-    path: 'apps/api/src/games/game-join-conditions.test.ts',
-    oldOid: '020305559f9a351f50db8c4eb22cbf7f96d364bd',
-    newOid: '2dd7c344ad9f929495d1f1e50e47d5c2b639b0ac',
-  },
-  {
-    path: 'apps/api/src/games/game-join-conditions.ts',
-    oldOid: 'fcedef03338f747145d08ac0796f0440d73e885a',
-    newOid: 'f8c9e62ec57ca639bd8ad33f8b4f3fd09f997fa9',
-  },
-  {
-    path: 'docs/contracts/game-join-conditions.md',
-    oldOid: 'b5009d30579e65caef133116bfb2f58cd2b0be36',
-    newOid: 'af199d739153277becdbca1df6c0499108ed0d4f',
-  },
-  {
-    path: 'packages/database/src/game-join-conditions-context-repository.ts',
-    oldOid: 'e4b084d60905099f1babdae0915f6cc6c8ed08ef',
-    newOid: '2945dc681ee0eca5e9a6df8ed5a2f77fb21bd3a3',
-  },
-  {
-    path: 'packages/viva-adapter/src/game-subscription-selection.ts',
-    oldOid: 'd3f3518ade36ffc400c5ea7e1fe8064d5f52ba7f',
-    newOid: '055441ccc3363db241af1d378eadc3c23f5e62dd',
-  },
-  {
-    path: 'apps/api/src/games/game-commercial-join-runtime.test.ts',
-    oldOid: 'c5a7bbc5fd82da33a84044bb48ffef0fea6a158c',
-    newOid: '6e4e6d98463188d5feaff59551365a40c7b0f514',
-  },
-].map((row) => ({ ...row, status: 'M', oldMode: '100644', newMode: '100644' }));
-it('pins JOIN60 runtime, tests and contract without an editable app allowlist', () => {
-  for (const row of join60Group) {
-    expect(CLOSED_R1_CONTROLLER_FILES).not.toContain(row.path);
-    const bytes = readFileSync(row.path);
-    expect(
-      createHash('sha1')
-        .update('blob ' + bytes.length + '\0')
-        .update(bytes)
-        .digest('hex'),
-    ).toBe(row.newOid);
-  }
-});
 for (const validator of ['closed', 'tail'] as const) {
   function validate(entries: unknown) {
     if (validator === 'closed') return validateClosedR1ControllerClosure(entries);
@@ -232,44 +168,6 @@ for (const validator of ['closed', 'tail'] as const) {
     if (result.status !== 0) throw Error(result.stdout.trim());
     expect(result.stdout.trim()).toBe('PASS');
   }
-  describe(`${validator} exact JOIN60 prerequisite`, () => {
-    it('preserves prior admission and accepts the complete fixed group', () => {
-      expect(() => validate([...r1Entries, ...nativeJoinPair, ...phonePair])).not.toThrow();
-      expect(() =>
-        validate([...r1Entries, ...nativeJoinPair, ...phonePair, ...join60Group]),
-      ).not.toThrow();
-    });
-    it.each(join60Group.map((row) => [row.path]))('rejects missing %s', (path) => {
-      expect(() =>
-        validate([...r1Entries, ...join60Group.filter((row) => row.path !== path)]),
-      ).toThrow();
-    });
-    it.each([
-      { oldOid: 'c'.repeat(40) },
-      { newOid: 'c'.repeat(40) },
-      { oldMode: '100755' },
-      { newMode: '120000' },
-      { newMode: '100755' },
-      { status: 'A' },
-      { status: 'D' },
-      { status: 'R100' },
-      { extra: true },
-    ])('rejects mutated JOIN60 row %j', (change) => {
-      expect(() =>
-        validate([...r1Entries, { ...join60Group[0], ...change }, ...join60Group.slice(1)]),
-      ).toThrow();
-    });
-    it('rejects duplicate and unrelated sibling paths', () => {
-      expect(() => validate([...r1Entries, ...join60Group, join60Group[0]])).toThrow();
-      expect(() =>
-        validate([
-          ...r1Entries,
-          ...join60Group,
-          { ...join60Group[0], path: 'apps/api/src/games/unreviewed.ts' },
-        ]),
-      ).toThrow();
-    });
-  });
   describe(`${validator} exact native JOIN prerequisite`, () => {
     for (const path of [
       'scripts/timeweb-api-worker-migration.d.ts',

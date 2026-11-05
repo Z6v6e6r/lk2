@@ -107,12 +107,3 @@ backup/restore, actual migration and application rollout are distinct evidence. 
 result in this change proves STAGING, PROVIDER or PRODUCTION execution. Missing live capacity,
 predecessor admission, source/catalog publication or private preimages is a real pending gate;
 none is bypassed by this mechanism.
-
-## JOIN60 source compatibility
-
-Tail admission consumes the same exact all-or-none JOIN60 blob group documented in
-[closed migration prerequisites](closed-application-migrations-0103-0104.md#exact-join60-source-prerequisite).
-API/Worker119 binds the completed tail request and delegates this source attestation;
-there is no separate application allowlist. A new JOIN60 commit requires its own source CI,
-immutable publication, enrollment and fresh source-bound operations. Prior 2d042 packets
-are evidence for their original source only, never authority for the new candidate.

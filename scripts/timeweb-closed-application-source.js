@@ -180,81 +180,11 @@ export function validateClosedR1PhonePrerequisite(entries) {
     fail('R1_PHONE_PREREQUISITE');
   return new Set(rows.map((row) => row.path));
 }
-// Exact JOIN60 implementation, regression tests and duration contract.
-// Application paths stay outside the editable controller allowlist.
-const JOIN60_PREREQUISITE = Object.freeze({
-  'apps/api/src/games/game-commercial-join.test.ts': {
-    oldOid: '6350c1d9d1e213a02351327e372c11ef930b1d88',
-    newOid: '23fa1a6b8fd83042645ef82d96dc2329942dd34d',
-  },
-  'apps/api/src/games/game-join-conditions-owner.ts': {
-    oldOid: '3ea378e81b3ab71cb263e0f1b9fc14d0a3650ef0',
-    newOid: 'bae4a56b46088d9445f30a0956406832e65f3c24',
-  },
-  'apps/api/src/games/game-join-conditions-resolver.test.ts': {
-    oldOid: '6ae655278baadea2c9cbcaeca30894c047f88c4e',
-    newOid: '4d810ff830dd5d03adf1e083e253a6458e8312f7',
-  },
-  'apps/api/src/games/game-join-conditions.test-fixture.ts': {
-    oldOid: '4af7f33ddf6a193e5b57440d920582081e4f6436',
-    newOid: '3b93df7f80095bea1542922b8bfd9eb2588f71fd',
-  },
-  'apps/api/src/games/game-join-conditions.test.ts': {
-    oldOid: '020305559f9a351f50db8c4eb22cbf7f96d364bd',
-    newOid: '2dd7c344ad9f929495d1f1e50e47d5c2b639b0ac',
-  },
-  'apps/api/src/games/game-join-conditions.ts': {
-    oldOid: 'fcedef03338f747145d08ac0796f0440d73e885a',
-    newOid: 'f8c9e62ec57ca639bd8ad33f8b4f3fd09f997fa9',
-  },
-  'docs/contracts/game-join-conditions.md': {
-    oldOid: 'b5009d30579e65caef133116bfb2f58cd2b0be36',
-    newOid: 'af199d739153277becdbca1df6c0499108ed0d4f',
-  },
-  'packages/database/src/game-join-conditions-context-repository.ts': {
-    oldOid: 'e4b084d60905099f1babdae0915f6cc6c8ed08ef',
-    newOid: '2945dc681ee0eca5e9a6df8ed5a2f77fb21bd3a3',
-  },
-  'packages/viva-adapter/src/game-subscription-selection.ts': {
-    oldOid: 'd3f3518ade36ffc400c5ea7e1fe8064d5f52ba7f',
-    newOid: '055441ccc3363db241af1d378eadc3c23f5e62dd',
-  },
-  'apps/api/src/games/game-commercial-join-runtime.test.ts': {
-    oldOid: 'c5a7bbc5fd82da33a84044bb48ffef0fea6a158c',
-    newOid: '6e4e6d98463188d5feaff59551365a40c7b0f514',
-  },
-});
-export function validateClosedR1Join60Prerequisite(entries) {
-  if (!Array.isArray(entries)) fail('R1_JOIN60_PREREQUISITE');
-  const rows = entries.filter((row) => row && Object.hasOwn(JOIN60_PREREQUISITE, row.path));
-  if (rows.length === 0) return new Set();
-  if (
-    rows.length !== 10 ||
-    new Set(rows.map((row) => row.path)).size !== 10 ||
-    rows.some((row) => {
-      const pin = JOIN60_PREREQUISITE[row.path];
-      return (
-        !same(
-          Object.keys(row).sort(),
-          ['oldMode', 'newMode', 'oldOid', 'newOid', 'status', 'path'].sort(),
-        ) ||
-        row.status !== 'M' ||
-        row.oldMode !== '100644' ||
-        row.newMode !== '100644' ||
-        row.oldOid !== pin.oldOid ||
-        row.newOid !== pin.newOid
-      );
-    })
-  )
-    fail('R1_JOIN60_PREREQUISITE');
-  return new Set(rows.map((row) => row.path));
-}
 export function validateClosedR1ControllerClosure(entries) {
   const paths = new Set();
   if (!Array.isArray(entries) || !entries.length) fail('R1_DELTA');
   const nativePrerequisite = validateClosedR1NativeJoinPrerequisite(entries);
   const phonePrerequisite = validateClosedR1PhonePrerequisite(entries);
-  const join60Prerequisite = validateClosedR1Join60Prerequisite(entries);
   for (const row of entries) {
     if (
       !row ||
@@ -265,8 +195,7 @@ export function validateClosedR1ControllerClosure(entries) {
       paths.has(row.path) ||
       (!CLOSED_R1_CONTROLLER_FILES.includes(row.path) &&
         !nativePrerequisite.has(row.path) &&
-        !phonePrerequisite.has(row.path) &&
-        !join60Prerequisite.has(row.path)) ||
+        !phonePrerequisite.has(row.path)) ||
       !['A', 'M'].includes(row.status) ||
       row.newMode !== '100644' ||
       !/^[a-f0-9]{40}$/.test(row.newOid ?? '') ||
