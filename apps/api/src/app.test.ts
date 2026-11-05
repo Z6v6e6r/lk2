@@ -65,6 +65,22 @@ afterEach(async () => {
 });
 
 describe('health endpoints', () => {
+  it('answers 429 RATE_LIMIT_EXCEEDED, not 500, once the request limit is exhausted', async () => {
+    const app = await buildApp({ config, logger: createLogger('api-test', 'silent') });
+    apps.push(app);
+    const statuses: number[] = [];
+    let limited: Awaited<ReturnType<typeof app.inject>> | undefined;
+    for (let index = 0; index < 125 && !limited; index += 1) {
+      const response = await app.inject({ method: 'GET', url: '/health/live' });
+      statuses.push(response.statusCode);
+      if (response.statusCode !== 200) limited = response;
+    }
+    expect(statuses.filter((status) => status === 200)).toHaveLength(120);
+    expect(limited?.statusCode).toBe(429);
+    expect(limited?.json()).toMatchObject({ code: 'RATE_LIMIT_EXCEEDED' });
+    expect(limited?.headers['retry-after']).toBeDefined();
+  });
+
   it('allows CUP preflight for state-changing admin methods', async () => {
     const app = await buildApp({
       config: { ...config, CORS_ORIGINS: 'http://127.0.0.1:3001' },
