@@ -14,6 +14,7 @@ for (const component of ['api', 'worker'])
     requirements.set(row.relation, previous);
   }
 const names = [...requirements.keys()].sort();
+const schemas = [...new Set(names.map((name) => name.split('.')[0]))].sort();
 const need = (ok) => {
   if (!ok) throw Error('R1_RUNTIME_GRANT_BOUNDARY');
 };
@@ -39,18 +40,42 @@ const acl = (expression, owner) =>
 export const R1_RUNTIME_GRANT_CATALOG_SQL = `select jsonb_build_object(
  'databaseName',current_database(),'systemIdentifier',(select system_identifier::text from pg_catalog.pg_control_system()),'recovery',pg_catalog.pg_is_in_recovery(),
  'roleSafe',exists(select 1 from pg_catalog.pg_roles r where r.rolname='phub_runtime' and not(r.rolsuper or r.rolcreaterole or r.rolcreatedb or r.rolreplication or r.rolbypassrls) and not exists(select 1 from pg_catalog.pg_auth_members m where m.member=r.oid)),
+ 'schemas',(select jsonb_agg(jsonb_build_object('name',n.nspname,'owner',pg_catalog.pg_get_userbyid(n.nspowner),'acl',n.nspacl::text,'migratorUsage',pg_catalog.has_schema_privilege('phub_migrator',n.oid,'USAGE'),'migratorCreate',pg_catalog.has_schema_privilege('phub_migrator',n.oid,'CREATE')) order by n.nspname collate "C") from pg_catalog.pg_namespace n where n.nspname=any(array[${schemas.map(literal).join(',')}]::text[])),
  'ledger',(select jsonb_agg(jsonb_build_object('filename',filename,'checksum',checksum) order by filename collate "C") from public.schema_migrations),
  'tables',(select jsonb_agg(jsonb_build_object('relation',n.nspname||'.'||c.relname,'owner',pg_catalog.pg_get_userbyid(c.relowner),'kind',c.relkind::text,'rls',c.relrowsecurity,'forceRls',c.relforcerowsecurity,
  'schemaUsage',pg_catalog.has_schema_privilege('phub_runtime',n.oid,'USAGE'),'schemaCreate',pg_catalog.has_schema_privilege('phub_runtime',n.oid,'CREATE'),'schemaOwnerAssumable',pg_catalog.pg_has_role('phub_runtime',n.nspowner,'MEMBER'),
  'acl',${acl('c.relacl', 'c.relowner')},'columns',(select jsonb_agg(jsonb_build_object('name',col.attname,'acl',${acl('col.attacl')}) order by col.attname collate "C") from pg_catalog.pg_attribute col where col.attrelid=c.oid and col.attnum>0 and not col.attisdropped)) order by n.nspname collate "C",c.relname collate "C") from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname||'.'||c.relname=any(array[${names.map(literal).join(',')}]::text[])))`;
 function validate(snapshot) {
-  exact(snapshot, ['databaseName', 'systemIdentifier', 'recovery', 'roleSafe', 'ledger', 'tables']);
+  exact(snapshot, [
+    'databaseName',
+    'systemIdentifier',
+    'recovery',
+    'roleSafe',
+    'schemas',
+    'ledger',
+    'tables',
+  ]);
   ident(snapshot.databaseName);
   need(
     typeof snapshot.systemIdentifier === 'string' &&
       /^[1-9][0-9]*$/.test(snapshot.systemIdentifier),
   );
   need(snapshot.recovery === false && snapshot.roleSafe === true);
+  need(Array.isArray(snapshot.schemas) && snapshot.schemas.length === schemas.length);
+  for (const [i, row] of snapshot.schemas.entries()) {
+    exact(row, ['name', 'owner', 'acl', 'migratorUsage', 'migratorCreate']);
+    need(row.name === schemas[i]);
+    ident(row.owner);
+    // Existing runtime USAGE requires an explicit ACL here. Refuse null rather than
+    // materialize a default ACL that GRANT/REVOKE could not restore byte-for-byte.
+    need(
+      typeof row.acl === 'string' &&
+        row.acl.startsWith('{') &&
+        row.acl.endsWith('}') &&
+        row.acl.length <= 65536,
+    );
+    need(typeof row.migratorUsage === 'boolean' && typeof row.migratorCreate === 'boolean');
+  }
   r1PackagedInventory(snapshot.ledger);
   need(Array.isArray(snapshot.tables) && snapshot.tables.length === names.length);
   for (const [i, row] of snapshot.tables.entries()) {
@@ -156,7 +181,7 @@ export function planR1RuntimeGrants119(preimage) {
   }
   validate(postimage);
   return {
-    schema: 'PHUB_R1_RUNTIME_GRANTS119_V1',
+    schema: 'PHUB_R1_RUNTIME_GRANTS119_V2',
     preimage: structuredClone(preimage),
     preimageSha256: digest(preimage),
     postimage,
@@ -181,15 +206,35 @@ export function r1RuntimeGrantTransaction119(plan, phase) {
     '(select system_identifier::text from pg_catalog.pg_control_system())',
     "current_setting('phub.r1_grant_system_identifier')",
   );
+  const missingUsage = before.schemas.filter((row) => !row.migratorUsage);
+  const schemaStatements = (action) =>
+    missingUsage
+      .map(
+        (row) =>
+          `set local role ${ident(row.owner)};${action} USAGE on schema ${ident(row.name)} ${action === 'grant' ? 'to' : 'from'} phub_migrator;reset role;`,
+      )
+      .join('\n');
+  const check = (snapshot, code, omitSchemas = false) =>
+    `if ((${transactionCatalog})${omitSchemas ? " - 'schemas'" : ''}) is distinct from (${literal(encode(snapshot))}::jsonb${omitSchemas ? " - 'schemas'" : ''}) then raise exception '${code}';end if;`;
   return `begin;select set_config('phub.r1_grant_system_identifier',(select system_identifier::text from pg_catalog.pg_control_system()),true);set local search_path='pg_catalog';set local lock_timeout='5s';set local statement_timeout='30s';
-set local role phub_migrator;
-do $r1grants$ begin
+do $r1pre$ begin
+if current_user <> session_user then raise exception 'R1_RUNTIME_GRANT_ADMIN_ROLE';end if;
 lock table public.schema_migrations in share mode;
 ${names.map((n) => `lock table ${qualified(n)} in share row exclusive mode;`).join('\n')}
-if (${transactionCatalog}) is distinct from ${literal(encode(before))}::jsonb then raise exception 'R1_RUNTIME_GRANT_PREIMAGE_DRIFT';end if;
+${check(before, 'R1_RUNTIME_GRANT_PREIMAGE_DRIFT')}
+end $r1pre$;
+${schemaStatements('grant')}
+set local role phub_migrator;
+do $r1grants$ begin
+${check(before, 'R1_RUNTIME_GRANT_PREIMAGE_DRIFT', true)}
 ${changes.map((c) => statement(c.action, c.relation, c.column, c.privilege)).join('\n')}
-if (${transactionCatalog}) is distinct from ${literal(encode(after))}::jsonb then raise exception 'R1_RUNTIME_GRANT_POSTIMAGE_DRIFT';end if;
-end $r1grants$;commit;`;
+${check(after, 'R1_RUNTIME_GRANT_POSTIMAGE_DRIFT', true)}
+end $r1grants$;
+reset role;
+${schemaStatements('revoke')}
+do $r1post$ begin
+${check(after, 'R1_RUNTIME_GRANT_POSTIMAGE_DRIFT')}
+end $r1post$;commit;`;
 }
 
 // Translate only the exact table/column ACLs in a reviewed grant plan into the existing

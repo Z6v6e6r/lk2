@@ -28,3 +28,20 @@ At or after delivery release intent, provider calls may have begun. Reconcile th
 ## Acceptance still required
 
 After this closed update, execute the separate owner-approved configuration/binding activation and functional matrix. Validate retained Realtime ticket compatibility, reconnect/gap reads and message permissions; Web OAuth fallback, TLS/ingress and provider returns; bookings, subscriptions and payments against actual provider evidence. APK installation and device push/offline recovery remain DEVICE evidence collected on the owner's phone. No CI or rollout receipt substitutes for those results.
+
+### Temporary migrator schema access during runtime grants
+
+Runtime grant plans use `PHUB_R1_RUNTIME_GRANTS119_V2`. A new capture includes the actual
+owner, complete non-null raw ACL and effective migrator USAGE/CREATE for every fixed grant
+schema. V1 captures/plans are not accepted; regenerate the plan from a fresh canonical
+`R1_RUNTIME_GRANT_CATALOG_SQL` capture. Outer operation identity is unchanged, but the new
+plan hash must be sealed and reviewed; never reuse an old grant intent or terminal receipt.
+
+Apply and recover both start as the database administrator, lock the fixed relations and
+validate the whole preimage. Only missing schema USAGE is temporarily granted as the captured
+schema owner. Table/column grants still execute under `SET LOCAL ROLE phub_migrator`, preserving
+their grantor identity. The transaction then revokes only its added USAGE as the same schema
+owner and verifies the full final snapshot, including exact original schema ACLs. Existing
+USAGE/CREATE and unrelated grants are retained. No schema CREATE is added. Null schema ACLs
+are refused rather than materialized. Any drift/error rolls back the entire transaction;
+ambiguous execution still follows the existing no-replay/terminal-proof contract.

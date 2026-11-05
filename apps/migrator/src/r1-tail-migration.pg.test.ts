@@ -251,7 +251,8 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
               }
             }
             await client.query(`alter table public.schema_migrations owner to phub_migrator;
-     grant usage on schema public,identity,profile,notifications,support,games,locations,integration,eligibility,booking,commerce to phub_migrator,phub_runtime;
+     grant usage on schema public,identity,profile,notifications,support,locations,integration,eligibility,booking,commerce to phub_migrator,phub_runtime;
+     grant usage on schema games to phub_runtime;
      grant execute on function pg_catalog.pg_control_system()to phub_migrator,phub_runtime;
      alter default privileges for role phub_migrator in schema identity grant select,insert,update,delete on tables to phub_runtime`);
             if (variant === 'SCENARIO_EDITOR_V1') {
@@ -278,10 +279,14 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
               for (const profile of ['game_start_0103', 'subject_link_0104'] as const) {
                 const before = (
                   await client.query<{ acl: ClosedApplicationAclRow[] }>(
-                    `select (${closedApplicationAclSql(profile)})as acl`,
+                    `select (${closedApplicationAclSql(profile, 'R1_PACKAGE119')})as acl`,
                   )
                 ).rows[0]!.acl;
-                const preparation = closedApplicationAclPlan(profile, before);
+                expect(before.find((row) => row.key === 'schema:games')?.effective).toEqual({
+                  USAGE: false,
+                  CREATE: false,
+                });
+                const preparation = closedApplicationAclPlan(profile, before, 'R1_PACKAGE119');
                 await client.query(preparation.bootstrapSql);
                 const explicitArgument =
                   profile === 'game_start_0103'
@@ -315,6 +320,13 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
                   },
                 );
                 await client.query(preparation.cleanupSql);
+                expect(
+                  (
+                    await client.query<{ usage: boolean }>(
+                      "select has_schema_privilege('phub_migrator','games','USAGE') usage",
+                    )
+                  ).rows[0]!.usage,
+                ).toBe(false);
                 const rows = (
                   await client.query<{ filename: string; checksum: string }>(
                     'select filename,checksum from public.schema_migrations order by filename',
@@ -419,6 +431,16 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
           try {
             const preimage = await acl(root),
               preparation = r1TailPreparationPlan(preimage);
+            expect(preimage.find((row) => row.key === 'schema:games')?.props).toEqual({
+              USAGE: false,
+              CREATE: false,
+            });
+            expect(preparation.added).toContainEqual({
+              key: 'schema:games',
+              privilege: 'USAGE',
+              sql: 'grant USAGE on schema "games" to phub_migrator;',
+              inverse: 'revoke USAGE on schema "games" from phub_migrator;',
+            });
             // Actual wire login is restricted; the missing intents owner must be refused.
             await expect(assertR1TailRole(migrator)).rejects.toThrow('R1_TAIL_ROLE_OWNERSHIP');
             for (let count = 108; count <= 119; count++) {
@@ -455,6 +477,7 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             migrator.release();
             root.release();
           }
+          expect(checkpoints).toEqual(reviewed.variants[variant]);
           exported[variant] = checkpoints;
           const fixtureCatalogs: R1TailCatalogs = {
             schema: 'PHUB_R1_TAIL_CATALOGS_V1',
@@ -539,6 +562,10 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             expect(r1LedgerCount(await readR1TailLedger(executor))).toBe(119);
             await owner.query(r1TailAclTransaction(preparation, 'cleanup', await acl(owner)));
             expect(await acl(owner)).toEqual(preparation.preimage);
+            expect((await acl(owner)).find((row) => row.key === 'schema:games')?.props).toEqual({
+              USAGE: false,
+              CREATE: false,
+            });
             expect(point(await catalog(owner))).toEqual(checkpoints['119']!.cleaned);
             // Catalog evidence above stays unchanged. Exercise the new diagnostic only in
             // this already-owned disposable119 fixture, after all golden comparisons.
@@ -603,8 +630,40 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
             const grantPreimage = await runtimeAcl();
             const grantPlan = planR1RuntimeGrants119(grantPreimage);
             const beforeGrantCatalog = await catalog(owner);
+            expect(grantPreimage.schemas.find((row) => row.name === 'games')!.migratorUsage).toBe(
+              false,
+            );
+            // Exact owner/whole-ACL drift refuses before granting any temporary capability.
+            for (const drift of ['owner', 'acl'] as const) {
+              await owner.query(
+                drift === 'owner'
+                  ? 'alter schema games owner to phub_migrator'
+                  : 'grant usage on schema games to phub_migrator',
+              );
+              await expect(
+                owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply')),
+              ).rejects.toThrow('R1_RUNTIME_GRANT_PREIMAGE_DRIFT');
+              await owner.query('rollback');
+              await owner.query(
+                drift === 'owner'
+                  ? `alter schema games owner to ${quote(grantPreimage.schemas.find((row) => row.name === 'games')!.owner)}`
+                  : 'revoke usage on schema games from phub_migrator',
+              );
+              expect(await runtimeAcl()).toEqual(grantPreimage);
+            }
+            // Fault injection is test-only: abort after temporary USAGE and after table grants.
+            for (const marker of ['set local role phub_migrator;', 'end $r1grants$;']) {
+              const sql = r1RuntimeGrantTransaction119(grantPlan, 'apply').replace(
+                marker,
+                marker + " do $fault$ begin raise exception 'TEST_GRANT_ABORT';end $fault$;",
+              );
+              await expect(owner.query(sql)).rejects.toThrow('TEST_GRANT_ABORT');
+              await owner.query('rollback');
+              expect(await runtimeAcl()).toEqual(grantPreimage);
+            }
             await owner.query(r1RuntimeGrantTransaction119(grantPlan, 'apply'));
             expect(await runtimeAcl()).toEqual(grantPlan.postimage);
+            expect((await runtimeAcl()).schemas).toEqual(grantPreimage.schemas);
             expect(await catalog(owner)).toEqual(
               r1RuntimeGrantCatalog119(beforeGrantCatalog, grantPlan),
             );

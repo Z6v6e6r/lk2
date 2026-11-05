@@ -140,6 +140,13 @@ export function r1ApiWorker119PlanFixture() {
     systemIdentifier: '7679125609183186977',
     recovery: false,
     roleSafe: true,
+    schemas: [...new Set(names.map((name) => name.split('.')[0]!))].sort().map((name) => ({
+      name,
+      owner: 'schema_owner',
+      acl: '{schema_owner=UC/schema_owner,phub_runtime=U/schema_owner}',
+      migratorUsage: name !== 'games',
+      migratorCreate: false,
+    })),
     ledger: structuredClone(R1_TAIL.inventory),
     tables: names.map((relation) => ({
       relation,
