@@ -119,6 +119,21 @@ const environmentSchema = z.object({
     .regex(/^\d{4}$/)
     .default('0000'),
   /**
+   * Extra synthetic phones accepted by the VIVA_MODE=mock identity provider (comma-separated, same
+   * code as AUTH_DEV_PHONE_E164), so a disposable stand can test journeys with several players.
+   * Rejected unless VIVA_MODE=mock; mock itself is forbidden in production.
+   */
+  AUTH_DEV_EXTRA_PHONES_E164: z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((phone) => phone.trim())
+        .filter(Boolean),
+    )
+    .pipe(z.array(z.string().regex(/^\+7\d{10}$/)).max(9)),
+  /**
    * Links the provider-asserted phone that keys viewer-scoped legacy (CUP) reads to the account that
    * just authenticated. The phone stays in integration custody: it is not a PadlHub login key and not
    * proof for payment, participation or activity-history guards.
@@ -1258,6 +1273,15 @@ export function loadConfig(
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.VIVA_MODE === 'mock') {
     throw new Error('VIVA_MODE=mock is forbidden in production');
+  }
+  if (parsed.data.AUTH_DEV_EXTRA_PHONES_E164.length > 0) {
+    if (parsed.data.VIVA_MODE !== 'mock') {
+      throw new Error('AUTH_DEV_EXTRA_PHONES_E164 requires VIVA_MODE=mock');
+    }
+    const phones = [parsed.data.AUTH_DEV_PHONE_E164, ...parsed.data.AUTH_DEV_EXTRA_PHONES_E164];
+    if (new Set(phones).size !== phones.length) {
+      throw new Error('AUTH_DEV_EXTRA_PHONES_E164 must not repeat AUTH_DEV_PHONE_E164 or itself');
+    }
   }
   if (parsed.data.APP_ENV === 'production' && !parsed.data.AUTH_COOKIE_SECURE) {
     throw new Error('AUTH_COOKIE_SECURE=true is required in production');

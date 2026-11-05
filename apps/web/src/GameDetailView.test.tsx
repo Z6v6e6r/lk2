@@ -106,6 +106,31 @@ describe('GameDetailView', () => {
     expect(within(panel).queryByRole('button', { name: 'Показать больше' })).toBeNull();
   });
 
+  it('does not invite joining the open seats of a cancelled game', () => {
+    const openGame: GameCard = {
+      ...game,
+      capacity: { total: 4, occupied: 2, reserved: 0, open: 2, waitlistCount: 0 },
+      participants: game.participants.slice(0, 2),
+    };
+    const props = {
+      activeTab: 'GAME' as const,
+      busy: false,
+      onAction: vi.fn(),
+      onChatOpen: vi.fn(),
+      onSubmit: vi.fn().mockResolvedValue(undefined),
+      onTabChange: vi.fn(),
+    };
+    const view = render(<GameDetailView {...props} game={openGame} />);
+    let panel = screen.getByRole('region', { name: 'Участники игры' });
+    expect(within(panel).getAllByText('Можно присоединиться')).toHaveLength(2);
+    view.rerender(
+      <GameDetailView {...props} game={{ ...openGame, displayState: 'CANCELLED' as const }} />,
+    );
+    panel = screen.getByRole('region', { name: 'Участники игры' });
+    expect(within(panel).getAllByText('Свободное место')).toHaveLength(2);
+    expect(within(panel).queryByText('Можно присоединиться')).toBeNull();
+  });
+
   it('offers only the viewer a leave badge through the existing action handler', async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();

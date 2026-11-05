@@ -880,7 +880,9 @@ export async function buildApp(options: BuildAppOptions) {
     hook: 'preHandler',
     ...(options.rateLimitRedis ? { redis: options.rateLimitRedis } : {}),
     keyGenerator: rateLimitKey,
-    errorResponseBuilder: (request) => ({
+    // The plugin throws this object; statusCode lets the error handler answer 429, not 500.
+    errorResponseBuilder: (request, context) => ({
+      statusCode: context.statusCode,
       code: 'RATE_LIMIT_EXCEEDED',
       message: 'Слишком много запросов. Повторите позже.',
       correlationId: correlationIdFromHeader(request),
@@ -2319,6 +2321,16 @@ export async function buildApp(options: BuildAppOptions) {
     );
     if (reply.sent) return;
     const statusCode = (error as { statusCode?: unknown }).statusCode;
+    if (statusCode === 429 && (error as { code?: unknown }).code === 'RATE_LIMIT_EXCEEDED') {
+      sendApiError(
+        request,
+        reply,
+        429,
+        'RATE_LIMIT_EXCEEDED',
+        'Слишком много запросов. Повторите позже.',
+      );
+      return;
+    }
     if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
       sendApiError(request, reply, statusCode, 'INVALID_REQUEST', 'Некорректный запрос.');
       return;

@@ -3151,6 +3151,17 @@
   font-size: 22px;
 }
 
+/* The create page keeps the round 40px back control: its visible "Назад" label overflowed the
+   circle and overlapped the subtitle. The accessible name stays on the link's aria-label. */
+.games-page--create .games-back {
+  font-size: 0;
+}
+
+.games-page--create .games-back > span {
+  color: inherit;
+  font-size: 22px;
+}
+
 .games-header__spacer {
   width: 40px;
   height: 40px;

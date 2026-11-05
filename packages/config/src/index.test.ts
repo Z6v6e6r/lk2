@@ -1608,6 +1608,35 @@ describe('loadConfig', () => {
     );
   });
 
+  it('parses mock-only extra dev phones and rejects them elsewhere', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        AUTH_DEV_EXTRA_PHONES_E164: ' +79990000002, +79990000003 ',
+      }).AUTH_DEV_EXTRA_PHONES_E164,
+    ).toEqual(['+79990000002', '+79990000003']);
+    expect(loadConfig(validEnvironment).AUTH_DEV_EXTRA_PHONES_E164).toEqual([]);
+    expect(() =>
+      loadConfig({ ...validEnvironment, AUTH_DEV_EXTRA_PHONES_E164: '89990000002' }),
+    ).toThrow('Invalid application configuration');
+    expect(() =>
+      loadConfig({ ...validEnvironment, AUTH_DEV_EXTRA_PHONES_E164: '+79990000001' }),
+    ).toThrow('AUTH_DEV_EXTRA_PHONES_E164 must not repeat');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        AUTH_DEV_EXTRA_PHONES_E164: '+79990000002,+79990000002',
+      }),
+    ).toThrow('AUTH_DEV_EXTRA_PHONES_E164 must not repeat');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'disabled',
+        AUTH_DEV_EXTRA_PHONES_E164: '+79990000002',
+      }),
+    ).toThrow('AUTH_DEV_EXTRA_PHONES_E164 requires VIVA_MODE=mock');
+  });
+
   it('forbids mock Viva in production', () => {
     expect(() => loadConfig({ ...validEnvironment, APP_ENV: 'production' })).toThrow(
       'VIVA_MODE=mock is forbidden in production',

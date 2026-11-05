@@ -466,7 +466,7 @@ function GameTab(props: {
               <ParticipantAvatarStack ariaLabel="Свободное место" capacity={1} participants={[]} />
               <span className="game-detail-player__name">
                 <strong>Свободное место</strong>
-                <small>Можно присоединиться</small>
+                {game.displayState === 'CANCELLED' ? null : <small>Можно присоединиться</small>}
               </span>
             </div>
           ))}
