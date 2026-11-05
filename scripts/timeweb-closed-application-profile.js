@@ -128,6 +128,7 @@ export function closedApplicationInputDigests(operation) {
   const acl = closedApplicationAclPlan(
     operation.migrationProfile,
     operation.expectedPrivilegePreimage,
+    closedApplicationPackageFamily(operation),
   );
   return {
     packageDescriptorSha256: operation.packageDescriptorSha256,
@@ -346,11 +347,11 @@ const safeRolesSql = `(select count(*)=2 and bool_and(not (rolsuper or rolbypass
   and not exists(select 1 from pg_catalog.pg_event_trigger where evtenabled<>'D')`;
 const targetSql = `jsonb_build_object('databaseName',current_database(),'systemIdentifier',(select system_identifier::text from pg_catalog.pg_control_system()))`;
 const lockAvailableSql = `not exists(select 1 from pg_catalog.pg_locks where locktype='advisory' and database=(select oid from pg_catalog.pg_database where datname=current_database()) and classid=0 and objid=7140221 and objsubid=1 and granted)`;
-export function closedApplicationRoleProbeSource(profile) {
+export function closedApplicationRoleProbeSource(profile, family = 'HISTORICAL108') {
   kind(profile);
   const query = `select jsonb_build_object('target',${targetSql},'currentRoleName',current_user,'sessionRoleName',session_user,
     'roleOverride',current_setting('role'),'readOnly',current_setting('transaction_read_only'),'recovery',pg_catalog.pg_is_in_recovery(),
-    'rolesSafe',(${safeRolesSql}),'migrationLockAvailable',(${lockAvailableSql}),'acl',(${closedApplicationAclSql(profile)})) value`;
+    'rolesSafe',(${safeRolesSql}),'migrationLockAvailable',(${lockAvailableSql}),'acl',(${closedApplicationAclSql(profile, family)})) value`;
   return `import {Client} from 'pg';let client;try{
     const phase=process.argv[1];if(!['pre','bootstrap'].includes(phase))throw Error();
     const url=new URL(process.env.DATABASE_URL);if(!['postgres:','postgresql:'].includes(url.protocol)||url.search||url.hash||decodeURIComponent(url.username)!=='phub_migrator'||url.pathname!=='/phub_beta')throw Error();
@@ -382,7 +383,11 @@ export function validateClosedApplicationRoleReadback(
     'acl',
   ]);
   const profile = kind(operation.migrationProfile);
-  const acl = closedApplicationAclPlan(profile, operation.expectedPrivilegePreimage);
+  const acl = closedApplicationAclPlan(
+    profile,
+    operation.expectedPrivilegePreimage,
+    closedApplicationPackageFamily(operation),
+  );
   if (
     !['pre', 'bootstrap'].includes(phase) ||
     value.schema !== 'PHUB_CLOSED_APPLICATION_MIGRATOR_READBACK_V1' ||
@@ -403,7 +408,7 @@ export function validateClosedApplicationRoleReadback(
     fail('ROLE_READBACK');
   return value;
 }
-export function closedApplicationStateSql(profile, phase) {
+export function closedApplicationStateSql(profile, phase, family = 'HISTORICAL108') {
   const step = descriptor.profiles[kind(profile)];
   if (!['pre', 'bootstrap', 'post', 'cleanup'].includes(phase)) fail('PHASE');
   const post = ['post', 'cleanup'].includes(phase);
@@ -425,7 +430,7 @@ export function closedApplicationStateSql(profile, phase) {
     'target',${targetSql},'rolesSafe',(${safeRolesSql}),
     'ledger',(select coalesce(jsonb_agg(jsonb_build_object('filename',filename,'checksum',checksum) order by filename),'[]'::jsonb) from public.schema_migrations),
     'catalog',(select jsonb_agg(jsonb_build_object('key',key,'value',value) order by key collate "C") from (${closedApplicationCatalogSql()}) c),
-    'acl',(${closedApplicationAclSql(profile)}),'newTableRows',${emptyRows},
+    'acl',(${closedApplicationAclSql(profile, family)}),'newTableRows',${emptyRows},
     'hazards',jsonb_build_object('migrationLockHeld',not (${lockAvailableSql}),
       'longTransactions',(select count(*) from pg_catalog.pg_stat_activity where datname=current_database() and pid<>pg_backend_pid() and xact_start<clock_timestamp()-interval '30 seconds'),
       'conflictingLocks',(select count(*) from pg_catalog.pg_locks where pid<>pg_backend_pid() and relation in ('notifications.scenario_runs'::regclass,'notifications.scenario_contexts'::regclass))),
@@ -451,7 +456,11 @@ export function validateClosedApplicationState(operation, value, phase) {
   const profile = kind(operation.migrationProfile),
     step = descriptor.profiles[profile];
   const count = ['pre', 'bootstrap'].includes(phase) ? step.preCount : step.postCount;
-  const acl = closedApplicationAclPlan(profile, operation.expectedPrivilegePreimage);
+  const acl = closedApplicationAclPlan(
+    profile,
+    operation.expectedPrivilegePreimage,
+    closedApplicationPackageFamily(operation),
+  );
   if (
     !['pre', 'bootstrap', 'post', 'cleanup'].includes(phase) ||
     value.schema !== 'PHUB_CLOSED_APPLICATION_DATABASE_STATE_V1' ||
@@ -464,7 +473,7 @@ export function validateClosedApplicationState(operation, value, phase) {
     fail('STATE');
   validateClosedApplicationLedger(profile, value.ledger, phase);
   validateClosedApplicationCatalog(operation, value.catalog, count);
-  validateClosedApplicationAcl(profile, value.acl);
+  validateClosedApplicationAcl(profile, value.acl, closedApplicationPackageFamily(operation));
   if (
     !same(value.hazards, { migrationLockHeld: false, longTransactions: 0, conflictingLocks: 0 }) ||
     value.gameStartDuplicates !== 0
@@ -581,7 +590,8 @@ export function validateClosedApplicationPlan(value, bytes) {
     value.imageId !== operation.publishedMigrator.imageId ||
     value.preLedgerSha256 !== checkpoint(step.preCount).ledgerSha256 ||
     value.postLedgerSha256 !== checkpoint(step.postCount).ledgerSha256 ||
-    value.roleProbeSourceSha256 !== hash(closedApplicationRoleProbeSource(profile)) ||
+    value.roleProbeSourceSha256 !==
+      hash(closedApplicationRoleProbeSource(profile, closedApplicationPackageFamily(operation))) ||
     value.secretSet.releaseId !== operation.expectedSecretSetReleaseId ||
     !same(value.secretSet.files, operation.expectedSecretSetFiles) ||
     !Number.isSafeInteger(value.secretSet.device) ||
@@ -661,7 +671,10 @@ export function createClosedApplicationKernelProfile(operation) {
     postLedgerSha256: checkpoint(step.postCount).ledgerSha256,
     errorPrefix: profile === 'game_start_0103' ? 'GAME_START_' : 'SUBJECT_LINK_',
     schemas: closedApplicationSchemas(profile),
-    roleProbeSource: closedApplicationRoleProbeSource(profile),
+    roleProbeSource: closedApplicationRoleProbeSource(
+      profile,
+      closedApplicationPackageFamily(operation),
+    ),
     validateOperation: (value, at) => {
       validateClosedApplicationOperation(value, at);
       if (!same(value, operation)) fail('OPERATION_DRIFT');

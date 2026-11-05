@@ -1,3 +1,4 @@
+import type { ClosedPackageFamily } from './closed-application-package-family.js';
 export type ClosedApplicationAclProfile = 'game_start_0103' | 'subject_link_0104';
 export interface ClosedApplicationAclRow {
   readonly key: string;
@@ -17,12 +18,17 @@ export interface ClosedApplicationAclPlan {
   readonly bootstrapSha256: string;
   readonly cleanupSha256: string;
 }
-export function closedApplicationAclSql(profile: ClosedApplicationAclProfile): string;
+export function closedApplicationAclSql(
+  profile: ClosedApplicationAclProfile,
+  family?: ClosedPackageFamily,
+): string;
 export function validateClosedApplicationAcl(
   profile: ClosedApplicationAclProfile,
   rows: unknown,
+  family?: ClosedPackageFamily,
 ): readonly ClosedApplicationAclRow[];
 export function closedApplicationAclPlan(
   profile: ClosedApplicationAclProfile,
   preimage: unknown,
+  family?: ClosedPackageFamily,
 ): ClosedApplicationAclPlan;

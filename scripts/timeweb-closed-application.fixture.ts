@@ -28,7 +28,10 @@ import {
   type ClosedApplicationAclRow,
 } from './closed-application-migration-acl.js';
 
-function aclFixture(profile: ClosedApplicationKind): ClosedApplicationAclRow[] {
+function aclFixture(
+  profile: ClosedApplicationKind,
+  family: ClosedPackageFamily = 'HISTORICAL108',
+): ClosedApplicationAclRow[] {
   const tables =
     profile === 'game_start_0103'
       ? ['games.games', 'identity.tenants', 'identity.users']
@@ -65,6 +68,18 @@ function aclFixture(profile: ClosedApplicationKind): ClosedApplicationAclRow[] {
         acl: [],
       });
   }
+  if (family === 'R1_PACKAGE119')
+    rows.push({
+      key: 'schema:games',
+      owner: 'phub_beta',
+      aclIsNull: false,
+      effective: { CREATE: false, USAGE: false },
+      acl: [
+        ['phub_beta', 'phub_beta', 'CREATE', false],
+        ['phub_beta', 'phub_beta', 'USAGE', false],
+        ['phub_beta', 'phub_runtime', 'USAGE', false],
+      ],
+    });
   return rows.sort((a, b) => (a.key < b.key ? -1 : 1));
 }
 export function closedApplicationOperationFixture(
@@ -87,8 +102,8 @@ export function closedApplicationOperationFixture(
     restarts: 0,
     startedAt: '2026-10-27T07:00:00.000Z',
   });
-  const expectedPrivilegePreimage = aclFixture(migrationProfile),
-    acl = closedApplicationAclPlan(migrationProfile, expectedPrivilegePreimage);
+  const expectedPrivilegePreimage = aclFixture(migrationProfile, family),
+    acl = closedApplicationAclPlan(migrationProfile, expectedPrivilegePreimage, family);
   return {
     schema: (family === 'R1_PACKAGE119'
       ? CLOSED_R1_OPERATION_SCHEMAS
@@ -199,7 +214,11 @@ export function closedApplicationCustodyFixture(kind: ClosedApplicationKind, gen
     const count = ['pre', 'bootstrap'].includes(phase)
       ? definition.preCount
       : definition.preCount + 1;
-    const acl = closedApplicationAclPlan(kind, operation.expectedPrivilegePreimage);
+    const acl = closedApplicationAclPlan(
+      kind,
+      operation.expectedPrivilegePreimage,
+      'R1_PACKAGE119',
+    );
     const tables =
       count >= 107
         ? [
@@ -360,7 +379,7 @@ export function closedApplicationCustodyFixture(kind: ClosedApplicationKind, gen
     },
     backup: backupProof,
     inputs: closedApplicationInputDigests(operation),
-    roleProbeSourceSha256: hash(closedApplicationRoleProbeSource(kind)),
+    roleProbeSourceSha256: hash(closedApplicationRoleProbeSource(kind, 'R1_PACKAGE119')),
     preimage: prestate,
   };
   const files = new Map<string, Buffer>([

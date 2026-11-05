@@ -172,6 +172,9 @@ for (const validator of ['closed', 'tail'] as const) {
     for (const path of [
       'scripts/timeweb-api-worker-migration.d.ts',
       'scripts/timeweb-closed-application-profile.d.ts',
+      'scripts/closed-application-migration-acl.js',
+      'scripts/closed-application-migration-acl.d.ts',
+      'scripts/closed-application-migration-acl.test.ts',
     ]) {
       it(`admits the named regular generation declaration ${path}`, () => {
         expect(CLOSED_R1_CONTROLLER_FILES).toContain(path);

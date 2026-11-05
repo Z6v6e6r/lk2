@@ -208,3 +208,26 @@ paths are not added to the editable controller allowlist. Partial pairs, differe
 mode/status changes and other application paths are rejected. Base27d, SQL/catalog/ledger,
 ACL/backup guards and controller=migrator source identity remain unchanged. This source
 exception does not activate an application, mobile build/store or provider operation.
+
+### R1 restricted-role probe and temporary games access
+
+The `R1_PACKAGE119` operation family resolves its parent relation ACLs through
+`pg_catalog.pg_namespace` and `pg_catalog.pg_class` OIDs. Its pre-bootstrap wire-role
+probe must succeed without schema `games` USAGE. The historical108 SQL/probe contract
+remains byte-identical; family selection comes from the existing operation schema.
+
+For both R1 game-start0103 and subject-link0104, capture `schema:games` in the exact privilege preimage, including
+its confirmed owner, explicit ACL and effective USAGE/CREATE. The supported owner is
+`phub_beta`; an unknown owner, missing row or null schema ACL fails closed. If USAGE is
+absent, bootstrap adds only that privilege for `phub_migrator`, alongside the existing
+scoped column REFERENCES grants. 0103 needs USAGE for its foreign key; both migration
+modes also need it while validating the canonical games parent catalog. It never adds
+games CREATE or table DML. Cleanup
+revokes only privileges added by this attempt, preserving prior runtime/migrator grants.
+Both transactions compare the whole preimage before and after, including schema ACL.
+A rolled-back migration still requires the same guarded ACL cleanup.
+
+This source correction requires a newly reviewed controller/migrator source tuple and
+fresh matching backup/probe/input hashes. Previously sealed b989 operations and their
+backup generations are immutable and must not be reinterpreted using the new ACL plan.
+A source test or disposable PG16 rehearsal is not permission to mutate a live ACL.

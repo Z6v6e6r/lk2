@@ -31,6 +31,7 @@ import {
 import {
   CLOSED_APPLICATION_DATABASE_TARGET,
   closedApplicationStateSql,
+  closedApplicationRoleProbeSource,
   validateClosedApplicationState,
   createClosedApplicationKernelProfile,
   closedApplicationInputDigests,
@@ -560,9 +561,13 @@ const rolePasswords = {
 (disposable ? describe.sequential : describe.skip)(
   'fixed application migration modes on owned PG16',
   () => {
-    it.each(['DORMANT', 'SCENARIO_EDITOR_V1'] as const)(
-      'applies one step with bounded rollback and preserved %s ACL',
-      async (catalogVariant) => {
+    it.each([
+      ['DORMANT', 'HISTORICAL108'],
+      ['SCENARIO_EDITOR_V1', 'HISTORICAL108'],
+      ['SCENARIO_EDITOR_V1', 'R1_PACKAGE119'],
+    ] as const)(
+      'applies one step with bounded rollback and preserved %s / %s ACL',
+      async (catalogVariant, family) => {
         const admin = new Pool({ connectionString: disposable, max: 2 });
         const database = `closed_single_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
         const directory = await mkdtemp(resolve(tmpdir(), 'closed-single-pg-'));
@@ -678,6 +683,10 @@ const rolePasswords = {
           grant usage on schema public,identity,profile,notifications,support,games,locations to phub_migrator,phub_runtime;
           grant execute on function pg_catalog.pg_control_system() to phub_migrator,phub_runtime;
           alter default privileges for role phub_migrator in schema identity grant select,insert,update,delete on tables to phub_runtime`);
+            if (family === 'R1_PACKAGE119')
+              await client.query(
+                'alter schema games owner to phub_beta;revoke usage on schema games from phub_migrator',
+              );
             await client.query("set search_path='pg_catalog'");
             const baseline = (
               await client.query(NOTIFICATION_CATALOG_SQL, [[...NOTIFICATION_NEW_TABLES]])
@@ -701,7 +710,7 @@ const rolePasswords = {
           const packagedFiles = (await readdir(source))
             .filter((filename) => filename.endsWith('.sql'))
             .sort()
-            .slice(0, 108);
+            .slice(0, family === 'R1_PACKAGE119' ? 119 : 108);
           assertClosedPackagedCatalog(
             await Promise.all(
               packagedFiles.map(async (filename) => ({
@@ -709,6 +718,7 @@ const rolePasswords = {
                 checksum: hash(await readFile(resolve(source, filename))),
               })),
             ),
+            family,
           );
           await mkdir(resolve(directory, 'migrations'));
           for (const filename of packagedFiles)
@@ -724,8 +734,18 @@ const rolePasswords = {
           const target = { ...identity, catalogVariant };
           const encoded = Buffer.from(JSON.stringify(target)).toString('base64');
           const main = 'apps/migrator/src/main.ts',
-            game = ['--game-start-migration-0103', encoded],
-            subject = ['--subject-link-migration-0104', encoded];
+            game = [
+              family === 'R1_PACKAGE119'
+                ? '--r1-game-start-migration-0103'
+                : '--game-start-migration-0103',
+              encoded,
+            ],
+            subject = [
+              family === 'R1_PACKAGE119'
+                ? '--r1-subject-link-migration-0104'
+                : '--subject-link-migration-0104',
+              encoded,
+            ];
           const cli = (entry: string, args: string[] = [], cwd = directory) =>
             promisify(execFile)(
               process.execPath,
@@ -769,7 +789,7 @@ const rolePasswords = {
             JSON.stringify(
               (
                 await db!
-                  .query(`select 'schema:'||nspname item,coalesce(nspacl::text,'') acl from pg_namespace where nspname in ('identity','notifications') union all
+                  .query(`select 'schema:'||nspname item,coalesce(nspacl::text,'') acl from pg_namespace where nspname in ('identity','notifications','games') union all
         select 'column:'||attrelid::regclass::text||':'||attname,coalesce(attacl::text,'') from pg_attribute where attrelid in ('identity.tenants'::regclass,'identity.users'::regclass,'games.games'::regclass) and attnum>0 and not attisdropped union all
         select 'default:'||coalesce(n.nspname,'GLOBAL'),d.defaclacl::text from pg_default_acl d left join pg_namespace n on n.oid=d.defaclnamespace where d.defaclrole='phub_migrator'::regrole order by item`)
               ).rows,
@@ -785,24 +805,35 @@ const rolePasswords = {
           );
           await denied('CLOSED_APPLICATION_MIGRATION_LEDGER', main, subject);
           await denied('CLOSED_APPLICATION_MIGRATION_TARGET', main, [
-            '--game-start-migration-0103',
+            game[0]!,
             Buffer.from(JSON.stringify({ ...target, systemIdentifier: '1' })).toString('base64'),
           ]);
-          await denied('CLOSED_APPLICATION_MIGRATION_CATALOG', main, [
-            '--game-start-migration-0103',
-            Buffer.from(
-              JSON.stringify({
-                ...target,
-                catalogVariant: catalogVariant === 'DORMANT' ? 'SCENARIO_EDITOR_V1' : 'DORMANT',
-              }),
-            ).toString('base64'),
-          ]);
+          // Before R1 bootstrap, the migrator's guarded catalog read also lacks games USAGE.
+          await denied(
+            family === 'R1_PACKAGE119'
+              ? 'CLOSED_APPLICATION_MIGRATION_FAILED'
+              : 'CLOSED_APPLICATION_MIGRATION_CATALOG',
+            main,
+            [
+              game[0]!,
+              Buffer.from(
+                JSON.stringify({
+                  ...target,
+                  catalogVariant: catalogVariant === 'DORMANT' ? 'SCENARIO_EDITOR_V1' : 'DORMANT',
+                }),
+              ).toString('base64'),
+            ],
+          );
           // No env timeout is supplied: the closed mode itself must bound advisory acquisition.
           const advisoryBlocker = await db.connect(),
             advisoryStarted = Date.now();
           try {
             await advisoryBlocker.query('select pg_advisory_lock($1)', [7_140_221]);
-            await denied('timeout', main, game);
+            await denied(
+              family === 'R1_PACKAGE119' ? 'CLOSED_APPLICATION_MIGRATION_FAILED' : 'timeout',
+              main,
+              game,
+            );
           } finally {
             await advisoryBlocker.query('select pg_advisory_unlock($1)', [7_140_221]);
             advisoryBlocker.release();
@@ -810,18 +841,25 @@ const rolePasswords = {
           expect(Date.now() - advisoryStarted).toBeLessThan(20000);
           expect(await count()).toBe(106);
           expect(await catalog()).toEqual(pre);
-          await denied('permission denied', main, game);
+          await denied(
+            family === 'R1_PACKAGE119'
+              ? 'CLOSED_APPLICATION_MIGRATION_FAILED'
+              : 'permission denied',
+            main,
+            game,
+          );
           expect(await count()).toBe(106);
           expect(await catalog()).toEqual(pre);
           const readTemporaryAcl = async (profile: 'game_start_0103' | 'subject_link_0104') =>
             (
               await db!.query<{ snapshot: unknown }>(
-                `select (${closedApplicationAclSql(profile)}) snapshot`,
+                `select (${closedApplicationAclSql(profile, family)}) snapshot`,
               )
             ).rows[0]!.snapshot;
           const gameAcl = closedApplicationAclPlan(
             'game_start_0103',
             await readTemporaryAcl('game_start_0103'),
+            family,
           );
           const hostState = async (
             profile: 'game_start_0103' | 'subject_link_0104',
@@ -830,7 +868,7 @@ const rolePasswords = {
             const client = await db!.connect();
             try {
               const result = (await client.query(
-                closedApplicationStateSql(profile, phase),
+                closedApplicationStateSql(profile, phase, family),
               )) as unknown as { rows: Record<string, unknown>[] }[];
               return {
                 ...(result.flatMap((row) => row.rows)[0]!.jsonb_build_object as Record<
@@ -874,16 +912,86 @@ const rolePasswords = {
               client.release();
             }
           };
-          const gameEvidence = await verifyHostPrestate('game_start_0103', gameAcl);
+          // The R1 regression uses the real restricted wire login and the exact generated
+          // probe SQL. Only its fixed production URL guard is outside this disposable DB test.
+          const restrictedProbe = async (
+            profile: 'game_start_0103' | 'subject_link_0104' = 'game_start_0103',
+          ) => {
+            const source = closedApplicationRoleProbeSource(profile, family);
+            const literal = source.match(
+              /const rows=\(await client\.query\(("(?:[^"\\]|\\.)*")\)\)\.rows;/,
+            )?.[1];
+            expect(literal).toBeDefined();
+            const restricted = new Pool({ connectionString: roleUrl.toString(), max: 1 });
+            const wire = await restricted.connect();
+            try {
+              await wire.query(
+                "begin isolation level repeatable read read only;set local search_path='pg_catalog'",
+              );
+              const result = (
+                await wire.query<{
+                  value: {
+                    currentRoleName: string;
+                    sessionRoleName: string;
+                    readOnly: string;
+                    acl: unknown;
+                  };
+                }>(JSON.parse(literal!) as string)
+              ).rows[0]!.value;
+              expect(result).toMatchObject({
+                currentRoleName: 'phub_migrator',
+                sessionRoleName: 'phub_migrator',
+                readOnly: 'on',
+                rolesSafe: true,
+                migrationLockAvailable: true,
+              });
+              return result.acl;
+            } finally {
+              await wire.query('rollback');
+              wire.release();
+              await restricted.end();
+            }
+          };
+          const gameEvidence =
+            family === 'HISTORICAL108'
+              ? await verifyHostPrestate('game_start_0103', gameAcl)
+              : null;
+          if (family === 'R1_PACKAGE119') {
+            expect(gameAcl.preimage.find((row) => row.key === 'schema:games')?.effective).toEqual({
+              USAGE: false,
+              CREATE: false,
+            });
+            expect(await restrictedProbe()).toEqual(gameAcl.preimage);
+            // A concurrent ACL change must stop bootstrap without removing that change.
+            const drift = await db.connect();
+            try {
+              await drift.query('grant usage on schema games to phub_migrator');
+              await expect(drift.query(gameAcl.bootstrapSql)).rejects.toThrow(
+                'CLOSED_APPLICATION_ACL_DRIFT',
+              );
+              await drift.query('rollback');
+              expect(await readTemporaryAcl('game_start_0103')).not.toEqual(gameAcl.preimage);
+              await drift.query('revoke usage on schema games from phub_migrator');
+            } finally {
+              drift.release();
+            }
+            expect(await restrictedProbe()).toEqual(gameAcl.preimage);
+          }
           await db.query(gameAcl.bootstrapSql);
           const gameBootstrap = await hostState('game_start_0103', 'bootstrap');
+          if (family === 'R1_PACKAGE119')
+            expect(await restrictedProbe()).toEqual(gameAcl.bootstrap);
           const blocker = await db.connect(),
             started = Date.now();
           try {
             await blocker.query(
               'begin;lock table notifications.scenario_runs in access exclusive mode',
             );
-            await denied('lock timeout', main, game);
+            await denied(
+              family === 'R1_PACKAGE119' ? 'CLOSED_APPLICATION_MIGRATION_FAILED' : 'lock timeout',
+              main,
+              game,
+            );
           } finally {
             await blocker.query('rollback');
             blocker.release();
@@ -891,6 +999,19 @@ const rolePasswords = {
           expect(Date.now() - started).toBeLessThan(20000);
           expect(await count()).toBe(106);
           expect(await catalog()).toEqual(pre);
+          if (family === 'R1_PACKAGE119') {
+            // The failed, rolled-back migration must still allow exact ACL cleanup.
+            await db.query(gameAcl.cleanupSql);
+            expect(await restrictedProbe()).toEqual(gameAcl.preimage);
+            expect(await acls()).toBe(aclPreimage);
+            await db.query(gameAcl.bootstrapSql);
+            const grants = (
+              await db.query<{ can_create: boolean; dml: boolean }>(
+                "select has_schema_privilege('phub_migrator','games','CREATE') can_create, has_table_privilege('phub_migrator','games.games','SELECT,INSERT,UPDATE,DELETE') dml",
+              )
+            ).rows[0];
+            expect(grants).toEqual({ can_create: false, dml: false });
+          }
           expect((await cli(main, game)).stdout.trim()).toBe(
             'Applied 0103_game_start_notification_scenarios.sql',
           );
@@ -903,18 +1024,60 @@ const rolePasswords = {
             ).rows[0]?.relation,
           ).toBeNull();
           const gamePost = await hostState('game_start_0103', 'post');
+          if (family === 'R1_PACKAGE119') {
+            const drift = await db.connect();
+            try {
+              await drift.query('grant create on schema games to phub_runtime');
+              await expect(drift.query(gameAcl.cleanupSql)).rejects.toThrow(
+                'CLOSED_APPLICATION_ACL_DRIFT',
+              );
+              await drift.query('rollback');
+              expect(await readTemporaryAcl('game_start_0103')).not.toEqual(gameAcl.bootstrap);
+              await drift.query('revoke create on schema games from phub_runtime');
+            } finally {
+              drift.release();
+            }
+            expect(await restrictedProbe()).toEqual(gameAcl.bootstrap);
+          }
           await db.query(gameAcl.cleanupSql);
           const gameCleanup = await hostState('game_start_0103', 'cleanup');
+          if (family === 'R1_PACKAGE119') {
+            expect(await restrictedProbe()).toEqual(gameAcl.preimage);
+            expect(await acls()).toBe(aclPreimage);
+            expect(await count()).toBe(107);
+            await denied('CLOSED_APPLICATION_MIGRATION_LEDGER', main, game);
+            // The successor also reads the canonical games parent catalog after 0103
+            // has restored USAGE=false; its own bootstrap must grant and restore it.
+            const successor = closedApplicationAclPlan(
+              'subject_link_0104',
+              await readTemporaryAcl('subject_link_0104'),
+              family,
+            );
+            expect(successor.added).toContainEqual(['schema:games', 'USAGE']);
+            expect(await restrictedProbe('subject_link_0104')).toEqual(successor.preimage);
+            await db.query(successor.bootstrapSql);
+            expect(await restrictedProbe('subject_link_0104')).toEqual(successor.bootstrap);
+            expect((await cli(main, subject)).stdout.trim()).toBe(
+              'Applied 0104_identity_external_subject_link_commands.sql',
+            );
+            expect(await count()).toBe(108);
+            await db.query(successor.cleanupSql);
+            expect(await restrictedProbe('subject_link_0104')).toEqual(successor.preimage);
+            expect(await acls()).toBe(aclPreimage);
+            await denied('CLOSED_APPLICATION_MIGRATION_LEDGER', main, subject);
+            return;
+          }
           const completedGame = await verifyClosedKernelRecovery(
-            gameEvidence.operation,
+            gameEvidence!.operation,
             {
-              pre: gameEvidence.state,
+              pre: gameEvidence!.state,
               bootstrap: gameBootstrap,
               post: gamePost,
               cleanup: gameCleanup,
             },
-            gameEvidence.proof,
+            gameEvidence!.proof,
           );
+          if (!gameEvidence) throw Error('MISSING_HISTORICAL_EVIDENCE');
           expect(await acls()).toBe(aclPreimage);
           await denied('CLOSED_APPLICATION_MIGRATION_LEDGER', main, game);
           await denied('CLOSED_APPLICATION_MIGRATION_CONTROLLER_REQUIRED');

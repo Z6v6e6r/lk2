@@ -42,22 +42,30 @@ const permissions = Object.freeze({
     ].map((row) => Object.freeze(row)),
   ),
 });
-function rules(profile) {
+function rules(profile, family = 'HISTORICAL108') {
   if (!Object.hasOwn(permissions, profile)) fail('PROFILE');
-  return permissions[profile];
+  if (!['HISTORICAL108', 'R1_PACKAGE119'].includes(family)) fail('FAMILY');
+  return family === 'R1_PACKAGE119'
+    ? [permissions[profile][0], ['schema:games', 'USAGE'], ...permissions[profile].slice(1)]
+    : permissions[profile];
 }
-function scope(profile) {
-  const selected = rules(profile);
+function scope(profile, family) {
+  const selected = rules(profile, family);
   return {
     schema: selected[0][0].slice(7),
-    tables: [...new Set(selected.slice(1).map(([key]) => key.split(':')[1]))].sort(compare),
+    schemas: selected.filter(([key]) => key.startsWith('schema:')).map(([key]) => key.slice(7)),
+    tables: [
+      ...new Set(
+        selected.filter(([key]) => key.startsWith('column:')).map(([key]) => key.split(':')[1]),
+      ),
+    ].sort(compare),
   };
 }
-export function closedApplicationAclSql(profile) {
-  const { schema, tables } = scope(profile);
+export function closedApplicationAclSql(profile, family = 'HISTORICAL108') {
+  const { schema, schemas, tables } = scope(profile, family);
   const names = tables.map((name) => `'${name}'`).join(',');
   // All table/column ACLs in the fixed parent scope are captured, including unrelated privileges.
-  return `with acl_objects as (
+  const historical = `with acl_objects as (
     select 'schema:'||n.nspname key,n.nspowner owner,n.nspacl acl,n.nspacl is null "aclIsNull",
       jsonb_build_object('CREATE',pg_catalog.has_schema_privilege('${MIGRATOR}',n.oid,'CREATE'),'USAGE',pg_catalog.has_schema_privilege('${MIGRATOR}',n.oid,'USAGE')) effective,
       'n'::"char" aclkind from pg_catalog.pg_namespace n where n.nspname='${schema}'
@@ -75,9 +83,42 @@ export function closedApplicationAclSql(profile) {
         x.privilege_type,x.is_grantable) order by pg_catalog.pg_get_userbyid(x.grantor) collate "C",
         case when x.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(x.grantee) end collate "C",x.privilege_type collate "C",x.is_grantable),'[]'::jsonb)
        from pg_catalog.aclexplode(case when o.aclkind='c' then o.acl else coalesce(o.acl,pg_catalog.acldefault(o.aclkind,o.owner)) end) x)) order by o.key collate "C"),'[]'::jsonb) from acl_objects o`;
+  if (family === 'HISTORICAL108') return historical;
+  // Catalog lookup must work before the restricted login receives schema USAGE.
+  // Fixed names come from the source-owned profile, never operation input.
+  const selected = tables
+    .map((name) => {
+      const [namespace, relation] = name.split('.');
+      return `(n.nspname='${namespace}' and c.relname='${relation}')`;
+    })
+    .join(' or ');
+  return (
+    historical
+      .replace(
+        'with acl_objects as (',
+        `with scoped_relations as (
+      select c.oid,c.relowner,c.relacl,n.nspname||'.'||c.relname qualified_name
+      from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+      where ${selected}
+    ), acl_objects as (`,
+      )
+      .replace(
+        `from pg_catalog.pg_namespace n where n.nspname='${schema}'`,
+        `from pg_catalog.pg_namespace n where n.nspname in (${schemas.map((name) => `'${name}'`).join(',')})`,
+      )
+      .replaceAll('c.oid::regclass::text', 'c.qualified_name')
+      .replaceAll('from pg_catalog.pg_class c', 'from scoped_relations c')
+      // Preserve the actual pg_class read inside the scoped CTE.
+      .replace(
+        'from scoped_relations c join pg_catalog.pg_namespace',
+        'from pg_catalog.pg_class c join pg_catalog.pg_namespace',
+      )
+      .replace(`where c.oid=any(array[${names}]::regclass[])`, '')
+      .replace(`where c.oid=any(array[${names}]::regclass[]) and a.attnum>0`, 'where a.attnum>0')
+  );
 }
-export function validateClosedApplicationAcl(profile, rows) {
-  const { schema, tables } = scope(profile);
+export function validateClosedApplicationAcl(profile, rows, family = 'HISTORICAL108') {
+  const { schemas, tables } = scope(profile, family);
   if (
     !Array.isArray(rows) ||
     rows.length < 3 ||
@@ -89,7 +130,8 @@ export function validateClosedApplicationAcl(profile, rows) {
   for (const row of rows) {
     exact(row, ['key', 'owner', 'aclIsNull', 'effective', 'acl']);
     const parts = typeof row.key === 'string' ? row.key.split(':') : [];
-    const schemaRow = row.key === `schema:${schema}`;
+    const schemaRow = schemas.some((name) => row.key === `schema:${name}`);
+    const temporaryGamesUsage = family === 'R1_PACKAGE119' && row.key === 'schema:games';
     if (
       !(
         schemaRow ||
@@ -109,7 +151,7 @@ export function validateClosedApplicationAcl(profile, rows) {
     exact(row.effective, schemaRow ? ['CREATE', 'USAGE'] : ['REFERENCES']);
     if (
       Object.values(row.effective).some((value) => typeof value !== 'boolean') ||
-      (schemaRow && (!row.effective.USAGE || row.aclIsNull))
+      (schemaRow && ((!row.effective.USAGE && !temporaryGamesUsage) || row.aclIsNull))
     )
       fail('EFFECTIVE');
     let last = '';
@@ -138,26 +180,27 @@ export function validateClosedApplicationAcl(profile, rows) {
   }
   const keys = new Set(rows.map((row) => row.key));
   if (
-    !keys.has(`schema:${schema}`) ||
+    schemas.some((schema) => !keys.has(`schema:${schema}`)) ||
     tables.some((table) => !keys.has(`table:${table}`)) ||
-    rules(profile).some(([key]) => !keys.has(key))
+    rules(profile, family).some(([key]) => !keys.has(key))
   )
     fail('COVERAGE');
   return rows;
 }
-export function closedApplicationAclPlan(profile, preimage) {
-  validateClosedApplicationAcl(profile, preimage);
+export function closedApplicationAclPlan(profile, preimage, family = 'HISTORICAL108') {
+  validateClosedApplicationAcl(profile, preimage, family);
   preimage = JSON.parse(JSON.stringify(preimage));
   const bootstrap = JSON.parse(JSON.stringify(preimage));
   const added = [];
-  for (const [key, privilege] of rules(profile)) {
+  for (const [key, privilege] of rules(profile, family)) {
     const row = bootstrap.find((item) => item.key === key);
     const direct = row.acl.filter((grant) => grant[1] === MIGRATOR && grant[2] === privilege);
     if (direct.length > 1 || (direct.length === 1 && !row.effective[privilege]))
       fail('DIRECT_EFFECTIVE');
     if (row.effective[privilege]) continue;
     if (direct.length) fail('DIRECT_EFFECTIVE');
-    row.acl.push([OWNER, MIGRATOR, privilege, false]);
+    // Owner is part of the validated exact preimage; never change schema ownership.
+    row.acl.push([row.owner, MIGRATOR, privilege, false]);
     row.acl.sort((a, b) => compare(JSON.stringify(a), JSON.stringify(b)));
     row.aclIsNull = false;
     row.effective[privilege] = true;
@@ -171,7 +214,7 @@ export function closedApplicationAclPlan(profile, preimage) {
     return `${revoke ? 'revoke' : 'grant'} ${right} on ${target} ${revoke ? 'from' : 'to'} ${MIGRATOR};`;
   };
   const guard = (expected) =>
-    `do $closed_acl$ begin if (${closedApplicationAclSql(profile)}) is distinct from '${JSON.stringify(expected).replaceAll("'", "''")}'::jsonb then raise exception 'CLOSED_APPLICATION_ACL_DRIFT'; end if; end $closed_acl$;`;
+    `do $closed_acl$ begin if (${closedApplicationAclSql(profile, family)}) is distinct from '${JSON.stringify(expected).replaceAll("'", "''")}'::jsonb then raise exception 'CLOSED_APPLICATION_ACL_DRIFT'; end if; end $closed_acl$;`;
   const transaction = (before, after, statements) =>
     `begin;set local search_path='pg_catalog';set local lock_timeout='5s';set local statement_timeout='30s';do $closed_lock$ begin perform pg_catalog.pg_advisory_xact_lock(7140221);end $closed_lock$;${guard(before)}${statements.join('')}${guard(after)}commit;`;
   const bootstrapSql = transaction(
