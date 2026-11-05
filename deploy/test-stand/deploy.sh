@@ -116,6 +116,9 @@ log "granting phub_runtime"
 compose exec -T postgres psql -U postgres -d phub -v ON_ERROR_STOP=1 -q \
   -v runtime_password="'$RUNTIME_PASSWORD'" -f - < grant-runtime.sql >/dev/null
 
+log "opening stand tenant gates (in-app notifications, chats)"
+compose exec -T postgres psql -U postgres -d phub -v ON_ERROR_STOP=1 -q -f - < stand-runtime.sql >/dev/null
+
 log "starting application"
 compose up -d --wait --remove-orphans api worker realtime web caddy
 
