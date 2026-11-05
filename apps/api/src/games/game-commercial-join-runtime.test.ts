@@ -15,12 +15,7 @@ import {
   fixtureActor,
 } from './game-join-conditions.test-fixture.js';
 
-import {
-  executeCommercialJoin,
-  commercialJoinRequestHash,
-  type CommercialJoinAttemptView,
-  type CommercialJoinRepositoryPort,
-} from './game-commercial-join.js';
+import { executeCommercialJoin, commercialJoinRequestHash } from './game-commercial-join.js';
 
 const baseUrl = 'https://owner.example.test';
 const config = {
@@ -594,8 +589,16 @@ describe('60-minute second participant through the real commercial runtime', () 
         });
       const order: string[] = [];
       const operationId = fixtureId(900);
-      let prior: CommercialJoinAttemptView | null = null;
-      const begin = vi.fn<CommercialJoinRepositoryPort['beginPaidJoin']>(async (input) => {
+      let prior: Awaited<
+        ReturnType<
+          Parameters<
+            typeof createGameCommercialJoinRuntime
+          >[0]['rosterRepository']['getPaidJoinAttempt']
+        >
+      > = null;
+      const begin = vi.fn<
+        Parameters<typeof createGameCommercialJoinRuntime>[0]['rosterRepository']['beginPaidJoin']
+      >(async (input) => {
         await Promise.resolve();
         order.push('reserve');
         prior = {
@@ -608,6 +611,7 @@ describe('60-minute second participant through the real commercial runtime', () 
           reservation: {
             id: fixtureId(901),
             state: 'ACTIVE',
+            paymentState: 'PROCESSING',
             expiresAt: new Date(now + 900_000).toISOString(),
           },
           receipt: null,
@@ -616,6 +620,7 @@ describe('60-minute second participant through the real commercial runtime', () 
           outcome: 'reserved',
           operationId,
           reservationId: fixtureId(901),
+          eligibilityDecisionId: fixtureId(902),
           revision: 9,
           expiresAt: new Date(now + 900_000).toISOString(),
         };
@@ -645,7 +650,7 @@ describe('60-minute second participant through the real commercial runtime', () 
         return {
           contractVersion: 1 as const,
           status: 'PENDING' as const,
-          reason: 'OWNER_PENDING',
+          reason: 'OWNER_PENDING' as const,
           asOf: new Date().toISOString(),
           operationId,
         };

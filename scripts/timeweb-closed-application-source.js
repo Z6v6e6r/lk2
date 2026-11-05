@@ -221,7 +221,7 @@ const JOIN60_PREREQUISITE = Object.freeze({
   },
   'apps/api/src/games/game-commercial-join-runtime.test.ts': {
     oldOid: 'c5a7bbc5fd82da33a84044bb48ffef0fea6a158c',
-    newOid: '27471920361d91db421106a33e450823cd8bf438',
+    newOid: '6e4e6d98463188d5feaff59551365a40c7b0f514',
   },
 });
 export function validateClosedR1Join60Prerequisite(entries) {

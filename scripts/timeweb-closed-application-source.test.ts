@@ -191,7 +191,7 @@ const join60Group = [
   {
     path: 'apps/api/src/games/game-commercial-join-runtime.test.ts',
     oldOid: 'c5a7bbc5fd82da33a84044bb48ffef0fea6a158c',
-    newOid: '27471920361d91db421106a33e450823cd8bf438',
+    newOid: '6e4e6d98463188d5feaff59551365a40c7b0f514',
   },
 ].map((row) => ({ ...row, status: 'M', oldMode: '100644', newMode: '100644' }));
 it('pins JOIN60 runtime, tests and contract without an editable app allowlist', () => {

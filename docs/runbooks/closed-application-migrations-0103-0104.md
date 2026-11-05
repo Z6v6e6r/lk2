@@ -250,7 +250,7 @@ The prior source without this group remains accepted.
 | `docs/contracts/game-join-conditions.md`                           | `b5009d30579e65caef133116bfb2f58cd2b0be36` | `af199d739153277becdbca1df6c0499108ed0d4f` |
 | `packages/database/src/game-join-conditions-context-repository.ts` | `e4b084d60905099f1babdae0915f6cc6c8ed08ef` | `2945dc681ee0eca5e9a6df8ed5a2f77fb21bd3a3` |
 | `packages/viva-adapter/src/game-subscription-selection.ts`         | `d3f3518ade36ffc400c5ea7e1fe8064d5f52ba7f` | `055441ccc3363db241af1d378eadc3c23f5e62dd` |
-| `apps/api/src/games/game-commercial-join-runtime.test.ts`          | `c5a7bbc5fd82da33a84044bb48ffef0fea6a158c` | `27471920361d91db421106a33e450823cd8bf438` |
+| `apps/api/src/games/game-commercial-join-runtime.test.ts`          | `c5a7bbc5fd82da33a84044bb48ffef0fea6a158c` | `6e4e6d98463188d5feaff59551365a40c7b0f514` |
 
 A merged JOIN60 source is a new immutable source/artifact tuple. Obtain its successful
 source CI, publication, canonical manifest, enrollment and fresh target evidence before
