@@ -11,6 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 HISTORY=.deploy-history
+CURRENT=.deploy-current
 compose() { docker compose -f compose.yaml "$@"; }
 log() { printf '[test-stand] %s\n' "$*"; }
 die() { printf '[test-stand] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -28,14 +29,24 @@ case "${1:-}" in
 esac
 
 if [[ $mode == status ]]; then
-  PHUB_TAG=$(tail -1 "$HISTORY" 2>/dev/null || echo none) compose ps
+  PHUB_TAG=$(cat "$CURRENT" 2>/dev/null || echo none) compose ps
   log "deployed tags (newest last):"; tail -5 "$HISTORY" 2>/dev/null || true
   exit 0
 fi
 
 if [[ $mode == rollback ]]; then
-  [[ $(wc -l < "$HISTORY" 2>/dev/null || echo 0) -ge 2 ]] || die "no previous successful tag to roll back to"
-  PHUB_TAG=$(tail -2 "$HISTORY" | head -1)
+  # .deploy-current is the tag the stand was last pointed at, successful or not. After a failed
+  # attempt it differs from the newest successful tag, which is then the one to restore; when the
+  # current tag is itself the newest success, restore the one before it.
+  last_ok=$(tail -1 "$HISTORY" 2>/dev/null || true)
+  current=$(cat "$CURRENT" 2>/dev/null || true)
+  [[ -n $last_ok ]] || die "no successful tag recorded yet"
+  if [[ $current != "$last_ok" ]]; then
+    PHUB_TAG=$last_ok
+  else
+    [[ $(wc -l < "$HISTORY") -ge 2 ]] || die "no earlier successful tag than the current $current"
+    PHUB_TAG=$(tail -2 "$HISTORY" | head -1)
+  fi
 else
   PHUB_TAG=${1:-}
   [[ $PHUB_TAG =~ ^[0-9a-f]{7,40}$|^test-stand$ ]] || die "usage: ./deploy.sh [--reset] <main commit sha>"
@@ -90,10 +101,11 @@ RUNTIME_PASSWORD=$(cat .secrets/runtime-password)
 if [[ $mode == reset ]]; then
   log "RESET: removing stand containers and volumes (all test data)"
   compose --profile tools down -v --remove-orphans
-  : > "$HISTORY"
+  : > "$HISTORY"; rm -f "$CURRENT"
 fi
 
 log "deploying tag $PHUB_TAG to https://$TEST_STAND_DOMAIN"
+echo "$PHUB_TAG" > "$CURRENT"
 compose --profile tools pull --quiet
 compose up -d --wait postgres redis rabbitmq minio
 
@@ -119,5 +131,6 @@ if [[ $ok != 1 ]]; then
   die "deploy of $PHUB_TAG failed smoke; run ./deploy.sh --rollback to return to the previous tag"
 fi
 
+# A rollback restores a tag that is already in the history; record only new successes.
 [[ $mode == rollback ]] || echo "$PHUB_TAG" >> "$HISTORY"
 log "OK: $PHUB_TAG is live at https://$TEST_STAND_DOMAIN"
