@@ -9,8 +9,8 @@ bullet, and lk2 returns to the strict production route.
 ## What it replaces and what it keeps
 
 The strict route ([Timeweb beta](timeweb-lk2-beta.md), [R1 tail](r1-tail108-119-migration.md))
-needs enrollment, custody capsules and per-migration controllers. That machinery is paused, and lk2
-was stuck at ledger 105 (`0101`). This lane promotes one green main commit in a single command:
+needs enrollment, custody capsules and per-migration controllers, and that machinery is paused.
+This lane promotes one green main commit in a single command:
 
 1. `plan` pulls the five `ghcr.io/z6v6e6r/phub-*:<sha>` images built by the `Test stand` workflow
    for that green main commit and records their registry digests; `promote` refuses without that
@@ -56,8 +56,10 @@ per-file controllers for 0099-0104 and the R1 tail, long observation.
   tables grants are only added: missing SELECT, or UPDATE when the role has none on any column, is
   granted and printed as `Granted row-lock parent privileges`. Nothing on older tables is revoked.
   Idempotent; a rerun grants nothing new.
-- New tables are owned by the superuser `phub_beta` (not `phub_migrator`). The strict
-  `r1-runtime-grants119` plan expects `phub_migrator` ownership and is not applicable after this lane.
+- Tables created by this lane are owned by the superuser `phub_beta`. The 0102-0115 tables on lk2
+  were created by the strict route and stay owned by `phub_migrator`; the lane re-applies the same
+  runtime ACL on them (revoke, then grant the identical set). The strict `r1-runtime-grants119`
+  plan expects `phub_migrator` ownership, so it no longer applies to tables the lane creates.
 
 ## Operating it
 
@@ -101,6 +103,16 @@ directory for the migrator container and removed on exit.
 
 Rollback never reverses migrations. All 0102-0115 changes are additive; previous images run on the
 new schema. A full reset of lk2 data is `pg_restore` of a lane backup and needs its own decision.
+
+## Current lk2 state
+
+Read-only readback on lk2 (2026-11-06, before any lane run): the strict route had already applied
+0103-0115 (08:43-08:47 MSK; 0102 on 2026-10-27), so the ledger is 119 (`0115`). The 19 new tables
+are owned by `phub_migrator`, `phub_runtime` holds exactly the R1 post-119 matrix on them and
+SELECT plus UPDATE on all 11 row-lock parents. Canonical project `phub-timeweb-beta` runs release
+`4474386691e2e16d5dc7ca264c741edff0bee540-42163086533-1` with env root `/etc/phub/timeweb-beta`;
+`/health/ready`, `/realtime/health/ready` and `/` answer 200 on the host. The lane has not been run;
+its first use is the next main commit that changes the application.
 
 ## Evidence
 
