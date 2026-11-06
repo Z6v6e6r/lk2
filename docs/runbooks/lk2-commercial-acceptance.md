@@ -63,6 +63,79 @@ with its base URL and integration token, and the join-conditions owner
 Writing these keys through the provisioner needs PR #602 (runtime-environment contract) merged;
 the beta lane itself does not validate the contract, it only reuses `api.env`.
 
+## Delegation pairing with LK1 (plan, not executed)
+
+LK1 side (source `Z6v6e6r/lk`, `scripts/nodered_booked_operation_receiver_nodes/_booked_operation_delegation_prelude.js`,
+used by `fn_game_create_owner_verify.js`): Node-RED reads one trusted key from its environment and
+verifies `RS256`, `typ=phub-subscription-runtime-actor-delegation+jwt`, `kid`, `iss`, `aud`,
+`caller=lk2-api`, `tenant_key=iSkq6G`:
+
+| LK1 env (Node-RED on `lk-primary-147`)                 | Value                                         |
+| ------------------------------------------------------ | --------------------------------------------- |
+| `LK1_BOOKED_OPERATION_RECEIVER_ENABLED`                | `true`                                        |
+| `BOOKED_OPERATION_EXECUTION_ENABLED`                   | `true` (real execution for a valid signature) |
+| `LK2_BOOKED_OPERATION_DELEGATION_ISSUER`               | `https://lk2.padlhub.su`                      |
+| `LK2_BOOKED_OPERATION_DELEGATION_AUDIENCE`             | `padlhub-lk1-booked-operation`                |
+| `LK2_BOOKED_OPERATION_DELEGATION_KEY_ID`               | `lk2-beta-2026-11` (`[A-Za-z0-9._:-]{3,64}`)  |
+| `LK2_BOOKED_OPERATION_DELEGATION_PUBLIC_KEY_PEM`       | SPKI PEM, LF written as `\n`                  |
+| `LK2_BOOKED_OPERATION_DELEGATION_MAX_LIFETIME_SECONDS` | default 120 (LK2 TTL 30 fits)                 |
+
+LK1 trusts exactly **one** key. If another LK2 contour already holds it, replacing it cuts that
+contour off; the readback below decides between reusing and replacing.
+
+LK2 side (`/etc/phub/timeweb-beta/api.env`): `SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS`
+(`{"<kid>":"<PKCS8 PEM with \n>"}`), `SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID`,
+`SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER`, `SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE` with the same
+three values, plus the CREATE keys from the table above.
+
+Steps, each a separate owner approval:
+
+1. **P1 — LK1 readback (read-only)**, as root on `lk-primary-147`; prints names, flags and whether
+   the quarter CREATE owner is installed, never the key:
+
+   ```sh
+   pid=$(pgrep -f node-red | head -1); tr '\0' '\n' < /proc/$pid/environ | grep -E '^(LK1_BOOKED_OPERATION_RECEIVER_ENABLED|BOOKED_OPERATION_EXECUTION_ENABLED|LK2_BOOKED_OPERATION_DELEGATION_)' | sed -E 's/^(LK2_BOOKED_OPERATION_DELEGATION_PUBLIC_KEY_PEM)=.*/\1=<set>/'
+   systemctl status $(ps -o unit= -p $pid) --no-pager 2>/dev/null | head -3
+   for f in $(find / -name flows.json -path '*node-red*' 2>/dev/null); do echo "$f $(grep -c 'Quarter CREATE' "$f")"; done
+   ```
+
+2. **P2 — key on the lk2 host.** The private key never leaves `phub-timeweb-staging`:
+
+   ```sh
+   umask 077; d=/root/lk2-delegation-2026-11; mkdir -p "$d"
+   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$d/private.pem"
+   openssl pkey -in "$d/private.pem" -pubout -out "$d/public.pem"
+   awk '{printf "%s\\n",$0}' "$d/public.pem"; echo   # the LK1 PUBLIC_KEY_PEM value
+   ```
+
+3. **P3 — LK1 trusts the key:** set the seven LK1 values in the env source P1 found, restart
+   Node-RED. With no LK2 signer yet this changes nothing for users.
+4. **P4 — LK2 signs:** back up and extend `api.env`, then recreate the API through the lane
+   (`docker restart` does not reread `env_file`):
+
+   ```sh
+   cp -p /etc/phub/timeweb-beta/api.env /etc/phub/timeweb-beta/api.env.bak-$(date +%Y%m%d%H%M%S)
+   python3 -I -S -c 'import json,sys;print("SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS="+json.dumps({sys.argv[2]:open(sys.argv[1]).read()},separators=(",",":")))' /root/lk2-delegation-2026-11/private.pem lk2-beta-2026-11 >> /etc/phub/timeweb-beta/api.env
+   cat >> /etc/phub/timeweb-beta/api.env <<'ENV'
+   SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID=lk2-beta-2026-11
+   SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER=https://lk2.padlhub.su
+   SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE=padlhub-lk1-booked-operation
+   GAME_COMMERCIAL_CREATE_ENABLED=true
+   GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT=QUARTER_OWNER
+   GAME_COMMERCIAL_CREATE_OWNER_BASE_URL=https://padlhub.su/
+   GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS=5000
+   ENV
+   sudo deploy/timeweb/lk2-beta-lane.sh plan <green-main-sha> && sudo deploy/timeweb/lk2-beta-lane.sh promote <green-main-sha>
+   ```
+
+5. Read-only acceptance, then one approved `--create` (steps 4–5 of the next section).
+
+Rollback: LK2 — restore the `api.env.bak-*` copy and `lk2-beta-lane.sh rollback` (or promote
+again); LK1 — set `BOOKED_OPERATION_EXECUTION_ENABLED=false` and restart Node-RED, which refuses
+every LK2 call with `GAME_CREATE_OWNER_UNAVAILABLE`. Revoking the key = removing the LK1 public key.
+JOIN pairing (subscription-runtime WARN base URL and LK1 integration token) is a later, separate
+step; the monthly purchase verifier in LK1 was not checked here.
+
 ## Activation and rollback
 
 1. Owner approves and merges #602. Pick a main SHA with green `Pull request checks` and
