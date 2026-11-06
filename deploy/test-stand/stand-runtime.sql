@@ -24,6 +24,14 @@ insert into identity.users (id, tenant_id)
 select '00000000-0000-4000-8000-00000000a001', id from identity.tenants where tenant_key = 'local-padel'
 on conflict do nothing;
 
+-- The synthetic operator has no sign-in method; it only authors the game notification ruleset
+-- that the Test stand workflow provisions after each deploy.
+insert into identity.user_access_profiles (tenant_id, user_id, roles, permissions)
+select tenant_id, id, array['admin'], array['notifications.manage']
+  from identity.users where id = '00000000-0000-4000-8000-00000000a001'
+on conflict (tenant_id, user_id) do update
+  set roles = excluded.roles, permissions = excluded.permissions;
+
 insert into locations.profiles (
   tenant_id, id, slug, title, short_title, city, court_count, address, latitude, longitude,
   metro_name, publication_status, show_on_home, sort_order, created_by, updated_by, published_at

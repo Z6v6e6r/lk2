@@ -58,9 +58,10 @@ the verification environment). The first real deploy is that check.
 ## Game notifications on a fresh stand
 
 `stand-runtime.sql` opens in-app notifications, but game notification rules are a separate audited
-ruleset. After a `--reset`, provision it once through an SSH tunnel to the stand PostgreSQL, using
-the synthetic operator `00000000-0000-4000-8000-00000000a001` (it needs `admin` +
-`notifications.manage` in `identity.user_access_profiles`):
+ruleset. The `Test stand` workflow re-applies it after every deploy (idempotent, so a `--reset`
+recovers on its own) through an SSH tunnel to the stand PostgreSQL, acting as the synthetic operator
+`00000000-0000-4000-8000-00000000a001`; `stand-runtime.sql` grants that operator `admin` +
+`notifications.manage`. To apply it by hand:
 
 ```sh
 DATABASE_URL=postgres://postgres:<stand password>@127.0.0.1:<tunnel port>/phub \
@@ -68,3 +69,11 @@ DATABASE_URL=postgres://postgres:<stand password>@127.0.0.1:<tunnel port>/phub \
   --actor-id=00000000-0000-4000-8000-00000000a001 \
   --idempotency-key=test-stand-game-ruleset-v1 --confirm=APPLY_GAME_NOTIFICATION_RULESET
 ```
+
+## Multi-player E2E
+
+`npm run stand:e2e` signs in the three synthetic phones (`AUTH_DEV_PHONE_E164` plus
+`AUTH_DEV_EXTRA_PHONES_E164`) and checks the last-seat race, game chat and its ACL, leave/rejoin,
+cancellation with a participant notification, direct chat, friends and a public community. It only
+runs against `test.lk2.padlhub.su` or localhost (`PHUB_API_BASE_URL`). Community creation has a
+daily quota, so a second run on the same day reports that step as SKIP.

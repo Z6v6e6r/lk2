@@ -141,3 +141,26 @@ jobs:
             "$target:phub-test-stand/"
           printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/id_stand "$target" \
             "docker login ghcr.io -u ${{ github.actor }} --password-stdin >/dev/null && cd ~/phub-test-stand && chmod +x deploy.sh && ./deploy.sh $RESET $TAG"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.configured.outputs.ok == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - name: Provision the game notification ruleset
+        # Idempotent (fixed idempotency key); a --reset wipes it, so every deploy re-applies it
+        # through an SSH tunnel to the stand PostgreSQL with the synthetic operator.
+        if: steps.configured.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          target="${SSH_USER:-root}@$HOST"
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run contracts:generate && npm run build:packages
+          ssh_stand() { ssh -i ~/.ssh/id_stand -o BatchMode=yes "$target" "$@"; }
+          pg_ip=$(ssh_stand "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \$(docker ps -q -f label=com.docker.compose.project=phub-test -f label=com.docker.compose.service=postgres)")
+          pg_password=$(ssh_stand "sed -n 's/^POSTGRES_PASSWORD=//p' ~/phub-test-stand/.secrets/postgres.env")
+          echo "::add-mask::$pg_password"
+          ssh -i ~/.ssh/id_stand -o BatchMode=yes -o ExitOnForwardFailure=yes -f -N -L "15432:$pg_ip:5432" "$target"
+          DATABASE_URL="postgres://postgres:$pg_password@127.0.0.1:15432/phub" \
+            npm run notifications:game:provision -- --tenant-key=local-padel \
+            --actor-id=00000000-0000-4000-8000-00000000a001 \
+            --idempotency-key=test-stand-game-ruleset-v1 --confirm=APPLY_GAME_NOTIFICATION_RULESET
