@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import type { ClosedPackageFamily } from '../../../scripts/closed-application-package-family.js';
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
@@ -31,9 +32,28 @@ import {
   afterNotificationStep,
   type NotificationTarget,
 } from './notification-migration.js';
+import {
+  assertLk2BetaLaneTarget,
+  assertLk2RuntimeGrants,
+  LK2_BETA_LANE_LOCK_TIMEOUT,
+  LK2_BETA_LANE_STATEMENT_TIMEOUT,
+  LK2_BETA_LANE_TARGET_SQL,
+  LK2_ROW_LOCK_PARENT_SQL,
+  LK2_RUNTIME_GRANT_VERIFY_SQL,
+  lk2BetaLaneMode,
+  lk2RowLockParentGaps,
+  lk2RowLockParentGrantStatements,
+  lk2RowLockParents,
+  lk2RuntimeGrants,
+  lk2RuntimeGrantStatements,
+  type Lk2BetaLaneTargetRow,
+  type Lk2RowLockParentRow,
+  type Lk2RuntimeGrantVerifyRow,
+} from './lk2-beta-lane.js';
 
 type MigrationRunMode =
   | { readonly mode: 'ordinary' }
+  | { readonly mode: typeof lk2BetaLaneMode; readonly dryRun: boolean }
   | { readonly mode: typeof notificationMode; readonly target: NotificationTarget }
   | {
       readonly mode: typeof closedSingleMode;
@@ -130,6 +150,32 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
 
     const appliedFilenames = new Set(applied.map((entry) => entry.filename));
     const packagedFilenames = packagedMigrations.map((migration) => migration.filename);
+    if (input.mode === lk2BetaLaneMode) {
+      // Bound to the disposable lk2 cluster only; refuses before any DDL elsewhere.
+      assertLk2BetaLaneTarget(
+        (await client.query<Lk2BetaLaneTargetRow>(LK2_BETA_LANE_TARGET_SQL)).rows[0],
+      );
+      process.stdout.write(
+        JSON.stringify({
+          schema: 'PHUB_LK2_BETA_LANE_MIGRATION_PLAN_V1',
+          dryRun: input.dryRun,
+          applied: appliedFilenames.size,
+          packaged: packagedFilenames.length,
+          pending: packagedFilenames.filter((filename) => !appliedFilenames.has(filename)),
+          rowLockParentGaps: lk2RowLockParentGaps(
+            (
+              await client.query<Lk2RowLockParentRow>(LK2_ROW_LOCK_PARENT_SQL, [
+                lk2RowLockParents(),
+              ])
+            ).rows,
+          ),
+        }) + '\n',
+      );
+      if (input.dryRun) return;
+      await client.query(
+        `set lock_timeout = '${LK2_BETA_LANE_LOCK_TIMEOUT}'; set statement_timeout = '${LK2_BETA_LANE_STATEMENT_TIMEOUT}'`,
+      );
+    }
     const stagedFilenames =
       input.mode === 'communities_staged_rehearsal'
         ? new Set(
@@ -209,9 +255,42 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
         throw error;
       }
     }
+    if (input.mode === lk2BetaLaneMode) await applyLk2RuntimeGrants(client);
   } finally {
     await client.query('select pg_advisory_unlock($1)', [7_140_221]).catch(() => undefined);
     client.release();
     await pool.end();
   }
+}
+
+async function applyLk2RuntimeGrants(client: PoolClient): Promise<void> {
+  const grants = lk2RuntimeGrants();
+  await client.query('begin');
+  try {
+    for (const statement of lk2RuntimeGrantStatements(grants)) await client.query(statement);
+    const parents = lk2RowLockParents();
+    const parentQuery = async () =>
+      lk2RowLockParentGaps(
+        (await client.query<Lk2RowLockParentRow>(LK2_ROW_LOCK_PARENT_SQL, [parents])).rows,
+      );
+    const parentGaps = await parentQuery();
+    for (const statement of lk2RowLockParentGrantStatements(parentGaps))
+      await client.query(statement);
+    if ((await parentQuery()).length > 0) throw new Error('LK2_BETA_LANE_PARENT_GRANT_VERIFY');
+    if (parentGaps.length > 0)
+      process.stdout.write(`Granted row-lock parent privileges: ${JSON.stringify(parentGaps)}\n`);
+    assertLk2RuntimeGrants(
+      (
+        await client.query<Lk2RuntimeGrantVerifyRow>(LK2_RUNTIME_GRANT_VERIFY_SQL, [
+          grants.map((grant) => grant.relation),
+        ])
+      ).rows,
+      grants,
+    );
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  }
+  process.stdout.write(`Granted runtime privileges on ${grants.length} relations\n`);
 }
