@@ -9,7 +9,7 @@ import {
 } from '../../../../packages/domain/src/subscription-purchase.test-fixture.js';
 const prefix = '/user/api/v1/iSkq6G/subscription-purchase-operations',
   key = 'fixture-original-key';
-function setup(enabled = true) {
+function setup(enabled = true, launchOrigins?: readonly string[]) {
   const app = Fastify();
   const runtime = {
     capability: vi.fn(
@@ -40,6 +40,7 @@ function setup(enabled = true) {
     ...(enabled ? { runtime: runtime as unknown as MonthlyPurchaseRuntime } : {}),
     readHandlers: [auth],
     commandHandlers: [auth],
+    ...(launchOrigins ? { launchOrigins } : {}),
   });
   return { app, runtime };
 }
@@ -146,5 +147,94 @@ it('bank return cannot confirm payment; launch has nonce CSP and consumes only a
     expect(runtime.consumeLaunch).toHaveBeenCalledTimes(1);
   } finally {
     await app.close();
+  }
+});
+
+const consumeUrl = '/user/api/v1/subscription-payment-launch/consume';
+const consumePayload = () => ({
+  operationId: monthlyQuote().operationId,
+  launchCode: monthlyActor.tenantId + '.' + 'a'.repeat(64),
+});
+it('configured launch origins match exactly; lookalike, http and missing origins fail closed', async () => {
+  const { app, runtime } = setup(true, ['https://lk2.padlhub.su', 'https://test.lk2.padlhub.su']);
+  try {
+    const rejected = [
+      'http://test.lk2.padlhub.su',
+      'https://test.lk2.padlhub.su.evil.example',
+      'https://evil-test.lk2.padlhub.su',
+      'https://test.lk2.padlhub',
+      'https://test.lk2.padlhub.su/',
+      'https://test.lk2.padlhub.su:8443',
+      'https://TEST.lk2.padlhub.su',
+      'https://foreign.invalid',
+      'https://lk.nano.padlhub.su',
+      'null',
+      '',
+    ];
+    for (const origin of rejected) {
+      const response = await app.inject({
+        method: 'POST',
+        url: consumeUrl,
+        headers: { origin },
+        payload: consumePayload(),
+      });
+      expect(response.statusCode, origin).toBe(404);
+      expect(response.json()).toEqual({
+        code: 'SUBSCRIPTION_PAYMENT_LINK_UNAVAILABLE',
+        message: 'Ссылка недоступна.',
+      });
+    }
+    const missing = await app.inject({
+      method: 'POST',
+      url: consumeUrl,
+      payload: consumePayload(),
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(runtime.consumeLaunch).not.toHaveBeenCalled();
+    for (const origin of ['https://test.lk2.padlhub.su', 'https://lk2.padlhub.su'])
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: consumeUrl,
+            headers: { origin },
+            payload: consumePayload(),
+          })
+        ).statusCode,
+      ).toBe(200);
+    expect(runtime.consumeLaunch).toHaveBeenCalledTimes(2);
+  } finally {
+    await app.close();
+  }
+});
+it('omitted or empty launch origins keep the lk2-only default', async () => {
+  for (const launchOrigins of [undefined, []]) {
+    const { app, runtime } = setup(true, launchOrigins);
+    try {
+      for (const origin of ['https://test.lk2.padlhub.su', 'https://lk.nano.padlhub.su'])
+        expect(
+          (
+            await app.inject({
+              method: 'POST',
+              url: consumeUrl,
+              headers: { origin },
+              payload: consumePayload(),
+            })
+          ).statusCode,
+        ).toBe(404);
+      expect(runtime.consumeLaunch).not.toHaveBeenCalled();
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: consumeUrl,
+            headers: { origin: 'https://lk2.padlhub.su' },
+            payload: consumePayload(),
+          })
+        ).statusCode,
+      ).toBe(200);
+    } finally {
+      await app.close();
+    }
   }
 });

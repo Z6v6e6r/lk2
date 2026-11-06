@@ -15,7 +15,8 @@ export function registerMonthlyPurchaseRoutes(
     runtime?: MonthlyPurchaseRuntime;
     readHandlers: readonly preHandlerHookHandler[];
     commandHandlers: readonly preHandlerHookHandler[];
-    allowDebugOrigin?: boolean;
+    /** Exact origins of the same-origin landing page; omitted means lk2 only. */
+    launchOrigins?: readonly string[];
   },
 ) {
   const actor = (r: FastifyRequest) => {
@@ -138,10 +139,7 @@ try{if(!operationId||!launchCode)throw Error();const response=await fetch('${lau
     async (r, p) => {
       p.header('Cache-Control', 'no-store').header('Referrer-Policy', 'no-referrer');
       try {
-        const allowed = [
-          'https://lk2.padlhub.su',
-          ...(o.allowDebugOrigin ? ['https://lk.nano.padlhub.su'] : []),
-        ];
+        const allowed = o.launchOrigins?.length ? o.launchOrigins : ['https://lk2.padlhub.su'];
         if (typeof r.headers.origin !== 'string' || !allowed.includes(r.headers.origin))
           throw new MonthlyPurchaseError();
         emptyQuery(r);

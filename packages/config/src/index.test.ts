@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   loadConfig,
+  monthlySubscriptionLaunchOrigins,
   loadRealtimeConfig,
   loadWorkerConfig,
   runtimeContourTargetFingerprint,
@@ -1906,6 +1907,59 @@ it('monthly purchase admission remains default-off and requires a complete dedic
     expect(() =>
       loadConfig({ ...validEnvironment, MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS: timeout }),
     ).toThrow();
+});
+
+it('monthly payment launch origins default to the reviewed lk2 set and accept only exact HTTPS origins', () => {
+  const base = loadConfig(validEnvironment);
+  expect(base.MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS).toBe('');
+  expect(monthlySubscriptionLaunchOrigins(base)).toEqual(
+    base.APP_ENV === 'production'
+      ? ['https://lk2.padlhub.su']
+      : ['https://lk2.padlhub.su', 'https://lk.nano.padlhub.su'],
+  );
+  expect(
+    monthlySubscriptionLaunchOrigins({
+      APP_ENV: 'production',
+      MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS: '',
+    }),
+  ).toEqual(['https://lk2.padlhub.su']);
+  expect(
+    monthlySubscriptionLaunchOrigins({
+      APP_ENV: 'staging',
+      MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS: '',
+    }),
+  ).toEqual(['https://lk2.padlhub.su', 'https://lk.nano.padlhub.su']);
+  const configured = loadConfig({
+    ...validEnvironment,
+    MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS:
+      ' https://lk2.padlhub.su , https://test.lk2.padlhub.su,https://lk2.padlhub.su ',
+  });
+  expect(configured.MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS).toBe(
+    'https://lk2.padlhub.su,https://test.lk2.padlhub.su',
+  );
+  expect(monthlySubscriptionLaunchOrigins(configured)).toEqual([
+    'https://lk2.padlhub.su',
+    'https://test.lk2.padlhub.su',
+  ]);
+  for (const origins of [
+    'http://test.lk2.padlhub.su',
+    'https://test.lk2.padlhub.su/',
+    'https://test.lk2.padlhub.su/user',
+    'https://*.lk2.padlhub.su',
+    'https://user:pass@test.lk2.padlhub.su',
+    'https://TEST.lk2.padlhub.su',
+    'https://test.lk2.padlhub.su:443',
+    'https://127.0.0.1',
+    'https://localhost',
+    'https://stand.localhost',
+    'https://intranet',
+    'test.lk2.padlhub.su',
+    'https://lk2.padlhub.su,ftp://test.lk2.padlhub.su',
+  ])
+    expect(
+      () => loadConfig({ ...validEnvironment, MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS: origins }),
+      origins,
+    ).toThrow('MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS must contain exact public HTTPS origins only');
 });
 
 it('keeps residency product configuration explicit and never enables a mock fallback', () => {
