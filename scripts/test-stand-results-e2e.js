@@ -165,10 +165,16 @@ async function prepare(users) {
     (game) => game?.revision !== undefined,
   );
   for (const user of joiners) {
-    const before = await readGame(user, gameId);
-    const joined = await call(user.token, 'POST', `/games/${gameId}/join`, {
-      expectedRevision: before?.revision,
-    });
+    // The card projection can lag a just-applied join, so a stale revision is retried.
+    let joined;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const before = await readGame(user, gameId);
+      joined = await call(user.token, 'POST', `/games/${gameId}/join`, {
+        expectedRevision: before?.revision,
+      });
+      if (joined.json?.code !== 'GAME_REVISION_CONFLICT') break;
+      await sleep(1500);
+    }
     if (joined.status >= 300)
       record(`player ${user.phone} joins`, false, `${joined.status} ${joined.json?.code ?? ''}`);
   }
