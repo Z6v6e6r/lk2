@@ -77,3 +77,13 @@ DATABASE_URL=postgres://postgres:<stand password>@127.0.0.1:<tunnel port>/phub \
 cancellation with a participant notification, direct chat, friends and a public community. It only
 runs against `test.lk2.padlhub.su` or localhost (`PHUB_API_BASE_URL`). Community creation has a
 daily quota, so a second run on the same day reports that step as SKIP.
+
+`npm run stand:e2e:results` checks game result entry: a participant submits the score, the author
+cannot confirm it, another participant disputes it, the score is submitted again and confirmed, and
+a wrong roster, a non-participant and a second submission after confirmation are refused. A result
+opens only after the Worker finishes the game and joining closes 30 minutes before the start, so
+`--phase=prepare` creates a 4-player game that starts in about 32 minutes and lasts 5, and
+`--phase=verify` runs after it ends (without `--phase` the script waits in between, about 40
+minutes). It needs four synthetic phones; a fifth enables the non-participant check. Phones
+`+79990000004` and `+79990000005` were added to `stand.env.example`; an existing host `stand.env` is
+never overwritten, so add them to `AUTH_DEV_EXTRA_PHONES_E164` there.
