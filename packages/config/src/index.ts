@@ -170,6 +170,9 @@ const environmentSchema = z.object({
     .min(100)
     .max(10_000)
     .default(10_000),
+  // Exact HTTPS origins whose same-origin landing page may consume a one-use payment launch code.
+  // Empty keeps the reviewed default (lk2, plus lk.nano outside production). Owner: subscriptions.
+  MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS: z.string().default(''),
   SUBSCRIPTION_RUNTIME_WARN_MODE: z.enum(['OFF', 'WARN']).default('OFF'),
   SUBSCRIPTION_RUNTIME_BASE_URL: z.string().url().optional(),
   SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: z.string().min(32).optional(),
@@ -710,6 +713,52 @@ function materializeFileSecret(
   return value;
 }
 
+export const DEFAULT_MONTHLY_SUBSCRIPTION_LAUNCH_ORIGIN = 'https://lk2.padlhub.su';
+export const DEBUG_MONTHLY_SUBSCRIPTION_LAUNCH_ORIGIN = 'https://lk.nano.padlhub.su';
+
+function normalizeMonthlySubscriptionLaunchOrigins(serialized: string): string {
+  const normalized = new Set<string>();
+  for (const candidate of serialized.split(',')) {
+    const value = candidate.trim();
+    if (!value) continue;
+    let url: URL | undefined;
+    try {
+      url = new URL(value);
+    } catch {
+      url = undefined;
+    }
+    const hostname = url?.hostname ?? '';
+    if (
+      !url ||
+      url.protocol !== 'https:' ||
+      url.origin !== value ||
+      url.port !== '' ||
+      hostname.endsWith('.') ||
+      value.includes('*') ||
+      isIP(hostname.replace(/^\[|\]$/g, '')) !== 0 ||
+      hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      !hostname.includes('.')
+    )
+      throw new Error(
+        'MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS must contain exact public HTTPS origins only',
+      );
+    normalized.add(value);
+  }
+  return [...normalized].join(',');
+}
+
+/** The exact origins allowed to consume a payment launch code; never empty. */
+export function monthlySubscriptionLaunchOrigins(
+  config: Pick<AppConfig, 'APP_ENV' | 'MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS'>,
+): readonly string[] {
+  const configured = config.MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS.split(',').filter(Boolean);
+  if (configured.length) return configured;
+  return config.APP_ENV === 'production'
+    ? [DEFAULT_MONTHLY_SUBSCRIPTION_LAUNCH_ORIGIN]
+    : [DEFAULT_MONTHLY_SUBSCRIPTION_LAUNCH_ORIGIN, DEBUG_MONTHLY_SUBSCRIPTION_LAUNCH_ORIGIN];
+}
+
 function normalizeWebPushAllowedOrigins(serialized: string): string {
   const normalized = new Set<string>();
   for (const candidate of serialized.split(',')) {
@@ -840,6 +889,9 @@ export function loadConfig(
 
   const webPushAllowedEndpointOrigins = normalizeWebPushAllowedOrigins(
     parsed.data.WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS,
+  );
+  const monthlySubscriptionLaunchOriginList = normalizeMonthlySubscriptionLaunchOrigins(
+    parsed.data.MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS,
   );
 
   if (
@@ -1884,6 +1936,7 @@ export function loadConfig(
   return {
     ...parsed.data,
     WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: webPushAllowedEndpointOrigins,
+    MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS: monthlySubscriptionLaunchOriginList,
   };
 }
 

@@ -26,6 +26,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import { monthlySubscriptionLaunchOrigins } from '@phub/config';
 import type { AppConfig, RuntimeContourAttestation } from '@phub/config';
 import type {
   CommunityCreateService,
@@ -1147,7 +1148,7 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.monthlyPurchase ? { runtime: options.monthlyPurchase } : {}),
     readHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
-    allowDebugOrigin: options.config.APP_ENV !== 'production',
+    launchOrigins: monthlySubscriptionLaunchOrigins(options.config),
   });
   registerQuarterCreateRoutes(app as unknown as FastifyInstance, {
     ...(options.gameQuarterCreate ? { runtime: options.gameQuarterCreate } : {}),
