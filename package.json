@@ -105,6 +105,7 @@
     "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke-test.ts",
     "smoke:auth": "node --env-file-if-exists=.env --import tsx scripts/auth-smoke.ts",
     "stand:e2e": "node scripts/test-stand-e2e.js",
+    "lk2:commercial-acceptance": "node scripts/lk2-commercial-acceptance.js",
     "local:up": "node scripts/lk2-local.js up",
     "local:status": "node scripts/lk2-local.js status",
     "local:stop": "node scripts/lk2-local.js stop",
