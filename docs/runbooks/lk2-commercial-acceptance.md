@@ -88,6 +88,19 @@ LK2 side (`/etc/phub/timeweb-beta/api.env`): `SUBSCRIPTION_RUNTIME_DELEGATION_PR
 `SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER`, `SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE` with the same
 three values, plus the CREATE keys from the table above.
 
+**P1 readback, 2026-11-06** (read-only, through the operator's SOCKS tunnel): live LK1 Node-RED
+runs under pm2 as `node-red` (started 2026-11-03) from `/root/.node-red/flows.json`. Its HTTP
+integration endpoints are only `/lk/integrations/v1/booked-operation-admissions` and
+`/lk/integrations/v1/booked-operations/:operationId`; **the quarter CREATE owner
+(`/lk/integrations/v1/game-create-operations/*`) is not installed**, nor is the monthly friendship
+owner. No `LK1_BOOKED_OPERATION_RECEIVER_ENABLED`, `BOOKED_OPERATION_EXECUTION_ENABLED` or
+`LK2_BOOKED_OPERATION_DELEGATION_*` is set in the process or flow environment, so LK1 trusts no
+LK2 key today and nothing is replaced by a new one. Consequence: before P3 the LK1 owner flow from
+`Z6v6e6r/lk` (`scripts/patch_nodered_game_create_owner.mjs`, `nodered_game_create_owner_nodes/`)
+must be installed on live LK1 through that repository's own reviewed procedure (a CRITICAL live
+LK1 change), and P3 sets the env through pm2 (`pm2 restart node-red --update-env` with the values
+exported, or the pm2 ecosystem file).
+
 Steps, each a separate owner approval:
 
 1. **P1 — LK1 readback (read-only)**, as root on `lk-primary-147`; prints names, flags and whether
