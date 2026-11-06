@@ -7,7 +7,9 @@ release preparation and deployment preparation without duplicating Timeweb proce
 
 ## Setup and commands
 
-Requires Node 22+, npm 10.9+, the committed lockfile and Docker Desktop/Compose with `--wait` support.
+Requires Node 22 (pinned in `.nvmrc`; CI uses 22), npm 10.9+, the committed lockfile and Docker
+Desktop/Compose with `--wait` support. Node 25+ enables a global `localStorage` that breaks the Web
+tests; on such a Node run them with `NODE_OPTIONS=--no-webstorage`.
 Install host tooling using `npm ci`, not `npm install`; no new dependencies are required.
 
 ```sh
