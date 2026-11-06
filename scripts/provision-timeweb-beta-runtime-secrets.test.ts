@@ -1122,6 +1122,15 @@ describe('quarter CREATE API-only release inputs', () => {
     env.api!.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT = 'BOOKED_OPERATION';
     expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
   });
+  it('rejects a disabled flag that keeps the QUARTER_OWNER transport, which the API would refuse', () => {
+    const env = quarter();
+    env.api!.GAME_COMMERCIAL_CREATE_ENABLED = 'false';
+    expect(() => loadConfig(env.api)).toThrow();
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+    delete env.api!.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT;
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).not.toThrow();
+    expect(loadConfig(env.api).GAME_COMMERCIAL_CREATE_ENABLED).toBe(false);
+  });
   it.each(['worker', 'realtime', 'migrator'])('keeps CREATE keys out of %s', (role) => {
     const env = quarter();
     env[role]!.GAME_COMMERCIAL_CREATE_ENABLED = 'false';

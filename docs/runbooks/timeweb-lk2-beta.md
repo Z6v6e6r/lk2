@@ -1007,6 +1007,8 @@ existing `GAME_PAYMENT_REQUIRED` answer. A supplied flag must be `false` or `tru
 admitted transport is `QUARTER_OWNER` (the LK1 `ORGANIZER_QUARTER_CREATE` owner: whole-court
 window, organizer quarter on the subscription). `ADVISORY` and `BOOKED_OPERATION` are refused on
 this contour. The owner URL must be exactly `https://padlhub.su/`, timeout 100–5000 ms.
+The transport is admitted only together with `GAME_COMMERCIAL_CREATE_ENABLED=true`; to
+deactivate, set the flag to `false` and remove the transport line in the same change.
 
 Enabling requires `GAMES_READ_ENABLED=true`, `GAMES_COMMANDS_ENABLED=true` and the canonical RSA
 delegation keyring, selected active key, issuer and audience that the LK1 owner verifies. It does

@@ -121,6 +121,10 @@ export function validateTimewebCommercialRuntime(api, fail) {
     )
       fail('subscription_runtime_boundary_invalid');
   }
+  // packages/config refuses QUARTER_OWNER without the flag, so a flag-only deactivation must also
+  // drop the transport; otherwise the API would fail at startup after passing this validator.
+  if (api.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT !== undefined && !quarterCreate)
+    fail('commercial_create_transport_without_flag');
   if (quarterCreate) {
     if (
       api.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT !== 'QUARTER_OWNER' ||
