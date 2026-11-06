@@ -1,6 +1,7 @@
 import { runR1TailMigration } from './r1-tail-migration.js';
 import { R1_TAIL_ARGUMENT } from '../../../scripts/r1-tail-migration-profile.js';
 import { runMigrationProcess } from './migration-runner.js';
+import { lk2BetaLaneArgument, lk2BetaLaneMode, lk2BetaLanePlanArgument } from './lk2-beta-lane.js';
 import {
   notificationMode,
   notificationModeArgument,
@@ -16,6 +17,11 @@ import {
 
 const args = process.argv.slice(2);
 if (args.length === 0) await runMigrationProcess({ mode: 'ordinary' });
+else if (
+  args.length === 1 &&
+  (args[0] === lk2BetaLaneArgument || args[0] === lk2BetaLanePlanArgument)
+)
+  await runMigrationProcess({ mode: lk2BetaLaneMode, dryRun: args[0] === lk2BetaLanePlanArgument });
 else if (args.length === 2 && args[0] === R1_TAIL_ARGUMENT) {
   const bytes = Buffer.from(args[1]!, 'base64');
   if (bytes.toString('base64') !== args[1]) throw new Error('R1_TAIL_TARGET_ENCODING');

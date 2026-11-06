@@ -93,6 +93,7 @@ source-quality at every stage; reuse the exact successful run when its source is
 ## Related documents
 
 - [Timeweb beta runbook](timeweb-lk2-beta.md) — canonical target and current strict procedure.
+- [LK2 disposable beta lane](lk2-beta-lane.md) — one-command promote for lk2 while it holds synthetic data.
 - [Standard Timeweb delivery](timeweb-standard-delivery.md) — enrolled Web route.
 - [Notification migration package](notification-migrations-0099-0101.md) — current migration profile.
 - [Publication custody](timeweb-amd64-image-publication.md) — immutable images and manifests.
