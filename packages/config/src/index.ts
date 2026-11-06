@@ -732,6 +732,8 @@ function normalizeMonthlySubscriptionLaunchOrigins(serialized: string): string {
       !url ||
       url.protocol !== 'https:' ||
       url.origin !== value ||
+      url.port !== '' ||
+      hostname.endsWith('.') ||
       value.includes('*') ||
       isIP(hostname.replace(/^\[|\]$/g, '')) !== 0 ||
       hostname === 'localhost' ||

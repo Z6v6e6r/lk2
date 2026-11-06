@@ -1941,6 +1941,13 @@ it('monthly payment launch origins default to the reviewed lk2 set and accept on
     'https://lk2.padlhub.su',
     'https://test.lk2.padlhub.su',
   ]);
+  // Browsers send the ASCII (punycode) form; only that exact spelling is accepted.
+  expect(
+    loadConfig({
+      ...validEnvironment,
+      MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS: 'https://xn--e1aybc.lk2.padlhub.su',
+    }).MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS,
+  ).toBe('https://xn--e1aybc.lk2.padlhub.su');
   for (const origins of [
     'http://test.lk2.padlhub.su',
     'https://test.lk2.padlhub.su/',
@@ -1949,6 +1956,9 @@ it('monthly payment launch origins default to the reviewed lk2 set and accept on
     'https://user:pass@test.lk2.padlhub.su',
     'https://TEST.lk2.padlhub.su',
     'https://test.lk2.padlhub.su:443',
+    'https://test.lk2.padlhub.su:8443',
+    'https://test.lk2.padlhub.su.',
+    'https://тест.lk2.padlhub.su',
     'https://127.0.0.1',
     'https://localhost',
     'https://stand.localhost',
