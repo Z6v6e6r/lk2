@@ -223,9 +223,6 @@ function MobileSession({
           </div>
         </aside>
       )}
-      <nav className="native-quarter-navigation" aria-label="Создание игры">
-        <a href="/games/new?quarterCreate=1">Игра по подписке</a>
-      </nav>
       {native ? <AndroidTournamentNavigation /> : null}
       <App
         key={dataGeneration}
