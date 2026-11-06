@@ -115,7 +115,8 @@ export function lk2RuntimeGrantStatements(grants = lk2RuntimeGrants()): string[]
 }
 
 // Read-only check run after the grants: every listed relation exists, its schema is usable by the
-// runtime role and the runtime role holds exactly the listed table-level privileges.
+// runtime role, and the runtime role holds exactly the listed table-level privileges and, where it
+// has no table-level UPDATE, UPDATE on exactly the listed columns.
 export const LK2_RUNTIME_GRANT_VERIFY_SQL = `
   select g.relation,
          to_regclass(g.relation) is not null as present,
@@ -124,7 +125,13 @@ export const LK2_RUNTIME_GRANT_VERIFY_SQL = `
          case when to_regclass(g.relation) is null then null
               else array(select p from unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p
                           where pg_catalog.has_table_privilege('${LK2_BETA_LANE_RUNTIME_ROLE}', to_regclass(g.relation), p)
-                          order by p) end as privileges
+                          order by p) end as privileges,
+         case when to_regclass(g.relation) is null
+                or pg_catalog.has_table_privilege('${LK2_BETA_LANE_RUNTIME_ROLE}', to_regclass(g.relation), 'UPDATE') then array[]::text[]
+              else array(select a.attname::text from pg_catalog.pg_attribute a
+                          where a.attrelid = to_regclass(g.relation) and a.attnum > 0 and not a.attisdropped
+                            and pg_catalog.has_column_privilege('${LK2_BETA_LANE_RUNTIME_ROLE}', a.attrelid, a.attnum, 'UPDATE')
+                          order by a.attname collate "C") end as update_columns
     from unnest($1::text[]) as g(relation)
    order by g.relation
 `;
@@ -134,6 +141,7 @@ export interface Lk2RuntimeGrantVerifyRow {
   readonly present: boolean;
   readonly schema_usage: boolean;
   readonly privileges: readonly string[] | null;
+  readonly update_columns: readonly string[];
 }
 
 export function assertLk2RuntimeGrants(
@@ -149,5 +157,64 @@ export function assertLk2RuntimeGrants(
     const actual = [...(row.privileges ?? [])].sort().join(',');
     if (actual !== [...grant.privileges].sort().join(','))
       throw new Error(`LK2_BETA_LANE_GRANT_MISMATCH:${grant.relation}`);
+    if ([...row.update_columns].sort().join(',') !== [...grant.updateColumns].sort().join(','))
+      throw new Error(`LK2_BETA_LANE_COLUMN_GRANT_MISMATCH:${grant.relation}`);
   }
+}
+
+// Existing parent tables that the new code reads under FOR SHARE/UPDATE row locks. PostgreSQL
+// requires SELECT plus UPDATE on at least one column for those locks. These tables predate the
+// lane, so their grants are only ever added to (never revoked): missing SELECT, or a missing
+// UPDATE when the role has UPDATE on no column at all, is granted and reported.
+export function lk2RowLockParents(): string[] {
+  const parents = new Set<string>();
+  for (const component of ['api', 'worker'] as const)
+    for (const row of r1RuntimePrivilegeRequirements(component))
+      if (!row.tenantTable && row.rowLock) parents.add(row.relation);
+  return [...parents].sort();
+}
+
+export const LK2_ROW_LOCK_PARENT_SQL = `
+  select g.relation,
+         to_regclass(g.relation) is not null as present,
+         case when to_regclass(g.relation) is null then false
+              else pg_catalog.has_schema_privilege('${LK2_BETA_LANE_RUNTIME_ROLE}', split_part(g.relation, '.', 1), 'USAGE') end as schema_usage,
+         case when to_regclass(g.relation) is null then false
+              else pg_catalog.has_table_privilege('${LK2_BETA_LANE_RUNTIME_ROLE}', to_regclass(g.relation), 'SELECT') end as can_select,
+         case when to_regclass(g.relation) is null then false
+              else pg_catalog.has_any_column_privilege('${LK2_BETA_LANE_RUNTIME_ROLE}', to_regclass(g.relation), 'UPDATE') end as can_lock
+    from unnest($1::text[]) as g(relation)
+   order by g.relation
+`;
+
+export interface Lk2RowLockParentRow {
+  readonly relation: string;
+  readonly present: boolean;
+  readonly schema_usage: boolean;
+  readonly can_select: boolean;
+  readonly can_lock: boolean;
+}
+
+export function lk2RowLockParentGaps(rows: readonly Lk2RowLockParentRow[]): {
+  relation: string;
+  missing: ('SELECT' | 'UPDATE')[];
+}[] {
+  return rows.flatMap((row) => {
+    if (!row.present) throw new Error(`LK2_BETA_LANE_PARENT_MISSING:${row.relation}`);
+    if (!row.schema_usage) throw new Error(`LK2_BETA_LANE_SCHEMA_USAGE_MISSING:${row.relation}`);
+    const missing: ('SELECT' | 'UPDATE')[] = [];
+    if (!row.can_select) missing.push('SELECT');
+    if (!row.can_lock) missing.push('UPDATE');
+    return missing.length > 0 ? [{ relation: row.relation, missing }] : [];
+  });
+}
+
+export function lk2RowLockParentGrantStatements(
+  gaps: readonly { relation: string; missing: readonly ('SELECT' | 'UPDATE')[] }[],
+): string[] {
+  const role = identifier(LK2_BETA_LANE_RUNTIME_ROLE);
+  return gaps.map(
+    ({ relation, missing }) =>
+      `grant ${missing.join(', ')} on table ${qualified(relation)} to ${role}`,
+  );
 }

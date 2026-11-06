@@ -38,11 +38,16 @@ import {
   LK2_BETA_LANE_LOCK_TIMEOUT,
   LK2_BETA_LANE_STATEMENT_TIMEOUT,
   LK2_BETA_LANE_TARGET_SQL,
+  LK2_ROW_LOCK_PARENT_SQL,
   LK2_RUNTIME_GRANT_VERIFY_SQL,
   lk2BetaLaneMode,
+  lk2RowLockParentGaps,
+  lk2RowLockParentGrantStatements,
+  lk2RowLockParents,
   lk2RuntimeGrants,
   lk2RuntimeGrantStatements,
   type Lk2BetaLaneTargetRow,
+  type Lk2RowLockParentRow,
   type Lk2RuntimeGrantVerifyRow,
 } from './lk2-beta-lane.js';
 
@@ -157,6 +162,13 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
           applied: appliedFilenames.size,
           packaged: packagedFilenames.length,
           pending: packagedFilenames.filter((filename) => !appliedFilenames.has(filename)),
+          rowLockParentGaps: lk2RowLockParentGaps(
+            (
+              await client.query<Lk2RowLockParentRow>(LK2_ROW_LOCK_PARENT_SQL, [
+                lk2RowLockParents(),
+              ])
+            ).rows,
+          ),
         }) + '\n',
       );
       if (input.dryRun) return;
@@ -256,6 +268,17 @@ async function applyLk2RuntimeGrants(client: PoolClient): Promise<void> {
   await client.query('begin');
   try {
     for (const statement of lk2RuntimeGrantStatements(grants)) await client.query(statement);
+    const parents = lk2RowLockParents();
+    const parentQuery = async () =>
+      lk2RowLockParentGaps(
+        (await client.query<Lk2RowLockParentRow>(LK2_ROW_LOCK_PARENT_SQL, [parents])).rows,
+      );
+    const parentGaps = await parentQuery();
+    for (const statement of lk2RowLockParentGrantStatements(parentGaps))
+      await client.query(statement);
+    if ((await parentQuery()).length > 0) throw new Error('LK2_BETA_LANE_PARENT_GRANT_VERIFY');
+    if (parentGaps.length > 0)
+      process.stdout.write(`Granted row-lock parent privileges: ${JSON.stringify(parentGaps)}\n`);
     assertLk2RuntimeGrants(
       (
         await client.query<Lk2RuntimeGrantVerifyRow>(LK2_RUNTIME_GRANT_VERIFY_SQL, [

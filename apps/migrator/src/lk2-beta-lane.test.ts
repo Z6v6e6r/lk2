@@ -5,6 +5,9 @@ import {
   assertLk2RuntimeGrants,
   LK2_BETA_LANE_TARGET,
   lk2RuntimeGrants,
+  lk2RowLockParentGaps,
+  lk2RowLockParentGrantStatements,
+  lk2RowLockParents,
   lk2RuntimeGrantStatements,
 } from './lk2-beta-lane.js';
 
@@ -112,7 +115,13 @@ describe('lk2 beta lane runtime grants', () => {
     const grants = [{ relation: 'a.b', privileges: ['SELECT'] as const, updateColumns: [] }].map(
       (grant) => ({ ...grant, privileges: [...grant.privileges] }),
     );
-    const ok = { relation: 'a.b', present: true, schema_usage: true, privileges: ['SELECT'] };
+    const ok = {
+      relation: 'a.b',
+      present: true,
+      schema_usage: true,
+      privileges: ['SELECT'],
+      update_columns: [] as string[],
+    };
     expect(() => assertLk2RuntimeGrants([ok], grants)).not.toThrow();
     expect(() => assertLk2RuntimeGrants([{ ...ok, present: false }], grants)).toThrow(
       'LK2_BETA_LANE_GRANT_RELATION_MISSING:a.b',
@@ -124,6 +133,9 @@ describe('lk2 beta lane runtime grants', () => {
       assertLk2RuntimeGrants([{ ...ok, privileges: ['SELECT', 'DELETE'] }], grants),
     ).toThrow('LK2_BETA_LANE_GRANT_MISMATCH:a.b');
     expect(() => assertLk2RuntimeGrants([], grants)).toThrow('LK2_BETA_LANE_GRANT_VERIFY');
+    expect(() => assertLk2RuntimeGrants([{ ...ok, update_columns: ['secret'] }], grants)).toThrow(
+      'LK2_BETA_LANE_COLUMN_GRANT_MISMATCH:a.b',
+    );
   });
 });
 
@@ -141,5 +153,30 @@ describe('lk2 beta lane entrypoint', () => {
     expect(binding).toBeLessThan(
       source.indexOf('create table if not exists public.schema_migrations'),
     );
+  });
+});
+
+describe('lk2 beta lane row-lock parents', () => {
+  it('lists the reviewed parent tables locked by the new code', () => {
+    expect(lk2RowLockParents()).toEqual(
+      expect.arrayContaining(['identity.tenants', 'identity.users', 'games.games']),
+    );
+    expect(lk2RowLockParents()).not.toContain('commerce.monthly_purchase_attempts');
+  });
+
+  it('only adds missing SELECT or lock-enabling UPDATE, never revokes', () => {
+    const row = { relation: 'identity.tenants', present: true, schema_usage: true };
+    expect(lk2RowLockParentGaps([{ ...row, can_select: true, can_lock: true }])).toEqual([]);
+    const gaps = lk2RowLockParentGaps([{ ...row, can_select: true, can_lock: false }]);
+    expect(gaps).toEqual([{ relation: 'identity.tenants', missing: ['UPDATE'] }]);
+    expect(lk2RowLockParentGrantStatements(gaps)).toEqual([
+      'grant UPDATE on table "identity"."tenants" to "phub_runtime"',
+    ]);
+    expect(() =>
+      lk2RowLockParentGaps([{ ...row, present: false, can_select: false, can_lock: false }]),
+    ).toThrow('LK2_BETA_LANE_PARENT_MISSING:identity.tenants');
+    expect(() =>
+      lk2RowLockParentGaps([{ ...row, schema_usage: false, can_select: false, can_lock: false }]),
+    ).toThrow('LK2_BETA_LANE_SCHEMA_USAGE_MISSING:identity.tenants');
   });
 });

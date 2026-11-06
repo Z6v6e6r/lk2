@@ -2,7 +2,7 @@
 # LK2 disposable beta lane: promote one green main commit to lk2.padlhub.su.
 # Run as root on the lk2 host. See docs/runbooks/lk2-beta-lane.md.
 #
-#   lk2-beta-lane.sh plan <sha>       pull the five images, show pending migrations and current state
+#   lk2-beta-lane.sh plan <sha>       pull the five images, record their digests, show pending migrations
 #   lk2-beta-lane.sh promote <sha>    backup -> migrate (+ runtime grants) -> api/realtime/web/worker -> smoke
 #   lk2-beta-lane.sh rollback         restore the previous recorded application images (schema stays)
 #   lk2-beta-lane.sh status           containers, images and recorded history
@@ -48,21 +48,29 @@ compose() {
     "$DOCKER_BIN" compose -p "$PROJECT" -f "$COMPOSE_FILE" --env-file "$env_file" --profile background "$@"
 }
 
-container() { printf '%s-%s-1' "$PROJECT" "$1"; }
-container_exists() { docker inspect "$(container "$1")" >/dev/null 2>&1; }
-container_running() {
-  [[ $(docker inspect -f '{{.State.Running}}' "$(container "$1")" 2>/dev/null || echo false) == true ]]
+canonical() { printf '%s-%s-1' "$PROJECT" "$1"; }
+# The one running application container of a service on the beta network, whatever its Compose
+# project (lk2 may still run the legacy phub-timeweb-beta-apps project). Two is ambiguous: stop.
+live_id() {
+  local ids
+  ids=$(docker ps -q --filter "network=$NETWORK" --filter "label=com.docker.compose.service=$1")
+  [[ $(printf '%s' "$ids" | grep -c .) -le 1 ]] || die "more than one running $1 container on $NETWORK"
+  printf '%s' "$ids"
 }
-container_image() { docker inspect -f '{{.Config.Image}}' "$(container "$1")" 2>/dev/null || true; }
+container_running() { [[ -n $(live_id "$1") ]]; }
+container_image() { local id; id=$(live_id "$1"); [[ -n $id ]] && docker inspect -f '{{.Config.Image}}' "$id" || true; }
+container_project() { local id; id=$(live_id "$1"); [[ -n $id ]] && docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$id" || true; }
 digest_of() { # "<registry>/phub-api@sha256:..." -> "sha256:..."
-  [[ $1 =~ @(sha256:[0-9a-f]{64})$ ]] && printf '%s' "${BASH_REMATCH[1]}"
+  [[ ${1:-} =~ @(sha256:[0-9a-f]{64})$ ]] && printf '%s' "${BASH_REMATCH[1]}"
 }
 
 postgres_container() {
-  docker ps -q --filter "network=$NETWORK" | while read -r id; do
+  local id ip
+  for id in $(docker ps -q --filter "network=$NETWORK"); do
     ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NETWORK\").IPAddress}}" "$id")
-    [[ $ip == "$POSTGRES_IP" ]] && { docker inspect -f '{{.Name}}' "$id" | sed 's#^/##'; break; }
+    if [[ $ip == "$POSTGRES_IP" ]]; then docker inspect -f '{{.Name}}' "$id" | sed 's#^/##'; return 0; fi
   done
+  return 0
 }
 
 # Reads the superuser name/password from the operator PostgreSQL container. Never printed.
@@ -80,6 +88,7 @@ superuser_env() {
   {
     printf 'DATABASE_URL=postgresql://%s:%s@%s:5432/%s\n' "$user" "$encoded" "$POSTGRES_IP" "$DATABASE"
     printf 'MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS=10000\n'
+    # Only relevant while 0069-0073 are pending; on lk2 they are applied, so this is a no-op.
     printf 'CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=CHAT_PUSH_FOUNDATION_MAINTENANCE_V1\n'
   } > "$TMP/migrator.env"
   printf '%s' "$user" > "$TMP/superuser"
@@ -95,21 +104,30 @@ pull_images() { # sha -> writes $TMP/<image>.ref with the immutable digest refer
     docker pull --quiet "$REGISTRY/phub-$image:$sha" >/dev/null ||
       die "cannot pull $REGISTRY/phub-$image:$sha (is it a green main SHA built by 'Test stand'? docker login ghcr.io?)"
     ref=$(docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$REGISTRY/phub-$image:$sha" |
-      grep -E "^$REGISTRY/phub-$image@sha256:[0-9a-f]{64}$" | head -1)
+      grep -E "^$REGISTRY/phub-$image@sha256:[0-9a-f]{64}$" | head -1 || true)
     [[ -n $ref ]] || die "no registry digest for phub-$image:$sha"
     printf '%s' "$ref" > "$TMP/$image.ref"
   done
 }
 
+require_env_root() {
+  local svc
+  for svc in api realtime worker; do
+    [[ -f $ENV_ROOT/$svc.env ]] || die "runtime env root $ENV_ROOT has no $svc.env"
+  done
+}
+
 fcm_source() {
-  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/run/phub/fcm-service-account.json"}}{{.Source}}{{end}}{{end}}' \
-    "$(container worker)" 2>/dev/null || true
+  local id
+  id=$(live_id worker)
+  [[ -n $id ]] || { [[ -f $STATE/releases/fcm-source ]] && cat "$STATE/releases/fcm-source"; return 0; }
+  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/run/phub/fcm-service-account.json"}}{{.Source}}{{end}}{{end}}' "$id"
 }
 
 # Release env for compose.beta.yaml: digests and paths only, no credential values.
 write_release_env() { # out release_id api realtime web worker migrator (digests)
   local out=$1 fcm
-  fcm=$(fcm_source)
+  fcm=$(cat "$STATE/releases/fcm-source" 2>/dev/null || true)
   {
     printf 'PHUB_RELEASE_ID=%s\n' "$2"
     printf 'TIMEWEB_RUNTIME_ENV_ROOT=%s\n' "$ENV_ROOT"
@@ -119,36 +137,77 @@ write_release_env() { # out release_id api realtime web worker migrator (digests
   } > "$out"
 }
 
-# Captures the running application images once, before the first lane promotion.
-capture_baseline() {
-  [[ -f $STATE/releases/baseline.env ]] && return
-  local svc ref digests=()
-  for svc in api realtime web worker; do
-    ref=$(container_image "$svc")
-    if [[ -z $ref ]]; then digests+=(none); continue; fi
-    [[ -n $(digest_of "$ref") ]] || die "running $svc image is not pinned by digest: $ref"
-    digests+=("$(digest_of "$ref")")
+describe_live() {
+  local svc
+  for svc in "${APP_SERVICES[@]}"; do
+    if container_running "$svc"; then
+      log "  $svc running project=$(container_project "$svc") $(container_image "$svc")"
+    else
+      log "  $svc not running"
+    fi
   done
-  write_release_env "$STATE/releases/baseline.env" baseline "${digests[@]}" none
-  : > "$STATE/releases/baseline.services"
-  for svc in "${APP_SERVICES[@]}"; do container_running "$svc" && echo "$svc" >> "$STATE/releases/baseline.services"; done
-  log "baseline recorded: $(tr '\n' ' ' < "$STATE/releases/baseline.services")"
 }
 
-# Services to run: everything that runs now, plus api/realtime/web always.
+# Refuses unless api/realtime/web each run exactly once, pinned by digest. A legacy Compose
+# project needs an explicit TIMEWEB_RUNTIME_ENV_ROOT, because its env root cannot be read back.
+check_live() {
+  local svc legacy=false
+  for svc in api realtime web; do
+    container_running "$svc" || die "no running $svc container on $NETWORK"
+    [[ -n $(digest_of "$(container_image "$svc")") ]] || die "running $svc image is not pinned by digest"
+    [[ $(container_project "$svc") == "$PROJECT" ]] || legacy=true
+  done
+  if [[ $legacy == true && ! -f $STATE/releases/baseline.services && -z ${TIMEWEB_RUNTIME_ENV_ROOT:-} ]]; then
+    die "lk2 runs a non-canonical Compose project; set TIMEWEB_RUNTIME_ENV_ROOT to the env root those containers use"
+  fi
+}
+
+# Captures the running application containers once, before the first lane promotion. Lines:
+# "<service> <container id> <compose project> <image digest>".
+capture_baseline() {
+  [[ -f $STATE/releases/baseline.services ]] && return
+  local svc id
+  fcm_source > "$STATE/releases/fcm-source" || true
+  : > "$TMP/baseline.services"
+  for svc in "${APP_SERVICES[@]}"; do
+    id=$(live_id "$svc"); [[ -n $id ]] || continue
+    printf '%s %s %s %s\n' "$svc" "$id" "$(container_project "$svc")" "$(digest_of "$(container_image "$svc")")" >> "$TMP/baseline.services"
+  done
+  mv "$TMP/baseline.services" "$STATE/releases/baseline.services"
+  log "baseline recorded:"; sed 's/^/[lk2-beta]   /' "$STATE/releases/baseline.services"
+}
+
+baseline_field() { awk -v s="$1" -v f="$2" '$1 == s {print $f}' "$STATE/releases/baseline.services"; }
+
+# Services to run: api/realtime/web always, worker when it runs now or ran in the baseline.
 target_services() {
   local svc
   for svc in "${APP_SERVICES[@]}"; do
-    if [[ $svc != worker ]] || container_running worker || grep -qx worker "$STATE/releases/baseline.services" 2>/dev/null; then
+    if [[ $svc != worker ]] || container_running worker || [[ -n $(baseline_field worker 1 2>/dev/null) ]]; then
       echo "$svc"
     fi
   done
 }
 
+wait_healthy() { # container id
+  local health
+  for _ in $(seq 1 36); do
+    health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || echo missing)
+    [[ $health == healthy || $health == running ]] && return 0
+    sleep 5
+  done
+  return 1
+}
+
 start_services() { # env_file services...
-  local env_file=$1 svc; shift
+  local env_file=$1 svc id; shift
   for svc in "$@"; do
     grep -q "^$(echo "$svc" | tr a-z A-Z)_IMAGE_DIGEST=sha256:" "$env_file" || { log "  skip $svc (no image recorded)"; continue; }
+    # Hand the service name and address over from a legacy-project container: stop, never remove.
+    id=$(live_id "$svc")
+    if [[ -n $id && $(container_project "$svc") != "$PROJECT" ]]; then
+      log "  stop legacy $svc $id"; docker stop -t 30 "$id" >/dev/null || return 1
+    fi
     log "  up $svc"
     compose "$env_file" up -d --no-deps --pull never --wait --wait-timeout 180 "$svc" || return 1
   done
@@ -172,16 +231,16 @@ verify_running() { # env_file services...
   local env_file=$1 svc want got; shift
   for svc in "$@"; do
     want=$(grep "^$(echo "$svc" | tr a-z A-Z)_IMAGE_DIGEST=" "$env_file" | cut -d= -f2)
-    [[ $want == none ]] && continue
+    [[ $want == sha256:* ]] || continue
     got=$(digest_of "$(container_image "$svc")")
-    [[ $got == "$want" ]] || { log "  $svc runs $got, expected $want"; return 1; }
+    [[ $got == "$want" ]] || { log "  $svc runs ${got:-nothing}, expected $want"; return 1; }
   done
 }
 
 ledger() {
   local pg=$1
   docker exec "$pg" psql -U "$(cat "$TMP/superuser")" -d "$DATABASE" -tAc \
-    "select count(*) || ' applied, last ' || coalesce(max(filename), '-') from public.schema_migrations"
+    "select count(*) || ' applied, last ' || coalesce(max(filename), '-') from public.schema_migrations" || true
 }
 
 run_migrator() { # mode-argument
@@ -192,29 +251,62 @@ run_migrator() { # mode-argument
 backup() {
   local pg=$1 sha=$2 size free file
   size=$(docker exec "$pg" psql -U "$(cat "$TMP/superuser")" -d "$DATABASE" -tAc "select pg_database_size('$DATABASE')")
+  [[ $size =~ ^[0-9]+$ ]] || die "cannot read the database size"
   free=$(( $(df -Pk "$STATE/backups" | awk 'NR==2{print $4}') * 1024 ))
   (( free > 2 * size )) || die "backup needs > 2x database size free ($size bytes db, $free bytes free)"
   file="$STATE/backups/$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}.dump"
   log "backup -> $file"
-  docker exec "$pg" pg_dump -U "$(cat "$TMP/superuser")" -d "$DATABASE" -Fc > "$file.partial"
-  docker exec -i "$pg" pg_restore -l < "$file.partial" > /dev/null || die "backup is not a readable archive"
+  if ! docker exec "$pg" pg_dump -U "$(cat "$TMP/superuser")" -d "$DATABASE" -Fc > "$file.partial" ||
+     ! docker exec -i "$pg" pg_restore -l < "$file.partial" > /dev/null; then
+    rm -f "$file.partial"; die "backup failed"
+  fi
   mv "$file.partial" "$file"
   ls -1t "$STATE"/backups/*.dump 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | xargs -r rm -f
 }
 
-rollback_to() { # env_file
-  local env_file=$1 services
+rollback_to_baseline() {
+  local svc id project digest services env_file=$TMP/baseline.env
+  log "rolling application back to the baseline containers (migrations stay applied)"
+  services=(); while read -r svc; do services+=("$svc"); done < <(awk '{print $1}' "$STATE/releases/baseline.services")
+  write_release_env "$env_file" baseline \
+    "$(baseline_field api 4)" "$(baseline_field realtime 4)" "$(baseline_field web 4)" \
+    "$(baseline_field worker 4)" none
+  for svc in "${APP_SERVICES[@]}"; do
+    project=$(baseline_field "$svc" 3)
+    if [[ -z $project ]]; then
+      # Not running before the lane: stop what the lane started.
+      docker stop -t 30 "$(canonical "$svc")" >/dev/null 2>&1 || true
+    elif [[ $project == "$PROJECT" ]]; then
+      log "  up $svc (baseline image)"
+      compose "$env_file" up -d --no-deps --pull never --wait --wait-timeout 180 "$svc" || return 1
+    else
+      id=$(baseline_field "$svc" 2)
+      log "  restore legacy $svc $id"
+      docker rm -f "$(canonical "$svc")" >/dev/null 2>&1 || true
+      docker start "$id" >/dev/null || return 1
+      wait_healthy "$id" || return 1
+    fi
+  done
+  for svc in "${services[@]}"; do
+    digest=$(baseline_field "$svc" 4)
+    [[ $(digest_of "$(container_image "$svc")") == "$digest" ]] || { log "  $svc does not run its baseline image"; return 1; }
+  done
+  smoke
+}
+
+rollback_to() { # release name (a lane SHA or baseline)
+  [[ $1 == baseline ]] && { rollback_to_baseline; return; }
+  local env_file=$STATE/releases/$1.env services
+  [[ -f $env_file ]] || { log "no release env for $1"; return 1; }
   services=(); while read -r svc; do services+=("$svc"); done < <(target_services)
-  log "rolling application back to $(grep '^PHUB_RELEASE_ID=' "$env_file" | cut -d= -f2) (migrations stay applied)"
+  log "rolling application back to $1 (migrations stay applied)"
   start_services "$env_file" "${services[@]}" && verify_running "$env_file" "${services[@]}" && smoke
 }
 
 cmd=${1:-}
 case $cmd in
   status)
-    for svc in "${APP_SERVICES[@]}"; do
-      printf '%-9s %-8s %s\n' "$svc" "$(container_running "$svc" && echo running || echo stopped)" "$(container_image "$svc")"
-    done
+    describe_live
     log "current: $(cat "$STATE/current" 2>/dev/null || echo none)"
     log "history (newest last):"; tail -5 "$STATE/history" 2>/dev/null || true
     ;;
@@ -222,27 +314,34 @@ case $cmd in
   plan)
     require_sha "${2:-}" plan; sha=$2
     pg=$(postgres_container); [[ -n $pg ]] || die "no PostgreSQL container at $POSTGRES_IP on $NETWORK"
-    [[ -f $ENV_ROOT/api.env ]] || die "runtime env root $ENV_ROOT has no api.env"
+    log "running now:"; describe_live
+    check_live
+    require_env_root
     superuser_env "$pg"
     log "pulling images for $sha"; pull_images "$sha"
-    for image in "${IMAGES[@]}"; do log "  $image $(cat "$TMP/$image.ref")"; done
+    mkdir -p "$STATE/plans"
+    for image in "${IMAGES[@]}"; do log "  $image $(cat "$TMP/$image.ref")"; cat "$TMP/$image.ref"; echo; done > "$TMP/plan.out"
+    grep '^\[lk2-beta\]' "$TMP/plan.out" || true
+    grep -v '^\[lk2-beta\]' "$TMP/plan.out" | grep . > "$STATE/plans/$sha"
     log "ledger: $(ledger "$pg")"
     run_migrator --lk2-beta-lane-plan
-    log "running now:"; for svc in "${APP_SERVICES[@]}"; do log "  $svc $(container_running "$svc" && echo running || echo stopped) $(container_image "$svc")"; done
-    log "will run after promote: $(target_services | tr '\n' ' ')"
-    log "PLAN ONLY: no database, container or file change was made (images were pulled)"
+    log "env root: $ENV_ROOT; will run after promote: $(target_services | tr '\n' ' ')"
+    log "PLAN ONLY: no database or container change was made (images pulled, digests recorded for promote)"
     ;;
 
   promote)
     require_sha "${2:-}" promote; sha=$2
+    [[ -f $STATE/plans/$sha ]] || die "run '$0 plan $sha' first and review it"
     pg=$(postgres_container); [[ -n $pg ]] || die "no PostgreSQL container at $POSTGRES_IP on $NETWORK"
-    [[ -f $ENV_ROOT/api.env ]] || die "runtime env root $ENV_ROOT has no api.env"
+    check_live
+    require_env_root
     superuser_env "$pg"
     log "promoting $sha to $PUBLIC_ORIGIN"
     pull_images "$sha"
+    for image in "${IMAGES[@]}"; do cat "$TMP/$image.ref"; echo; done | diff -q - "$STATE/plans/$sha" >/dev/null ||
+      die "image digests for $sha changed since plan; rerun plan"
     capture_baseline
-    previous=$STATE/releases/$(cat "$STATE/current" 2>/dev/null || echo baseline).env
-    [[ -f $previous ]] || previous=$STATE/releases/baseline.env
+    previous=$(cat "$STATE/current" 2>/dev/null || echo baseline)
     services=(); while read -r svc; do services+=("$svc"); done < <(target_services)
     release=$STATE/releases/$sha.env
     write_release_env "$release" "lk2-beta-${sha:0:12}" \
@@ -252,12 +351,12 @@ case $cmd in
 
     log "ledger before: $(ledger "$pg")"
     backup "$pg" "$sha"
-    worker_was_running=false
-    if container_running worker; then worker_was_running=true; log "stopping worker for the migration"; docker stop -t 60 "$(container worker)" >/dev/null; fi
+    worker_id=$(live_id worker)
+    if [[ -n $worker_id ]]; then log "stopping worker for the migration"; docker stop -t 60 "$worker_id" >/dev/null; fi
     log "migrating"
     if ! run_migrator --lk2-beta-lane; then
       log "migration failed; committed files stay applied, the failed file was rolled back"
-      [[ $worker_was_running == true ]] && docker start "$(container worker)" >/dev/null
+      [[ -n $worker_id ]] && docker start "$worker_id" >/dev/null
       log "ledger now: $(ledger "$pg")"
       die "promotion of $sha stopped before any application change; fix forward and rerun promote"
     fi
@@ -269,9 +368,9 @@ case $cmd in
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $sha" >> "$STATE/history"
       log "OK: $sha is live at $PUBLIC_ORIGIN"
     else
-      log "promotion failed; recent api logs:"; docker logs --tail 40 "$(container api)" 2>&1 | tail -40 || true
+      log "promotion failed; recent api logs:"; docker logs --tail 40 "$(canonical api)" 2>&1 | tail -40 || true
       rollback_to "$previous" || die "ROLLBACK ALSO FAILED: inspect the host now"
-      die "promotion of $sha failed; application restored to $(basename "$previous" .env), schema stays at the new ledger"
+      die "promotion of $sha failed; application restored to $previous, schema stays at the new ledger"
     fi
     ;;
 
@@ -283,9 +382,7 @@ case $cmd in
       die "history top does not match current $current; inspect $STATE"
     target=$(tail -2 "$STATE/history" | sed '$d' | awk '{print $2}')
     target=${target:-baseline}
-    env_file=$STATE/releases/$target.env
-    [[ -f $env_file ]] || die "no release env for $target"
-    if rollback_to "$env_file"; then
+    if rollback_to "$target"; then
       sed -i.bak '$d' "$STATE/history" && rm -f "$STATE/history.bak"
       echo "$target" > "$STATE/current"
       log "OK: rolled back to $target"
