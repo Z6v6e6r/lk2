@@ -25,6 +25,19 @@ irreversible external operation and needs the owner's explicit approval for that
   subscription; a confirmed JOIN writes off the joiner's visit. Code rollback reverses neither;
   refunds stay manual (first-version mode).
 
+## Readback 2026-11-06 (owner ran the command above on the host)
+
+Present: `VIVA_MODE=production`, `VIVA_OAUTH_ENABLED=true`, `GAMES_READ_ENABLED=true`,
+`GAMES_COMMANDS_ENABLED=true`, `VIVA_DIRECT_READ_ENABLED=true`, `SUBSCRIPTION_RUNTIME_WARN_MODE=OFF`.
+Absent and covered by config defaults: `VIVA_AUTH_TENANT_KEY` (`iSkq6G`),
+`LEGACY_GAMES_PUBLIC_BASE_URL` (`https://padlhub.su`), `VIVA_END_USER_API_URL`.
+Absent and **blocking**: every `GAME_COMMERCIAL_*` key and the whole
+`SUBSCRIPTION_RUNTIME_DELEGATION_*` set (private keys, active key id, issuer, audience); for JOIN
+also `SUBSCRIPTION_RUNTIME_BASE_URL` and the integration token. The delegation keyring is signing
+material paired with the live LK1 verifier: LK1 must trust its public key, issuer and audience
+before LK2 can sign a single request. That pairing is a separate owner-approved credential change
+on both sides, not an `api.env` edit alone.
+
 ## Required `api.env` values
 
 CREATE (transport `QUARTER_OWNER`, enforced by `packages/config`):
