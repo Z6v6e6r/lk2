@@ -241,8 +241,6 @@ if (gameId) {
     });
 
     await step('organizer cancels; participant sees it and is notified', async () => {
-      const before = await call(loser.token, 'GET', '/notifications?limit=50');
-      const beforeCount = before.json?.items?.length ?? 0;
       const cancelled = await call(a.token, 'POST', `/games/${gameId}/cancel`, {
         reasonCode: 'ORGANIZER_REQUEST',
       });
@@ -253,20 +251,24 @@ if (gameId) {
         30_000,
       );
       const settleMs = Date.now() - startedAt;
+      // The game id is fresh, so a match is this cancellation, never an older or join notification.
+      const isCancellation = (item) =>
+        item.deepLink === `/games/${gameId}` && /отмен/i.test(item.title ?? '');
       const after = await until(
-        () => call(loser.token, 'GET', '/notifications?limit=50'),
-        (r) => (r.json?.items?.length ?? 0) > beforeCount,
+        () => call(loser.token, 'GET', '/notifications?limit=20'),
+        (r) => (r.json?.items ?? []).some(isCancellation),
       );
+      const notified = (after.json?.items ?? []).some(isCancellation);
       record(
         'organizer cancels a game with a participant',
         cancelled.status < 300 && game?.displayState === 'CANCELLED',
         `cancel=${cancelled.status} visibleAfter=${settleMs}ms`,
       );
-      // Needs the game notification ruleset; deploy.sh provisions it on the stand.
+      // Needs the game notification ruleset; the Test stand workflow provisions it.
       record(
         'participant receives a cancellation notification',
-        (after.json?.items?.length ?? 0) > beforeCount,
-        `before=${beforeCount}`,
+        notified,
+        `status=${after.status}`,
       );
     });
   }
