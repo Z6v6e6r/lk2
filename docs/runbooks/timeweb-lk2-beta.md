@@ -997,3 +997,20 @@ require that contour's integration token. Existing runtime keys and live flags a
 this contract addition. Use [monthly purchase ownership and recovery](../domains/monthly-subscription-purchase.md)
 for source pairing, immutable inputs, provider/device acceptance and rollback retention. Activation
 remains a separate approved operation; validation alone never sends a payment or grants release authority.
+
+## Quarter CREATE inputs (source only)
+
+The optional `GAME_COMMERCIAL_CREATE_ENABLED`, `GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT`,
+`GAME_COMMERCIAL_CREATE_OWNER_BASE_URL` and `GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS` belong only
+to `api.env`; worker, realtime and migrator must reject them. Omission keeps CREATE on the
+existing `GAME_PAYMENT_REQUIRED` answer. A supplied flag must be `false` or `true`; the only
+admitted transport is `QUARTER_OWNER` (the LK1 `ORGANIZER_QUARTER_CREATE` owner: whole-court
+window, organizer quarter on the subscription). `ADVISORY` and `BOOKED_OPERATION` are refused on
+this contour. The owner URL must be exactly `https://padlhub.su/`, timeout 100–5000 ms.
+The transport is admitted only together with `GAME_COMMERCIAL_CREATE_ENABLED=true`; to
+deactivate, set the flag to `false` and remove the transport line in the same change.
+
+Enabling requires `GAMES_READ_ENABLED=true`, `GAMES_COMMANDS_ENABLED=true` and the canonical RSA
+delegation keyring, selected active key, issuer and audience that the LK1 owner verifies. It does
+not require generic subscription WARN. Activation is a separate owner-approved CRITICAL operation;
+validation alone never books a court or writes off a visit.

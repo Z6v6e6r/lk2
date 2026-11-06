@@ -53,7 +53,21 @@ export function validateTimewebCommercialRuntime(api, fail) {
     !['false', 'true'].includes(api.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED)
   )
     fail('monthly_purchase_flag');
+  if (
+    api.GAME_COMMERCIAL_CREATE_ENABLED !== undefined &&
+    !['false', 'true'].includes(api.GAME_COMMERCIAL_CREATE_ENABLED)
+  )
+    fail('commercial_create_flag');
+  // lk2 admits only the LK1 organizer quarter owner (whole-court window, organizer quarter on the
+  // subscription). ADVISORY would admit CREATE without an owner decision and BOOKED_OPERATION has
+  // no LK1 receiver, so both stay out of this contour.
+  if (
+    api.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT !== undefined &&
+    api.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT !== 'QUARTER_OWNER'
+  )
+    fail('commercial_create_transport');
   const monthly = api.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED === 'true';
+  const quarterCreate = api.GAME_COMMERCIAL_CREATE_ENABLED === 'true';
   const active = api.GAME_COMMERCIAL_JOIN_ENABLED === 'true';
   if (active && mode !== 'WARN') fail('commercial_join_boundary_required');
   const secureBase = (value) => {
@@ -78,6 +92,13 @@ export function validateTimewebCommercialRuntime(api, fail) {
     )
       fail('monthly_purchase_owner_invalid');
   }
+  if (api.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL !== undefined) {
+    if (
+      !secureBase(api.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL) ||
+      new URL(api.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL).href !== 'https://padlhub.su/'
+    )
+      fail('commercial_create_owner_invalid');
+  }
   for (const key of ['SUBSCRIPTION_RUNTIME_BASE_URL', 'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL']) {
     if (api[key] !== undefined && !secureBase(api[key]))
       fail('subscription_runtime_boundary_invalid');
@@ -100,7 +121,20 @@ export function validateTimewebCommercialRuntime(api, fail) {
     )
       fail('subscription_runtime_boundary_invalid');
   }
-  if (mode === 'WARN' || monthly) {
+  // packages/config refuses QUARTER_OWNER without the flag, so a flag-only deactivation must also
+  // drop the transport; otherwise the API would fail at startup after passing this validator.
+  if (api.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT !== undefined && !quarterCreate)
+    fail('commercial_create_transport_without_flag');
+  if (quarterCreate) {
+    if (
+      api.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT !== 'QUARTER_OWNER' ||
+      !api.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL ||
+      api.GAMES_COMMANDS_ENABLED !== 'true' ||
+      api.GAMES_READ_ENABLED !== 'true'
+    )
+      fail('commercial_create_owner_unavailable');
+  }
+  if (mode === 'WARN' || monthly || quarterCreate) {
     const required = [
       'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
       'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
@@ -126,6 +160,7 @@ export function validateTimewebCommercialRuntime(api, fail) {
   const bounds = {
     MONTHLY_SUBSCRIPTION_OWNER_TIMEOUT_MS: [100, 10000],
     GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS: [100, 5000],
+    GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS: [100, 5000],
     SUBSCRIPTION_RUNTIME_TIMEOUT_MS: [100, 10000],
     SUBSCRIPTION_RUNTIME_CIRCUIT_FAILURE_THRESHOLD: [1, 100],
     SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS: [1000, 300000],
