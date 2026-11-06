@@ -631,13 +631,19 @@ function GameTab(props: {
           <a
             className="game-detail-chat"
             href={`/chats/${gameConversation.conversationId}`}
-            aria-label="Чат игры"
+            aria-label={
+              gameConversation.unreadCount
+                ? `Чат игры, непрочитанных сообщений: ${gameConversation.unreadCount}`
+                : 'Чат игры'
+            }
             onClick={
               onChatNavigate ? () => onChatNavigate(gameConversation.conversationId) : undefined
             }
           >
             <ChatIcon />
-            {gameConversation.unreadCount ? <span>{gameConversation.unreadCount}</span> : null}
+            {gameConversation.unreadCount ? (
+              <span aria-hidden="true">{gameConversation.unreadCount}</span>
+            ) : null}
           </a>
         ) : chatEntry === 'CREATE' ? (
           <button

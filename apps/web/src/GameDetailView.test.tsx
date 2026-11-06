@@ -350,6 +350,24 @@ describe('GameDetailView', () => {
     expect(screen.getByRole('button', { name: 'Отправить на согласование' })).toBeInTheDocument();
   });
 
+  it('announces unread game chat messages in the chat link name', () => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={{ ...game, conversation: { ...game.conversation!, unreadCount: 3 } }}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole('link', { name: 'Чат игры, непрочитанных сообщений: 3' }),
+    ).toHaveAttribute('href', `/chats/${game.conversation?.conversationId}`);
+  });
+
   it('opens get/create only from the canonical participant game detail', async () => {
     const user = userEvent.setup();
     const onChatOpen = vi.fn();
