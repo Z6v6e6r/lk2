@@ -1050,3 +1050,81 @@ describe('monthly purchase API-only release inputs', () => {
     }
   });
 });
+
+describe('quarter CREATE API-only release inputs', () => {
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  function quarter() {
+    const env = safeRuntimeEnvironments();
+    Object.assign(env.api!, {
+      GAMES_COMMANDS_ENABLED: 'true',
+      GAME_COMMERCIAL_CREATE_ENABLED: 'true',
+      GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: 'QUARTER_OWNER',
+      GAME_COMMERCIAL_CREATE_OWNER_BASE_URL: 'https://padlhub.su/',
+      GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS: '3000',
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({
+        'synthetic-quarter': privateKey,
+      }),
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'synthetic-quarter',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://issuer.example.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'synthetic-quarter-owner',
+    });
+    return env;
+  }
+  it('keeps the current environment valid and accepts an explicit false flag', () => {
+    const off = safeRuntimeEnvironments();
+    expect(() => validateTimewebRuntimeEnvironments(off, { host, tenantKey })).not.toThrow();
+    off.api!.GAME_COMMERCIAL_CREATE_ENABLED = 'false';
+    expect(() => validateTimewebRuntimeEnvironments(off, { host, tenantKey })).not.toThrow();
+    expect(loadConfig(off.api).GAME_COMMERCIAL_CREATE_ENABLED).toBe(false);
+  });
+  it('accepts the complete quarter owner boundary and loads the QUARTER_OWNER transport', () => {
+    const env = quarter();
+    expect(env.api!.SUBSCRIPTION_RUNTIME_WARN_MODE).toBe('OFF');
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).not.toThrow();
+    const config = loadConfig(env.api);
+    expect(config.GAME_COMMERCIAL_CREATE_ENABLED).toBe(true);
+    expect(config.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT).toBe('QUARTER_OWNER');
+  });
+  it.each([
+    'GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT',
+    'GAME_COMMERCIAL_CREATE_OWNER_BASE_URL',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE',
+  ])('refuses incomplete activation missing %s', (key) => {
+    const env = quarter();
+    delete env.api![key];
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each([
+    { GAME_COMMERCIAL_CREATE_ENABLED: 'yes' },
+    { GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: 'ADVISORY' },
+    { GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: 'BOOKED_OPERATION' },
+    { GAME_COMMERCIAL_CREATE_OWNER_BASE_URL: 'https://owner.example.test/' },
+    { GAME_COMMERCIAL_CREATE_OWNER_BASE_URL: 'http://padlhub.su/' },
+    { GAME_COMMERCIAL_CREATE_OWNER_BASE_URL: 'https://padlhub.su/api' },
+    { GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS: '99' },
+    { GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS: '5001' },
+    { GAMES_COMMANDS_ENABLED: 'false' },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'unknown-key' },
+  ])('rejects incompatible activation input %o', (changes) => {
+    const env = quarter();
+    Object.assign(env.api!, changes);
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it('rejects a non-QUARTER_OWNER transport even while the flag is off', () => {
+    const env = safeRuntimeEnvironments();
+    env.api!.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT = 'BOOKED_OPERATION';
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each(['worker', 'realtime', 'migrator'])('keeps CREATE keys out of %s', (role) => {
+    const env = quarter();
+    env[role]!.GAME_COMMERCIAL_CREATE_ENABLED = 'false';
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+});
