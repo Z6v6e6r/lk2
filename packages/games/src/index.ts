@@ -846,6 +846,15 @@ function deriveAllowedActions(input: {
   ) {
     actions.add('SUBMIT_RESULT');
   }
+  // A dispute reopens entry of a corrected score. The result command accepts a resubmission in
+  // DISPUTED without the AWAITING_SUBMISSION window, so the card offers it the same way.
+  if (
+    game.lifecycleState === 'FINISHED' &&
+    resultState === 'DISPUTED' &&
+    (viewerRelation === 'ORGANIZER' || viewerRelation === 'PARTICIPANT')
+  ) {
+    actions.add('SUBMIT_RESULT');
+  }
   if (game.lifecycleState === 'FINISHED' && resultState === 'PENDING_CONFIRMATION') {
     const viewerUserId = input.viewerUserId;
     if (

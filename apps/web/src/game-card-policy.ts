@@ -75,7 +75,10 @@ export function gameHistoryStateLabel(game: GameCardModel): string {
 
 export function gameHistoryPrimaryAction(game: GameCardModel): GameCardAction | undefined {
   const allowedActions: readonly string[] = game.allowedActions;
-  if (game.displayState === 'RESULT_REQUIRED' && allowedActions.includes('SUBMIT_RESULT')) {
+  if (
+    (game.displayState === 'RESULT_REQUIRED' || game.displayState === 'RESULT_DISPUTED') &&
+    allowedActions.includes('SUBMIT_RESULT')
+  ) {
     return 'SUBMIT_RESULT';
   }
   if (game.displayState === 'RESULT_PENDING' && allowedActions.includes('DISPUTE_RESULT')) {

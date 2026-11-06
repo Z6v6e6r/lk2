@@ -246,6 +246,22 @@ describe('GameCard lifecycle template', () => {
       }),
     ).toBe('SUBMIT_RESULT');
     expect(
+      gameHistoryPrimaryAction({
+        ...historyGame,
+        displayState: 'RESULT_DISPUTED',
+        resultSummary: { state: 'DISPUTED', sets: [{ teamA: 6, teamB: 4 }] },
+        allowedActions: ['OPEN_DETAILS', 'SUBMIT_RESULT', 'OPEN_DISPUTE'],
+      }),
+    ).toBe('SUBMIT_RESULT');
+    expect(
+      gameHistoryPrimaryAction({
+        ...historyGame,
+        displayState: 'RESULT_DISPUTED',
+        resultSummary: { state: 'DISPUTED', sets: [{ teamA: 6, teamB: 4 }] },
+        allowedActions: ['OPEN_DETAILS', 'OPEN_DISPUTE'],
+      }),
+    ).toBeUndefined();
+    expect(
       gameHistoryStateLabel({
         ...historyGame,
         displayState: 'RESULT_DISPUTED',
