@@ -8,6 +8,11 @@ irreversible external operation and needs the owner's explicit approval for that
 - Release `44743866…` (PR #601 merge) runs in project `phub-timeweb-beta`, env root
   `/etc/phub/timeweb-beta` ([beta lane](lk2-beta-lane.md), readback 2026-11-06). That release
   already contains the quarter CREATE routes and the commercial JOIN runtime.
+- PR #602 (runtime contract for the quarter CREATE keys) is merged into main as `2740f8d3`
+  (owner approval recorded in the PR, 2026-11-06).
+- Host: `phub-timeweb-staging` (tailnet `100.77.212.57`, host key pinned in
+  `deploy/timeweb/target.json`). Root SSH needs the operator's own key; a session without it
+  stops here instead of obtaining access.
 - The values in `api.env` (`VIVA_MODE`, commercial flags, delegation keys) are **not recorded in
   Git** and were not read. Read them on the host, names and non-secret values only:
 
