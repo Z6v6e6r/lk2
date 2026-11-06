@@ -132,7 +132,14 @@ async function loginAll() {
   return users;
 }
 
-const readGame = async (user, id) => (await call(user.token, 'GET', `/games/${id}`)).json?.game;
+// Polling reads tolerate a transient network failure; the predicate simply sees no game yet.
+const readGame = async (user, id) => {
+  try {
+    return (await call(user.token, 'GET', `/games/${id}`)).json?.game;
+  } catch {
+    return undefined;
+  }
+};
 const rosterOf = (game) => (game?.participants ?? []).map((p) => p.userId);
 
 async function prepare(users) {
@@ -383,7 +390,7 @@ function savedGame() {
     const state = JSON.parse(readFileSync(statePath, 'utf8'));
     if (state.baseUrl === baseUrl) {
       if (Date.parse(state.verifyAfter) > Date.now())
-        console.log(`note: the game ends later; waiting until ${state.verifyAfter} (+10 min)`);
+        console.log(`note: the game ends later; waiting until ${state.verifyAfter}`);
       return { gameId: state.gameId, verifyAfter: state.verifyAfter };
     }
   } catch {
@@ -402,8 +409,12 @@ const signIn = async () => {
   return users;
 };
 
-let users = await signIn();
 let game = args.phase === 'verify' ? savedGame() : {};
+if (game.verifyAfter) {
+  // Access tokens are short-lived; sign in only once the game has ended.
+  await sleep(Math.max(0, Date.parse(game.verifyAfter) - Date.now()));
+}
+let users = await signIn();
 if (args.phase !== 'verify') {
   game = (await prepare(users)) ?? {};
   if (game.gameId && args.phase === 'all') {
