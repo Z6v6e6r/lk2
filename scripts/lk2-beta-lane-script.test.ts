@@ -85,6 +85,8 @@ case $1 in
   compose)
     env_file=""; args=("$@")
     for ((i = 0; i < \${#args[@]}; i++)); do [[ \${args[i]} == --env-file ]] && env_file=\${args[i+1]}; done
+    # Like Compose ':?' interpolation: every digest variable must be non-empty.
+    grep -qE '^[A-Z]+_IMAGE_DIGEST=$' "$env_file" && { echo "required variable is missing a value" >&2; exit 1; }
     svc=\${!#}; key=$(tr a-z A-Z <<<"$svc")_IMAGE_DIGEST
     d=$(grep "^$key=" "$env_file" | cut -d= -f2)
     echo "$svc phub-timeweb-beta ghcr.io/z6v6e6r/phub-$svc@$d true" > "$C/phub-timeweb-beta-$svc-1"
@@ -94,14 +96,14 @@ esac
 exit 0
 `;
 
-function setup(project: string, ids: (svc: string) => string) {
+function setup(project: string, ids: (svc: string) => string, running = SERVICES) {
   const bin = join(root, 'bin');
   mkdirSync(join(fake, 'c'), { recursive: true });
   mkdirSync(bin, { recursive: true });
   mkdirSync(join(root, 'env'), { recursive: true });
   for (const svc of ['api', 'realtime', 'worker'])
     writeFileSync(join(root, 'env', `${svc}.env`), 'X=1\n');
-  for (const svc of SERVICES)
+  for (const svc of running)
     writeFileSync(join(fake, 'c', ids(svc)), `${svc} ${project} ${OLD(svc)} true\n`);
   writeFileSync(join(fake, 'ledger'), '105');
   const write = (name: string, body: string) => {
@@ -248,6 +250,33 @@ describe('lk2-beta-lane.sh on the canonical project', { timeout: 60_000 }, () =>
     expect(run('rollback').out).toContain('OK: rolled back to baseline');
     expect(container(canonical('api'))[2]).toBe(OLD('api'));
     expect(run('rollback').out).toContain('nothing to roll back');
+  });
+});
+
+describe('lk2-beta-lane.sh without a running worker', { timeout: 60_000 }, () => {
+  beforeEach(() => setup('phub-timeweb-beta', canonical, ['api', 'realtime', 'web']));
+
+  it('a failed start restores a workerless baseline with valid Compose interpolation', () => {
+    writeFileSync(join(fake, 'up-fails'), '');
+    const { code, out } = promote(SHA_A);
+    expect(code).not.toBe(0);
+    expect(out).toContain('application restored to baseline');
+    expect(out).not.toContain('required variable is missing a value');
+    for (const svc of ['api', 'realtime', 'web'])
+      expect(container(canonical(svc))[2]).toBe(OLD(svc));
+    expect(existsSync(join(fake, 'c', canonical('worker')))).toBe(false);
+  });
+
+  it('low backup disk space only warns; capacity is not a per-release gate', () => {
+    writeFileSync(
+      join(root, 'bin', 'df'),
+      '#!/bin/sh\necho "Filesystem 1024-blocks Used Available Capacity Mounted"\necho "fake 10 9 1 90% /"\n',
+    );
+    chmodSync(join(root, 'bin', 'df'), 0o755);
+    const { code, out } = promote(SHA_A);
+    expect(code, out).toBe(0);
+    expect(out).toContain('WARNING: less than 2x database size free');
+    expect(out).toContain(`OK: ${SHA_A} is live`);
   });
 });
 

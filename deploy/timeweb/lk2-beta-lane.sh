@@ -132,8 +132,10 @@ write_release_env() { # out release_id api realtime web worker migrator (digests
     printf 'PHUB_RELEASE_ID=%s\n' "$2"
     printf 'TIMEWEB_RUNTIME_ENV_ROOT=%s\n' "$ENV_ROOT"
     printf 'TIMEWEB_FCM_CREDENTIAL_SOURCE=%s\n' "${fcm:-/dev/null}"
-    printf 'API_IMAGE_DIGEST=%s\nREALTIME_IMAGE_DIGEST=%s\nWEB_IMAGE_DIGEST=%s\n' "$3" "$4" "$5"
-    printf 'WORKER_IMAGE_DIGEST=%s\nMIGRATOR_IMAGE_DIGEST=%s\n' "$6" "$7"
+    # compose.beta.yaml requires every digest variable to be non-empty (`:?`), even for a service
+    # that is not started; `none` keeps interpolation valid and start_services skips it.
+    printf 'API_IMAGE_DIGEST=%s\nREALTIME_IMAGE_DIGEST=%s\nWEB_IMAGE_DIGEST=%s\n' "${3:-none}" "${4:-none}" "${5:-none}"
+    printf 'WORKER_IMAGE_DIGEST=%s\nMIGRATOR_IMAGE_DIGEST=%s\n' "${6:-none}" "${7:-none}"
   } > "$out"
 }
 
@@ -253,7 +255,9 @@ backup() {
   size=$(docker exec "$pg" psql -U "$(cat "$TMP/superuser")" -d "$DATABASE" -tAc "select pg_database_size('$DATABASE')")
   [[ $size =~ ^[0-9]+$ ]] || die "cannot read the database size"
   free=$(( $(df -Pk "$STATE/backups" | awk 'NR==2{print $4}') * 1024 ))
-  (( free > 2 * size )) || die "backup needs > 2x database size free ($size bytes db, $free bytes free)"
+  # Capacity is a provisioning property (AGENTS.md), not a per-release gate: warn only. A dump
+  # that does not fit fails below and stops the promotion before any migration.
+  (( free > 2 * size )) || log "WARNING: less than 2x database size free for backups ($size bytes db, $free bytes free); provision more disk"
   file="$STATE/backups/$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:12}.dump"
   log "backup -> $file"
   if ! docker exec "$pg" pg_dump -U "$(cat "$TMP/superuser")" -d "$DATABASE" -Fc > "$file.partial" ||

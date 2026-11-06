@@ -18,8 +18,9 @@ was stuck at ledger 105 (`0101`). This lane promotes one green main commit in a 
 2. find the one running API/Realtime/Web/Worker container per service on the `phub-timeweb-beta`
    network, whatever its Compose project (two of one service is a stop), and record them once as
    `baseline` (the first rollback target);
-3. `pg_dump -Fc` of `phub_beta` (needs > 2x database size free; last 3 kept, checked with
-   `pg_restore -l`);
+3. `pg_dump -Fc` of `phub_beta`, checked with `pg_restore -l`; last 3 kept. Less than 2x database
+   size free only warns (capacity is a provisioning property, not a per-release gate); a dump that
+   fails stops the promotion before any migration;
 4. stop the Worker, run `migrator --lk2-beta-lane` as the PostgreSQL superuser;
 5. start API, Realtime, Web and (if it was running) Worker on the new digests with
    `compose.beta.yaml` in project `phub-timeweb-beta`. A container of the legacy project
