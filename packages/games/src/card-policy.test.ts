@@ -282,6 +282,34 @@ describe('GameCard display policy', () => {
     expect(atDeadline.allowedActions).not.toContain('SUBMIT_RESULT');
   });
 
+  it('reopens score entry for participants after a dispute, past the submission window', () => {
+    const disputed = game({
+      lifecycleState: 'FINISHED',
+      startsAt: '2026-07-20T08:30:00+03:00',
+      endsAt: '2026-07-20T10:00:00+03:00',
+      participants: [participant(IDS.organizer, 'ORGANIZER'), participant(IDS.player2)],
+      result: {
+        state: 'DISPUTED',
+        submittedByUserId: IDS.organizer,
+        requiredConfirmationUserIds: [IDS.player2],
+        confirmedByUserIds: [],
+        sets: [{ teamA: 6, teamB: 4 }],
+      },
+    });
+    for (const viewerUserId of [IDS.organizer, IDS.player2]) {
+      const card = projectGameCard(disputed, cardContext({ surface: 'HISTORY', viewerUserId }));
+      expect(card.displayState).toBe('RESULT_DISPUTED');
+      expect(card.allowedActions).toContain('SUBMIT_RESULT');
+      expect(card.allowedActions).toContain('OPEN_DISPUTE');
+      expect(card.allowedActions).not.toContain('CONFIRM_RESULT');
+    }
+    const outsider = projectGameCard(
+      disputed,
+      cardContext({ surface: 'HISTORY', viewerUserId: IDS.outsider }),
+    );
+    expect(outsider.allowedActions).not.toContain('SUBMIT_RESULT');
+  });
+
   it('offers result confirmation only to an eligible non-submitting player', () => {
     const input = game({
       lifecycleState: 'FINISHED',
