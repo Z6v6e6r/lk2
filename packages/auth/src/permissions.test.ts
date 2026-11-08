@@ -18,6 +18,20 @@ describe('client permission catalog', () => {
     expect(new Set(FULL_CLIENT_PERMISSIONS).size).toBe(FULL_CLIENT_PERMISSIONS.length);
   });
 
+  it('lets any beta sign-in test the two-court pilot', () => {
+    expect(FULL_CLIENT_PERMISSIONS).toContain('games.test-courts');
+    expect(isAdminOnlyPermission('games.test-courts')).toBe(false);
+    expect(resolveClientPermissions({ stored: [], fullClientAccess: true })).toContain(
+      'games.test-courts',
+    );
+    expect(
+      resolveClientPermissions({ stored: ['profile.read'], fullClientAccess: false }),
+    ).not.toContain('games.test-courts');
+    expect(
+      mergeFullClientAccess({ roles: ['client'], permissions: ['games.play'] }).permissions,
+    ).toEqual(expect.arrayContaining(['games.play', 'games.test-courts']));
+  });
+
   it('adds the catalog only when the beta switch is on', () => {
     expect(resolveClientPermissions({ stored: ['profile.read'], fullClientAccess: false })).toEqual(
       ['profile.read'],
