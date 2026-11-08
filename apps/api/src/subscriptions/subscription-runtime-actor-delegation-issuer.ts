@@ -69,6 +69,12 @@ import {
   bookedOperationAdmissionRequestSha256,
   type BookedOperationAdmissionRequest,
   type ManagedSubscriptionRuntimeV1QuoteRequest,
+  PROVIDER_ACCOUNT_ATTESTATION_PATH,
+  PROVIDER_ACCOUNT_ATTESTATION_SCOPE,
+  PROVIDER_ACCOUNT_ATTESTATION_TYP,
+  PROVIDER_ACCOUNT_TENANT_KEY,
+  providerAccountAttestationRequestSha256,
+  type ProviderAccountAttestationRequest,
 } from '@phub/subscription-runtime-adapter';
 
 const actionSet = new Set(['CREATE_GAME', 'JOIN_GAME']);
@@ -996,6 +1002,73 @@ export class SubscriptionRuntimeActorDelegationIssuer {
       .setExpirationTime(now + this.options.ttlSeconds)
       .setJti(randomUUID())
       .sign(await importPKCS8(this.options.privateKeyPem, 'RS256'));
+  }
+
+  /**
+   * ADR 0028: read-only LK1 owner attestation. It carries no provider client id, because that id
+   * is what LK1 attests from the actor's own Viva token; the request digest binds the exact body.
+   */
+  async issueProviderAccountAttestation(input: {
+    readonly userId: string;
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly sessionId: string;
+    readonly correlationId: string;
+    readonly request: ProviderAccountAttestationRequest;
+    readonly actorTokenExpiresAt: string;
+  }): Promise<string> {
+    let requestSha256: string;
+    try {
+      requestSha256 = providerAccountAttestationRequestSha256(input.request);
+    } catch {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    const actorTokenExpiresAt = Date.parse(input.actorTokenExpiresAt);
+    if (
+      ![input.userId, input.tenantId, input.sessionId, input.request.operationId].every(
+        (value) => uuidPattern.test(value) && value === value.toLowerCase(),
+      ) ||
+      input.tenantKey !== PROVIDER_ACCOUNT_TENANT_KEY ||
+      !correlationPattern.test(input.correlationId) ||
+      !Number.isFinite(actorTokenExpiresAt) ||
+      actorTokenExpiresAt <= Date.now()
+    ) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    const key = await importPKCS8(this.options.privateKeyPem, 'RS256');
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      contract_version: 1,
+      scope: PROVIDER_ACCOUNT_ATTESTATION_SCOPE,
+      caller: 'lk2-api',
+      method: 'POST',
+      path: PROVIDER_ACCOUNT_ATTESTATION_PATH,
+      operation_id: input.request.operationId,
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      provider: 'VIVA',
+      correlation_id: input.correlationId,
+      request_sha256: requestSha256,
+      actor_token_expires_at: new Date(actorTokenExpiresAt).toISOString(),
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: PROVIDER_ACCOUNT_ATTESTATION_TYP,
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + this.options.ttlSeconds)
+      .setJti(randomUUID())
+      .sign(key);
   }
 
   async issueBookedOperationRead(input: {

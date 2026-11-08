@@ -1,7 +1,10 @@
 import { exportPKCS8, generateKeyPair, jwtVerify } from 'jose';
 import { describe, expect, it } from 'vitest';
 
-import { bookedOperationAdmissionId } from '@phub/subscription-runtime-adapter';
+import {
+  bookedOperationAdmissionId,
+  providerAccountAttestationRequestSha256,
+} from '@phub/subscription-runtime-adapter';
 
 import {
   SubscriptionRuntimeActorDelegationIssuer,
@@ -207,5 +210,64 @@ describe('SubscriptionRuntimeActorDelegationIssuer', () => {
         },
       }),
     ).rejects.toThrow('SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID');
+  });
+
+  it('mints a provider-account attestation bound to the exact body and no client id', async () => {
+    const keys = await generateKeyPair('RS256', { extractable: true });
+    const issuer = new SubscriptionRuntimeActorDelegationIssuer({
+      privateKeyPem: await exportPKCS8(keys.privateKey),
+      keyId: 'lk2-beta-2026-11',
+      issuer: 'https://lk2.padlhub.su',
+      audience: 'padlhub-lk1-booked-operation',
+      ttlSeconds: 30,
+    });
+    const request = {
+      contractVersion: 1 as const,
+      operationId: '55555555-5555-4555-8555-555555555555',
+      target: { exerciseId: 'ex-77' },
+    };
+    const actorTokenExpiresAt = new Date(Date.now() + 120_000).toISOString();
+    const base = {
+      userId: '11111111-1111-4111-8111-111111111111',
+      tenantId: '22222222-2222-4222-8222-222222222222',
+      tenantKey: 'iSkq6G',
+      sessionId: '33333333-3333-4333-8333-333333333333',
+      correlationId: 'attest-test-0001',
+      request,
+      actorTokenExpiresAt,
+    };
+    const token = await issuer.issueProviderAccountAttestation(base);
+    const verified = await jwtVerify(token, keys.publicKey, {
+      algorithms: ['RS256'],
+      issuer: 'https://lk2.padlhub.su',
+      audience: 'padlhub-lk1-booked-operation',
+      typ: 'phub-provider-account-attestation+jwt',
+    });
+    expect(verified.payload).toMatchObject({
+      contract_version: 1,
+      scope: 'lk1:provider-account:attest',
+      caller: 'lk2-api',
+      method: 'POST',
+      path: '/lk/integrations/v1/provider-account-attestations',
+      operation_id: request.operationId,
+      tenant_key: 'iSkq6G',
+      provider: 'VIVA',
+      request_sha256: providerAccountAttestationRequestSha256(request),
+      actor_token_expires_at: actorTokenExpiresAt,
+      sub: base.userId,
+    });
+    expect(verified.payload).not.toHaveProperty('provider_client_id');
+    expect((verified.payload.exp ?? 0) - (verified.payload.iat ?? 0)).toBe(30);
+
+    for (const bad of [
+      { ...base, tenantKey: 'other' },
+      { ...base, actorTokenExpiresAt: new Date(Date.now() - 1000).toISOString() },
+      { ...base, request: { ...request, operationId: 'not-a-uuid' } },
+      { ...base, request: { ...request, extra: 1 } as unknown as typeof request },
+      { ...base, sessionId: 'AAAAAAAA-3333-4333-8333-333333333333' },
+    ])
+      await expect(issuer.issueProviderAccountAttestation(bad)).rejects.toThrow(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
   });
 });
