@@ -209,8 +209,7 @@ export function parseProviderAccountAttestation(
   };
   if (!request.target) return result;
   const targetProof = parseTargetProof(value.targetProof, request.target.exerciseId);
-  const attested = new Set(subscriptions.map((s) => s.clientSubscriptionId));
-  if (!targetProof.ownedClientSubscriptionIds.every((id) => attested.has(id))) return invalid();
+  // lk#303: the proof covers every subscription of the account, not only the <=50 listed ones.
   return { ...result, targetProof };
 }
 

@@ -134,7 +134,7 @@ describe('provider account attestation response', () => {
       ).toThrow(ProviderAccountOwnerError);
   });
 
-  it('requires a target proof that only names attested subscriptions', () => {
+  it('requires a target proof for a targeted request', () => {
     const targeted = { ...request, target: { exerciseId: 'ex-77' } };
     const proof = {
       exerciseId: 'ex-77',
@@ -146,13 +146,14 @@ describe('provider account attestation response', () => {
       parseProviderAccountAttestation(response({ targetProof: proof }), targeted, now).targetProof,
     ).toEqual(proof);
     expect(() => parseProviderAccountAttestation(response(), targeted, now)).toThrow();
-    expect(() =>
+    // The proof may name owned subscriptions beyond the truncated display list (lk#303).
+    expect(
       parseProviderAccountAttestation(
-        response({ targetProof: { ...proof, ownedClientSubscriptionIds: ['sub-foreign'] } }),
+        response({ targetProof: { ...proof, ownedClientSubscriptionIds: ['sub-unlisted'] } }),
         targeted,
         now,
-      ),
-    ).toThrow();
+      ).targetProof?.ownedClientSubscriptionIds,
+    ).toEqual(['sub-unlisted']);
     expect(() =>
       parseProviderAccountAttestation(
         response({ targetProof: { ...proof, exerciseId: 'ex-other' } }),
