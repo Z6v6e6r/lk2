@@ -114,6 +114,7 @@ export type HomeDashboard = components['schemas']['HomeDashboard'];
 export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
 export type GameJoinConditions = components['schemas']['GameJoinConditions'];
+export type JoinableSubscriptions = components['schemas']['JoinableSubscriptions'];
 export type GameTestCourtList = components['schemas']['GameTestCourtList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
@@ -1764,6 +1765,15 @@ export class PadlHubApiClient {
         body: jsonRequestBody(input),
       }),
     );
+  }
+
+  /** ADR 0028: one fresh LK1-attested list; PadlHub UUIDs only, display-only state. */
+  public listJoinableSubscriptions(): Promise<JoinableSubscriptions> {
+    return this.request<JoinableSubscriptions>('/subscriptions/joinable', {
+      auth: 'required',
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
   }
 
   public getGameJoinConditions(

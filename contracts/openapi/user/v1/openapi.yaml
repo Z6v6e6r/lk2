@@ -404,6 +404,43 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/subscriptions/joinable:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [subscriptions]
+      operationId: listJoinableSubscriptions
+      summary: List the actor's subscriptions from a fresh LK1 owner attestation
+      description: |
+        ADR 0028. Requires an authenticated active PadlHub session, games.play and tenant
+        membership. Each call obtains one fresh read-only LK1 attestation of the actor's own Viva
+        account, signed for the same session as the actor token, and records the server-owned
+        identity and subscription mappings. Only PadlHub UUIDs are returned; no Viva identifier,
+        phone or name is exposed. state and remainingUnits are display-only: every command is
+        re-verified by the owner. Returns 503 until the owner contour is composed, and 409 when the
+        Viva account is already bound to another PadlHub user.
+      responses:
+        '200':
+          description: Display-only list; no booking, payment or entitlement authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: 'private, no-store' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinableSubscriptions' }
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          description: The Viva account is bound to another PadlHub user; support reconciliation.
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '502':
+          description: The owner returned an invalid attestation.
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/subscription-runtime/quote:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -6200,6 +6237,25 @@ components:
             status: { type: string, enum: [UNKNOWN, CONFIRMED] }
             asOf: { type: [string, 'null'], format: date-time }
         reason: { type: [string, 'null'] }
+    JoinableSubscriptions:
+      type: object
+      additionalProperties: false
+      required: [attestedAt, items]
+      properties:
+        attestedAt: { type: string, format: date-time }
+        items:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, title, state, remainingUnits, validUntil]
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: [string, 'null'], maxLength: 120 }
+              state: { type: string, enum: [ACTIVE, NOT_ACTIVATED, PAUSED, FINISHED] }
+              remainingUnits: { type: [integer, 'null'], minimum: 0 }
+              validUntil: { type: [string, 'null'], format: date-time }
     GameJoinConditions:
       type: object
       additionalProperties: false

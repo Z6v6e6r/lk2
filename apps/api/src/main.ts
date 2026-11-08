@@ -98,6 +98,9 @@ import Redis from 'ioredis';
 import { buildApp } from './app.js';
 import { ClientResidencyService } from './residency/client-residency-service.js';
 import { createGameJoinConditionsRuntime } from './games/game-join-conditions-runtime.js';
+import { createLk1OwnedSubscriptionReader } from './games/lk1-owned-subscription-reader.js';
+import { createProviderAccountMappingRepository } from '../../../packages/database/src/provider-account-mapping-repository.js';
+import { ProviderAccountOwnerClient } from '../../../packages/subscription-runtime-adapter/src/provider-account-attestation.js';
 import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
 import { createGameCommercialCreateRuntime } from './games/game-create-commercial-runtime.js';
 import { createGameJoinConditionsContextRepository } from '../../../packages/database/src/game-join-conditions-context-repository.js';
@@ -825,7 +828,33 @@ const subscriptionPolicyRegistryClient = config.SUBSCRIPTION_POLICY_REGISTRY_ENA
       onMetric: (metric) => logger.info({ metric }, 'subscription policy registry read'),
     })
   : undefined;
-const gameJoinConditionsOwner = createGameJoinConditionsRuntime({ config, pool, authService });
+// ADR 0028: the LK1 owner attests the actor's Viva account; PadlHub egress never reads Viva End
+// User data. Composed only with commercial JOIN and the existing actor-delegation key ring.
+const providerAccountOwnerClient =
+  config.GAME_COMMERCIAL_JOIN_ENABLED &&
+  subscriptionRuntimeWarnBoundary &&
+  config.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL
+    ? new ProviderAccountOwnerClient({
+        baseUrl: config.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL,
+        timeoutMs: config.GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS,
+        environment: ['local', 'ci'].includes(config.APP_ENV) ? 'development' : 'production',
+      })
+    : undefined;
+const providerAccountAttestation =
+  providerAccountOwnerClient && subscriptionRuntimeWarnBoundary
+    ? {
+        client: providerAccountOwnerClient,
+        issuer: subscriptionRuntimeWarnBoundary.delegationIssuer,
+      }
+    : undefined;
+const gameJoinConditionsOwner = createGameJoinConditionsRuntime({
+  config,
+  pool,
+  authService,
+  ...(providerAccountAttestation
+    ? { ownedSubscriptionReader: createLk1OwnedSubscriptionReader(providerAccountAttestation) }
+    : {}),
+});
 // Paid JOIN reaches the existing owner only when the flag, the join-conditions owner and the
 // existing actor-delegation material are all composed; otherwise the route keeps GAME_PAYMENT_REQUIRED.
 const gameManagedSelfLeave = createManagedSelfLeaveRuntime({
@@ -981,6 +1010,20 @@ const app = await buildApp({
   tournamentLocal,
   gameManagedSelfLeave,
   ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
+  ...(providerAccountAttestation
+    ? {
+        joinableSubscriptions: {
+          ...providerAccountAttestation,
+          repository: createProviderAccountMappingRepository(pool),
+          issueActorToken: async (
+            actor: Parameters<typeof authService.issueVivaAccessToken>[0],
+          ) => {
+            const issued = await authService.issueVivaAccessToken(actor);
+            return { token: issued.accessToken, expiresAt: issued.expiresAt };
+          },
+        },
+      }
+    : {}),
   ...(gameCommercialCreate ? { gameCommercialCreate } : {}),
   ...(subscriptionRuntimeWarnBoundary
     ? {

@@ -3,6 +3,7 @@ import type * as VivaAdapter from '@phub/viva-adapter';
 import type * as JoinConditions from './game-join-conditions.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGameJoinConditionsRuntime } from './game-join-conditions-runtime.js';
+import { createLk1OwnedSubscriptionReader } from './lk1-owned-subscription-reader.js';
 import { readGameJoinConditions, type GameJoinConditionsActor } from './game-join-conditions.js';
 
 const harness = vi.hoisted(() => ({
@@ -63,11 +64,17 @@ const issueVivaAccessToken = vi.fn().mockResolvedValue({
   expiresAt: '2099-09-21T07:00:00Z',
   profilePhotoGrant: 'synthetic-unused-grant',
 });
-const build = (changes: Partial<Config> = {}) =>
+const build = (changes: Partial<Config> = {}, withLk1Reader = true) =>
   createGameJoinConditionsRuntime({
     config: { ...config, ...changes },
     pool,
     authService: { issueVivaAccessToken },
+    ...(withLk1Reader
+      ? {
+          ownedSubscriptionReader: (input: unknown) =>
+            harness.readOwned(input) as Promise<{ fingerprint: string }>,
+        }
+      : {}),
   });
 
 beforeEach(() => {
@@ -141,6 +148,12 @@ describe('existing-game advisory runtime composition', () => {
     });
   }
 
+  it('stays disabled without the LK1 owner reader and never builds the Viva reader', () => {
+    expect(build({}, false)).toBeUndefined();
+    expect(harness.createReader).not.toHaveBeenCalled();
+    expect(harness.createRepository).not.toHaveBeenCalled();
+  });
+
   it.each(['sandbox', 'production'] as const)(
     'composes lazily for %s and exact trusted URLs',
     (mode) => {
@@ -152,10 +165,8 @@ describe('existing-game advisory runtime composition', () => {
         }),
       ).toBeDefined();
       expect(harness.createRepository).toHaveBeenCalledWith(pool, 'iSkq6G');
-      expect(harness.createReader).toHaveBeenCalledWith({
-        apiBaseUrl: `${config.VIVA_END_USER_API_URL}/`,
-        providerTenantKey: 'iSkq6G',
-      });
+      // ADR 0028: the server-side Viva reader is never composed from lk2 egress.
+      expect(harness.createReader).not.toHaveBeenCalled();
       expect(harness.createPreview).toHaveBeenCalledWith(`${config.LEGACY_GAMES_PUBLIC_BASE_URL}/`);
       expect(connect).not.toHaveBeenCalled();
       expect(harness.resolve).not.toHaveBeenCalled();
@@ -184,6 +195,43 @@ describe('existing-game advisory runtime composition', () => {
     expect(harness.preview).toHaveBeenCalledTimes(1);
     await readGameJoinConditions(owner, actor, actor.correlationId);
     expect(issueVivaAccessToken).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads conditions end to end through the LK1 reader with a fresh attestation per call', async () => {
+    harness.resolve.mockResolvedValue({ ...context, providerExerciseId: 'synthetic-exercise' });
+    const attest = vi.fn((request: { operationId: string }) =>
+      Promise.resolve({
+        contractVersion: 1 as const,
+        operationId: request.operationId,
+        providerTenantKey: 'iSkq6G' as const,
+        providerClientId: context.providerClientId,
+        subscriptions: [],
+        attestedAt: new Date().toISOString(),
+        targetProof: {
+          exerciseId: 'synthetic-exercise',
+          startsAt: context.startsAt,
+          durationMinutes: 90,
+          ownedClientSubscriptionIds: [context.providerSubscriptionId],
+          eligibleClientSubscriptionIds: [context.providerSubscriptionId],
+        },
+      }),
+    );
+    const owner = createGameJoinConditionsRuntime({
+      config,
+      pool,
+      authService: { issueVivaAccessToken },
+      ownedSubscriptionReader: createLk1OwnedSubscriptionReader({
+        issuer: { issueProviderAccountAttestation: () => Promise.resolve('signed.jwt.value') },
+        client: { attest },
+      }),
+    });
+    if (!owner) throw new Error('expected synthetic runtime');
+    expect(
+      (await readGameJoinConditions(owner, actor, actor.correlationId)).price.amountMinor,
+    ).toBe(70000);
+    expect(attest).toHaveBeenCalledTimes(2);
+    const ids = attest.mock.calls.map(([request]) => request.operationId);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it('does not repeat a failed broker promise within the same request or call providers', async () => {

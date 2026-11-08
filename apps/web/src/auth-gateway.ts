@@ -602,6 +602,7 @@ export interface AuthGateway {
   readonly getActivityHistory: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
   readonly getGame: (gameId: string) => Promise<GameCard>;
   readonly getGameJoinConditions?: PadlHubApiClient['getGameJoinConditions'];
+  readonly listJoinableSubscriptions?: PadlHubApiClient['listJoinableSubscriptions'];
   readonly createGame: (
     input: CreateGameRequest,
     options?: { readonly idempotencyKey?: string },
