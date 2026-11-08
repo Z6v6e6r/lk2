@@ -15,9 +15,18 @@ export function createGameJoinConditionsOwner(options: {
     readonly sessionId: string;
     readonly tenantKey: string;
     readonly correlationId: string;
-  }) => Promise<string>;
+  }) => Promise<{ readonly accessToken: string; readonly expiresAt: string }>;
   readonly readOwnedSubscription: (input: {
     readonly accessToken: string;
+    readonly accessTokenExpiresAt: string;
+    /** ADR 0028: actor and exercise let the LK1 owner attest ownership from its own egress. */
+    readonly actor: {
+      readonly tenantId: string;
+      readonly userId: string;
+      readonly sessionId: string;
+      readonly tenantKey: string;
+    };
+    readonly providerExerciseId: string | null;
     readonly providerClientId: string;
     readonly providerSubscriptionId: string;
     readonly startsAt: string;
@@ -28,7 +37,10 @@ export function createGameJoinConditionsOwner(options: {
   readonly readPreview: GameJoinConditionsOwner['readPreview'];
   readonly providerMode: 'MOCK' | 'LIVE';
 }): GameJoinConditionsOwner {
-  const requestTokens = new WeakMap<AbortSignal, { actorKey: string; token: Promise<string> }>();
+  const requestTokens = new WeakMap<
+    AbortSignal,
+    { actorKey: string; token: Promise<{ accessToken: string; expiresAt: string }> }
+  >();
   return {
     async resolveSelection(actor, signal) {
       if (signal.aborted) return null;
@@ -57,10 +69,18 @@ export function createGameJoinConditionsOwner(options: {
         };
         requestTokens.set(signal, requestToken);
       }
-      const accessToken = await requestToken.token;
+      const { accessToken, expiresAt } = await requestToken.token;
       if (signal.aborted) return null;
       const proof = await options.readOwnedSubscription({
         accessToken,
+        accessTokenExpiresAt: expiresAt,
+        actor: {
+          tenantId: actor.tenantId,
+          userId: actor.userId,
+          sessionId: actor.sessionId,
+          tenantKey: actor.tenantKey,
+        },
+        providerExerciseId: context.providerExerciseId,
         providerClientId: context.providerClientId,
         providerSubscriptionId: context.providerSubscriptionId,
         startsAt: context.startsAt,

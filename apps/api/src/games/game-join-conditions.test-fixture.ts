@@ -158,7 +158,11 @@ export function createJoinConditionsFixture(
   };
   const owner = createGameJoinConditionsOwner({
     contextRepository: createGameJoinConditionsContextRepository(pool, 'iSkq6G'),
-    getAccessToken: () => Promise.resolve('synthetic-user-context'),
+    getAccessToken: () =>
+      Promise.resolve({
+        accessToken: 'synthetic-user-context',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      }),
     readOwnedSubscription: createOwnedHubSubscriptionReader({
       apiBaseUrl: 'https://viva.synthetic.invalid/end-user/api',
       providerTenantKey: 'iSkq6G',
