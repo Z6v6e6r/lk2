@@ -31,7 +31,7 @@ paths:
         '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
         '403': { $ref: ../../common/components.yaml#/components/responses/Forbidden }
         '409':
-          description: Original request or target attempt conflicts.
+          description: Original request or target attempt conflicts, or a level-policy refusal of a new attempt (canonical level reason code such as LEVEL_NOT_ALLOWED or PLAYER_LEVEL_REQUIRED; no attempt is created).
           content:
             application/json:
               schema: { $ref: ../../common/components.yaml#/components/schemas/ApiError }

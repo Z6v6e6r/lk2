@@ -109,6 +109,34 @@ Modes are OFF, SHADOW, WARN and BLOCK. Initial rows are OFF/zero. Old clients re
 
 `OFF` still stores an auditable SKIP decision for a final command so paid operations can have an exact snapshot. It does not change the user outcome.
 
+### Tournament and training pre-dispatch gate (2026-11-08)
+
+CUP owns the final tournament roster write and Viva owns the group-training booking, so PadlHub
+cannot place the decision inside their transactions. The User API therefore evaluates the same
+rule before any owner write, through `createParticipationLevelGate`
+(`packages/database/src/participation-level-gate.ts`) and `createExternalLevelCheck`
+(`apps/api/src/eligibility/external-level-check.ts`):
+
+- Tournament JOIN: after the fresh registration-date read, before CUP `prepare`, using the
+  `accessLevels` range from that fresh read (`LEGACY_TOURNAMENT_SETTINGS`).
+- Training registration: before the local attempt row and any owner preparation, using the
+  `levelRange` of that training in the complete Viva day page for its `dateHint` (`VIVA_EXERCISE`).
+- Player level is `eligibility.player_sport_levels`: the CUP projection when present, otherwise
+  the player's self-declared or onboarding level. Tolerance and modes come from the
+  tenant/sport/activity policy edited in CUP admin.
+- OFF performs no provider read and records no decision. SHADOW/WARN/BLOCK persist a decision row
+  before the command continues. Only FAIL refuses, with the canonical reason code (HTTP 409).
+- An unreadable constraint fails closed with `PARTICIPATION_LEVEL_UNAVAILABLE` (503) in WARN and
+  BLOCK. SHADOW continues. A stored attempt (same idempotency key) is never re-gated, so a
+  started registration is not broken by a later policy or level change.
+- No personal-invitation bypass and no waitlist recheck exist on this path yet.
+- Web clears its browser custody on a level refusal, because no attempt exists for that key, and
+  offers a self-declared level choice for `PLAYER_LEVEL_REQUIRED`/`UNKNOWN`/scale mismatch.
+
+Residual gap: this is a pre-dispatch check, not an owner-side constraint. Legacy LK/Node-RED
+writers and a level change between check and owner commit are not covered. Marking
+`writer_authoritative` for TOURNAMENT/TRAINING remains an explicit owner decision.
+
 ## Data model
 
 New `eligibility` schema tables:
@@ -146,7 +174,8 @@ Costs and constraints:
 - The trusted assessment updates PadlHub profile and eligibility projections; a separate outbox or
   adapter is still required if Viva must display the same value during the transition.
 - Legacy writers must be routed before BLOCK.
-- Tournament/training commands and their callback/recovery integration still require migration;
+- Tournament/training commands are gated before dispatch in the User API, but their final writers
+  and callback/recovery integration still live in CUP/Viva;
   the legacy game callback bridge is implemented only as a default-off deployment candidate and
   still needs callback-loss reconciliation.
 - Decision storage adds write volume; retention/aggregation must be monitored in SHADOW.

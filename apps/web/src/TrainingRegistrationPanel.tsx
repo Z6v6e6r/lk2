@@ -3,9 +3,20 @@ import type { TrainingRegistrationResult } from '@phub/api-contracts';
 import type { AuthGateway } from './auth-gateway.js';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
 import { TrainingRegistrationAttempts } from './training-registration-attempt.js';
+import {
+  PARTICIPATION_LEVEL_UNAVAILABLE_MESSAGE,
+  canPickParticipationLevel,
+  participationLevelRefusal,
+  participationLevelUnavailable,
+} from './participation-level.js';
+import { ParticipationLevelPicker } from './ParticipationLevelPicker.js';
 export type TrainingRegistrationGateway = Pick<
   AuthGateway,
-  'registerTraining' | 'getTrainingRegistration' | 'getHomeDashboard'
+  | 'registerTraining'
+  | 'getTrainingRegistration'
+  | 'getHomeDashboard'
+  | 'getOwnPlayerLevel'
+  | 'setOwnPlayerLevel'
 >;
 class TrainingPanelLifetime {
   private active = true;
@@ -74,6 +85,7 @@ function TrainingRegistrationSession({
     [result, setResult] = useState<TrainingRegistrationResult | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null),
+    [levelSetup, setLevelSetup] = useState(false),
     [stored, setStored] = useState(() => {
       try {
         return attempts.load(training.id);
@@ -86,6 +98,7 @@ function TrainingRegistrationSession({
     if (busy) return;
     setBusy(true);
     setError(null);
+    setLevelSetup(false);
     try {
       const original = attempts.load(training.id);
       const value = read
@@ -98,9 +111,20 @@ function TrainingRegistrationSession({
         setResult(value);
         setStored(attempts.load(training.id));
       }
-    } catch {
-      if (lifetime.current(gateway))
+    } catch (cause) {
+      if (!lifetime.current(gateway)) return;
+      const level = participationLevelRefusal(cause);
+      if (level) {
+        // The refused request was never created; its browser custody is already cleared.
+        setStored(attempts.load(training.id));
+        setResult(null);
+        setError(level.message);
+        setLevelSetup(level.needsLevel);
+      } else if (participationLevelUnavailable(cause)) {
+        setError(PARTICIPATION_LEVEL_UNAVAILABLE_MESSAGE);
+      } else {
         setError('Не удалось проверить запись. Сохранённый запрос не заменён; повторите проверку.');
+      }
     } finally {
       if (lifetime.current(gateway)) setBusy(false);
     }
@@ -162,6 +186,13 @@ function TrainingRegistrationSession({
         <p role="status">Текущая запись не подтверждена. Проверка не создаёт новую запись.</p>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
+      {levelSetup && canPickParticipationLevel(gateway) ? (
+        <ParticipationLevelPicker
+          gateway={gateway}
+          onSaved={() => void run(false)}
+          onCancel={() => setLevelSetup(false)}
+        />
+      ) : null}
       <div className="games-level-recovery__actions">
         <button
           className="games-level-recovery__primary"

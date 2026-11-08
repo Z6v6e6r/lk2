@@ -39,4 +39,18 @@ describe('original tournament dated feed association', () => {
     await adapter.readDate('2026-11-02');
     await expect(adapter.resolveRegistrationDate(s!.id)).rejects.toThrow();
   });
+  it('captures the level range from the fresh registration read, not the first cached page', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(() => Promise.resolve(Response.json([source])))
+      .mockImplementationOnce(() =>
+        Promise.resolve(Response.json([{ ...source, accessLevels: [3, 4.5] }])),
+      );
+    const adapter = new LegacyTournamentSummaryAdapter({ fetchImplementation });
+    expect(adapter.registrationLevelRange('synthetic-unknown')).toBeUndefined();
+    const [summary] = await adapter.readDate('2026-11-01');
+    expect(adapter.registrationLevelRange(summary!.id)).toBeNull();
+    await adapter.resolveRegistrationDate(summary!.id);
+    expect(adapter.registrationLevelRange(summary!.id)).toEqual({ from: 'C', to: 'B' });
+  });
 });

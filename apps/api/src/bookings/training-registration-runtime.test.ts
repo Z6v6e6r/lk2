@@ -535,3 +535,40 @@ it('claim-time INTENT identity is rechecked when another lease pins after the in
   expect(t.client.admit).not.toHaveBeenCalled();
   expect(t.repository.settlePreparation).not.toHaveBeenCalled();
 });
+it('level refusal stops a new training attempt before any local row, token or owner call', async () => {
+  const h = await setup();
+  const levelCheck = vi.fn(async () =>
+    Promise.resolve({ code: 'PLAYER_LEVEL_REQUIRED' as const, status: 409 as const }),
+  );
+  const gated = createTrainingRegistrationRuntime({
+    enabled: true,
+    repository: h.repository,
+    client: h.client,
+    issuer: h.issuer,
+    token: h.token,
+    levelCheck,
+  });
+  await expect(gated.execute(actor, input)).rejects.toMatchObject({
+    code: 'PLAYER_LEVEL_REQUIRED',
+    status: 409,
+  });
+  expect(levelCheck).toHaveBeenCalledWith(actor, input.trainingId, input.dateHint);
+  expect(h.repository.begin).not.toHaveBeenCalled();
+  expect(h.token).not.toHaveBeenCalled();
+  expect(h.client.prepare).not.toHaveBeenCalled();
+});
+it('eligible level continues and an existing attempt is never re-gated', async () => {
+  const h = await setup();
+  const levelCheck = vi.fn(async () => Promise.resolve(null));
+  const gated = createTrainingRegistrationRuntime({
+    enabled: true,
+    repository: h.repository,
+    client: h.client,
+    issuer: h.issuer,
+    token: h.token,
+    levelCheck,
+  });
+  expect((await gated.execute(actor, input)).operation.status).toBe('CONFIRMED');
+  await gated.execute(actor, input);
+  expect(levelCheck).toHaveBeenCalledTimes(1);
+});

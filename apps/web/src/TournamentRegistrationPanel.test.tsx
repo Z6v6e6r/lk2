@@ -32,6 +32,96 @@ describe('rendered actual tournament registration panel', () => {
     });
   });
   afterEach(cleanup);
+  it('level refusal offers a self-declared level and retries a fresh JOIN', async () => {
+    const levels = ['D', 'C', 'B'].map((code, index) => ({
+      id: `3333333${index}-3333-4333-a333-333333333333`,
+      sportCode: 'PADEL',
+      code,
+      title: code,
+      rank: index + 1,
+      sortOrder: index + 1,
+      aliases: [code],
+      active: true,
+      scaleVersion: 1,
+    }));
+    const gateway = {
+      tournamentPrincipal: () => `${id}:${id}:0:0`,
+      getTournamentRegistration: vi.fn(
+        async () => await Promise.resolve({ commandsEnabled: true, result: null }),
+      ),
+      commandTournament: vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error('level'), { status: 409, code: 'PLAYER_LEVEL_REQUIRED' }),
+        )
+        .mockResolvedValueOnce(joined),
+      retryTournament: vi.fn(),
+      getOwnPlayerLevel: vi.fn(
+        async () =>
+          await Promise.resolve({
+            sportCode: 'PADEL',
+            scaleVersion: 1,
+            levels,
+            currentLevel: null,
+          }),
+      ),
+      setOwnPlayerLevel: vi.fn(async () => await Promise.resolve({})),
+    } as unknown as AuthGateway;
+    const user = userEvent.setup();
+    render(
+      <TournamentRegistrationPanel
+        gateway={gateway}
+        principal={{ tenantId: id, userId: id }}
+        tournamentId={id}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Записаться на турнир' })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: 'Записаться на турнир' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Чтобы записаться, укажите свой уровень.',
+    );
+    await user.selectOptions(await screen.findByLabelText('Ваш уровень'), levels[1]!.id);
+    await user.click(screen.getByRole('button', { name: 'Сохранить и записаться' }));
+    expect(await screen.findByText('Запись подтверждена.')).toBeVisible();
+    expect(gateway.setOwnPlayerLevel).toHaveBeenCalledWith(levels[1]!.id, 'PADEL');
+    const calls = (gateway.commandTournament as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]![2]).not.toBe(calls[0]![2]);
+  });
+  it('out-of-range level refusal shows the reason without a level picker', async () => {
+    const gateway = {
+      tournamentPrincipal: () => `${id}:${id}:0:0`,
+      getTournamentRegistration: vi.fn(
+        async () => await Promise.resolve({ commandsEnabled: true, result: null }),
+      ),
+      commandTournament: vi.fn(async () => {
+        await Promise.resolve();
+        throw Object.assign(new Error('level'), { status: 409, code: 'LEVEL_NOT_ALLOWED' });
+      }),
+      retryTournament: vi.fn(),
+      getOwnPlayerLevel: vi.fn(),
+      setOwnPlayerLevel: vi.fn(),
+    } as unknown as AuthGateway;
+    const user = userEvent.setup();
+    render(
+      <TournamentRegistrationPanel
+        gateway={gateway}
+        principal={{ tenantId: id, userId: id }}
+        tournamentId={id}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Записаться на турнир' })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: 'Записаться на турнир' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Ваш уровень не подходит под диапазон этой активности.',
+    );
+    expect(screen.queryByLabelText('Ваш уровень')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Записаться на турнир' })).toBeEnabled();
+  });
   it('UNKNOWN manual same-operation recovery, then exact original LEAVE', async () => {
     const gateway = {
       tournamentPrincipal: () => `${id}:${id}:0:0`,

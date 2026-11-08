@@ -1539,6 +1539,10 @@ function publicTournamentSummary(value: unknown): PublicTournamentSummary | unde
  */
 export class LegacyTournamentSummaryAdapter {
   private readonly registrationDates = new Map<string, Set<string>>();
+  private readonly registrationLevelRanges = new Map<
+    string,
+    PublicTournamentSummary['levelRange']
+  >();
   private readonly cache = new Map<string, TournamentCacheEntry>();
   private readonly pending = new Map<string, Promise<readonly PublicTournamentSummary[]>>();
   private readonly avatarSources = new Map<
@@ -1609,6 +1613,8 @@ export class LegacyTournamentSummaryAdapter {
             const dates = this.registrationDates.get(summary.id) ?? new Set<string>();
             dates.add(date);
             this.registrationDates.set(summary.id, dates);
+            if (this.registrationLevelRanges.size >= 10000) this.registrationLevelRanges.clear();
+            this.registrationLevelRanges.set(summary.id, summary.levelRange);
           }
           const avatarSourceUrl =
             typeof item === 'object' && item !== null && !Array.isArray(item)
@@ -1681,6 +1687,14 @@ export class LegacyTournamentSummaryAdapter {
     )
       throw new Error('TOURNAMENT_DATE_ASSOCIATION_UNAVAILABLE');
     return date;
+  }
+
+  /**
+   * Level range captured by the fresh registration read above (`resolveRegistrationDate`).
+   * `undefined` means the range is not known and a level gate must fail closed.
+   */
+  public registrationLevelRange(id: string): PublicTournamentSummary['levelRange'] | undefined {
+    return this.registrationLevelRanges.has(id) ? this.registrationLevelRanges.get(id) : undefined;
   }
 
   public readDate(date: string): Promise<readonly PublicTournamentSummary[]> {
