@@ -45,6 +45,28 @@ export class ProviderAccountMappingConflict extends Error {
   }
 }
 
+/** The tenant is not bound to the Viva tenant the LK1 owner attests for. */
+export class ProviderAccountTenantUnbound extends Error {
+  constructor() {
+    super('PROVIDER_ACCOUNT_TENANT_UNBOUND');
+  }
+}
+
+const ATTESTED_PROVIDER_TENANT_KEY = 'iSkq6G';
+
+async function assertTenantBinding(client: PoolClient, tenantId: string): Promise<void> {
+  const bindings = await client.query<{ readonly provider_tenant_key: string } & QueryResultRow>(
+    `select provider_tenant_key from integration.identity_provider_bindings
+      where tenant_id = $1 and provider = 'VIVA'`,
+    [tenantId],
+  );
+  if (
+    bindings.rows.length !== 1 ||
+    bindings.rows[0]!.provider_tenant_key !== ATTESTED_PROVIDER_TENANT_KEY
+  )
+    throw new ProviderAccountTenantUnbound();
+}
+
 interface MappingRow extends QueryResultRow {
   readonly id: string;
   readonly internal_id: string;
@@ -115,6 +137,7 @@ export function createProviderAccountMappingRepository(pool: Pool) {
     async recordAttestation(input: AttestedAccountInput): Promise<AttestedAccountResult> {
       try {
         return await withTenantTransaction(pool, input.tenantId, async (client) => {
+          await assertTenantBinding(client, input.tenantId);
           const profileMappingId = await upsertProfile(client, input);
           const subscriptions: AttestedAccountSubscription[] = [];
           for (const item of input.subscriptions) {

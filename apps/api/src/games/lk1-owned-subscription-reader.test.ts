@@ -78,7 +78,7 @@ describe('createLk1OwnedSubscriptionReader', () => {
   it('fails closed without a mapped exercise and never calls LK1', async () => {
     const { client, read } = setup();
     await expect(read({ ...input, providerExerciseId: null })).rejects.toMatchObject({
-      code: 'JOIN_SELECTION_TARGET_UNAVAILABLE',
+      code: 'GAME_JOIN_CONDITIONS_MAPPING_UNAVAILABLE',
     });
     expect(client.attest).not.toHaveBeenCalled();
   });
@@ -88,28 +88,28 @@ describe('createLk1OwnedSubscriptionReader', () => {
       'another Viva client',
       { providerClientId: '9f9f9f9f-1f3e-4b7a-9c11-2a6f0b1d9e01' },
       {},
-      'JOIN_SELECTION_FOREIGN_ACTOR',
+      'GAME_JOIN_CONDITIONS_SELECTION_INVALID',
     ],
     [
       'a foreign subscription',
       {},
       { ownedClientSubscriptionIds: ['other-sub'] },
-      'JOIN_SELECTION_SUBSCRIPTION_NOT_OWNED',
+      'GAME_JOIN_CONDITIONS_SELECTION_INVALID',
     ],
     [
       'another start',
       {},
       { startsAt: '2026-11-09T11:00:00.000Z' },
-      'JOIN_SELECTION_TARGET_MISMATCH',
+      'GAME_JOIN_CONDITIONS_REVISION_CHANGED',
     ],
-    ['another duration', {}, { durationMinutes: 90 }, 'JOIN_SELECTION_TARGET_MISMATCH'],
+    ['another duration', {}, { durationMinutes: 90 }, 'GAME_JOIN_CONDITIONS_REVISION_CHANGED'],
     [
       'an owned but inapplicable subscription',
       {},
       { eligibleClientSubscriptionIds: [] },
-      'JOIN_SELECTION_VARIANT_UNAVAILABLE',
+      'GAME_JOIN_CONDITIONS_SELECTION_INVALID',
     ],
-    ['a missing proof', { targetProof: undefined }, {}, 'JOIN_SELECTION_TARGET_MISMATCH'],
+    ['a missing proof', { targetProof: undefined }, {}, 'GAME_JOIN_CONDITIONS_REVISION_CHANGED'],
   ])('rejects %s', async (_name, patch, proof, code) => {
     const { read } = setup(patch, proof);
     await expect(read(input)).rejects.toMatchObject({ code });

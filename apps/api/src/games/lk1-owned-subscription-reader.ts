@@ -6,6 +6,24 @@ import {
   type ProviderAccountAttestationRequest,
 } from '../../../../packages/subscription-runtime-adapter/src/provider-account-attestation.js';
 
+import { GameJoinConditionsError } from './game-join-conditions.js';
+
+/**
+ * Selection refusals surface as the existing join-conditions codes, so commercial JOIN answers
+ * GAME_SUBSCRIPTION_SELECTION_REQUIRED (pick another owned, applicable subscription) or a revision
+ * conflict (schedule changed) instead of a misleading payment error.
+ */
+export function toJoinConditionsError(error: Lk1OwnedSubscriptionError): GameJoinConditionsError {
+  switch (error.code) {
+    case 'JOIN_SELECTION_TARGET_MISMATCH':
+      return new GameJoinConditionsError('GAME_JOIN_CONDITIONS_REVISION_CHANGED', 409);
+    case 'JOIN_SELECTION_TARGET_UNAVAILABLE':
+      return new GameJoinConditionsError('GAME_JOIN_CONDITIONS_MAPPING_UNAVAILABLE');
+    default:
+      return new GameJoinConditionsError('GAME_JOIN_CONDITIONS_SELECTION_INVALID');
+  }
+}
+
 /** ADR 0028: replaces the server Viva read (403 from lk2 egress) with an LK1 owner attestation. */
 export class Lk1OwnedSubscriptionError extends Error {
   constructor(
@@ -62,7 +80,9 @@ export function createLk1OwnedSubscriptionReader(options: {
     readonly correlationId: string;
   }): Promise<{ readonly fingerprint: string }> => {
     if (!input.providerExerciseId)
-      throw new Lk1OwnedSubscriptionError('JOIN_SELECTION_TARGET_UNAVAILABLE');
+      throw toJoinConditionsError(
+        new Lk1OwnedSubscriptionError('JOIN_SELECTION_TARGET_UNAVAILABLE'),
+      );
     const request: ProviderAccountAttestationRequest = {
       contractVersion: 1,
       operationId: randomUUID(),
@@ -85,20 +105,24 @@ export function createLk1OwnedSubscriptionReader(options: {
       correlationId: input.correlationId,
     });
     if (result.providerClientId.toLowerCase() !== input.providerClientId.toLowerCase())
-      throw new Lk1OwnedSubscriptionError('JOIN_SELECTION_FOREIGN_ACTOR');
+      throw toJoinConditionsError(new Lk1OwnedSubscriptionError('JOIN_SELECTION_FOREIGN_ACTOR'));
     const proof = result.targetProof;
     if (
       !proof ||
       Date.parse(proof.startsAt) !== Date.parse(input.startsAt) ||
       proof.durationMinutes !== input.durationMinutes
     )
-      throw new Lk1OwnedSubscriptionError('JOIN_SELECTION_TARGET_MISMATCH');
+      throw toJoinConditionsError(new Lk1OwnedSubscriptionError('JOIN_SELECTION_TARGET_MISMATCH'));
     const selected = input.providerSubscriptionId.toLowerCase();
     const owned = new Set(proof.ownedClientSubscriptionIds.map((id) => id.toLowerCase()));
     if (!owned.has(selected))
-      throw new Lk1OwnedSubscriptionError('JOIN_SELECTION_SUBSCRIPTION_NOT_OWNED');
+      throw toJoinConditionsError(
+        new Lk1OwnedSubscriptionError('JOIN_SELECTION_SUBSCRIPTION_NOT_OWNED'),
+      );
     if (!proof.eligibleClientSubscriptionIds.some((id) => id.toLowerCase() === selected))
-      throw new Lk1OwnedSubscriptionError('JOIN_SELECTION_VARIANT_UNAVAILABLE');
+      throw toJoinConditionsError(
+        new Lk1OwnedSubscriptionError('JOIN_SELECTION_VARIANT_UNAVAILABLE'),
+      );
     // Deterministic over the attested facts: join conditions resolve the selection twice and
     // require an identical sourceVersion; a per-call operation id would never match.
     return {
