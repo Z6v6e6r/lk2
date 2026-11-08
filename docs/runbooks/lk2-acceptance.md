@@ -30,7 +30,8 @@
 ```sh
 npm run lk2:preflight                      # человекочитаемый отчёт, exit 1 при FAIL
 mkdir -p output/lk2-acceptance-$(date +%Y%m%d)
-npm run lk2:preflight -- --json > output/lk2-acceptance-$(date +%Y%m%d)/preflight.json
+# --silent убирает баннер npm, иначе файл не является чистым JSON
+npm run --silent lk2:preflight -- --json > output/lk2-acceptance-$(date +%Y%m%d)/preflight.json
 ```
 
 Скрипт [`scripts/lk2-test-preflight.ts`](../../scripts/lk2-test-preflight.ts) проверяет только
