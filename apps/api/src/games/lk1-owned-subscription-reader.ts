@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   PROVIDER_ACCOUNT_TENANT_KEY,
@@ -13,7 +13,8 @@ export class Lk1OwnedSubscriptionError extends Error {
       | 'JOIN_SELECTION_TARGET_UNAVAILABLE'
       | 'JOIN_SELECTION_FOREIGN_ACTOR'
       | 'JOIN_SELECTION_SUBSCRIPTION_NOT_OWNED'
-      | 'JOIN_SELECTION_TARGET_MISMATCH',
+      | 'JOIN_SELECTION_TARGET_MISMATCH'
+      | 'JOIN_SELECTION_VARIANT_UNAVAILABLE',
   ) {
     super(code);
   }
@@ -92,9 +93,27 @@ export function createLk1OwnedSubscriptionReader(options: {
       proof.durationMinutes !== input.durationMinutes
     )
       throw new Lk1OwnedSubscriptionError('JOIN_SELECTION_TARGET_MISMATCH');
+    const selected = input.providerSubscriptionId.toLowerCase();
     const owned = new Set(proof.ownedClientSubscriptionIds.map((id) => id.toLowerCase()));
-    if (!owned.has(input.providerSubscriptionId.toLowerCase()))
+    if (!owned.has(selected))
       throw new Lk1OwnedSubscriptionError('JOIN_SELECTION_SUBSCRIPTION_NOT_OWNED');
-    return { fingerprint: `lk1-attest:${result.operationId}:${result.attestedAt}` };
+    if (!proof.eligibleClientSubscriptionIds.some((id) => id.toLowerCase() === selected))
+      throw new Lk1OwnedSubscriptionError('JOIN_SELECTION_VARIANT_UNAVAILABLE');
+    // Deterministic over the attested facts: join conditions resolve the selection twice and
+    // require an identical sourceVersion; a per-call operation id would never match.
+    return {
+      fingerprint: createHash('sha256')
+        .update(
+          JSON.stringify([
+            'lk1-attest:v1',
+            result.providerClientId.toLowerCase(),
+            proof.exerciseId,
+            Date.parse(proof.startsAt),
+            proof.durationMinutes,
+            selected,
+          ]),
+        )
+        .digest('hex'),
+    };
   };
 }

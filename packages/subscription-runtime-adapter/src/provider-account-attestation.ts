@@ -36,6 +36,12 @@ export interface ProviderAccountTargetProof {
   /** Owner-computed duration (1..1440); callers enforce their own allowed set. */
   readonly durationMinutes: number;
   readonly ownedClientSubscriptionIds: readonly string[];
+  /**
+   * Owned ids that LK1 judges applicable to this exact target under the money rules the former
+   * lk2 Viva reader enforced (product, enforcement date, lifecycle, visits, activation, expiry,
+   * freeze). lk2 requires the selected subscription here; absent field fails closed.
+   */
+  readonly eligibleClientSubscriptionIds: readonly string[];
 }
 
 export interface ProviderAccountAttestation {
@@ -153,7 +159,10 @@ function parseSubscription(value: unknown): AttestedSubscription {
 
 function parseTargetProof(value: unknown, exerciseId: string): ProviderAccountTargetProof {
   if (
-    !exactKeys(value, 'exerciseId,startsAt,durationMinutes,ownedClientSubscriptionIds') ||
+    !exactKeys(
+      value,
+      'exerciseId,startsAt,durationMinutes,ownedClientSubscriptionIds,eligibleClientSubscriptionIds',
+    ) ||
     value.exerciseId !== exerciseId ||
     !iso(value.startsAt) ||
     !Number.isInteger(value.durationMinutes) ||
@@ -162,14 +171,22 @@ function parseTargetProof(value: unknown, exerciseId: string): ProviderAccountTa
     !Array.isArray(value.ownedClientSubscriptionIds) ||
     value.ownedClientSubscriptionIds.length > MAX_SUBSCRIPTIONS ||
     !value.ownedClientSubscriptionIds.every(providerId) ||
-    new Set(value.ownedClientSubscriptionIds).size !== value.ownedClientSubscriptionIds.length
+    new Set(value.ownedClientSubscriptionIds).size !== value.ownedClientSubscriptionIds.length ||
+    !Array.isArray(value.eligibleClientSubscriptionIds) ||
+    value.eligibleClientSubscriptionIds.length > MAX_SUBSCRIPTIONS ||
+    !value.eligibleClientSubscriptionIds.every(providerId) ||
+    new Set(value.eligibleClientSubscriptionIds).size !== value.eligibleClientSubscriptionIds.length
   )
+    return invalid();
+  const owned = new Set(value.ownedClientSubscriptionIds.map((id) => id.toLowerCase()));
+  if (!value.eligibleClientSubscriptionIds.every((id) => owned.has(id.toLowerCase())))
     return invalid();
   return {
     exerciseId,
     startsAt: value.startsAt,
     durationMinutes: value.durationMinutes as number,
     ownedClientSubscriptionIds: [...value.ownedClientSubscriptionIds],
+    eligibleClientSubscriptionIds: [...value.eligibleClientSubscriptionIds],
   };
 }
 
@@ -321,13 +338,17 @@ export class ProviderAccountOwnerClient {
       this.openUntil = 0;
       return result;
     } catch (error) {
-      // Only transport/owner availability failures open the circuit; a forbidden actor does not.
+      // Only LK1-wide transport failures open the shared circuit: network errors and our own
+      // deadline. HTTP answers (including an actor-scoped 503 or 429) never block other users.
       if (
         !(error instanceof ProviderAccountOwnerError) ||
-        error.code === 'PROVIDER_ACCOUNT_UNAVAILABLE'
+        (error.code === 'PROVIDER_ACCOUNT_UNAVAILABLE' && error.status === 504)
       ) {
         this.failures += 1;
-        if (this.failures >= 3) this.openUntil = now() + 30_000;
+        if (this.failures >= 3) {
+          this.openUntil = now() + 30_000;
+          this.failures = 0;
+        }
       }
       if (error instanceof ProviderAccountOwnerError) throw error;
       throw new ProviderAccountOwnerError('PROVIDER_ACCOUNT_UNAVAILABLE', 503);

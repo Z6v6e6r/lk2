@@ -119,6 +119,7 @@ describe('provider account attestation response', () => {
       startsAt: '2026-11-09T10:00:00.000Z',
       durationMinutes: 120,
       ownedClientSubscriptionIds: ['sub-1001'],
+      eligibleClientSubscriptionIds: ['sub-1001'],
     };
     expect(
       parseProviderAccountAttestation(response({ targetProof: proof }), targeted, now).targetProof
@@ -141,6 +142,7 @@ describe('provider account attestation response', () => {
       startsAt: '2026-11-09T10:00:00.000Z',
       durationMinutes: 60,
       ownedClientSubscriptionIds: ['sub-1001'],
+      eligibleClientSubscriptionIds: ['sub-1001'],
     };
     expect(
       parseProviderAccountAttestation(response({ targetProof: proof }), targeted, now).targetProof,
@@ -149,11 +151,30 @@ describe('provider account attestation response', () => {
     // The proof may name owned subscriptions beyond the truncated display list (lk#303).
     expect(
       parseProviderAccountAttestation(
-        response({ targetProof: { ...proof, ownedClientSubscriptionIds: ['sub-unlisted'] } }),
+        response({
+          targetProof: {
+            ...proof,
+            ownedClientSubscriptionIds: ['sub-unlisted'],
+            eligibleClientSubscriptionIds: [],
+          },
+        }),
         targeted,
         now,
       ).targetProof?.ownedClientSubscriptionIds,
     ).toEqual(['sub-unlisted']);
+    // Eligibility is required and must be a subset of the owned ids.
+    const withoutEligible: Record<string, unknown> = { ...proof };
+    delete withoutEligible.eligibleClientSubscriptionIds;
+    expect(() =>
+      parseProviderAccountAttestation(response({ targetProof: withoutEligible }), targeted, now),
+    ).toThrow(ProviderAccountOwnerError);
+    expect(() =>
+      parseProviderAccountAttestation(
+        response({ targetProof: { ...proof, eligibleClientSubscriptionIds: ['sub-foreign'] } }),
+        targeted,
+        now,
+      ),
+    ).toThrow(ProviderAccountOwnerError);
     expect(() =>
       parseProviderAccountAttestation(
         response({ targetProof: { ...proof, exerciseId: 'ex-other' } }),
@@ -215,10 +236,20 @@ describe('ProviderAccountOwnerClient', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
-  it('opens the circuit after three unavailable responses', async () => {
+  it('does not open the shared circuit on owner HTTP answers such as an actor-scoped 503', async () => {
     const fetchImpl = vi.fn(() =>
       Promise.resolve(json({ code: 'PROVIDER_ACCOUNT_UNAVAILABLE' }, 503)),
     );
+    const c = client(fetchImpl);
+    for (let i = 0; i < 4; i += 1)
+      await expect(c.attest({ contractVersion: 1, operationId }, envelope)).rejects.toMatchObject({
+        code: 'PROVIDER_ACCOUNT_UNAVAILABLE',
+      });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it('opens the circuit after three transport failures', async () => {
+    const fetchImpl = vi.fn(() => Promise.reject(new Error('ECONNRESET')));
     const c = client(fetchImpl);
     for (let i = 0; i < 4; i += 1)
       await expect(c.attest({ contractVersion: 1, operationId }, envelope)).rejects.toMatchObject({

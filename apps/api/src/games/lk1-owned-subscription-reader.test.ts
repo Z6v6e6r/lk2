@@ -42,6 +42,7 @@ function setup(patch: Record<string, unknown> = {}, proof: Record<string, unknow
           startsAt: '2026-11-09T10:00:00.000Z',
           durationMinutes: 60,
           ownedClientSubscriptionIds: [subscriptionId],
+          eligibleClientSubscriptionIds: [subscriptionId],
           ...proof,
         },
         ...patch,
@@ -69,7 +70,9 @@ describe('createLk1OwnedSubscriptionReader', () => {
     expect((issued as unknown as { tenantKey: string }).tenantKey).toBe('iSkq6G');
     expect(envelope.actorToken.token).toBe(input.accessToken);
     expect(envelope.actorDelegation).toBe('signed.jwt.value');
-    expect(result.fingerprint).toBe(`lk1-attest:${request.operationId}:2026-11-08T10:00:00.000Z`);
+    expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    // Join conditions resolve twice: a fresh operation id must not change the fingerprint.
+    expect((await read(input)).fingerprint).toBe(result.fingerprint);
   });
 
   it('fails closed without a mapped exercise and never calls LK1', async () => {
@@ -100,6 +103,12 @@ describe('createLk1OwnedSubscriptionReader', () => {
       'JOIN_SELECTION_TARGET_MISMATCH',
     ],
     ['another duration', {}, { durationMinutes: 90 }, 'JOIN_SELECTION_TARGET_MISMATCH'],
+    [
+      'an owned but inapplicable subscription',
+      {},
+      { eligibleClientSubscriptionIds: [] },
+      'JOIN_SELECTION_VARIANT_UNAVAILABLE',
+    ],
     ['a missing proof', { targetProof: undefined }, {}, 'JOIN_SELECTION_TARGET_MISMATCH'],
   ])('rejects %s', async (_name, patch, proof, code) => {
     const { read } = setup(patch, proof);
