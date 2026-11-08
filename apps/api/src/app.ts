@@ -1,3 +1,7 @@
+import {
+  registerJoinableSubscriptionsRoutes,
+  type JoinableSubscriptionsOptions,
+} from './subscriptions/joinable-subscriptions-routes.js';
 import { registerMonthlyPurchaseRoutes } from './subscriptions/monthly-purchase-routes.js';
 import type { MonthlyPurchaseRuntime } from './subscriptions/monthly-purchase-runtime.js';
 import { registerTournamentChatRoutes } from './tournaments/tournament-chat-routes.js';
@@ -440,6 +444,7 @@ export interface BuildAppOptions {
   readonly tournamentLocal?: TournamentLocalRuntime;
   readonly gameManagedSelfLeave?: ManagedSelfLeaveRuntime;
   readonly gameCommercialJoin?: GameCommercialJoinOptions;
+  readonly joinableSubscriptions?: JoinableSubscriptionsOptions;
   /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
   readonly gameCommercialCreate?: GameCommercialCreateOptions;
   readonly gameQuarterCreate?: QuarterCreateRuntime;
@@ -1176,6 +1181,10 @@ export async function buildApp(options: BuildAppOptions) {
   registerBookedOperationAdmissionRoutes(app as unknown as FastifyInstance, {
     ...options.bookedOperationAdmission,
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerJoinableSubscriptionsRoutes(app as unknown as FastifyInstance, {
+    ...(options.joinableSubscriptions ? { joinable: options.joinableSubscriptions } : {}),
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
   registerGameJoinConditionsRoutes(app as unknown as FastifyInstance, {
     ...(options.gameJoinConditionsOwner ? { owner: options.gameJoinConditionsOwner } : {}),

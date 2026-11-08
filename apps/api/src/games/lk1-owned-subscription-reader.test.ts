@@ -11,7 +11,7 @@ const input = {
     tenantId: '22222222-2222-4222-8222-222222222222',
     userId: '11111111-1111-4111-8111-111111111111',
     sessionId: '33333333-3333-4333-8333-333333333333',
-    tenantKey: 'iSkq6G',
+    tenantKey: 'local-padel',
   },
   providerExerciseId: 'ex-77',
   providerClientId: clientId,
@@ -66,6 +66,7 @@ describe('createLk1OwnedSubscriptionReader', () => {
     expect(issued.request).toBe(request);
     expect(issued.request.target).toEqual({ exerciseId: 'ex-77' });
     expect(issued.actorToken).toBe(input.accessToken);
+    expect((issued as unknown as { tenantKey: string }).tenantKey).toBe('iSkq6G');
     expect(envelope.actorToken.token).toBe(input.accessToken);
     expect(envelope.actorDelegation).toBe('signed.jwt.value');
     expect(result.fingerprint).toBe(`lk1-attest:${request.operationId}:2026-11-08T10:00:00.000Z`);

@@ -37,6 +37,13 @@ export function createGameJoinConditionsRuntime(options: {
   readonly config: JoinReadConfig;
   readonly pool: Pool;
   readonly authService: Pick<AuthService, 'issueVivaAccessToken'>;
+  /**
+   * ADR 0028: LK1-attested ownership proof. Viva rejects End User reads from lk2 egress (403),
+   * so production composes this reader instead of the server-side Viva reader.
+   */
+  readonly ownedSubscriptionReader?: Parameters<
+    typeof createGameJoinConditionsOwner
+  >[0]['readOwnedSubscription'];
 }) {
   const { config, pool, authService } = options;
   if (
@@ -56,10 +63,12 @@ export function createGameJoinConditionsRuntime(options: {
       const issued = await authService.issueVivaAccessToken(actor);
       return { accessToken: issued.accessToken, expiresAt: issued.expiresAt };
     },
-    readOwnedSubscription: createOwnedHubSubscriptionReader({
-      apiBaseUrl: config.VIVA_END_USER_API_URL,
-      providerTenantKey: config.VIVA_AUTH_TENANT_KEY,
-    }),
+    readOwnedSubscription:
+      options.ownedSubscriptionReader ??
+      createOwnedHubSubscriptionReader({
+        apiBaseUrl: config.VIVA_END_USER_API_URL,
+        providerTenantKey: config.VIVA_AUTH_TENANT_KEY,
+      }),
     readPreview: createLk1GamePricePreviewRead(config.LEGACY_GAMES_PUBLIC_BASE_URL),
     providerMode: 'LIVE',
   });

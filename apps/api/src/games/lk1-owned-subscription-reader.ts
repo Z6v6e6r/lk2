@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
-import type {
-  ProviderAccountAttestation,
-  ProviderAccountAttestationRequest,
+import {
+  PROVIDER_ACCOUNT_TENANT_KEY,
+  type ProviderAccountAttestation,
+  type ProviderAccountAttestationRequest,
 } from '../../../../packages/subscription-runtime-adapter/src/provider-account-attestation.js';
 
 /** ADR 0028: replaces the server Viva read (403 from lk2 egress) with an LK1 owner attestation. */
@@ -67,7 +68,11 @@ export function createLk1OwnedSubscriptionReader(options: {
       target: { exerciseId: input.providerExerciseId },
     };
     const actorDelegation = await options.issuer.issueProviderAccountAttestation({
-      ...input.actor,
+      tenantId: input.actor.tenantId,
+      userId: input.actor.userId,
+      sessionId: input.actor.sessionId,
+      // The delegation names the Viva provider tenant, not the PadlHub route tenant key.
+      tenantKey: PROVIDER_ACCOUNT_TENANT_KEY,
       correlationId: input.correlationId,
       request,
       actorToken: input.accessToken,
