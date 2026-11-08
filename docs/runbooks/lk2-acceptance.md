@@ -22,14 +22,15 @@
 | Push              | `FCM_ENABLED=true`, `FCM_PROJECT_ID`, `FCM_APP_ID=ru.padlhub.app`, `FCM_CREDENTIAL_FILE=/run/phub/fcm-service-account.json`, bind `TIMEWEB_FCM_CREDENTIAL_SOURCE`; tenant-флаг `android_push_enabled`; порядок — [android-chats-fcm](android-chats-fcm.md) | Реальная доставка FCM на телефон подтверждена                                                                                              |
 | APK               | Пользователь ставит подписанную сборку: `output/android-lk2-release-20261108-signed/PadlHub-1.13-code14-lk2-release-7a16312d.apk`                                                                                                                          | `adb shell pm get-app-links ru.padlhub.app` → `lk2.padlhub.su: verified`                                                                   |
 
-Если FCM или гранты ещё не включены, соответствующие строки матрицы помечаются `BLOCKED`, а не
+Если FCM или доступ ещё не включены, соответствующие строки матрицы помечаются `BLOCKED`, а не
 `PASS`: отсутствие проверки не считается успехом.
 
-Состояние на 2026-11-08: промоут `75110af8` выполнен (бэкап `20261108T151721Z-75110af82795.dump`),
+Состояние на 2026-11-08: промоут `75110af8`, затем `10705588` (beta-каталог `games.test-courts`;
+бэкапы `20261108T151721Z-75110af82795.dump` и `20261108T175503Z-107055881e2f.dump`),
 preflight = READY, FCM на сервере включён (`FCM_ENABLED=true`, tenant `android_push_enabled=true`),
 `GAMES_TEST_COURTS_ENABLED=true` и `GAMES_COMMANDS_ENABLED=true` в api и worker. Право
-`games.test-courts` входит в beta-каталог (PR #617) и выдаётся при входе любого номера после
-промоута сборки с этим изменением, поэтому строки 3–4 доступны для прогона без персональных грантов.
+`games.test-courts` входит в beta-каталог (PR #617) и выдаётся при входе любого номера начиная с
+промоута `10705588`, поэтому строки 3–4 доступны для прогона без персональных грантов.
 
 ## 2. Preflight (read-only, до и после промоута)
 
@@ -93,8 +94,9 @@ adb shell pm get-app-links ru.padlhub.app
 ## 6. Откат и очистка
 
 - Приложение: `adb uninstall ru.padlhub.app`.
-- Тестовые аккаунты: сначала завершить/отменить их тестовые игры и вывести из чатов, затем убрать
-  точечное право `games.test-courts`; отзыв права не отзывает уже выданное участие.
+- Доступ к тестовым кортам: пока `BETA_FULL_CLIENT_ACCESS_ENABLED=true`, точечное удаление права
+  `games.test-courts` вернётся при следующем входе, поэтому рабочие способы — `GAMES_TEST_COURTS_ENABLED=false`,
+  выключение beta-флага или деактивация пользователя; уже выданное участие в играх это не отзывает.
 - Тестовые корты: `GAMES_TEST_COURTS_ENABLED=false` закрывает новые создания/вход.
 - Контур: `deploy/timeweb/lk2-beta-lane.sh rollback` возвращает предыдущий образ, схема остаётся;
   выполняется только с одобрения владельца.
