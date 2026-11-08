@@ -4232,11 +4232,14 @@ paths:
     get:
       tags: [games]
       operationId: listGameTestCourts
-      summary: List the two beta courts available to an explicitly granted tester
+      summary: List the two beta courts available to a signed-in beta tester
       description: |
         Returns internal PadlHub identities only. Disabled beta or missing stored games.test-courts
-        permission returns an empty list. Broad beta client access and admin roles do not grant it.
-        Creation on these courts requires PRIVATE, FRIENDLY and NO_PAYMENT; it makes no Viva booking.
+        permission returns an empty list. The check reads identity.user_access_profiles; while
+        BETA_FULL_CLIENT_ACCESS_ENABLED=true the beta client catalog converges that permission at
+        client token issuance, so every signed-in beta phone number can test the two courts.
+        Admin roles and JWT claims alone do not grant it. Creation on these courts requires PRIVATE,
+        FRIENDLY and NO_PAYMENT; it makes no Viva booking.
       responses:
         '200':
           description: Tester-scoped catalogue, never cached.

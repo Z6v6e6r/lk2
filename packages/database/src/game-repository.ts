@@ -54,7 +54,12 @@ export const GAME_TEST_COURT_PUBLIC_FILTER = /* @__PURE__ */ (() =>
   `not (tenant_id = '${GAME_TEST_COURT_SCOPE.tenantId}'::uuid
   and coalesce(base_payload #>> '{court,id}', '') in (${GAME_TEST_COURT_SCOPE.courts.map((court) => `'${court.id}'`).join(', ')}))`)();
 
-/** Reads the explicit stored grant; broad beta client permissions and admin roles do not grant it. */
+/**
+ * Reads the stored grant. While `BETA_FULL_CLIENT_ACCESS_ENABLED=true` the beta client catalog
+ * (which includes `games.test-courts`) is converged into `identity.user_access_profiles` on every
+ * client token issuance, so any beta sign-in can test the two courts; admin roles and JWT claims
+ * alone never grant it.
+ */
 export async function hasGameTestCourtAccess(
   client: PoolClient,
   tenantId: string,

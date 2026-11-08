@@ -214,6 +214,12 @@ export const ADMIN_ONLY_PERMISSIONS = [
  * `BETA_FULL_CLIENT_ACCESS_ENABLED` testing switch and the matching backfill script, so a closed
  * beta can exercise every client feature without an operator granting rights account by account.
  * The admin role and every `ADMIN_ONLY_PERMISSIONS` entry stay out of this list on purpose.
+ *
+ * `games.test-courts` is the two-court beta pilot right. The owner decided on 2026-11-08 that any
+ * phone number that signs in to the disposable beta contour must be able to test it, so the right
+ * belongs to the beta catalog instead of an operator-maintained per-account list. It only gates the
+ * two synthetic test courts named in `GAME_TEST_COURT_SCOPE`; ordinary courts and every provider
+ * booking path stay behind their existing gates.
  */
 export const FULL_CLIENT_PERMISSIONS = [
   'profile.read',
@@ -221,6 +227,7 @@ export const FULL_CLIENT_PERMISSIONS = [
   'profile.contact.request',
   'chat.direct.create',
   'games.play',
+  'games.test-courts',
   'communities.create',
   'tournaments.manage',
 ] as const;

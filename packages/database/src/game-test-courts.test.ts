@@ -111,15 +111,57 @@ describe('temporary beta test-court boundary', () => {
     expect(isRestrictedGameTestCourt(scope.tenantId, scope.courts[0].id)).toBe(true);
   });
 
-  it('full beta client access does not grant test-court access', async () => {
-    expect(FULL_CLIENT_PERMISSIONS).not.toContain(GAME_TEST_COURTS_PERMISSION);
-    const { pool, query } = database(FULL_CLIENT_PERMISSIONS);
+  it('gives every beta sign-in the two-court pilot through the beta catalog', async () => {
+    expect(FULL_CLIENT_PERMISSIONS).toContain(GAME_TEST_COURTS_PERMISSION);
+    const { pool } = database(FULL_CLIENT_PERMISSIONS);
     const repository = createGameTestCourtRepository(pool, true);
+    expect(await repository.list(scope.tenantId, userId)).toEqual(
+      scope.courts.map((court) => ({ ...court, stationId: scope.stationId })),
+    );
+    expect(await repository.hasAccess(scope.tenantId, userId)).toBe(true);
+  });
+
+  it('keeps the beta catalog closed while the pilot flag is off', async () => {
+    const { pool, query } = database(FULL_CLIENT_PERMISSIONS);
+    const repository = createGameTestCourtRepository(pool, false);
     expect(await repository.list(scope.tenantId, userId)).toEqual([]);
     expect(await repository.hasAccess(scope.tenantId, userId)).toBe(false);
     expect(query.mock.calls.some(([sql]) => sql.includes('integration.external_entity_map'))).toBe(
       false,
     );
+  });
+
+  it('still denies a beta profile on any non-exact court, payment mode or incomplete mappings', async () => {
+    const mispaired = database(FULL_CLIENT_PERMISSIONS, 2, {
+      station_id: userId,
+      court_id: scope.courts[0].id,
+      payment_mode: 'NO_PAYMENT',
+    });
+    expect(
+      await createGameTestCourtRepository(mispaired.pool, true).canJoin(
+        scope.tenantId,
+        userId,
+        userId,
+        audit,
+      ),
+    ).toBe(false);
+    const paid = database(FULL_CLIENT_PERMISSIONS, 2, {
+      station_id: scope.stationId,
+      court_id: scope.courts[0].id,
+      payment_mode: 'PAID',
+    });
+    expect(
+      await createGameTestCourtRepository(paid.pool, true).canJoin(
+        scope.tenantId,
+        userId,
+        userId,
+        audit,
+      ),
+    ).toBe(false);
+    const incomplete = database(FULL_CLIENT_PERMISSIONS, 1);
+    expect(
+      await createGameTestCourtRepository(incomplete.pool, true).list(scope.tenantId, userId),
+    ).toEqual([]);
   });
 
   it('returns precisely two existing internal identities only with the explicit grant and complete mappings', async () => {
