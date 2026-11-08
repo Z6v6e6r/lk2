@@ -1,5 +1,3 @@
-import './native-quarter-create.css';
-import { AndroidTournamentNavigation } from './AndroidTournamentNavigation.js';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
@@ -223,10 +221,6 @@ function MobileSession({
           </div>
         </aside>
       )}
-      <nav className="native-quarter-navigation" aria-label="Создание игры">
-        <a href="/games/new?quarterCreate=1">Игра по подписке</a>
-      </nav>
-      {native ? <AndroidTournamentNavigation /> : null}
       <App
         key={dataGeneration}
         gateway={gateway}
