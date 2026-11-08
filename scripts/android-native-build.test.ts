@@ -27,6 +27,25 @@ const workflow = parse(source) as {
 const job = workflow.jobs['unsigned-native']!;
 const commands = job.steps.map((step: { run?: string }) => step.run ?? '').join('\n');
 const gradle = readFileSync('apps/mobile/android/app/build.gradle', 'utf8');
+// Only the reviewed explicit opt-in block and guarded release assignment may sign.
+// Everything left must retain the original unsigned/default boundary.
+function unsignedGradleSource(input: string): string {
+  const gate = '    if (offlineSigning != null) {';
+  const start = input.indexOf(gate);
+  if (start < 0 || input.indexOf(gate, start + gate.length) >= 0) return input;
+  let depth = 1;
+  let end = start + gate.length;
+  while (end < input.length && depth > 0) {
+    if (input[end] === '{') depth++;
+    if (input[end] === '}') depth--;
+    end++;
+  }
+  if (depth !== 0) return input;
+  return (input.slice(0, start) + input.slice(end)).replace(
+    '            if (offlineSigning != null) signingConfig signingConfigs.offlineOwner',
+    '',
+  );
+}
 const verify = job.steps.find(
   (step: { name?: string }) =>
     step.name === 'Require complete native test reports and an unsigned application',
@@ -74,7 +93,8 @@ describe('Android native CI boundary', () => {
     expect(commands).toContain('npm exec -w @phub/mobile -- cap sync android');
     expect(commands).toContain(':app:testDebugUnitTest :app:assembleRelease');
     expect(gradle).toContain('testImplementation "org.json:json:20240303"');
-    expect(gradle).not.toMatch(/returnDefaultValues|ignoreFailures|signingConfig|signingConfigs/);
+    expect(gradle).not.toMatch(/returnDefaultValues|ignoreFailures/);
+    expect(unsignedGradleSource(gradle)).not.toMatch(/\bsigningConfigs?\b/);
     expect(commands).toContain('app-release-unsigned.apk');
     expect(commands).toContain('Missing META-INF/MANIFEST.MF');
     expect(commands).toContain('sha256sum');
@@ -82,6 +102,21 @@ describe('Android native CI boundary', () => {
     expect(
       job.steps.some((step: { 'continue-on-error'?: boolean }) => step['continue-on-error']),
     ).toBe(false);
+  });
+
+  it('allows only explicit opt-in signing and rejects an unconditional default signer', () => {
+    expect(gradle).toContain('def offlineSigning = null');
+    expect(gradle).toContain("System.getenv('PHUB_ANDROID_SIGNING_INPUTS')");
+    expect(gradle).toContain('if (offlineSigningPath != null) {');
+    expect(gradle).toContain(
+      'if (offlineSigning != null) signingConfig signingConfigs.offlineOwner',
+    );
+    expect(commands).not.toContain('PHUB_ANDROID_SIGNING_INPUTS');
+    const unsafe = gradle.replace(
+      '        release {',
+      '        release {\n            signingConfig signingConfigs.offlineOwner',
+    );
+    expect(unsignedGradleSource(unsafe)).toMatch(/\bsigningConfigs?\b/);
   });
 
   it('refuses signed-release claims and retains only unsigned build and test evidence', () => {
