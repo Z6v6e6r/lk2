@@ -69,13 +69,16 @@ import {
   bookedOperationAdmissionRequestSha256,
   type BookedOperationAdmissionRequest,
   type ManagedSubscriptionRuntimeV1QuoteRequest,
+} from '@phub/subscription-runtime-adapter';
+// Imported by path: the adapter index is pinned inside a committed migrator bundle.
+import {
   PROVIDER_ACCOUNT_ATTESTATION_PATH,
   PROVIDER_ACCOUNT_ATTESTATION_SCOPE,
   PROVIDER_ACCOUNT_ATTESTATION_TYP,
   PROVIDER_ACCOUNT_TENANT_KEY,
   providerAccountAttestationRequestSha256,
   type ProviderAccountAttestationRequest,
-} from '@phub/subscription-runtime-adapter';
+} from '../../../../packages/subscription-runtime-adapter/src/provider-account-attestation.js';
 
 const actionSet = new Set(['CREATE_GAME', 'JOIN_GAME']);
 const correlationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;

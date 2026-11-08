@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
  * The browser never supplies these identifiers; only this strictly parsed owner response may
  * become an `integration.external_entity_map` mapping.
  */
-export const PROVIDER_ACCOUNT_ATTESTATION_PATH = '/lk/integrations/v1/provider-account-attestations';
+export const PROVIDER_ACCOUNT_ATTESTATION_PATH =
+  '/lk/integrations/v1/provider-account-attestations';
 export const PROVIDER_ACCOUNT_ATTESTATION_SCOPE = 'lk1:provider-account:attest';
 export const PROVIDER_ACCOUNT_ATTESTATION_TYP = 'phub-provider-account-attestation+jwt';
 export const PROVIDER_ACCOUNT_TENANT_KEY = 'iSkq6G';
@@ -45,9 +46,7 @@ export interface ProviderAccountAttestation {
 }
 
 export type ProviderAccountOwnerErrorCode =
-  | 'PROVIDER_ACCOUNT_UNAVAILABLE'
-  | 'PROVIDER_ACCOUNT_FORBIDDEN'
-  | 'PROVIDER_ACCOUNT_INVALID';
+  'PROVIDER_ACCOUNT_UNAVAILABLE' | 'PROVIDER_ACCOUNT_FORBIDDEN' | 'PROVIDER_ACCOUNT_INVALID';
 
 export class ProviderAccountOwnerError extends Error {
   constructor(
@@ -125,7 +124,7 @@ function parseSubscription(value: unknown): AttestedSubscription {
     typeof value.title !== 'string' ||
     value.title.trim().length === 0 ||
     value.title.length > 120 ||
-    /[\u0000-\u001f\u007f]/.test(value.title) ||
+    [...value.title].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f) ||
     !['ACTIVE', 'PAUSED', 'FINISHED'].includes(value.state as string) ||
     !(
       value.remainingUnits === null ||
@@ -162,7 +161,7 @@ function parseTargetProof(value: unknown, exerciseId: string): ProviderAccountTa
     exerciseId,
     startsAt: value.startsAt,
     durationMinutes: value.durationMinutes,
-    ownedClientSubscriptionIds: [...(value.ownedClientSubscriptionIds as string[])],
+    ownedClientSubscriptionIds: [...value.ownedClientSubscriptionIds],
   };
 }
 

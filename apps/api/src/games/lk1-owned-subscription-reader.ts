@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   ProviderAccountAttestation,
   ProviderAccountAttestationRequest,
-} from '@phub/subscription-runtime-adapter';
+} from '../../../../packages/subscription-runtime-adapter/src/provider-account-attestation.js';
 
 /** ADR 0028: replaces the server Viva read (403 from lk2 egress) with an LK1 owner attestation. */
 export class Lk1OwnedSubscriptionError extends Error {

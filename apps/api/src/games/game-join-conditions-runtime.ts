@@ -52,7 +52,10 @@ export function createGameJoinConditionsRuntime(options: {
 
   return createGameJoinConditionsOwner({
     contextRepository: createGameJoinConditionsContextRepository(pool, config.VIVA_AUTH_TENANT_KEY),
-    getAccessToken: async (actor) => (await authService.issueVivaAccessToken(actor)).accessToken,
+    getAccessToken: async (actor) => {
+      const issued = await authService.issueVivaAccessToken(actor);
+      return { accessToken: issued.accessToken, expiresAt: issued.expiresAt };
+    },
     readOwnedSubscription: createOwnedHubSubscriptionReader({
       apiBaseUrl: config.VIVA_END_USER_API_URL,
       providerTenantKey: config.VIVA_AUTH_TENANT_KEY,

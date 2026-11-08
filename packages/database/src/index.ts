@@ -101,4 +101,3 @@ export type {
   GameJoinConditionsContext,
 } from './game-join-conditions-context-repository.js';
 export * from './tournament-local-repository.js';
-export * from './provider-account-mapping-repository.js';

@@ -146,11 +146,8 @@ describe('ProviderAccountOwnerClient', () => {
     });
 
   it('sends only the fixed route, headers and body', async () => {
-    const fetchImpl = vi.fn(async () => json(response()));
-    await client(fetchImpl as unknown as typeof fetch).attest(
-      { contractVersion: 1, operationId },
-      envelope,
-    );
+    const fetchImpl = vi.fn(() => Promise.resolve(json(response())));
+    await client(fetchImpl).attest({ contractVersion: 1, operationId }, envelope);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`https://padlhub.su${PROVIDER_ACCOUNT_ATTESTATION_PATH}`);
     expect(init.method).toBe('POST');
@@ -164,8 +161,10 @@ describe('ProviderAccountOwnerClient', () => {
   });
 
   it('maps owner 401/403 to FORBIDDEN without opening the circuit', async () => {
-    const fetchImpl = vi.fn(async () => json({ code: 'PROVIDER_ACCOUNT_FORBIDDEN' }, 403));
-    const c = client(fetchImpl as unknown as typeof fetch);
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(json({ code: 'PROVIDER_ACCOUNT_FORBIDDEN' }, 403)),
+    );
+    const c = client(fetchImpl);
     for (let i = 0; i < 4; i += 1)
       await expect(c.attest({ contractVersion: 1, operationId }, envelope)).rejects.toMatchObject({
         code: 'PROVIDER_ACCOUNT_FORBIDDEN',
@@ -174,8 +173,10 @@ describe('ProviderAccountOwnerClient', () => {
   });
 
   it('opens the circuit after three unavailable responses', async () => {
-    const fetchImpl = vi.fn(async () => json({ code: 'PROVIDER_ACCOUNT_UNAVAILABLE' }, 503));
-    const c = client(fetchImpl as unknown as typeof fetch);
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(json({ code: 'PROVIDER_ACCOUNT_UNAVAILABLE' }, 503)),
+    );
+    const c = client(fetchImpl);
     for (let i = 0; i < 4; i += 1)
       await expect(c.attest({ contractVersion: 1, operationId }, envelope)).rejects.toMatchObject({
         code: 'PROVIDER_ACCOUNT_UNAVAILABLE',
@@ -184,8 +185,8 @@ describe('ProviderAccountOwnerClient', () => {
   });
 
   it('rejects an oversized body', async () => {
-    const big = vi.fn(
-      async () => new Response('x'.repeat(40000), { status: 200 }),
+    const big = vi.fn(() =>
+      Promise.resolve(new Response('x'.repeat(40000), { status: 200 })),
     ) as unknown as typeof fetch;
     await expect(
       client(big).attest({ contractVersion: 1, operationId }, envelope),

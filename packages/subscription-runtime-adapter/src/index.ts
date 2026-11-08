@@ -732,5 +732,3 @@ export { QuarterCreateOwnerClient, QuarterPreparationRefused } from './quarter-c
 
 export * from './quarter-create-station-membership.js';
 export { MonthlyPurchaseOwnerClient, type MonthlyOwnerEnvelope } from './monthly-purchase.js';
-
-export * from './provider-account-attestation.js';

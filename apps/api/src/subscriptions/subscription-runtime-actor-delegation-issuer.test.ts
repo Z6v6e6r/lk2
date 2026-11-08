@@ -1,10 +1,8 @@
 import { exportPKCS8, generateKeyPair, jwtVerify } from 'jose';
 import { describe, expect, it } from 'vitest';
 
-import {
-  bookedOperationAdmissionId,
-  providerAccountAttestationRequestSha256,
-} from '@phub/subscription-runtime-adapter';
+import { bookedOperationAdmissionId } from '@phub/subscription-runtime-adapter';
+import { providerAccountAttestationRequestSha256 } from '../../../../packages/subscription-runtime-adapter/src/provider-account-attestation.js';
 
 import {
   SubscriptionRuntimeActorDelegationIssuer,
