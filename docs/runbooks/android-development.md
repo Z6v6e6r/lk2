@@ -170,9 +170,12 @@ changed by development.
 The checked-in `apps/web/public/.well-known/assetlinks.json` delegates the host to `ru.padlhub.app`
 with the **existing controlled-test debug certificate** SHA-256
 `22:07:BD:6E:B9:0A:EF:E4:4D:BD:04:3A:9C:FA:CD:17:54:13:13:BE:C3:A5:95:8D:05:1B:E8:07:E0:0B:EF:93`.
-It contains no signing key. A debug APK signed by another developer/CI key will not verify.
-Before store/release distribution, replace this association with the approved release certificate
-and remove the debug fingerprint; do not publish a release-signed APK under this test association.
+It also lists the owner's release **upload certificate** (created 2026-11-08, alias `upload`)
+SHA-256 `8C:59:A9:D1:96:23:97:66:D5:03:F5:52:0B:F0:CB:89:91:C8:63:08:9A:6D:F6:18:FB:18:E4:7A:E4:02:70:1E`,
+so controlled testers can use release-signed APKs during the test phase while older debug builds
+keep working. It contains no signing key. An APK signed by any other developer/CI key will not
+verify. Before store distribution, remove the debug fingerprint and add Google Play's app-signing
+certificate if Play App Signing is used (the upload certificate is not what Play distributes).
 
 The exact callback path `/android/oauth/yandex` must return the static fallback HTML directly
 with HTTPS 200 and no `Location` header. nginx must select its `index.html` explicitly: directory

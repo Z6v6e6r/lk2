@@ -5,7 +5,8 @@
       "namespace": "android_app",
       "package_name": "ru.padlhub.app",
       "sha256_cert_fingerprints": [
-        "22:07:BD:6E:B9:0A:EF:E4:4D:BD:04:3A:9C:FA:CD:17:54:13:13:BE:C3:A5:95:8D:05:1B:E8:07:E0:0B:EF:93"
+        "22:07:BD:6E:B9:0A:EF:E4:4D:BD:04:3A:9C:FA:CD:17:54:13:13:BE:C3:A5:95:8D:05:1B:E8:07:E0:0B:EF:93",
+        "8C:59:A9:D1:96:23:97:66:D5:03:F5:52:0B:F0:CB:89:91:C8:63:08:9A:6D:F6:18:FB:18:E4:7A:E4:02:70:1E"
       ]
     }
   }
