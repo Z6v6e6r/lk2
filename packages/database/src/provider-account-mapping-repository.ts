@@ -16,8 +16,8 @@ export interface AttestedAccountInput {
   readonly subscriptions: readonly {
     readonly clientSubscriptionId: string;
     readonly productId: string | null;
-    readonly title: string;
-    readonly state: 'ACTIVE' | 'PAUSED' | 'FINISHED';
+    readonly title: string | null;
+    readonly state: 'ACTIVE' | 'NOT_ACTIVATED' | 'PAUSED' | 'FINISHED';
     readonly remainingUnits: number | null;
     readonly validUntil: string | null;
   }[];
@@ -28,8 +28,8 @@ export interface AttestedAccountSubscription {
   readonly subscriptionId: string;
   readonly clientSubscriptionId: string;
   readonly productId: string | null;
-  readonly title: string;
-  readonly state: 'ACTIVE' | 'PAUSED' | 'FINISHED';
+  readonly title: string | null;
+  readonly state: 'ACTIVE' | 'NOT_ACTIVATED' | 'PAUSED' | 'FINISHED';
   readonly remainingUnits: number | null;
   readonly validUntil: string | null;
 }

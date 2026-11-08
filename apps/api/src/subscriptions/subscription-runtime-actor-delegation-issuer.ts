@@ -1018,6 +1018,8 @@ export class SubscriptionRuntimeActorDelegationIssuer {
     readonly sessionId: string;
     readonly correlationId: string;
     readonly request: ProviderAccountAttestationRequest;
+    /** The exact X-Subscription-Actor-Token value; only its digest enters the JWT. */
+    readonly actorToken: string;
     readonly actorTokenExpiresAt: string;
   }): Promise<string> {
     let requestSha256: string;
@@ -1035,6 +1037,7 @@ export class SubscriptionRuntimeActorDelegationIssuer {
       ) ||
       input.tenantKey !== PROVIDER_ACCOUNT_TENANT_KEY ||
       !correlationPattern.test(input.correlationId) ||
+      !/^[!-~]{16,4096}$/.test(input.actorToken) ||
       !Number.isFinite(actorTokenExpiresAt) ||
       actorTokenExpiresAt <= Date.now()
     ) {
@@ -1057,6 +1060,7 @@ export class SubscriptionRuntimeActorDelegationIssuer {
       provider: 'VIVA',
       correlation_id: input.correlationId,
       request_sha256: requestSha256,
+      actor_token_sha256: `sha256:${createHash('sha256').update(input.actorToken, 'utf8').digest('hex')}`,
       actor_token_expires_at: new Date(actorTokenExpiresAt).toISOString(),
     })
       .setProtectedHeader({

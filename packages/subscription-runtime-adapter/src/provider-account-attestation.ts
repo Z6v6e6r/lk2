@@ -22,8 +22,10 @@ export interface ProviderAccountAttestationRequest {
 export interface AttestedSubscription {
   readonly clientSubscriptionId: string;
   readonly productId: string | null;
-  readonly title: string;
-  readonly state: 'ACTIVE' | 'PAUSED' | 'FINISHED';
+  /** Null when the Viva subscription has no name. Display only. */
+  readonly title: string | null;
+  /** Display only; LK1 re-verifies on every command. NOT_ACTIVATED = Viva NEW, usable for JOIN. */
+  readonly state: 'ACTIVE' | 'NOT_ACTIVATED' | 'PAUSED' | 'FINISHED';
   readonly remainingUnits: number | null;
   readonly validUntil: string | null;
 }
@@ -31,7 +33,8 @@ export interface AttestedSubscription {
 export interface ProviderAccountTargetProof {
   readonly exerciseId: string;
   readonly startsAt: string;
-  readonly durationMinutes: 60 | 90;
+  /** Owner-computed duration (1..1440); callers enforce their own allowed set. */
+  readonly durationMinutes: number;
   readonly ownedClientSubscriptionIds: readonly string[];
 }
 
@@ -116,16 +119,19 @@ export function providerAccountAttestationRequestSha256(
     .digest('hex')}`;
 }
 
+const displayTitle = (v: unknown): v is string =>
+  typeof v === 'string' &&
+  v.trim().length > 0 &&
+  v.length <= 120 &&
+  ![...v].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f);
+
 function parseSubscription(value: unknown): AttestedSubscription {
   if (
     !exactKeys(value, 'clientSubscriptionId,productId,title,state,remainingUnits,validUntil') ||
     !providerId(value.clientSubscriptionId) ||
     !(value.productId === null || uuid(value.productId)) ||
-    typeof value.title !== 'string' ||
-    value.title.trim().length === 0 ||
-    value.title.length > 120 ||
-    [...value.title].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f) ||
-    !['ACTIVE', 'PAUSED', 'FINISHED'].includes(value.state as string) ||
+    !(value.title === null || displayTitle(value.title)) ||
+    !['ACTIVE', 'NOT_ACTIVATED', 'PAUSED', 'FINISHED'].includes(value.state as string) ||
     !(
       value.remainingUnits === null ||
       (Number.isInteger(value.remainingUnits) &&
@@ -150,7 +156,9 @@ function parseTargetProof(value: unknown, exerciseId: string): ProviderAccountTa
     !exactKeys(value, 'exerciseId,startsAt,durationMinutes,ownedClientSubscriptionIds') ||
     value.exerciseId !== exerciseId ||
     !iso(value.startsAt) ||
-    (value.durationMinutes !== 60 && value.durationMinutes !== 90) ||
+    !Number.isInteger(value.durationMinutes) ||
+    (value.durationMinutes as number) < 1 ||
+    (value.durationMinutes as number) > 1440 ||
     !Array.isArray(value.ownedClientSubscriptionIds) ||
     value.ownedClientSubscriptionIds.length > MAX_SUBSCRIPTIONS ||
     !value.ownedClientSubscriptionIds.every(providerId) ||
@@ -160,7 +168,7 @@ function parseTargetProof(value: unknown, exerciseId: string): ProviderAccountTa
   return {
     exerciseId,
     startsAt: value.startsAt,
-    durationMinutes: value.durationMinutes,
+    durationMinutes: value.durationMinutes as number,
     ownedClientSubscriptionIds: [...value.ownedClientSubscriptionIds],
   };
 }
@@ -212,8 +220,13 @@ interface Envelope {
   readonly correlationId: string;
 }
 
+/** LK1 error bodies are `{code}` only; classification is by HTTP status (lk#303 contract). */
 const statusCode = (status: number): ProviderAccountOwnerErrorCode =>
-  status === 401 || status === 403 ? 'PROVIDER_ACCOUNT_FORBIDDEN' : 'PROVIDER_ACCOUNT_UNAVAILABLE';
+  status === 401 || status === 403
+    ? 'PROVIDER_ACCOUNT_FORBIDDEN'
+    : status === 400 || status === 409
+      ? 'PROVIDER_ACCOUNT_INVALID'
+      : 'PROVIDER_ACCOUNT_UNAVAILABLE';
 
 /** Server-to-server LK1 client. One bounded call; the caller owns retry policy. */
 export class ProviderAccountOwnerClient {

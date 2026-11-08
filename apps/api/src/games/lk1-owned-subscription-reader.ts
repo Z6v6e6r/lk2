@@ -27,6 +27,7 @@ export function createLk1OwnedSubscriptionReader(options: {
       readonly sessionId: string;
       readonly correlationId: string;
       readonly request: ProviderAccountAttestationRequest;
+      readonly actorToken: string;
       readonly actorTokenExpiresAt: string;
     }): Promise<string>;
   };
@@ -69,6 +70,7 @@ export function createLk1OwnedSubscriptionReader(options: {
       ...input.actor,
       correlationId: input.correlationId,
       request,
+      actorToken: input.accessToken,
       actorTokenExpiresAt: input.accessTokenExpiresAt,
     });
     const result = await options.client.attest(request, {

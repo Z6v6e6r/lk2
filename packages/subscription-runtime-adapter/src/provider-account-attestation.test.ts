@@ -104,6 +104,36 @@ describe('provider account attestation response', () => {
     );
   });
 
+  it('accepts NOT_ACTIVATED, an unnamed subscription and any owner duration', () => {
+    const parsed = parseProviderAccountAttestation(
+      response({
+        subscriptions: [{ ...subscription, state: 'NOT_ACTIVATED', title: null, productId: null }],
+      }),
+      request,
+      now,
+    );
+    expect(parsed.subscriptions[0]).toMatchObject({ state: 'NOT_ACTIVATED', title: null });
+    const targeted = { ...request, target: { exerciseId: 'ex-77' } };
+    const proof = {
+      exerciseId: 'ex-77',
+      startsAt: '2026-11-09T10:00:00.000Z',
+      durationMinutes: 120,
+      ownedClientSubscriptionIds: ['sub-1001'],
+    };
+    expect(
+      parseProviderAccountAttestation(response({ targetProof: proof }), targeted, now).targetProof
+        ?.durationMinutes,
+    ).toBe(120);
+    for (const durationMinutes of [0, 1441, 60.5])
+      expect(() =>
+        parseProviderAccountAttestation(
+          response({ targetProof: { ...proof, durationMinutes } }),
+          targeted,
+          now,
+        ),
+      ).toThrow(ProviderAccountOwnerError);
+  });
+
   it('requires a target proof that only names attested subscriptions', () => {
     const targeted = { ...request, target: { exerciseId: 'ex-77' } };
     const proof = {
@@ -168,6 +198,18 @@ describe('ProviderAccountOwnerClient', () => {
     for (let i = 0; i < 4; i += 1)
       await expect(c.attest({ contractVersion: 1, operationId }, envelope)).rejects.toMatchObject({
         code: 'PROVIDER_ACCOUNT_FORBIDDEN',
+      });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([400, 409])('maps owner %i to INVALID without opening the circuit', async (status) => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(json({ code: 'PROVIDER_ACCOUNT_INVALID' }, status)),
+    );
+    const c = client(fetchImpl);
+    for (let i = 0; i < 4; i += 1)
+      await expect(c.attest({ contractVersion: 1, operationId }, envelope)).rejects.toMatchObject({
+        code: 'PROVIDER_ACCOUNT_INVALID',
       });
     expect(fetchImpl).toHaveBeenCalledTimes(4);
   });

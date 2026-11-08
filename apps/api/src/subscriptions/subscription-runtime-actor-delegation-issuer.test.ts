@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { exportPKCS8, generateKeyPair, jwtVerify } from 'jose';
 import { describe, expect, it } from 'vitest';
 
@@ -232,6 +233,7 @@ describe('SubscriptionRuntimeActorDelegationIssuer', () => {
       sessionId: '33333333-3333-4333-8333-333333333333',
       correlationId: 'attest-test-0001',
       request,
+      actorToken: 'viva-access-token-0123456789',
       actorTokenExpiresAt,
     };
     const token = await issuer.issueProviderAccountAttestation(base);
@@ -252,13 +254,40 @@ describe('SubscriptionRuntimeActorDelegationIssuer', () => {
       provider: 'VIVA',
       request_sha256: providerAccountAttestationRequestSha256(request),
       actor_token_expires_at: actorTokenExpiresAt,
+      actor_token_sha256: `sha256:${createHash('sha256').update(base.actorToken).digest('hex')}`,
       sub: base.userId,
     });
+    expect(Object.keys(verified.payload).sort()).toEqual(
+      [
+        'iss',
+        'aud',
+        'sub',
+        'sid',
+        'iat',
+        'nbf',
+        'exp',
+        'jti',
+        'contract_version',
+        'caller',
+        'scope',
+        'method',
+        'path',
+        'tenant_id',
+        'tenant_key',
+        'provider',
+        'operation_id',
+        'correlation_id',
+        'request_sha256',
+        'actor_token_sha256',
+        'actor_token_expires_at',
+      ].sort(),
+    );
     expect(verified.payload).not.toHaveProperty('provider_client_id');
     expect((verified.payload.exp ?? 0) - (verified.payload.iat ?? 0)).toBe(30);
 
     for (const bad of [
       { ...base, tenantKey: 'other' },
+      { ...base, actorToken: 'short' },
       { ...base, actorTokenExpiresAt: new Date(Date.now() - 1000).toISOString() },
       { ...base, request: { ...request, operationId: 'not-a-uuid' } },
       { ...base, request: { ...request, extra: 1 } as unknown as typeof request },
