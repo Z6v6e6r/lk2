@@ -403,7 +403,7 @@ permissions are preserved, an account without a row gets one, and the change is 
 becomes reachable as soon as they open the app or refresh their session; until that happens the refusal
 is the correct description of their grant. The switch has two operational consequences: turning it off
 stops the automatic convergence, so the durable grants must then be maintained with the operator
-backfill, and while it is on, narrowing one of the seven beta permissions with
+backfill, and while it is on, narrowing one of the eight beta permissions with
 `scripts/set-user-access.ts` is undone on that account's next client token issuance, because the stored
 profile is what every chat and communities gate reads. The operator backfill
 `npm run user:access:beta-full` (`--confirm=APPLY_USER_ACCESS` after a dry run) remains the way to
