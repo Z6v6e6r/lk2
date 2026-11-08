@@ -14,12 +14,15 @@ import {
   type TournamentAttempt,
 } from '@phub/database';
 import type { TournamentLocalOwnerClient } from '@phub/legacy-games-adapter';
+import type { ExternalLevelCheck } from '../eligibility/external-level-check.js';
 export function createTournamentLocalRuntime(options: {
   enabled: boolean;
   repository: TournamentLocalRepository;
   client?: Pick<TournamentLocalOwnerClient, 'identity' | 'prepare' | 'command' | 'read'>;
   token?: (actor: TournamentActor) => Promise<string>;
   date?: (id: string) => Promise<string>;
+  /** Server-side level policy, evaluated after the fresh date read and before any CUP write. */
+  levelCheck?: ExternalLevelCheck;
 }) {
   const repo = options.repository;
   const scope = (a: TournamentActor, id: string) => ({
@@ -119,6 +122,18 @@ export function createTournamentLocalRuntime(options: {
       if (input.action === 'JOIN') {
         if (!options.date) throw new TournamentLocalError();
         date = await options.date(id);
+        const refusal = await options.levelCheck?.(a, id);
+        if (refusal) {
+          // A concurrent same-key request may have passed the check and begun meanwhile; the
+          // stored attempt wins, so a refusal never orphans it or clears its browser custody.
+          const raced = await repo.read(scope(a, id), { keyHash });
+          if (raced) {
+            if (JSON.stringify(raced.request) !== JSON.stringify(input))
+              throw new TournamentLocalError('TOURNAMENT_LOCAL_KEY_CONFLICT', 409);
+            return dispatch(a, raced, (await identity(a, raced)).token);
+          }
+          throw new TournamentLocalError(refusal.code, refusal.status);
+        }
         await options.client!.prepare(i.token, id, date, a.correlationId);
       } else {
         const original = await repo.read(scope(a, id), { id: input.originalJoinOperationId! });

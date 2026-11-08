@@ -116,3 +116,49 @@ it('storage getter denial renders a recoverable error and never sends a registra
     denied.mockRestore();
   }
 });
+it('missing level offers a self-declared level, then retries under the same key', async () => {
+  const h = setup();
+  const level = {
+    id: '66666666-6666-4666-8666-666666666666',
+    sportCode: 'PADEL',
+    code: 'C',
+    title: 'C',
+    rank: 3,
+    sortOrder: 3,
+    aliases: ['C'],
+    active: true,
+    scaleVersion: 1,
+  };
+  h.registerTraining.mockRejectedValueOnce(
+    Object.assign(new Error('level'), { status: 409, code: 'PLAYER_LEVEL_REQUIRED' }),
+  );
+  const setOwnPlayerLevel = vi.fn(() => Promise.resolve({}));
+  Object.assign(h.gateway, {
+    getOwnPlayerLevel: vi.fn(() =>
+      Promise.resolve({ sportCode: 'PADEL', scaleVersion: 1, levels: [level], currentLevel: null }),
+    ),
+    setOwnPlayerLevel,
+  });
+  render(
+    <TrainingRegistrationPanel
+      gateway={h.gateway}
+      principal={{ tenantId, userId }}
+      training={training}
+      onClose={() => undefined}
+    />,
+  );
+  const user = userEvent.setup();
+  await user.selectOptions(await screen.findByLabelText('Выберите подписку'), subscriptionId);
+  await user.click(screen.getByRole('button', { name: 'Записаться по подписке' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Чтобы записаться, укажите свой уровень.',
+  );
+  expect(screen.getByRole('button', { name: 'Продолжить исходный запрос' })).toBeInTheDocument();
+  await user.selectOptions(await screen.findByLabelText('Ваш уровень'), level.id);
+  await user.click(screen.getByRole('button', { name: 'Сохранить и записаться' }));
+  await waitFor(() => expect(h.registerTraining).toHaveBeenCalledTimes(2));
+  expect(setOwnPlayerLevel).toHaveBeenCalledWith(level.id, 'PADEL');
+  const calls = h.registerTraining.mock.calls as unknown as [string, unknown, string][];
+  expect(calls[1]![2]).toBe(calls[0]![2]);
+  await screen.findByText('Текущая запись не подтверждена. Проверка не создаёт новую запись.');
+});

@@ -8,6 +8,8 @@ import { createQuarterCreateRepository } from '@phub/database/quarter-create';
 import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createQuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
 import { createTournamentLocalRepository } from '@phub/database';
+import { createParticipationLevelGate } from '@phub/database/participation-level-gate';
+import { createExternalLevelCheck } from './eligibility/external-level-check.js';
 import { TournamentLocalOwnerClient } from '@phub/legacy-games-adapter';
 import { createTournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';
 import { createStationMembershipTransport } from '@phub/subscription-runtime-adapter';
@@ -698,6 +700,35 @@ const communityMediaRuntime = communityMediaObjectStore
   ? createCommunityMediaRuntime({ config, pool, objectStore: communityMediaObjectStore })
   : undefined;
 // Independent concrete TRAINING gate: never activates or widens WARN quote/game paths.
+const participationLevelGate = createParticipationLevelGate(pool);
+const logLevelDecision = (event: Record<string, string>) =>
+  logger.info({ eligibility: event }, 'external participation level decision');
+const tournamentLevelCheck = createExternalLevelCheck({
+  gate: participationLevelGate,
+  activityType: 'TOURNAMENT',
+  action: 'REGISTER',
+  constraintSource: 'LEGACY_TOURNAMENT_SETTINGS',
+  // Captured by the fresh registration-date read that immediately precedes this check.
+  levelRange: (_actor, id) => Promise.resolve(tournamentSummarySource?.registrationLevelRange(id)),
+  onDecision: logLevelDecision,
+});
+const trainingLevelCheck = createExternalLevelCheck({
+  gate: participationLevelGate,
+  activityType: 'TRAINING',
+  action: 'BOOK',
+  constraintSource: 'VIVA_EXERCISE',
+  levelRange: async (actor, id, dateHint) => {
+    if (!trainingCatalogueSource || !dateHint) return undefined;
+    const page = await trainingCatalogueSource.read({
+      ...(actor as Parameters<typeof trainingCatalogueSource.read>[0]),
+      dates: [dateHint],
+    });
+    if (!page.completedDates.includes(dateHint)) return undefined;
+    const activity = page.activities.find((item) => item.id === id);
+    return activity ? activity.levelRange : undefined;
+  },
+  onDecision: logLevelDecision,
+});
 const tournamentLocal = createTournamentLocalRuntime({
   enabled: config.TOURNAMENT_LOCAL_COMMANDS_ENABLED,
   repository: createTournamentLocalRepository(pool),
@@ -712,6 +743,7 @@ const tournamentLocal = createTournamentLocalRuntime({
         token: async (actor: Parameters<typeof authService.issueVivaAccessToken>[0]) =>
           (await authService.issueVivaAccessToken(actor)).accessToken,
         date: (id: string) => tournamentSummarySource!.resolveRegistrationDate(id),
+        levelCheck: tournamentLevelCheck,
       }
     : {}),
 });
@@ -752,6 +784,7 @@ const trainingRegistration = (() => {
         logger.info({ outcome }, 'training station membership boundary'),
       ) ?? undefined,
     metric: (outcome) => logger.info({ outcome }, 'training registration boundary'),
+    levelCheck: trainingLevelCheck,
   });
 })();
 const subscriptionRuntimeWarnBoundary = (() => {

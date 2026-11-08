@@ -25,6 +25,7 @@ import {
   type TrainingRegistrationOwnerClient,
   type TrainingOwnerOutcome,
 } from '@phub/subscription-runtime-adapter';
+import type { ExternalLevelCheck } from '../eligibility/external-level-check.js';
 import type { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
 export interface TrainingActor {
   tenantId: string;
@@ -92,6 +93,8 @@ export function createTrainingRegistrationRuntime(options: {
       }
     | undefined;
   metric?: (status: 'confirmed' | 'unknown' | 'expired' | 'unavailable') => void;
+  /** Server-side level policy for a new attempt, evaluated before any owner preparation. */
+  levelCheck?: ExternalLevelCheck;
 }): TrainingRegistrationRuntime {
   const { repository } = options;
   async function scope(
@@ -199,7 +202,20 @@ export function createTrainingRegistrationRuntime(options: {
         if (a) return view(a);
         throw new TrainingRegistrationError('TRAINING_REGISTRATION_DISABLED');
       }
-      if (!a)
+      if (!a) {
+        const refusal = await options.levelCheck?.(actor, input.trainingId, input.dateHint);
+        // A concurrent same-key request may have passed the check and begun meanwhile; the
+        // stored attempt wins, so a refusal never orphans it or clears its browser custody.
+        if (refusal) a = await repository.read(s);
+        if (
+          a &&
+          (a.request.subscriptionId !== input.subscriptionId ||
+            a.request.dateHint !== input.dateHint)
+        )
+          throw new TrainingRegistrationError('TRAINING_REGISTRATION_KEY_CONFLICT', 409);
+        if (refusal && !a) throw new TrainingRegistrationError(refusal.code, refusal.status);
+      }
+      if (!a) {
         a = await repository.begin(
           s,
           {
@@ -210,6 +226,7 @@ export function createTrainingRegistrationRuntime(options: {
           actor.correlationId,
           !!options.stationMembership,
         );
+      }
       let ctx: Awaited<ReturnType<typeof identity>>;
       try {
         ctx = await identity(actor, input.subscriptionId, a);
