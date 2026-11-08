@@ -1,6 +1,6 @@
 # ADR 0028: LK1-attested Viva account and subscription mappings
 
-- Status: proposed (design only; no implementation, migration or activation)
+- Status: accepted by the owner 2026-11-08 (LK1 read path); implementation pending, not activated
 - Date: 2026-11-08
 - Related: [ADR 0005](0005-viva-user-delegation-and-direct-transport.md),
   [ADR 0020](0020-client-assisted-booking-screen-snapshots.md),
@@ -154,7 +154,7 @@ attestation's `operationId` and `attestedAt` replace the current proof fingerpri
 
 Alternative (owner decision): Viva allowlists lk2 egress for the End User API. That would let the
 current reader work, but it contradicts ADR 0023, depends on a provider-side change outside
-PadlHub control and still leaves the mappings missing. This ADR does not choose it.
+PadlHub control and still leaves the mappings missing. The owner rejected it on 2026-11-08.
 
 ## Failure behavior
 
