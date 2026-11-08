@@ -32,13 +32,26 @@ function harness(overrides: Partial<Record<string, (call: Call) => unknown>> = {
         items: [{ stationId: STATION, courtId: COURT, stationTitle: 'Club', courtName: 'Court 1' }],
       },
     ],
-    'GET /home': (c) => [
+    'GET /subscriptions/joinable': (c) => [
       200,
       {
-        subscriptions: [
+        attestedAt: '2030-01-01T00:00:00.000Z',
+        items: [
           c.token === 'org'
-            ? { id: ORG_SUB, title: 'Org', status: 'active', remainingUnits: units.org }
-            : { id: JOIN_SUB, title: 'Join', status: 'active', remainingUnits: units.join },
+            ? {
+                id: ORG_SUB,
+                title: 'Org',
+                state: 'ACTIVE',
+                remainingUnits: units.org,
+                validUntil: null,
+              }
+            : {
+                id: JOIN_SUB,
+                title: 'Join',
+                state: 'NOT_ACTIVATED',
+                remainingUnits: units.join,
+                validUntil: null,
+              },
         ],
       },
     ],
@@ -196,8 +209,8 @@ describe('lk2 commercial acceptance', () => {
     expect(statuses(out.results)).toMatchObject({
       'quarter CREATE capability is available': 'PASS',
       'selected court is offered by the owner': 'PASS',
-      'organizer subscription is active with remaining units': 'PASS',
-      'joiner subscription is active with remaining units': 'PASS',
+      'organizer subscription is usable (ACTIVE or NOT_ACTIVATED, units left)': 'PASS',
+      'joiner subscription is usable (ACTIVE or NOT_ACTIVATED, units left)': 'PASS',
       'join conditions apply the joiner subscription': 'PASS',
     });
   });

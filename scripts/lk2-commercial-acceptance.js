@@ -131,28 +131,34 @@ export async function runAcceptance({
     return { status: response.status, json };
   }
 
-  async function until(read, done) {
+  async function until(read, done, intervalMs = 3000) {
     const deadline = now() + waitMs;
     let value = await read();
     while (!done(value) && now() < deadline) {
-      await sleep(3000);
+      await sleep(intervalMs);
       value = await read();
     }
     return value;
   }
 
+  // ADR 0028: /home is never projected on lk2; this route returns one fresh LK1-attested list
+  // with PadlHub UUIDs only. state/remainingUnits are display-only (the owner re-verifies).
   async function subscriptions(token) {
-    const home = await call(token, 'GET', '/home');
-    if (home.status !== 200 || !Array.isArray(home.json?.subscriptions))
-      throw new Error(`/home ${home.status} ${short(home.json)}`);
-    return home.json.subscriptions;
+    const joinable = await call(token, 'GET', '/subscriptions/joinable');
+    if (joinable.status !== 200 || !Array.isArray(joinable.json?.items))
+      throw new Error(`/subscriptions/joinable ${joinable.status} ${short(joinable.json)}`);
+    return joinable.json.items;
   }
+  const usable = (item) =>
+    !!item &&
+    ['ACTIVE', 'NOT_ACTIVATED'].includes(item.state) &&
+    (item.remainingUnits === null || item.remainingUnits > 0);
 
   function checkSubscription(label, list, id) {
     log(
       `      ${label} subscriptions: ` +
         (list
-          .map((s) => `${s.id} "${s.title}" ${s.status} remaining=${s.remainingUnits}`)
+          .map((s) => `${s.id} "${s.title ?? ''}" ${s.state} remaining=${s.remainingUnits}`)
           .join('; ') || 'none'),
     );
     if (!id) {
@@ -165,9 +171,11 @@ export async function runAcceptance({
     }
     const item = list.find((s) => s.id === id);
     record(
-      `${label} subscription is active with remaining units`,
-      !!item && item.status === 'active' && item.remainingUnits > 0,
-      item ? `${item.status} remaining=${item.remainingUnits}` : `${id} not in /home`,
+      `${label} subscription is usable (ACTIVE or NOT_ACTIVATED, units left)`,
+      usable(item),
+      item
+        ? `${item.state} remaining=${item.remainingUnits}`
+        : `${id} not in /subscriptions/joinable`,
     );
     return item;
   }
@@ -266,9 +274,13 @@ export async function runAcceptance({
   }
 
   async function unitsAfter(token, id, before, label) {
+    if (typeof before !== 'number')
+      return record(`${label} visit written off once`, null, 'unlimited subscription: no counter');
     const after = await until(
       async () => (await subscriptions(token).catch(() => [])).find((s) => s.id === id),
       (item) => item && item.remainingUnits < before,
+      // /subscriptions/joinable is a fresh owner attestation rate-limited to 6/min per user.
+      12000,
     );
     if (after && after.remainingUnits === before - 1)
       return record(
@@ -311,7 +323,7 @@ export async function runAcceptance({
         false,
         'set station, court, minute-aligned future ISO startsAt and subscription',
       );
-    } else if (!createAvailable || !targetListed || !organizerSub?.remainingUnits) {
+    } else if (!createAvailable || !targetListed || !usable(organizerSub)) {
       record('CREATE preconditions', false, 'readiness checks above must pass before any write');
     } else {
       const fingerprint = sha256(JSON.stringify(input));
@@ -402,7 +414,7 @@ export async function runAcceptance({
         false,
         'set PHUB_JOINER_TOKEN, PHUB_JOINER_SUBSCRIPTION_ID and a game',
       );
-    } else if (!joinerSub?.remainingUnits) {
+    } else if (!usable(joinerSub)) {
       record(
         'JOIN preconditions',
         false,
