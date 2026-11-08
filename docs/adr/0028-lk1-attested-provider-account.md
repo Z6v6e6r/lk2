@@ -45,6 +45,15 @@ egress with the actor's own Viva token. It compares `profile.id` with the delega
 `provider_client_id` before every v2 preflight. LK1 egress is not affected by the PadlHub egress
 block described in ADR 0023.
 
+The block is confirmed for lk2 egress. On 2026-11-08 the same unauthenticated
+`GET https://api.vivacrm.ru/end-user/api/v1/iSkq6G/profile` returned `403` with an empty body from
+the lk2 API container, but `401` from a workstation, the tunnel and LK1 (`lk-primary-147`). This
+was a `PROVIDER` probe without credentials. Consequently the existing server-side
+`createOwnedHubSubscriptionReader` (`packages/viva-adapter/src/game-subscription-selection.ts`),
+called by `game-join-conditions-owner.ts` from the lk2 API, cannot succeed. Join conditions fail
+before any mapping is consulted, which also violates the ADR 0023 rule that PadlHub processes do
+not call `/end-user/api/...`.
+
 ## Decision
 
 Mappings that downstream commands rely on are written **only from an LK1 owner attestation**. The
@@ -108,11 +117,12 @@ to 1 per 60 s per session). It:
    - upserts `viva_profile` for the actor with `sync_status='synced'`. If the same `clientId` is
      already mapped to another active user, it **fails** with `PROVIDER_ACCOUNT_CONFLICT` and an
      audit event, and never moves the mapping;
-   - upserts the `subscription` mappings and writes an attestation row to a new table
-     `integration.provider_account_attestations (tenant_id, user_id, provider_client_id,
-operation_id, attested_at, expires_at)` and `…_subscriptions (attestation_id,
-subscription_internal_id, client_subscription_id, product_id, state, remaining_units,
-valid_until)`. The migration is expand-only;
+   - upserts the `subscription` mappings and writes one row to the new table
+     `integration.provider_account_attestations` (tenant_id, user_id, provider_client_id,
+     operation_id, attested_at, expires_at), plus rows to
+     `integration.provider_account_attestation_subscriptions` (attestation_id,
+     subscription_internal_id, client_subscription_id, product_id, state, remaining_units,
+     valid_until). The migration is expand-only;
    - writes an outbox event `provider_account.attested.v1` without provider ids.
 
 ### Read surface
@@ -129,6 +139,22 @@ The join, CREATE and training context queries gain one join: the subscription mu
 actor's latest unexpired attestation. Today `external_entity_map` is not user-bound, so a known
 UUID of another user's subscription would pass the PadlHub context; LK1 rejects it later. After
 this change PadlHub rejects it first with the existing not-found outcome.
+
+### Owned-subscription proof in join conditions
+
+`createOwnedHubSubscriptionReader` is removed from the lk2 API composition. Join conditions take
+the owned-subscription proof from the same LK1 contract. They call
+`provider-account-attestations` with an optional
+`"target": { "exerciseId": "<provider exercise id from the LK_LEGACY_SNAPSHOT game alias>" }`.
+LK1 then also reads that exercise with the actor token and adds
+`"targetProof": { "exerciseId", "startsAt", "durationMinutes", "ownedClientSubscriptionIds": [...] }`.
+These are the fields LK1 already derives with `findOwnedSubscriptions` for the v2 preflight. The
+attestation's `operationId` and `attestedAt` replace the current proof fingerprint in
+`sourceVersion`. A result older than 60 s is not reused for a command.
+
+Alternative (owner decision): Viva allowlists lk2 egress for the End User API. That would let the
+current reader work, but it contradicts ADR 0023, depends on a provider-side change outside
+PadlHub control and still leaves the mappings missing. This ADR does not choose it.
 
 ## Failure behavior
 
