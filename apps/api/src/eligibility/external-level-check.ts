@@ -3,7 +3,7 @@ import type {
   ExternalParticipationActivityType,
   ParticipationLevelGate,
   ParticipationLevelRange,
-} from '@phub/database';
+} from '@phub/database/participation-level-gate';
 
 export interface ExternalLevelCheckActor {
   readonly tenantId: string;

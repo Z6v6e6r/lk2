@@ -7,7 +7,8 @@ import { createCommunityActorToken } from './communities/community-actor-token.j
 import { createQuarterCreateRepository } from '@phub/database/quarter-create';
 import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createQuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
-import { createParticipationLevelGate, createTournamentLocalRepository } from '@phub/database';
+import { createTournamentLocalRepository } from '@phub/database';
+import { createParticipationLevelGate } from '@phub/database/participation-level-gate';
 import { createExternalLevelCheck } from './eligibility/external-level-check.js';
 import { TournamentLocalOwnerClient } from '@phub/legacy-games-adapter';
 import { createTournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';

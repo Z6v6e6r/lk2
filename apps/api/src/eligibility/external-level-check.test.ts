@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ParticipationLevelGate } from '@phub/database';
+import type { ParticipationLevelGate } from '@phub/database/participation-level-gate';
 
 import { createExternalLevelCheck } from './external-level-check.js';
 
