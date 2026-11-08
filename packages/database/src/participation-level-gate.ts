@@ -24,6 +24,8 @@ export interface ParticipationLevelRange {
   /** Canonical level codes (for example `C`, `B+`) from a server-side activity read. */
   readonly from: string;
   readonly to: string;
+  /** Set by the source adapter when the declared selection cannot be one range (for example a gap). */
+  readonly dataQuality?: 'INVALID';
 }
 
 export interface ParticipationLevelGateInput {
@@ -218,7 +220,8 @@ export function createParticipationLevelGate(pool: Pool): ParticipationLevelGate
                   ...(facts.minimum_rank === null ? {} : { minRank: Number(facts.minimum_rank) }),
                   ...(facts.maximum_rank === null ? {} : { maxRank: Number(facts.maximum_rank) }),
                   source: input.constraintSource,
-                  dataQuality: complete ? 'VALID' : 'INVALID',
+                  dataQuality:
+                    complete && input.levelRange.dataQuality !== 'INVALID' ? 'VALID' : 'INVALID',
                   ...(facts.constraint_scale_version === null
                     ? {}
                     : { scaleVersion: Number(facts.constraint_scale_version) }),

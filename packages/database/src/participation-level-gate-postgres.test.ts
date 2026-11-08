@@ -74,7 +74,7 @@ describePostgres('participation level gate on PostgreSQL', () => {
 
   const decide = (
     t: { tenantId: string; playerId: string },
-    levelRange: { from: string; to: string } | null,
+    levelRange: { from: string; to: string; dataQuality?: 'INVALID' } | null,
     activityType: 'TOURNAMENT' | 'TRAINING' = 'TOURNAMENT',
   ) =>
     gate.decide({
@@ -164,6 +164,14 @@ describePostgres('participation level gate on PostgreSQL', () => {
       allowed: false,
       reasonCode: 'ACTIVITY_LEVEL_INVALID',
     });
+  });
+
+  it('treats a source-flagged gap as an invalid constraint', async () => {
+    const t = await tenant('BLOCK');
+    await setLevel(t.tenantId, t.playerId, 'C');
+    await expect(decide(t, { from: 'D+', to: 'B', dataQuality: 'INVALID' })).resolves.toMatchObject(
+      { allowed: false, reasonCode: 'ACTIVITY_LEVEL_INVALID' },
+    );
   });
 
   it('WARN and SHADOW never deny', async () => {

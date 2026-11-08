@@ -32,7 +32,7 @@ describe('rendered actual tournament registration panel', () => {
     });
   });
   afterEach(cleanup);
-  it('level refusal offers a self-declared level and retries a fresh JOIN', async () => {
+  it('level refusal offers a self-declared level and retries JOIN under the same key', async () => {
     const levels = ['D', 'C', 'B'].map((code, index) => ({
       id: `3333333${index}-3333-4333-a333-333333333333`,
       sportCode: 'PADEL',
@@ -88,7 +88,7 @@ describe('rendered actual tournament registration panel', () => {
     expect(gateway.setOwnPlayerLevel).toHaveBeenCalledWith(levels[1]!.id, 'PADEL');
     const calls = (gateway.commandTournament as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls).toHaveLength(2);
-    expect(calls[1]![2]).not.toBe(calls[0]![2]);
+    expect(calls[1]![2]).toBe(calls[0]![2]);
   });
   it('out-of-range level refusal shows the reason without a level picker', async () => {
     const gateway = {

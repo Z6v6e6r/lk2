@@ -1,4 +1,3 @@
-import { participationLevelRefusal } from './participation-level.js';
 import type {
   TournamentLocalInput,
   TournamentLocalResult,
@@ -144,18 +143,7 @@ export class TournamentLocalAttempts {
       this.current();
       this.storage.setItem(this.name(id), JSON.stringify(c));
       this.current();
-      let response: Awaited<ReturnType<NonNullable<typeof this.gateway.commandTournament>>>;
-      try {
-        response = await this.gateway.commandTournament(id, c.input, c.key);
-      } catch (error) {
-        // A level refusal is evaluated before the server creates any attempt for this key.
-        if (participationLevelRefusal(error)) {
-          this.current();
-          this.storage.removeItem(this.name(id));
-        }
-        throw error;
-      }
-      const r = this.result(id, response, c);
+      const r = this.result(id, await this.gateway.commandTournament(id, c.input, c.key), c);
       this.current();
       this.save(id, c, r);
       return r;

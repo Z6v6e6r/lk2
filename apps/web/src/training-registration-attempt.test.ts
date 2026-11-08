@@ -134,7 +134,7 @@ it('accepts fresh confirmed observation with unfinished operation without releas
   expect(result?.registration.status).toBe('CONFIRMED');
   expect(h.memory.size).toBe(1);
 });
-it('a server level refusal clears custody and lets the player choose another subscription', async () => {
+it('a server level refusal keeps custody so the retry reuses the original key', async () => {
   const h = setup();
   h.gateway.registerTraining.mockRejectedValueOnce(
     Object.assign(new Error('level'), { status: 409, code: 'LEVEL_NOT_ALLOWED' }),
@@ -142,10 +142,10 @@ it('a server level refusal clears custody and lets the player choose another sub
   await expect(
     h.a.submit(id(3), { dateHint: '2035-04-02', subscriptionId: id(4) }),
   ).rejects.toMatchObject({ code: 'LEVEL_NOT_ALLOWED' });
-  expect(h.a.load(id(3))).toBeNull();
-  h.result.subscriptionId = id(6);
-  await h.a.submit(id(3), { dateHint: '2035-04-02', subscriptionId: id(6) });
-  expect(h.gateway.registerTraining.mock.calls[1]?.[2]).not.toBe(
+  // A concurrent same-key request may still have created the attempt; keep it recoverable.
+  expect(h.a.load(id(3))).not.toBeNull();
+  await h.a.submit(id(3), { dateHint: '2035-04-02', subscriptionId: id(4) });
+  expect(h.gateway.registerTraining.mock.calls[1]?.[2]).toBe(
     h.gateway.registerTraining.mock.calls[0]?.[2],
   );
 });

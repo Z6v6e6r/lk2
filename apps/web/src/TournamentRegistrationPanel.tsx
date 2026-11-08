@@ -136,6 +136,7 @@ export function TournamentRegistrationPanel({
     setBusy(true);
     setError(null);
     setLevelSetup(false);
+    let levelRefused = false;
     try {
       if (kind === 'read') {
         const r = await attempts.read(tournamentId);
@@ -159,11 +160,14 @@ export function TournamentRegistrationPanel({
     } catch (e) {
       if (life.active) {
         if (kind === 'read') setCommandsEnabled(false);
+        levelRefused = participationLevelRefusal(e) !== null;
         failure(e);
       }
     } finally {
       if (life.active) {
-        setPending(hasCustody());
+        // A level refusal keeps custody of the key (a racing same-key attempt stays recoverable),
+        // but nothing is awaiting confirmation: JOIN stays available and resubmits that key.
+        setPending(!levelRefused && hasCustody());
         setBusy(false);
       }
     }

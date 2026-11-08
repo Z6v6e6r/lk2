@@ -116,7 +116,7 @@ it('storage getter denial renders a recoverable error and never sends a registra
     denied.mockRestore();
   }
 });
-it('missing level offers a self-declared level, then retries with a fresh key', async () => {
+it('missing level offers a self-declared level, then retries under the same key', async () => {
   const h = setup();
   const level = {
     id: '66666666-6666-4666-8666-666666666666',
@@ -153,12 +153,12 @@ it('missing level offers a self-declared level, then retries with a fresh key', 
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'Чтобы записаться, укажите свой уровень.',
   );
-  expect(screen.getByRole('button', { name: 'Записаться по подписке' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Продолжить исходный запрос' })).toBeInTheDocument();
   await user.selectOptions(await screen.findByLabelText('Ваш уровень'), level.id);
   await user.click(screen.getByRole('button', { name: 'Сохранить и записаться' }));
   await waitFor(() => expect(h.registerTraining).toHaveBeenCalledTimes(2));
   expect(setOwnPlayerLevel).toHaveBeenCalledWith(level.id, 'PADEL');
   const calls = h.registerTraining.mock.calls as unknown as [string, unknown, string][];
-  expect(calls[1]![2]).not.toBe(calls[0]![2]);
+  expect(calls[1]![2]).toBe(calls[0]![2]);
   await screen.findByText('Текущая запись не подтверждена. Проверка не создаёт новую запись.');
 });

@@ -1,7 +1,6 @@
 import type { TrainingRegistrationResult } from '@phub/api-contracts';
 import type { AuthGateway } from './auth-gateway.js';
 import type { GameJoinAttemptLockManager } from './game-join-attempt.js';
-import { participationLevelRefusal } from './participation-level.js';
 const uuid = (v: unknown): v is string =>
   typeof v === 'string' &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v);
@@ -130,23 +129,11 @@ export class TrainingRegistrationAttempts {
       return fresh;
     });
     this.current();
-    let r: TrainingRegistrationResult;
-    try {
-      r = await this.gateway.registerTraining(
-        trainingId,
-        { dateHint: a.dateHint, subscriptionId: a.subscriptionId },
-        a.idempotencyKey,
-      );
-    } catch (error) {
-      // A level refusal is evaluated before the server creates any attempt for this key.
-      if (participationLevelRefusal(error))
-        await this.locks.request(this.key(trainingId), { mode: 'exclusive' }, () => {
-          this.current();
-          if (this.load(trainingId)?.idempotencyKey === a.idempotencyKey)
-            this.storage.removeItem(this.key(trainingId));
-        });
-      throw error;
-    }
+    const r = await this.gateway.registerTraining(
+      trainingId,
+      { dateHint: a.dateHint, subscriptionId: a.subscriptionId },
+      a.idempotencyKey,
+    );
     return this.accept(a, r);
   }
   async read(trainingId: string) {

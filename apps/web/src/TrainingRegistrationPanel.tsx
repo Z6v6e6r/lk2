@@ -115,7 +115,8 @@ function TrainingRegistrationSession({
       if (!lifetime.current(gateway)) return;
       const level = participationLevelRefusal(cause);
       if (level) {
-        // The refused request was never created; its browser custody is already cleared.
+        // Custody of the key is kept: a racing same-key attempt stays recoverable and the retry
+        // re-evaluates the level under that key.
         setStored(attempts.load(training.id));
         setResult(null);
         setError(level.message);

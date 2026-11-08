@@ -2,8 +2,8 @@ import type { AuthGateway } from './auth-gateway.js';
 
 /**
  * Server-side level refusals for tournament and training registration. The server evaluates the
- * policy before creating any attempt, so a 409 level refusal means nothing was registered or
- * dispatched under that idempotency key.
+ * policy before creating an attempt, but a racing same-key request may still have created one, so
+ * browser custody of the key is kept and a retry re-evaluates under the same key.
  */
 const LEVEL_REFUSAL_MESSAGES: Readonly<Record<string, string>> = {
   PLAYER_LEVEL_REQUIRED: 'Чтобы записаться, укажите свой уровень.',

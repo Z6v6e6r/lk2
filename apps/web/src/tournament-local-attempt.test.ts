@@ -52,7 +52,7 @@ function fixture() {
   };
 }
 describe('tournament browser original request custody', () => {
-  it('a server level refusal clears custody so a fresh request can follow', async () => {
+  it('a server level refusal keeps custody so the retry reuses the original key', async () => {
     const f = fixture();
     f.gateway.commandTournament.mockRejectedValueOnce(
       Object.assign(new Error('level'), { status: 409, code: 'PLAYER_LEVEL_REQUIRED' }),
@@ -60,10 +60,11 @@ describe('tournament browser original request custody', () => {
     await expect(f.controller().submit(id, { action: 'JOIN' })).rejects.toMatchObject({
       code: 'PLAYER_LEVEL_REQUIRED',
     });
-    expect(f.controller().load(id)).toBeNull();
+    // A concurrent same-key request may still have created the attempt; keep it recoverable.
+    expect(f.controller().load(id)).not.toBeNull();
     await f.controller().submit(id, { action: 'JOIN' });
     const calls = f.gateway.commandTournament.mock.calls as unknown as [string, unknown, string][];
-    expect(calls[1]![2]).not.toBe(calls[0]![2]);
+    expect(calls[1]![2]).toBe(calls[0]![2]);
   });
   it('an unavailable level check keeps custody of the original key', async () => {
     const f = fixture();
