@@ -107,6 +107,20 @@ describe('concrete tournament runtime', () => {
     expect(f.repository.begin).not.toHaveBeenCalled();
     expect(f.client.command).not.toHaveBeenCalled();
   });
+  it('a refusal racing a same-key attempt that began meanwhile follows the stored attempt', async () => {
+    const f: ReturnType<typeof fixture> = fixture(
+      vi.fn<ExternalLevelCheck>(async () => {
+        // A concurrent same-key request passed the check and began while this one was refused.
+        await f.repository.begin(actor, id, 'hash', { action: 'JOIN' }, {} as never, '2026-11-01');
+        f.repository.begin.mockClear();
+        return { code: 'LEVEL_NOT_ALLOWED', status: 409 };
+      }),
+    );
+    const r = await f.runtime.execute(actor, id, 'original-command-key', { action: 'JOIN' });
+    expect(r.operation.id).toBe(op);
+    expect(f.repository.begin).not.toHaveBeenCalled();
+    expect(f.client.prepare).not.toHaveBeenCalled();
+  });
   it('fails closed when the level constraint cannot be confirmed', async () => {
     const f = fixture(
       vi.fn<ExternalLevelCheck>(async () =>

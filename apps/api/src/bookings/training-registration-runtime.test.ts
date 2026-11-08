@@ -572,3 +572,23 @@ it('eligible level continues and an existing attempt is never re-gated', async (
   await gated.execute(actor, input);
   expect(levelCheck).toHaveBeenCalledTimes(1);
 });
+it('a refusal racing a same-key attempt that began meanwhile returns the stored attempt', async () => {
+  const h = await setup();
+  await h.seedPrepared();
+  const prepared = h.row();
+  h.setRow(null);
+  const gated = createTrainingRegistrationRuntime({
+    enabled: true,
+    repository: h.repository,
+    client: h.client,
+    issuer: h.issuer,
+    token: h.token,
+    levelCheck: vi.fn(async () => {
+      h.setRow(prepared);
+      return Promise.resolve({ code: 'LEVEL_NOT_ALLOWED' as const, status: 409 as const });
+    }),
+  });
+  const r = await gated.execute(actor, input);
+  expect(r.operation.id).toBe(prepared!.id);
+  expect(h.repository.begin).not.toHaveBeenCalled();
+});

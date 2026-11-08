@@ -118,4 +118,13 @@ describe('external participation level check', () => {
       await expect(harness('SHADOW', range).check(actor, activityId)).resolves.toBeNull();
     }
   });
+
+  it('SHADOW observes only: a decision-store failure continues, BLOCK fails closed', async () => {
+    const shadow = harness('SHADOW', { from: 'C', to: 'B' });
+    shadow.gate.decide.mockRejectedValueOnce(new Error('DB_DOWN'));
+    await expect(shadow.check(actor, activityId)).resolves.toBeNull();
+    const blocked = harness('BLOCK', { from: 'C', to: 'B' });
+    blocked.gate.decide.mockRejectedValueOnce(new Error('DB_DOWN'));
+    await expect(blocked.check(actor, activityId)).rejects.toThrow('DB_DOWN');
+  });
 });

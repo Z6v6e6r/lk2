@@ -204,7 +204,18 @@ export function createTrainingRegistrationRuntime(options: {
       }
       if (!a) {
         const refusal = await options.levelCheck?.(actor, input.trainingId, input.dateHint);
-        if (refusal) throw new TrainingRegistrationError(refusal.code, refusal.status);
+        // A concurrent same-key request may have passed the check and begun meanwhile; the
+        // stored attempt wins, so a refusal never orphans it or clears its browser custody.
+        if (refusal) a = await repository.read(s);
+        if (
+          a &&
+          (a.request.subscriptionId !== input.subscriptionId ||
+            a.request.dateHint !== input.dateHint)
+        )
+          throw new TrainingRegistrationError('TRAINING_REGISTRATION_KEY_CONFLICT', 409);
+        if (refusal && !a) throw new TrainingRegistrationError(refusal.code, refusal.status);
+      }
+      if (!a) {
         a = await repository.begin(
           s,
           {

@@ -129,7 +129,15 @@ rule before any owner write, through `createParticipationLevelGate`
 - An unreadable constraint fails closed with `PARTICIPATION_LEVEL_UNAVAILABLE` (503) in WARN and
   BLOCK. SHADOW continues. A stored attempt (same idempotency key) is never re-gated, so a
   started registration is not broken by a later policy or level change.
+- If a refusal races a same-key request that already began an attempt, the stored attempt wins:
+  it is returned or dispatched, never refused, so web custody is not cleared for a live attempt.
+- SHADOW stays observe-only: a decision-store error is logged and the command continues.
 - No personal-invitation bypass and no waitlist recheck exist on this path yet.
+- Data-quality limits: the training range is the level token in the Viva exercise name/type/
+  direction, the same convention the catalogue level filter uses. It is enforced as a real
+  constraint, so a mis-titled training can refuse in BLOCK. Malformed or absent tournament
+  `accessLevels` and an untitled training both read as "no restriction"; the
+  `missing_activity_constraint_action` setting does not apply to these sources yet.
 - Web clears its browser custody on a level refusal, because no attempt exists for that key, and
   offers a self-declared level choice for `PLAYER_LEVEL_REQUIRED`/`UNKNOWN`/scale mismatch.
 

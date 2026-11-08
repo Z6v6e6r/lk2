@@ -74,17 +74,30 @@ export function createExternalLevelCheck(options: {
       });
       return mode === 'SHADOW' ? null : { code: 'PARTICIPATION_LEVEL_UNAVAILABLE', status: 503 };
     }
-    const decision = await options.gate.decide({
-      tenantId: actor.tenantId,
-      playerId: actor.userId,
-      sportCode: SPORT_CODE,
-      activityType: options.activityType,
-      activityId,
-      action: options.action,
-      levelRange,
-      constraintSource: options.constraintSource,
-      correlationId: actor.correlationId,
-    });
+    let decision: Awaited<ReturnType<ParticipationLevelGate['decide']>>;
+    try {
+      decision = await options.gate.decide({
+        tenantId: actor.tenantId,
+        playerId: actor.userId,
+        sportCode: SPORT_CODE,
+        activityType: options.activityType,
+        activityId,
+        action: options.action,
+        levelRange,
+        constraintSource: options.constraintSource,
+        correlationId: actor.correlationId,
+      });
+    } catch (error) {
+      // SHADOW observes only; WARN/BLOCK keep failing closed on an unavailable decision store.
+      if (mode !== 'SHADOW') throw error;
+      emit({
+        activityType: options.activityType,
+        mode,
+        outcome: 'SKIP',
+        reasonCode: 'DECISION_UNAVAILABLE',
+      });
+      return null;
+    }
     emit({
       activityType: options.activityType,
       mode: decision.mode,
