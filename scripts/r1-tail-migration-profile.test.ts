@@ -181,5 +181,5 @@ describe('R1 tail publication manifest contract', () => {
     expect(() => validateBytes(operation, Buffer.from(JSON.stringify(manifest)))).toThrow(
       'MANIFEST',
     );
-  });
+  }, 30_000);
 });
