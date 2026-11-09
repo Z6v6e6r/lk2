@@ -81,6 +81,8 @@ describe('createLk1OwnedSubscriptionReader', () => {
     ['the pseudonymous hash alias', 'a'.repeat(64)],
     ['an empty alias', ''],
     ['a non-pay alias', 'game_79c6fd04-1111-4222-8333-444455556666'],
+    ['an uppercase alias', 'pay_79C6FD04-1111-4222-8333-444455556666'],
+    ['a non-RFC uuid alias', 'pay_79c6fd04-1111-9222-8333-444455556666'],
   ])('fails closed for %s and never calls LK1', async (_name, legacyGameId) => {
     const { client, read } = setup();
     await expect(read({ ...input, legacyGameId })).rejects.toMatchObject({

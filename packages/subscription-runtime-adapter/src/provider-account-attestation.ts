@@ -72,7 +72,9 @@ const providerIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const isoPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const uuid = (v: unknown): v is string => typeof v === 'string' && uuidPattern.test(v);
-const legacyGameIdPattern = /^pay_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// lk#307: lowercase RFC 4122 UUID (versions 1-8), exactly as LK1 validates the alias.
+const legacyGameIdPattern =
+  /^pay_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** Exactly the LK1 payment-game alias; the pseudonymous hash alias is never a target. */
 export const isLegacyGameId = (v: unknown): v is string =>
   typeof v === 'string' && legacyGameIdPattern.test(v);
