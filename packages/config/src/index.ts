@@ -147,6 +147,14 @@ const environmentSchema = z.object({
    */
   CUP_IDENTITY_PROFILE_LINK_ENABLED: booleanFromEnvironment,
   /**
+   * ADR 0029 D5: after a successful Viva OTP login, an unmapped user gets the canonical
+   * `VIVA/viva_profile` mapping from a server Viva Admin lookup by the verified phone (exactly one
+   * active exact match). Owner: LK2 product owner. Purpose: paid JOIN/CREATE and server Viva reads
+   * need the mapping that OTP login never wrote. Activation: test-stand readback of one MATCHED
+   * login. Review: 2027-02-09, or remove once every active user is mapped.
+   */
+  VIVA_PROFILE_PHONE_LINK_ENABLED: booleanFromEnvironment,
+  /**
    * Accepts the provider-asserted viewer phone from our own client, which reads the provider profile
    * over the only transport the provider certifies for end users. The value is linked in integration
    * custody and never becomes a PadlHub login key.
@@ -1587,6 +1595,14 @@ export function loadConfig(
   }
   if (parsed.data.VIVA_DIRECT_READ_ENABLED && !parsed.data.VIVA_OAUTH_ENABLED) {
     throw new Error('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  }
+  if (parsed.data.VIVA_PROFILE_PHONE_LINK_ENABLED) {
+    if (parsed.data.VIVA_MODE !== 'sandbox' && parsed.data.VIVA_MODE !== 'production') {
+      throw new Error('VIVA_PROFILE_PHONE_LINK_ENABLED requires VIVA_MODE=sandbox or production');
+    }
+    if (!parsed.data.VIVA_API_URL || !parsed.data.VIVA_API_KEY) {
+      throw new Error('VIVA_PROFILE_PHONE_LINK_ENABLED requires VIVA_API_URL and VIVA_API_KEY');
+    }
   }
   if (parsed.data.VIVA_RESIDENCY_PRODUCT_ID) {
     if (parsed.data.VIVA_MODE !== 'sandbox' && parsed.data.VIVA_MODE !== 'production') {
