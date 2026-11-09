@@ -290,6 +290,8 @@ export interface AuthServiceOptions {
    * keys. Optional so environments without the provider profile read stay unchanged.
    */
   readonly legacyViewerIdentityLink?: LegacyViewerIdentityLink;
+  /** ADR 0029 D5: canonical Viva profile mapping from an Admin lookup by the verified phone. */
+  readonly vivaProfilePhoneLink?: VivaProfilePhoneLink;
   /**
    * Reports a beta client-access convergence that could not be written. The token is still issued
    * from the stored profile, so this is the only trace of a divergence that will be retried on the
@@ -302,6 +304,44 @@ export interface AuthServiceOptions {
     readonly error: unknown;
   }) => void;
   readonly now?: () => Date;
+}
+
+export type VivaProfilePhoneLinkLookup =
+  | { readonly kind: 'MATCHED'; readonly providerClientId: string }
+  | { readonly kind: 'NOT_FOUND' }
+  | { readonly kind: 'AMBIGUOUS' };
+
+export type VivaProfilePhoneLinkOutcomeLabel =
+  | 'linked'
+  | 'unchanged'
+  | 'user_conflict'
+  | 'client_conflict'
+  | 'already_mapped'
+  | 'not_found'
+  | 'ambiguous'
+  | 'unavailable';
+
+/**
+ * Best-effort post-login step. It never fails or delays the login beyond the adapter's bounded
+ * timeouts, never takes a phone from the client, and never overwrites an existing mapping.
+ */
+export interface VivaProfilePhoneLink {
+  readonly enabled: boolean;
+  readonly hasMapping: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+  }) => Promise<boolean>;
+  readonly lookup: (input: {
+    readonly phoneE164: string;
+    readonly correlationId: string;
+  }) => Promise<VivaProfilePhoneLinkLookup>;
+  readonly link: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly providerClientId: string;
+    readonly correlationId: string;
+  }) => Promise<'linked' | 'unchanged' | 'user_conflict' | 'client_conflict'>;
+  readonly onOutcome?: (outcome: VivaProfilePhoneLinkOutcomeLabel) => void;
 }
 
 export interface LegacyViewerIdentityLink {
@@ -742,6 +782,45 @@ export class AuthService {
    * integration custody and is never the account's login key; a provider, storage or conflict failure
    * is logged as an outcome and never fails the login itself.
    */
+  private async linkVivaProfileByPhone(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly phoneE164: string;
+    readonly correlationId: string;
+  }): Promise<void> {
+    const link = this.options.vivaProfilePhoneLink;
+    if (!link?.enabled) return;
+    const report = (outcome: VivaProfilePhoneLinkOutcomeLabel): void => {
+      try {
+        link.onOutcome?.(outcome);
+      } catch {
+        // Telemetry must never change the login result.
+      }
+    };
+    try {
+      if (await link.hasMapping({ tenantId: input.tenantId, userId: input.userId })) {
+        report('already_mapped');
+        return;
+      }
+      const found = await link.lookup({
+        phoneE164: input.phoneE164,
+        correlationId: input.correlationId,
+      });
+      if (found.kind === 'NOT_FOUND') return report('not_found');
+      if (found.kind === 'AMBIGUOUS') return report('ambiguous');
+      report(
+        await link.link({
+          tenantId: input.tenantId,
+          userId: input.userId,
+          providerClientId: found.providerClientId,
+          correlationId: input.correlationId,
+        }),
+      );
+    } catch {
+      report('unavailable');
+    }
+  }
+
   private async linkLegacyViewerIdentity(input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -1640,6 +1719,8 @@ export class AuthService {
     );
     let user: AuthUser;
     let phoneDelegation: VerifiedPhoneAuthentication['delegation'];
+    // Set only from a provider-verified identity whose phone equals the challenged phone.
+    let verifiedVivaPhone: string | undefined;
     if (cupDevAuthentication) {
       if (input.code !== this.options.config.CUP_DEV_AUTH_OTP_CODE) {
         const attempts = await this.options.challengeStore.incrementAttempts(challenge.id);
@@ -1689,6 +1770,9 @@ export class AuthService {
           await this.options.challengeStore.release(challenge.id, claimId);
         }
         this.mapProviderError(error);
+      }
+      if (challenge.provider === 'VIVA' && externalIdentity.phoneE164 === challenge.phoneE164) {
+        verifiedVivaPhone = challenge.phoneE164;
       }
       const identityBinding: TenantAuthBinding = {
         tenantId: challenge.tenantId,
@@ -1753,6 +1837,14 @@ export class AuthService {
         correlationId: input.correlationId,
       });
       await this.options.challengeStore.delete(challenge.id);
+      if (verifiedVivaPhone) {
+        await this.linkVivaProfileByPhone({
+          tenantId: challenge.tenantId,
+          userId: user.id,
+          phoneE164: verifiedVivaPhone,
+          correlationId: input.correlationId,
+        });
+      }
       return this.sessionResult(
         { sessionId, tenantId: challenge.tenantId, tenantKey: challenge.tenantKey, user },
         refreshToken,

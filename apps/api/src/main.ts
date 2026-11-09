@@ -42,7 +42,9 @@ import {
   createGameRosterRepository,
   createHomeBaseProjectionRepository,
   createHomeDashboardProjectionRepository,
+  hasVivaProfileMapping,
   linkLegacyViewerPhone,
+  linkVivaProfileByVerifiedPhone,
   readLegacyViewerPhone,
   createLegacyGameImportRepository,
   createLegacyGameRosterBridgeRepository,
@@ -88,6 +90,7 @@ import {
   VivaHomeSourceAdapter,
   VivaIdentityProvider,
   VivaExerciseRecommendationSourceAdapter,
+  VivaClientPhoneLookupAdapter,
   VivaResidencySourceAdapter,
 } from '@phub/viva-adapter';
 import {
@@ -269,6 +272,37 @@ const providerIdentityLink = config.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED
     }
   : undefined;
 
+// ADR 0029 D5: config validation guarantees sandbox/production mode and Admin credentials here.
+const vivaProfilePhoneLink = config.VIVA_PROFILE_PHONE_LINK_ENABLED
+  ? (() => {
+      const lookup = new VivaClientPhoneLookupAdapter({
+        mode: config.VIVA_MODE,
+        apiBaseUrl: config.VIVA_API_URL as string,
+        apiKey: config.VIVA_API_KEY as string,
+        // Runs inside the login request: keep each GET short and do not retry.
+        timeoutMs: Math.min(config.VIVA_TIMEOUT_MS, 2_000),
+        maxAttempts: 1,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 60_000,
+        onMetric: (metric) => logger.info({ metric }, 'Viva client phone lookup'),
+      });
+      return {
+        enabled: true,
+        hasMapping: (input: { readonly tenantId: string; readonly userId: string }) =>
+          hasVivaProfileMapping({ pool, ...input }),
+        lookup: (input: { readonly phoneE164: string; readonly correlationId: string }) =>
+          lookup.lookup(input),
+        link: (input: {
+          readonly tenantId: string;
+          readonly userId: string;
+          readonly providerClientId: string;
+          readonly correlationId: string;
+        }) => linkVivaProfileByVerifiedPhone({ pool, ...input }),
+        onOutcome: (outcome: string) => logger.info({ outcome }, 'Viva profile phone link'),
+      };
+    })()
+  : undefined;
+
 const authRepository = new PostgresAuthRepository(pool);
 const authService = new AuthService({
   config,
@@ -286,6 +320,7 @@ const authService = new AuthService({
       'beta client access convergence could not be written; the token keeps the stored profile',
     ),
   ...(legacyViewerIdentityLink ? { legacyViewerIdentityLink } : {}),
+  ...(vivaProfilePhoneLink ? { vivaProfilePhoneLink } : {}),
 });
 // Trusted tenant bindings only; keep circuit state across requests and bound cache cardinality.
 const trainingCatalogueAdapters = new Map<string, VivaExerciseRecommendationSourceAdapter>();
