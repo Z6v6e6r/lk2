@@ -221,6 +221,31 @@ Worker repeats the same check before it sends. Firefox endpoints stay rejected u
 added by a separate release, and a new origin must be added to both `api.env` and `worker.env`, because
 the API validates the registration and the Worker validates the delivery.
 
+`PROMOTIONS_ENGAGEMENT_SECRET` is the only admitted CUP advertisement egress from the API and it is
+optional. With the key present, `POST /user/api/v1/<tenantKey>/promotions/<promotionId>/engagements`
+forwards an `IMPRESSION` or `CLICK` to `POST /api/advertising/engagements` on the CUP at the code
+default origin `https://padlhub.su` — the single `cupOrigins` origin of `deploy/timeweb/target.json`.
+`PROMOTIONS_LEGACY_BASE_URL` is not in the API allow-list, so the origin is not operator-overridable on
+this contour and any attempt to set it fails closed as an unknown key. A `CLICK` carries the phone the
+API resolves from the viewer's `profile.user_summaries` row, never a browser-supplied one. That number
+is PadlHub/Viva-owned rather than state the legacy CUP already holds, so enabling the key forwards lk2
+viewer phones into LK1 advertising insights at `padlhub.su`; the ownership matrix does not classify
+that egress. lk2 still holds synthetic data and has no real users, so enabling it is an explicit owner
+decision for the beta lane and must not happen while a real tester's Viva account can be linked.
+Without the key the command answers HTTP 503 `PROMOTION_ENGAGEMENT_UNAVAILABLE`
+before any CUP call and the API logs a single `PROMOTION_ENGAGEMENT_BACKEND_MISSING` warning at
+startup, so a disabled contour is visible in the log instead of looking like a CUP outage. Enabling
+delivery requires the same value in the CUP container's `ADVERTISING_ENGAGEMENT_SECRET` and a working
+`POST /api/advertising/engagements` there; a missing CUP route or a mismatched secret surfaces as the
+same 503 plus a `promotion engagement recording failed` line whose `code` is
+`PROMOTION_ENGAGEMENT_UNAVAILABLE`, or `PROMOTION_ENGAGEMENT_CIRCUIT_OPEN` while the sink's circuit is
+open. The transport detail — `PROMOTION_ENGAGEMENT_HTTP_401`/`404` or `PROMOTION_ENGAGEMENT_TIMEOUT` —
+is on the API's `promotion engagement delivery` metric line together with the attempt number and
+status. Generate the value with
+`openssl rand -base64 48`: the provisioner rejects `#`, `$`, `'`, backslash and whitespace as Compose
+metacharacters. Removing the key from `api.env` and re-provisioning disables delivery again without a
+code change.
+
 iOS delivers Web Push only to a web app the person added to the Home Screen (iOS 16.4+), so the web
 client ships `manifest.webmanifest` with `display: standalone` and an `apple-touch-icon`, and reports
 `needs_install` in a Safari tab instead of offering a button that cannot work. iOS ignores the

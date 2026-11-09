@@ -198,6 +198,11 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://fcm.googleapis.com',
     NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: `{"v1":"${exact32ByteBase64Value('notification-endpoint-keyring')}"}`,
     NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: 'v1',
+    // Ad engagement statistics leave the API only when this optional key is admitted and present.
+    // The rehearsed runtime sets it so the allow-list admission and the equal-value contract with the
+    // CUP container's ADVERTISING_ENGAGEMENT_SECRET are both exercised, while an env file without it
+    // still validates because the API answers 503 instead of recording anything.
+    PROMOTIONS_ENGAGEMENT_SECRET: strongValue('promotions-engagement'),
   };
   const worker = {
     ...baseEnvironment('worker'),

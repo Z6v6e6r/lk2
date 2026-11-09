@@ -138,6 +138,34 @@ describe('Timeweb beta runtime secret provisioner', () => {
     expect(() => validateTimewebRuntimeEnvironments(environments, { host, tenantKey })).toThrow();
   });
 
+  it('admits the CUP engagement secret for the API only and keeps it out of the plan', () => {
+    expect(() =>
+      validateTimewebRuntimeEnvironments(safeRuntimeEnvironments(), { host, tenantKey }),
+    ).not.toThrow();
+
+    // The key stays optional: without it the API answers a stable 503 instead of recording an
+    // engagement, so a release that does not enable CUP delivery yet still validates.
+    const disabled = safeRuntimeEnvironments();
+    delete disabled.api!.PROMOTIONS_ENGAGEMENT_SECRET;
+    expect(() => validateTimewebRuntimeEnvironments(disabled, { host, tenantKey })).not.toThrow();
+
+    // The egress secret belongs to the API only; the isolated worker and realtime fail closed.
+    for (const service of ['worker', 'realtime'] as const) {
+      const widened = safeRuntimeEnvironments();
+      widened[service]!.PROMOTIONS_ENGAGEMENT_SECRET = 'synthetic-promotions-engagement-value';
+      expect(() => validateTimewebRuntimeEnvironments(widened, { host, tenantKey })).toThrow(
+        'unknown_key',
+      );
+    }
+
+    const value = fixture();
+    const plan = JSON.stringify(
+      provisionTimewebBetaRuntimeSecrets({ ...options(value), dryRun: true }),
+    );
+    expect(plan).toContain('PROMOTIONS_ENGAGEMENT_SECRET');
+    expect(plan).not.toContain(safeRuntimeEnvironments().api!.PROMOTIONS_ENGAGEMENT_SECRET);
+  });
+
   it('rejects a release not bound to the exact local source before creating a target', () => {
     const value = fixture();
     const wrongSource = 'f'.repeat(40);
