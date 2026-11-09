@@ -1,4 +1,4 @@
-# ADR 0028: LK2 transition ownership — LK1 owner for games, Viva Admin reads for profile
+# ADR 0029: LK2 transition ownership — LK1 owner for games, Viva Admin reads for profile
 
 - Status: Proposed (owner direction 2026-11-09; becomes accepted on owner approval in the PR)
 - Date: 2026-11-09
@@ -7,6 +7,7 @@
   [ADR 0023](0023-browser-only-viva-end-user-transport.md)
 - Builds on: [ADR 0002](0002-viva-boundary.md), [ADR 0019](0019-home-base-and-viva-egress-gate.md),
   [ADR 0027](0027-client-residency-read.md)
+- Related: ADR 0028 (LK1-attested provider account, PR #611, proposed) — see D5
 
 ## Context
 
@@ -32,13 +33,30 @@ Current code already contains the building blocks this ADR relies on:
 - the LK1 owner integration at `https://padlhub.su`:
   `/api/internal/subscription-runtime/lk2/v1/{quote,reserve,confirm,release}`,
   `/api/internal/subscriptions/policy-registry`, `/api/internal/tournaments/local-operations`,
-  `/api/internal/tournaments/owner-preparations`, `/api/internal/lk/identity/verify`;
+  `/api/internal/tournaments/owner-preparations`, `/api/internal/lk/identity/verify`, and the game
+  owner commands `/lk/integrations/v1/game-create-{preparations,operations/admissions}` (quarter
+  CREATE), `/lk/integrations/v2/booked-operation-{preflights,admissions}` (managed JOIN) and
+  `/lk/integrations/v1/managed-self-leave-admissions` (self-leave);
   LK2 authorizes those calls with its own short-lived RS256 actor delegation, not a Viva token;
 - server-side Viva **Admin** reads with the system key: client subscriptions (ADR 0027) and the
   CUP client-record reads of PR #623 (`profile`, `summary`, `subscriptions`, `bookings`,
   `transactions`, GET only);
 - the synced `integration.external_entity_map` `VIVA/viva_profile` mapping as the only source of a
   user's Viva client ID.
+
+Current open-game command paths (source on `main`, 2026-11-09):
+
+| Command | Free game (`NO_PAYMENT`)                     | Paid game (`SPLIT`/`SUBSCRIPTION`)                                                                                                     |
+| ------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| CREATE  | LK2 PostgreSQL only; LK1 never sees the game | quarter CREATE: LK1 owner creates and books; LK2 keeps only a journal; the game reaches LK2 through the legacy importer (default off)  |
+| JOIN    | LK2 PostgreSQL roster only                   | LK2 reserves the seat locally, LK1 owner preflights/admits the booking and write-off; only for imported `MIRROR` games (`WARN` on lk2) |
+| LEAVE   | LK2 PostgreSQL roster only                   | managed self-leave through the LK1 owner                                                                                               |
+| CANCEL  | organizer cancel in LK2 PostgreSQL only      | refused with `GAME_PAYMENT_REQUIRED`; no owner path                                                                                    |
+
+A local LK2 command on an imported `MIRROR` game moves its roster sync to `CONFLICT`
+(`LEGACY_GAME_ROSTER_LOCAL_REVISION_CHANGED`): from then on LK1 and LK2 show different rosters.
+Paid commands also depend on `VIVA/viva_profile` and `VIVA/subscription` mappings, of which lk2 has
+none (ADR 0028 context).
 
 The open question is which system owns each write during the transition, so that the apps are not
 rebuilt again when the backend implementation changes.
@@ -65,6 +83,11 @@ call LK1 or Viva directly.
   recovery (as in the commercial JOIN and quarter-create contracts). Because LK1 and LK2 users can
   press the same button with different keys, the executor additionally enforces at most one active
   participation per `(game, user)` and an atomic capacity check-and-reserve.
+
+Paid commands already follow this rule. The gap is the free path and CANCEL: free CREATE, JOIN,
+LEAVE and organizer CANCEL must move behind the same LK1 owner (new owner operations for
+`NO_PAYMENT`, or the existing ones with a zero-price mode), and a local LK2 roster write on a
+`MIRROR` game is refused instead of splitting the roster.
 
 This amends ADR 0010/0016 for the transition: `games.*` stays `LOCAL_PRIMARY` at the PadlHub
 platform level (LK1 is a PadlHub system, not a provider), but the executor of record is the LK1
@@ -107,21 +130,41 @@ background refresh and history. Identical concurrent reads are coalesced by
 from one shared retry budget; `401/403` stop and alert instead of retrying. Background refresh
 covers active users only and never re-downloads full history.
 
-### D5. Authentication is unchanged by this ADR
+### D5. Viva account mapping — owner choice between ADR 0028 and an Admin lookup
+
+Every paid command and every D2 read needs the `VIVA/viva_profile` mapping, which lk2 does not
+have. ADR 0028 (PR #611) proposes an LK1 owner attestation as its only source; it was written
+before Admin API access was confirmed and did not evaluate it. With Admin access, a server path is
+available:
+
+- the OTP-verified Viva token already proves the phone (`phone_number_verified=true`, exact E.164
+  match, ADR 0023);
+- the API looks up Viva clients by that phone through an Admin method and writes the mapping only
+  when exactly one active client matches; zero or several matches fail closed to audited support
+  reconciliation; a later different match is a `clientId` conflict, never an overwrite.
+
+Trade-off: the Admin lookup removes the dependency on LK1 egress and the LK1 release (lk#303–305)
+and uses the same egress and budget as D2, but trusts phone uniqueness in Viva; the LK1 attestation
+proves the account with the user's own token. Both are CRITICAL identity changes with R4 review. The
+owner picks one; this ADR does not implement either. Recommended: the Admin lookup, keeping the
+LK1 attestation as the fallback for ambiguous phones.
+
+### D6. Authentication is unchanged by this ADR
 
 OTP and OAuth token exchange through Viva Keycloak and server-side token verification stay as in
 ADR 0023. Retiring the delegated browser token is a follow-up identity decision (CRITICAL) once no
 client read depends on it.
 
-## Preconditions (PROVIDER, before moving user traffic)
+## Preconditions
 
-1. Written confirmation from Viva that the system key may be used for these Admin reads at the
-   expected volume, and the quota (ADR 0002 requires contractual approval for server relays).
-2. Confirmation that `VIVA_API_KEY` is authorized for `bookings` and v2 `transactions`
-   (open gap in PR #623).
-3. LK1 owner exposes internal create/join/leave/cancel operations for open games with the same
-   delegation, idempotency and receipt model as `subscription-runtime` and
-   `tournaments/local-operations`. Only tournaments and subscription runtime exist today.
+1. Viva consent to server Admin reads — **confirmed by the owner on 2026-11-09** (owner statement;
+   the written agreement and quota should be linked here when available).
+2. `VIVA_API_KEY` authorized for the Admin methods used, including `bookings` and v2
+   `transactions` — **confirmed by the owner on 2026-11-09**; a PROVIDER readback on the test
+   stand is still required before traffic moves.
+3. LK1 owner operations for free (`NO_PAYMENT`) create/join/leave and for organizer cancel of any
+   game, with the same delegation, idempotency and receipt model as the existing paid ones.
+4. The D5 mapping source is chosen and implemented.
 
 ## Alternatives rejected
 
@@ -140,7 +183,8 @@ client read depends on it.
   one roster, one restriction decision and one write-off.
 - The system key becomes a single point of failure and of provider attention; D4 and the Viva
   agreement are mandatory, not optional tuning.
-- LK1 backend work (D1 precondition 3) is on the LK2 critical path.
+- LK1 backend work (precondition 3) and the mapping (D5) are on the LK2 critical path; the paid
+  owner commands already exist.
 - Each D1 command path and the user self-read of D2 are CRITICAL boundaries (booking/roster,
   PII/identity) and keep their gates; this ADR authorizes no flag flip, provider write or deploy.
 
