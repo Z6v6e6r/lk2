@@ -35,6 +35,8 @@ const calls = vi.hoisted(() => ({
   observeRead: undefined as ((observation: NativeReadObservation) => void) | undefined,
 }));
 vi.mock('./native-api-fetch.js', () => ({
+  // Android-only ADR 0023 capability; this suite stubs the gateway, so the wrapper is inert.
+  createNativeProfileObservationRefresh: () => async () => undefined,
   createNativeApiFetch: (
     _config: unknown,
     _plugin: unknown,
