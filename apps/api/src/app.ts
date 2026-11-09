@@ -420,6 +420,15 @@ export interface BuildAppOptions {
   readonly activityHistoryRepository?: ActivityHistoryRepository;
   readonly activityHistoryRefresher?: ActivityHistoryRefreshService;
   readonly activityHistoryProjector?: ActivityHistoryProjectionService;
+  /**
+   * Current viewer game cards for history entries. History rows store the card snapshot taken at
+   * sync time, so a result submitted afterwards would otherwise stay invisible in the list.
+   */
+  readonly activityHistoryGameCards?: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly gameIds: readonly string[];
+  }) => Promise<ReadonlyMap<string, unknown>>;
   readonly tournamentSummarySource?: TournamentSummarySource;
   readonly eventAvatarMedia?: EventAvatarMedia;
   readonly trainerAvatarRepository?: TrainerAvatarRepository;
@@ -1380,6 +1389,9 @@ export async function buildApp(options: BuildAppOptions) {
       ? { clientAssistedJobStore: options.bookingScreenReadJobStore }
       : {}),
     ...(options.activityHistoryProjector ? { projector: options.activityHistoryProjector } : {}),
+    ...(options.activityHistoryGameCards
+      ? { viewerGameCards: options.activityHistoryGameCards }
+      : {}),
     providerPageSize: options.config.ACTIVITY_HISTORY_PROVIDER_PAGE_SIZE,
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }

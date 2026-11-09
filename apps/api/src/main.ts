@@ -114,7 +114,7 @@ import { RedisProfileProviderReadJobStore } from './profile/profile-read-job-sto
 import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapshot-store.js';
 import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { EventCatalogItem } from './bookings/booking-recommendation-routes.js';
-import { listViewerGameCards } from './games/game-card-queries.js';
+import { getViewerGameCardBatch, listViewerGameCards } from './games/game-card-queries.js';
 import { CupLegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
 import { S3GiftCertificateMediaStore } from './gift-certificates/gift-certificate-media-store.js';
 import { S3GiftCertificateArtifactReadStore } from './gift-certificates/gift-certificate-artifact-store.js';
@@ -542,6 +542,28 @@ const readAllLocalGameHistory = gameReadRepository
         cursor = page.nextCursor;
       }
       throw new Error('ACTIVITY_HISTORY_LOCAL_GAMES_LIMIT_EXCEEDED');
+    }
+  : undefined;
+/**
+ * History rows store the game card snapshot taken when they were synced. The list renders the
+ * current viewer card instead, so a result submitted after the sync is visible to every roster
+ * member without waiting for their own history refresh.
+ */
+const activityHistoryGameCards = gameReadRepository
+  ? async (input: {
+      readonly tenantId: string;
+      readonly userId: string;
+      readonly gameIds: readonly string[];
+    }): Promise<ReadonlyMap<string, unknown>> => {
+      const cards = await getViewerGameCardBatch({
+        repository: gameReadRepository,
+        photoRepository: profileSummaryRepository,
+        tenantId: input.tenantId,
+        viewerUserId: input.userId,
+        gameIds: input.gameIds,
+        now: new Date().toISOString(),
+      });
+      return new Map([...cards].map(([gameId, entry]) => [gameId, entry.card]));
     }
   : undefined;
 const activityHistoryProjector =
@@ -1154,6 +1176,7 @@ const app = await buildApp({
     : {}),
   ...(activityHistoryRepository ? { activityHistoryRepository } : {}),
   ...(activityHistoryProjector ? { activityHistoryProjector } : {}),
+  ...(activityHistoryGameCards ? { activityHistoryGameCards } : {}),
   ...(gameReadRepository ? { gameReadRepository } : {}),
   ...(gameCommandRepository ? { gameCommandRepository } : {}),
   gameTestCourtRepository,
