@@ -7,7 +7,7 @@
   [ADR 0023](0023-browser-only-viva-end-user-transport.md)
 - Builds on: [ADR 0002](0002-viva-boundary.md), [ADR 0019](0019-home-base-and-viva-egress-gate.md),
   [ADR 0027](0027-client-residency-read.md)
-- Related: ADR 0028 (LK1-attested provider account, PR #611, proposed) — see D5
+- Supersedes as primary mapping source: ADR 0028 (LK1-attested provider account, PR #611, proposed) — see D5
 
 ## Context
 
@@ -130,24 +130,37 @@ background refresh and history. Identical concurrent reads are coalesced by
 from one shared retry budget; `401/403` stop and alert instead of retrying. Background refresh
 covers active users only and never re-downloads full history.
 
-### D5. Viva account mapping — owner choice between ADR 0028 and an Admin lookup
+### D5. Viva account mapping from a server Admin lookup by verified phone
 
-Every paid command and every D2 read needs the `VIVA/viva_profile` mapping, which lk2 does not
-have. ADR 0028 (PR #611) proposes an LK1 owner attestation as its only source; it was written
-before Admin API access was confirmed and did not evaluate it. With Admin access, a server path is
-available:
+Owner decision 2026-11-09: the `VIVA/viva_profile` mapping is written from a server-side Viva Admin
+lookup by the OTP-verified phone. Every paid command and every D2 read needs this mapping, which
+lk2 does not have today. This supersedes the LK1 owner attestation of ADR 0028 (PR #611) as the
+primary mapping source; ADR 0028 was written before Admin API access was confirmed.
 
-- the OTP-verified Viva token already proves the phone (`phone_number_verified=true`, exact E.164
-  match, ADR 0023);
-- the API looks up Viva clients by that phone through an Admin method and writes the mapping only
-  when exactly one active client matches; zero or several matches fail closed to audited support
-  reconciliation; a later different match is a `clientId` conflict, never an overwrite.
+- Trigger: a successful OTP login (ADR 0023) whose signed Viva token carries
+  `phone_number_verified=true` and a normalized E.164 phone equal to the challenged phone. The
+  phone is taken only from that verified token, never from a request body or the browser.
+- Lookup: `@phub/viva-adapter` queries Viva clients by that exact phone through an Admin method,
+  within the D4 budget, with timeout, bounded retry and circuit breaker. The exact Admin method
+  and its phone-matching semantics are pinned with a redacted fixture before implementation
+  (PROVIDER check).
+- Write: only when exactly one active client matches. The mapping is written through the existing
+  `ensureCanonicalProviderMapping` path in the login transaction or an idempotent follow-up job,
+  bound to `(tenant, PadlHub user)`.
+- Fail closed: zero matches leaves the user unmapped (paid commands and Viva reads unavailable);
+  several matches go to audited support reconciliation. A later lookup that returns a different
+  client for an already mapped user is a `clientId` conflict that blocks paid commands; it is never
+  an overwrite.
+- Phone change in Viva or PadlHub does not move an existing mapping automatically.
+- Subscription mappings (`VIVA/subscription`) are written by the same server read of the mapped
+  client's subscriptions (the ADR 0027 Admin source), bound to that user.
+- Audit: each mapping write, refusal and conflict is an audit event without phone or provider IDs
+  in logs.
 
-Trade-off: the Admin lookup removes the dependency on LK1 egress and the LK1 release (lk#303–305)
-and uses the same egress and budget as D2, but trusts phone uniqueness in Viva; the LK1 attestation
-proves the account with the user's own token. Both are CRITICAL identity changes with R4 review. The
-owner picks one; this ADR does not implement either. Recommended: the Admin lookup, keeping the
-LK1 attestation as the fallback for ambiguous phones.
+The LK1 attestation of ADR 0028 is not on the critical path; it may be kept as a later recovery
+path for ambiguous phones. This is a CRITICAL identity change: R4 review (identity/authorization
+and data integrity), negative tests for zero/many/changed matches, unverified phone and cross-user
+subscription IDs.
 
 ### D6. Authentication is unchanged by this ADR
 
@@ -164,7 +177,7 @@ client read depends on it.
    stand is still required before traffic moves.
 3. LK1 owner operations for free (`NO_PAYMENT`) create/join/leave and for organizer cancel of any
    game, with the same delegation, idempotency and receipt model as the existing paid ones.
-4. The D5 mapping source is chosen and implemented.
+4. The D5 Admin lookup is implemented; its Viva Admin search method is confirmed on the stand.
 
 ## Alternatives rejected
 
