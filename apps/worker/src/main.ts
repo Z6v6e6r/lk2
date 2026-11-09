@@ -45,6 +45,7 @@ import {
   createGameRosterRepository,
   createGameResultProjectionRepository,
   createGiftCertificateIssuanceRepository,
+  createLk1ResultBridgeRepository,
   createLocalCommunityDirectoryRepository,
   createMessagingRepository,
   createMessagingMediaRepository,
@@ -80,6 +81,8 @@ import { registerGameResultProjectorConsumer } from './game-result-projector-con
 import { registerGameMessagingMembershipConsumer } from './game-messaging-membership-consumer.js';
 import { registerCupRatingConsumer } from './cup-rating-consumer.js';
 import { CupRatingClient } from './cup-rating-client.js';
+import { registerLk1ResultBridgeConsumer } from './lk1-result-consumer.js';
+import { Lk1ResultClient } from './lk1-result-client.js';
 import { S3GiftCertificateArtifactStore } from './gift-certificate-artifact-store.js';
 import { runGiftCertificateSandboxDeliveryBatch } from './gift-certificate-delivery.js';
 import { expireCommunityDirectInviteBatch } from './community-direct-invite-expiry.js';
@@ -599,6 +602,19 @@ if (config.CUP_RATING_CONSUMER_ENABLED) {
       baseUrl: config.CUP_RATING_API_URL as string,
       serviceToken: config.CUP_RATING_SERVICE_TOKEN as string,
       timeoutMs: config.CUP_RATING_TIMEOUT_MS,
+    }),
+    logger,
+  });
+}
+if (config.LK1_RESULT_BRIDGE_ENABLED) {
+  await registerLk1ResultBridgeConsumer({
+    channel: consumerChannel,
+    bridge: createLk1ResultBridgeRepository(pool),
+    repository: gameResultProjectionRepository,
+    client: new Lk1ResultClient({
+      baseUrl: config.LK1_RESULT_BRIDGE_URL as string,
+      serviceToken: config.LK1_RESULT_BRIDGE_TOKEN as string,
+      timeoutMs: config.LK1_RESULT_BRIDGE_TIMEOUT_MS,
     }),
     logger,
   });

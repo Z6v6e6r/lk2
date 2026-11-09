@@ -102,6 +102,7 @@ describe('loadConfig', () => {
       SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS: 30,
       GAMES_RESULTS_WRITE_MODE: 'disabled',
       CUP_RATING_CONSUMER_ENABLED: false,
+      LK1_RESULT_BRIDGE_ENABLED: false,
       CUP_PLAYER_LEVEL_PROJECTION_ENABLED: false,
       PARTICIPATION_COMMANDS_ENABLED: false,
       PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS: 300,
@@ -683,6 +684,13 @@ describe('loadConfig', () => {
         CUP_RATING_API_URL: 'https://cup.internal',
       }),
     ).toThrow('requires CUP_RATING_API_URL and CUP_RATING_SERVICE_TOKEN');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        LK1_RESULT_BRIDGE_ENABLED: 'true',
+        LK1_RESULT_BRIDGE_URL: 'https://padlhub.su',
+      }),
+    ).toThrow('requires LK1_RESULT_BRIDGE_URL and LK1_RESULT_BRIDGE_TOKEN');
     expect(
       loadConfig({
         ...validEnvironment,
