@@ -1,6 +1,6 @@
 # ADR 0029: LK2 transition ownership — LK1 owner for games, Viva Admin reads for profile
 
-- Status: Proposed (owner direction 2026-11-09; becomes accepted on owner approval in the PR)
+- Status: Accepted (owner approval 2026-11-09)
 - Date: 2026-11-09
 - Amends: [ADR 0010](0010-games-domain-and-card-state-model.md),
   [ADR 0016](0016-lk-games-migration-and-viva-roster-association.md),
