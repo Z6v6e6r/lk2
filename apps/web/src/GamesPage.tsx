@@ -2356,6 +2356,11 @@ function GamesPageContent({
     }
   }
 
+  /**
+   * The detail screen's chat entry: a roster member can open the game conversation before anybody
+   * created the thread, so the messaging command creates or reads it back, then the browser moves
+   * to the returned conversation.
+   */
   async function openGameChat(game: ViewerGameCard): Promise<void> {
     if (busyGameId) return;
     setBusyGameId(game.id);
@@ -2387,21 +2392,6 @@ function GamesPageContent({
       title: game.title,
       updatedAt: new Date().toISOString(),
     });
-  }
-
-  /** Viewer cards carry the conversation field; a public catalogue card never does. */
-  function isViewerGame(game: GameCardModel): game is ViewerGameCard {
-    return 'conversation' in game;
-  }
-
-  /**
-   * A roster member can reach the game chat from the list before anybody opened the thread, exactly
-   * like the detail screen: the messaging command creates or reads it back, then the browser moves
-   * to the returned conversation.
-   */
-  function requestGameChat(game: GameCardModel): void {
-    if (!isViewerGame(game)) return;
-    void openGameChat(game);
   }
 
   if (gameId) {
@@ -2926,7 +2916,6 @@ function GamesPageContent({
               onChatOpen={(selectedGame, conversationId) =>
                 rememberCardGameChat(selectedGame, conversationId)
               }
-              onChatRequest={requestGameChat}
               onParticipantProfileRequest={(selectedGame, participant, participantIndex) =>
                 void handleParticipantProfileRequest(selectedGame, participant, participantIndex)
               }

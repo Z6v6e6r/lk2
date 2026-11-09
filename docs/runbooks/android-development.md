@@ -52,6 +52,38 @@ one delegation refresh and one replay of that GET. Other provider failures have 
 fallback; result/complete lost responses may replay only the same payload and idempotency key.
 Partial failure never completes a projection or returns an invented empty result.
 
+### Profile provider observation
+
+The same owner-approved ADR 0023 exception model covers exactly one more fixed Android read,
+`profile.read`. When the routing plan exposes `profile.read` as `DIRECT_VIVA` and
+`PROFILE_NATIVE_READ_ENABLED` is set, the app validates the current plan, obtains the short-lived
+delegated access token, performs one bounded `GET /v1/{providerTenantKey}/profile` on the approved
+provider origin and relays the bounded body to one 120-second PadlHub job. The API validates the job,
+principal, expiry and command, derives only the normalized assessed level and observed balance (no
+provider identifier, URL or token) and writes one monotonic `profile.provider_observations` row.
+The ordinary `GET /profile` local-slice response then carries those fields while the observation is
+inside `PROFILE_OBSERVATION_MAX_AGE_SECONDS`; a complete Home projection wins over it and another
+viewer never receives it. The bridge returns only a closed acknowledgement and the UI rereads the
+canonical profile, so an unavailable provider or disabled flag simply keeps the documented placeholders.
+Rollback is `PROFILE_NATIVE_READ_ENABLED=false`: it stops both new jobs and the local-slice merge,
+so the app falls back immediately without waiting for the freshness window. Removing the plan
+operation alone only stops new jobs. The expand-only migration stays applied and the stored row is
+unreadable while the flag is off.
+
+The relay body transits the API only to be strictly parsed: no API log, row or error message keeps
+it, and the device wipes its buffers. Only the normalized level and balance are stored. The trust
+model is self-only presentation data (never eligibility or money authority), and the internal
+idempotency token is the `(jobId, commandId)` pair; the transport `Idempotency-Key` is only a
+correlation key for this internal contract.
+
+Freshness compares the server-recorded `observed_at`, so API instances must run NTP and stay inside
+the 60-second forward tolerance; larger clock drift hides a fresh observation on other instances.
+Rollout evidence: redacted `profile provider read job/result/completion` log outcomes on the API,
+plus a provider readback that API/worker containers send no `/end-user/api/` traffic.
+
+Version 1.14/code15 ships this transport; the installed 1.13/code14 build predates it and cannot
+observe provider fields.
+
 Version 1.10/code11 corrects a 1.9 contract mismatch: delegated Viva access tokens are opaque,
 not necessarily JWTs with a `tenant_key` claim. Native code accepts only bounded Bearer-safe token
 bytes from the authenticated endpoint and keeps the fixed plan tenant/host and current user lease.

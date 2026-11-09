@@ -18,6 +18,7 @@ import {
   type RefreshSessionIdentity,
   type RefreshSessionRotation,
   type TenantAuthBinding,
+  type VivaProfilePhoneLink,
 } from './auth-service.js';
 import { MemoryAuthChallengeStore } from './challenge-store.js';
 import { MemoryAndroidOAuthStore } from './android-oauth-store.js';
@@ -2239,5 +2240,151 @@ describe('Android Yandex login', () => {
     expect(failed.cookies.some((value) => value.name === 'phub_refresh')).toBe(false);
     expect(f.repository.revocationOrder).toEqual(['session']);
     expect(f.repository.vivaDelegationRevocations).toBe(0);
+  });
+});
+
+describe('Viva profile phone link after OTP login (ADR 0029 D5)', () => {
+  const MATCHED_CLIENT = '11111111-1111-4111-8111-111111111111';
+
+  function phoneLink(overrides: Partial<VivaProfilePhoneLink> = {}) {
+    const outcomes: string[] = [];
+    const link: VivaProfilePhoneLink = {
+      enabled: true,
+      hasMapping: vi.fn(() => Promise.resolve(false)),
+      lookup: vi.fn(() =>
+        Promise.resolve({ kind: 'MATCHED' as const, providerClientId: MATCHED_CLIENT }),
+      ),
+      link: vi.fn(() => Promise.resolve('linked' as const)),
+      onOutcome: (outcome) => outcomes.push(outcome),
+      ...overrides,
+    };
+    return { link, outcomes };
+  }
+
+  async function login(
+    link: VivaProfilePhoneLink,
+    identityProvider: IdentityProviderPort = provider,
+  ) {
+    const phoneConfig = loadVivaPhoneConfig();
+    const authService = new AuthService({
+      config: phoneConfig,
+      repository: new FakeRepository(),
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', identityProvider]]),
+      vivaProfilePhoneLink: link,
+    });
+    const app = await buildApp({
+      config: phoneConfig,
+      logger: createLogger('api-viva-phone-link-test', 'silent'),
+      authService,
+    });
+    apps.push(app);
+    const challenge = (
+      await app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/auth/challenges',
+        headers: { 'idempotency-key': 'viva-phone-link-challenge-1' },
+        payload: { method: 'phone_otp', phone: '+79990000001' },
+      })
+    ).json<{ challengeId: string }>();
+    return app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: { 'idempotency-key': 'viva-phone-link-verify-001' },
+      payload: {
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+  }
+
+  it('links an unmapped user from the provider-verified phone', async () => {
+    const { link, outcomes } = phoneLink();
+    const response = await login(link);
+    expect(response.statusCode).toBe(200);
+    expect(link.lookup).toHaveBeenCalledWith(
+      expect.objectContaining({ phoneE164: '+79990000001' }),
+    );
+    expect(link.link).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: binding.tenantId,
+        userId: user.id,
+        providerClientId: MATCHED_CLIENT,
+      }),
+    );
+    expect(outcomes).toEqual(['linked']);
+    expect(response.body).not.toContain(MATCHED_CLIENT);
+  });
+
+  it('skips the provider lookup when the user is already mapped', async () => {
+    const { link, outcomes } = phoneLink({ hasMapping: vi.fn(() => Promise.resolve(true)) });
+    expect((await login(link)).statusCode).toBe(200);
+    expect(link.lookup).not.toHaveBeenCalled();
+    expect(link.link).not.toHaveBeenCalled();
+    expect(outcomes).toEqual(['already_mapped']);
+  });
+
+  it.each([
+    ['NOT_FOUND', 'not_found'],
+    ['AMBIGUOUS', 'ambiguous'],
+  ] as const)('writes nothing for %s and still logs in', async (kind, label) => {
+    const { link, outcomes } = phoneLink({ lookup: vi.fn(() => Promise.resolve({ kind })) });
+    expect((await login(link)).statusCode).toBe(200);
+    expect(link.link).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([label]);
+  });
+
+  it('keeps the login when the provider lookup or the mapping write fails', async () => {
+    const lookupDown = phoneLink({
+      lookup: vi.fn(() => Promise.reject(new Error('CLIENT_PHONE_LOOKUP_TIMEOUT'))),
+    });
+    expect((await login(lookupDown.link)).statusCode).toBe(200);
+    expect(lookupDown.outcomes).toEqual(['unavailable']);
+
+    const writeDown = phoneLink({ link: vi.fn(() => Promise.reject(new Error('db down'))) });
+    expect((await login(writeDown.link)).statusCode).toBe(200);
+    expect(writeDown.outcomes).toEqual(['unavailable']);
+  });
+
+  it('gives up at the lookup deadline and still logs in', async () => {
+    const { link, outcomes } = phoneLink({
+      lookup: vi.fn(() => new Promise<never>(() => undefined)),
+      lookupDeadlineMs: 20,
+    });
+    expect((await login(link)).statusCode).toBe(200);
+    expect(link.link).not.toHaveBeenCalled();
+    expect(outcomes).toEqual(['unavailable']);
+  });
+
+  it('reports a mapping conflict without failing the login', async () => {
+    const { link, outcomes } = phoneLink({
+      link: vi.fn(() => Promise.resolve('client_conflict' as const)),
+    });
+    expect((await login(link)).statusCode).toBe(200);
+    expect(outcomes).toEqual(['client_conflict']);
+  });
+
+  it('does nothing when disabled', async () => {
+    const { link } = phoneLink({ enabled: false });
+    expect((await login(link)).statusCode).toBe(200);
+    expect(link.hasMapping).not.toHaveBeenCalled();
+    expect(link.lookup).not.toHaveBeenCalled();
+  });
+
+  it('never looks up a phone the provider did not verify for this challenge', async () => {
+    const otherPhoneProvider: IdentityProviderPort = {
+      ...provider,
+      verifyPhoneCode: () =>
+        Promise.resolve({
+          issuer: 'https://identity.example.test',
+          subject: 'external-user-1',
+          phoneE164: '+79990000999',
+          displayName: user.displayName,
+        }),
+    };
+    const { link } = phoneLink();
+    expect((await login(link, otherPhoneProvider)).statusCode).toBe(200);
+    expect(link.hasMapping).not.toHaveBeenCalled();
+    expect(link.lookup).not.toHaveBeenCalled();
   });
 });

@@ -78,6 +78,13 @@ const environmentSchema = z.object({
   PROFILE_PHOTO_ALLOWED_HOSTS: z.string().min(1).default('.selcdn.ru,.selstorage.ru'),
   PROFILE_PHOTO_CLIENT_SYNC_ENABLED: booleanFromEnvironment,
   PROFILE_PHOTO_MAINTENANCE_ENABLED: booleanFromEnvironment,
+  /**
+   * Android profile.read endpoint exception (ADR-0023/0020). The flag gates only creation of the
+   * short-lived provider-read job; an already accepted observation keeps being republished for a
+   * bounded freshness window so disabling the flag never invents data.
+   */
+  PROFILE_NATIVE_READ_ENABLED: booleanFromEnvironment,
+  PROFILE_OBSERVATION_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(3_600).default(900),
   PROFILE_PHOTO_MAX_BYTES: z.coerce
     .number()
     .int()
@@ -139,6 +146,14 @@ const environmentSchema = z.object({
    * proof for payment, participation or activity-history guards.
    */
   CUP_IDENTITY_PROFILE_LINK_ENABLED: booleanFromEnvironment,
+  /**
+   * ADR 0029 D5: after a successful Viva OTP login, an unmapped user gets the canonical
+   * `VIVA/viva_profile` mapping from a server Viva Admin lookup by the verified phone (exactly one
+   * active exact match). Owner: LK2 product owner. Purpose: paid JOIN/CREATE and server Viva reads
+   * need the mapping that OTP login never wrote. Activation: test-stand readback of one MATCHED
+   * login. Review: 2027-02-09, or remove once every active user is mapped.
+   */
+  VIVA_PROFILE_PHONE_LINK_ENABLED: booleanFromEnvironment,
   /**
    * Accepts the provider-asserted viewer phone from our own client, which reads the provider profile
    * over the only transport the provider certifies for end users. The value is linked in integration
@@ -1580,6 +1595,14 @@ export function loadConfig(
   }
   if (parsed.data.VIVA_DIRECT_READ_ENABLED && !parsed.data.VIVA_OAUTH_ENABLED) {
     throw new Error('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  }
+  if (parsed.data.VIVA_PROFILE_PHONE_LINK_ENABLED) {
+    if (parsed.data.VIVA_MODE !== 'sandbox' && parsed.data.VIVA_MODE !== 'production') {
+      throw new Error('VIVA_PROFILE_PHONE_LINK_ENABLED requires VIVA_MODE=sandbox or production');
+    }
+    if (!parsed.data.VIVA_API_URL || !parsed.data.VIVA_API_KEY) {
+      throw new Error('VIVA_PROFILE_PHONE_LINK_ENABLED requires VIVA_API_URL and VIVA_API_KEY');
+    }
   }
   if (parsed.data.VIVA_RESIDENCY_PRODUCT_ID) {
     if (parsed.data.VIVA_MODE !== 'sandbox' && parsed.data.VIVA_MODE !== 'production') {

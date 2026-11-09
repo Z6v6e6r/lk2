@@ -71,6 +71,11 @@ import {
   createSubscriptionRuntimeActorContextRepository,
   projectHomeBaseUser,
 } from '@phub/database';
+import { createProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
+import {
+  hasVivaProfileMapping,
+  linkVivaProfileByVerifiedPhone,
+} from '@phub/database/viva-profile-phone-link';
 import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
@@ -87,6 +92,7 @@ import {
   VivaHomeSourceAdapter,
   VivaIdentityProvider,
   VivaExerciseRecommendationSourceAdapter,
+  VivaClientPhoneLookupAdapter,
   VivaResidencySourceAdapter,
   VivaClientAdminReadSource,
 } from '@phub/viva-adapter';
@@ -110,10 +116,11 @@ import { ActivityHistoryProjectionCoordinator } from './bookings/activity-histor
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
 import { RedisBookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
+import { RedisProfileProviderReadJobStore } from './profile/profile-read-job-store.js';
 import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapshot-store.js';
 import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { EventCatalogItem } from './bookings/booking-recommendation-routes.js';
-import { listViewerGameCards } from './games/game-card-queries.js';
+import { getViewerGameCardBatch, listViewerGameCards } from './games/game-card-queries.js';
 import { CupLegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
 import { S3GiftCertificateMediaStore } from './gift-certificates/gift-certificate-media-store.js';
 import { S3GiftCertificateArtifactReadStore } from './gift-certificates/gift-certificate-artifact-store.js';
@@ -268,6 +275,37 @@ const providerIdentityLink = config.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED
     }
   : undefined;
 
+// ADR 0029 D5: config validation guarantees sandbox/production mode and Admin credentials here.
+const vivaProfilePhoneLink = config.VIVA_PROFILE_PHONE_LINK_ENABLED
+  ? (() => {
+      const lookup = new VivaClientPhoneLookupAdapter({
+        mode: config.VIVA_MODE,
+        apiBaseUrl: config.VIVA_API_URL as string,
+        apiKey: config.VIVA_API_KEY as string,
+        // Runs inside the login request: keep each GET short and do not retry.
+        timeoutMs: Math.min(config.VIVA_TIMEOUT_MS, 2_000),
+        maxAttempts: 1,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 60_000,
+        onMetric: (metric) => logger.info({ metric }, 'Viva client phone lookup'),
+      });
+      return {
+        enabled: true,
+        hasMapping: (input: { readonly tenantId: string; readonly userId: string }) =>
+          hasVivaProfileMapping({ pool, ...input }),
+        lookup: (input: { readonly phoneE164: string; readonly correlationId: string }) =>
+          lookup.lookup(input),
+        link: (input: {
+          readonly tenantId: string;
+          readonly userId: string;
+          readonly providerClientId: string;
+          readonly correlationId: string;
+        }) => linkVivaProfileByVerifiedPhone({ pool, ...input }),
+        onOutcome: (outcome: string) => logger.info({ outcome }, 'Viva profile phone link'),
+      };
+    })()
+  : undefined;
+
 const authRepository = new PostgresAuthRepository(pool);
 const authService = new AuthService({
   config,
@@ -285,6 +323,7 @@ const authService = new AuthService({
       'beta client access convergence could not be written; the token keeps the stored profile',
     ),
   ...(legacyViewerIdentityLink ? { legacyViewerIdentityLink } : {}),
+  ...(vivaProfilePhoneLink ? { vivaProfilePhoneLink } : {}),
 });
 // Trusted tenant bindings only; keep circuit state across requests and bound cache cardinality.
 const trainingCatalogueAdapters = new Map<string, VivaExerciseRecommendationSourceAdapter>();
@@ -556,6 +595,28 @@ const readAllLocalGameHistory = gameReadRepository
         cursor = page.nextCursor;
       }
       throw new Error('ACTIVITY_HISTORY_LOCAL_GAMES_LIMIT_EXCEEDED');
+    }
+  : undefined;
+/**
+ * History rows store the game card snapshot taken when they were synced. The list renders the
+ * current viewer card instead, so a result submitted after the sync is visible to every roster
+ * member without waiting for their own history refresh.
+ */
+const activityHistoryGameCards = gameReadRepository
+  ? async (input: {
+      readonly tenantId: string;
+      readonly userId: string;
+      readonly gameIds: readonly string[];
+    }): Promise<ReadonlyMap<string, unknown>> => {
+      const cards = await getViewerGameCardBatch({
+        repository: gameReadRepository,
+        photoRepository: profileSummaryRepository,
+        tenantId: input.tenantId,
+        viewerUserId: input.userId,
+        gameIds: input.gameIds,
+        now: new Date().toISOString(),
+      });
+      return new Map([...cards].map(([gameId, entry]) => [gameId, entry.card]));
     }
   : undefined;
 const activityHistoryProjector =
@@ -1144,6 +1205,7 @@ const app = await buildApp({
   profileFriendshipRepository: createProfileFriendshipRepository(pool),
   profileReachabilityRepository: createProfileReachabilityRepository(pool),
   profileLevelHistoryRepository: createProfileLevelHistoryRepository(pool),
+  profileProviderObservationRepository: createProfileProviderObservationRepository(pool),
   profileSummaryRepository,
   clientResidencyService,
   ...(userVivaAdminSource
@@ -1162,6 +1224,9 @@ const app = await buildApp({
   ...(trainingCatalogueSource ? { trainingCatalogueSource } : {}),
   bookingPreferencesRepository: createBookingPreferencesRepository(pool),
   upcomingBookingsRepository: createUpcomingBookingsRepository(pool),
+  // Always mounted: the observation read path is independent of the rollout flag, and the flag
+  // itself is enforced when a provider-read job is created.
+  profileProviderReadJobStore: new RedisProfileProviderReadJobStore(redis),
   ...(config.VIVA_DIRECT_READ_ENABLED || config.GAMES_READ_ENABLED
     ? {
         bookingScreenReadJobStore: new RedisBookingScreenReadJobStore(redis),
@@ -1171,6 +1236,7 @@ const app = await buildApp({
     : {}),
   ...(activityHistoryRepository ? { activityHistoryRepository } : {}),
   ...(activityHistoryProjector ? { activityHistoryProjector } : {}),
+  ...(activityHistoryGameCards ? { activityHistoryGameCards } : {}),
   ...(gameReadRepository ? { gameReadRepository } : {}),
   ...(gameCommandRepository ? { gameCommandRepository } : {}),
   gameTestCourtRepository,

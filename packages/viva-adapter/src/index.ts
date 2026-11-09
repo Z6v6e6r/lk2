@@ -2,11 +2,13 @@ import { z } from 'zod';
 
 export * from './identity.js';
 export * from './home-source.js';
+export * from './profile-observation.js';
 export * from './booking-history-source.js';
 export * from './exercise-recommendation-source.js';
 export * from './upcoming-booking-source.js';
 export * from './residency-source.js';
 export * from './client-admin-read-source.js';
+export * from './client-phone-lookup.js';
 
 export interface InternalAvailableSlot {
   readonly id: string;

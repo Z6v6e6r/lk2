@@ -4011,3 +4011,206 @@ it('Android training catalogue stays on the server route and does not open brows
   expect(calls.filter((url) => url.includes('/trainings/catalog?'))).toHaveLength(2);
   expect(calls.join(' ')).not.toMatch(/booking-screen-read-jobs|viva|\/user\/api\/v2/);
 });
+
+describe('Android profile provider observation (ADR 0023)', () => {
+  const localSlice = {
+    userId: PROFILE_PHOTO_USER_ID,
+    displayName: 'Анна',
+    phoneLast4: '0001',
+  };
+  const providerProfile = {
+    ...localSlice,
+    level: { label: 'D+', value: 4, assessmentRequired: false },
+    balanceMinor: 12_500,
+    currency: 'RUB',
+  };
+  const otherUserId = '11111111-1111-4111-8111-111111111111';
+  const directPlan = () => profilePhotoRoutingPlan(Date.now(), 'native-profile-observation');
+  const serverPlan = () => ({
+    ...directPlan(),
+    operations: [{ operation: 'profile.read', transport: 'PADLHUB_API', fallback: 'PADLHUB_API' }],
+  });
+  const secondSession = {
+    ...profilePhotoSession(),
+    user: { id: otherUserId, displayName: 'Борис' },
+    context: { ...profilePhotoSession().context, userId: otherUserId, displayName: 'Борис' },
+  };
+  function androidProfileGateway(input: {
+    readonly profiles: readonly unknown[];
+    readonly refreshProfileObservation?: () => Promise<void>;
+    readonly plan?: unknown;
+    readonly planUnavailable?: boolean;
+  }) {
+    let profileReads = 0;
+    let sessionRefreshes = 0;
+    const fetchImplementation = vi.fn<typeof fetch>((request) => {
+      const url = requestUrl(request);
+      if (url.endsWith('/auth/session/refresh')) {
+        sessionRefreshes += 1;
+        return Promise.resolve(
+          Response.json(sessionRefreshes === 1 ? profilePhotoSession() : secondSession),
+        );
+      }
+      if (url.endsWith('/auth/session'))
+        return Promise.resolve(new Response(null, { status: 204 }));
+      if (url.endsWith('/routing-plan')) {
+        return input.planUnavailable
+          ? Promise.resolve(Response.json({ error: { code: 'UNAVAILABLE' } }, { status: 503 }))
+          : Promise.resolve(Response.json(input.plan ?? directPlan()));
+      }
+      if (url.endsWith('/profile')) {
+        const value = input.profiles[Math.min(profileReads, input.profiles.length - 1)];
+        profileReads += 1;
+        return Promise.resolve(Response.json(value));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://lk2.padlhub.su',
+      tenantKey: 'local-padel',
+      appVersion: 'test',
+      platform: 'android',
+      nativeSessionTransport: true,
+      fetchImplementation,
+      ...(input.refreshProfileObservation
+        ? { refreshProfileObservation: input.refreshProfileObservation }
+        : {}),
+    });
+    return { gateway, fetchImplementation, profileReads: () => profileReads };
+  }
+
+  it('fills provider level and balance from one device read and returns the canonical reread', async () => {
+    const refreshProfileObservation = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { gateway, profileReads } = androidProfileGateway({
+      profiles: [localSlice, providerProfile],
+      refreshProfileObservation,
+    });
+    await gateway.restoreSession();
+    await expect(gateway.getSelfProfile()).resolves.toEqual(providerProfile);
+    expect(refreshProfileObservation).toHaveBeenCalledTimes(1);
+    expect(profileReads()).toBe(2);
+  });
+
+  it('never calls the device read when the canonical profile already carries provider fields', async () => {
+    const refreshProfileObservation = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { gateway, profileReads } = androidProfileGateway({
+      profiles: [providerProfile],
+      refreshProfileObservation,
+    });
+    await gateway.restoreSession();
+    await expect(gateway.getSelfProfile()).resolves.toEqual(providerProfile);
+    expect(refreshProfileObservation).not.toHaveBeenCalled();
+    expect(profileReads()).toBe(1);
+  });
+
+  it('never calls the device read without the optional bridge capability', async () => {
+    const { gateway, fetchImplementation } = androidProfileGateway({ profiles: [localSlice] });
+    await gateway.restoreSession();
+    await expect(gateway.getSelfProfile()).resolves.toEqual(localSlice);
+    expect(
+      fetchImplementation.mock.calls.some(([request]) =>
+        requestUrl(request).endsWith('/routing-plan'),
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps the local slice when the device read fails', async () => {
+    const refreshProfileObservation = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValue(new Error('NATIVE_PROFILE_READ_DISABLED'));
+    const { gateway, profileReads } = androidProfileGateway({
+      profiles: [localSlice],
+      refreshProfileObservation,
+    });
+    await gateway.restoreSession();
+    await expect(gateway.getSelfProfile()).resolves.toEqual(localSlice);
+    expect(refreshProfileObservation).toHaveBeenCalledTimes(1);
+    expect(profileReads()).toBe(1);
+  });
+
+  it('keeps the local slice when the routing plan does not allow a direct provider read', async () => {
+    const refreshProfileObservation = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { gateway } = androidProfileGateway({
+      profiles: [localSlice],
+      refreshProfileObservation,
+      plan: serverPlan(),
+    });
+    await gateway.restoreSession();
+    await expect(gateway.getSelfProfile()).resolves.toEqual(localSlice);
+    expect(refreshProfileObservation).not.toHaveBeenCalled();
+  });
+
+  it('keeps the local slice when the routing plan is unavailable', async () => {
+    const refreshProfileObservation = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const { gateway } = androidProfileGateway({
+      profiles: [localSlice],
+      refreshProfileObservation,
+      planUnavailable: true,
+    });
+    await gateway.restoreSession();
+    await expect(gateway.getSelfProfile()).resolves.toEqual(localSlice);
+    expect(refreshProfileObservation).not.toHaveBeenCalled();
+  });
+
+  it('shares one device read between concurrent reads and honors the minimum interval', async () => {
+    const releases: (() => void)[] = [];
+    const refreshProfileObservation = vi.fn<() => Promise<void>>(
+      () =>
+        new Promise<void>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const { gateway, profileReads } = androidProfileGateway({
+      profiles: [localSlice],
+      refreshProfileObservation,
+    });
+    await gateway.restoreSession();
+    const first = gateway.getSelfProfile();
+    const second = gateway.getSelfProfile();
+    await vi.waitFor(() => expect(refreshProfileObservation).toHaveBeenCalledTimes(1));
+    releases[0]?.();
+    expect(await Promise.all([first, second])).toEqual([localSlice, localSlice]);
+    expect(refreshProfileObservation).toHaveBeenCalledTimes(1);
+    await expect(gateway.getSelfProfile()).resolves.toEqual(localSlice);
+    expect(refreshProfileObservation).toHaveBeenCalledTimes(1);
+    expect(profileReads()).toBe(5);
+  });
+
+  it('discards a pending observation on a principal change and reads once for the new principal', async () => {
+    const releases: (() => void)[] = [];
+    const refreshProfileObservation = vi.fn<() => Promise<void>>(
+      () =>
+        new Promise<void>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const secondSlice = {
+      userId: otherUserId,
+      displayName: 'Борис',
+      phoneLast4: '0002',
+    };
+    const secondProviderProfile = {
+      ...secondSlice,
+      level: { label: 'C', value: 5, assessmentRequired: false },
+      balanceMinor: 3_000,
+      currency: 'RUB',
+    };
+    const { gateway } = androidProfileGateway({
+      profiles: [localSlice, secondSlice, secondProviderProfile],
+      refreshProfileObservation,
+    });
+    await gateway.restoreSession();
+    const pending = gateway.getSelfProfile();
+    const discarded = expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+    await vi.waitFor(() => expect(refreshProfileObservation).toHaveBeenCalledTimes(1));
+    const logout = gateway.logout();
+    releases[0]?.();
+    await discarded;
+    await logout;
+    await gateway.restoreSession();
+    const next = gateway.getSelfProfile();
+    await vi.waitFor(() => expect(refreshProfileObservation).toHaveBeenCalledTimes(2));
+    releases[1]?.();
+    await expect(next).resolves.toEqual(secondProviderProfile);
+  });
+});
