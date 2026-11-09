@@ -16,7 +16,8 @@ const MAX_BODY_BYTES = 32768;
 export interface ProviderAccountAttestationRequest {
   readonly contractVersion: 1;
   readonly operationId: string;
-  readonly target?: { readonly exerciseId: string };
+  /** The LK1 game id alias `pay_<uuid>`; LK1 resolves the exercise in its own store. */
+  readonly target?: { readonly legacyGameId: string };
 }
 
 export interface AttestedSubscription {
@@ -31,7 +32,7 @@ export interface AttestedSubscription {
 }
 
 export interface ProviderAccountTargetProof {
-  readonly exerciseId: string;
+  readonly legacyGameId: string;
   readonly startsAt: string;
   /** Owner-computed duration (1..1440); callers enforce their own allowed set. */
   readonly durationMinutes: number;
@@ -71,6 +72,10 @@ const providerIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const isoPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const uuid = (v: unknown): v is string => typeof v === 'string' && uuidPattern.test(v);
+const legacyGameIdPattern = /^pay_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Exactly the LK1 payment-game alias; the pseudonymous hash alias is never a target. */
+export const isLegacyGameId = (v: unknown): v is string =>
+  typeof v === 'string' && legacyGameIdPattern.test(v);
 const providerId = (v: unknown): v is string => typeof v === 'string' && providerIdPattern.test(v);
 const iso = (v: unknown): v is string =>
   typeof v === 'string' && isoPattern.test(v) && Number.isFinite(Date.parse(v));
@@ -101,12 +106,12 @@ export function parseProviderAccountAttestationRequest(
   )
     throw new ProviderAccountOwnerError('PROVIDER_ACCOUNT_INVALID', 400);
   if (value.target === undefined) return { contractVersion: 1, operationId: value.operationId };
-  if (!exactKeys(value.target, 'exerciseId') || !providerId(value.target.exerciseId))
+  if (!exactKeys(value.target, 'legacyGameId') || !isLegacyGameId(value.target.legacyGameId))
     throw new ProviderAccountOwnerError('PROVIDER_ACCOUNT_INVALID', 400);
   return {
     contractVersion: 1,
     operationId: value.operationId,
-    target: { exerciseId: value.target.exerciseId },
+    target: { legacyGameId: value.target.legacyGameId },
   };
 }
 
@@ -118,7 +123,7 @@ export function providerAccountAttestationRequestSha256(
   const canonical = {
     contractVersion: 1,
     operationId: request.operationId,
-    target: request.target ? { exerciseId: request.target.exerciseId } : null,
+    target: request.target ? { legacyGameId: request.target.legacyGameId } : null,
   };
   return `sha256:${createHash('sha256')
     .update(`provider-account-attestation:v1\0${JSON.stringify(canonical)}`, 'utf8')
@@ -157,13 +162,13 @@ function parseSubscription(value: unknown): AttestedSubscription {
   };
 }
 
-function parseTargetProof(value: unknown, exerciseId: string): ProviderAccountTargetProof {
+function parseTargetProof(value: unknown, legacyGameId: string): ProviderAccountTargetProof {
   if (
     !exactKeys(
       value,
-      'exerciseId,startsAt,durationMinutes,ownedClientSubscriptionIds,eligibleClientSubscriptionIds',
+      'legacyGameId,startsAt,durationMinutes,ownedClientSubscriptionIds,eligibleClientSubscriptionIds',
     ) ||
-    value.exerciseId !== exerciseId ||
+    value.legacyGameId !== legacyGameId ||
     !iso(value.startsAt) ||
     !Number.isInteger(value.durationMinutes) ||
     (value.durationMinutes as number) < 1 ||
@@ -182,7 +187,7 @@ function parseTargetProof(value: unknown, exerciseId: string): ProviderAccountTa
   if (!value.eligibleClientSubscriptionIds.every((id) => owned.has(id.toLowerCase())))
     return invalid();
   return {
-    exerciseId,
+    legacyGameId,
     startsAt: value.startsAt,
     durationMinutes: value.durationMinutes as number,
     ownedClientSubscriptionIds: [...value.ownedClientSubscriptionIds],
@@ -225,7 +230,7 @@ export function parseProviderAccountAttestation(
     attestedAt: value.attestedAt,
   };
   if (!request.target) return result;
-  const targetProof = parseTargetProof(value.targetProof, request.target.exerciseId);
+  const targetProof = parseTargetProof(value.targetProof, request.target.legacyGameId);
   // lk#303: the proof covers every subscription of the account, not only the <=50 listed ones.
   return { ...result, targetProof };
 }
