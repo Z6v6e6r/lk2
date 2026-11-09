@@ -42,9 +42,7 @@ import {
   createGameRosterRepository,
   createHomeBaseProjectionRepository,
   createHomeDashboardProjectionRepository,
-  hasVivaProfileMapping,
   linkLegacyViewerPhone,
-  linkVivaProfileByVerifiedPhone,
   readLegacyViewerPhone,
   createLegacyGameImportRepository,
   createLegacyGameRosterBridgeRepository,
@@ -74,6 +72,10 @@ import {
   projectHomeBaseUser,
 } from '@phub/database';
 import { createProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
+import {
+  hasVivaProfileMapping,
+  linkVivaProfileByVerifiedPhone,
+} from '@phub/database/viva-profile-phone-link';
 import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
