@@ -236,12 +236,14 @@ Without the key the command answers HTTP 503 `PROMOTION_ENGAGEMENT_UNAVAILABLE`
 before any CUP call and the API logs a single `PROMOTION_ENGAGEMENT_BACKEND_MISSING` warning at
 startup, so a disabled contour is visible in the log instead of looking like a CUP outage. Enabling
 delivery requires the same value in the CUP container's `ADVERTISING_ENGAGEMENT_SECRET` and a working
-`POST /api/advertising/engagements` there; a missing CUP route or a mismatched secret surfaces as the
+`POST /api/advertising/engagements` there. Reuse the value the CUP container already holds, and change
+both sides together in one window only: a fresh value on one side alone turns every engagement into an
+authenticated rejection at the CUP. A missing CUP route or a mismatched secret surfaces as the
 same 503 plus a `promotion engagement recording failed` line whose `code` is
 `PROMOTION_ENGAGEMENT_UNAVAILABLE`, or `PROMOTION_ENGAGEMENT_CIRCUIT_OPEN` while the sink's circuit is
 open. The transport detail — `PROMOTION_ENGAGEMENT_HTTP_401`/`404` or `PROMOTION_ENGAGEMENT_TIMEOUT` —
 is on the API's `promotion engagement delivery` metric line together with the attempt number and
-status. Generate the value with
+status. When both sides are configured for the first time, generate the value with
 `openssl rand -base64 48`: the provisioner rejects `#`, `$`, `'`, backslash and whitespace as Compose
 metacharacters. Removing the key from `api.env` and re-provisioning disables delivery again without a
 code change.
