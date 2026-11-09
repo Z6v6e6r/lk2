@@ -71,6 +71,7 @@ import {
   createSubscriptionRuntimeActorContextRepository,
   projectHomeBaseUser,
 } from '@phub/database';
+import { createProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
 import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
@@ -109,6 +110,7 @@ import { ActivityHistoryProjectionCoordinator } from './bookings/activity-histor
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
 import { RedisBookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
+import { RedisProfileProviderReadJobStore } from './profile/profile-read-job-store.js';
 import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapshot-store.js';
 import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { EventCatalogItem } from './bookings/booking-recommendation-routes.js';
@@ -1128,6 +1130,7 @@ const app = await buildApp({
   profileFriendshipRepository: createProfileFriendshipRepository(pool),
   profileReachabilityRepository: createProfileReachabilityRepository(pool),
   profileLevelHistoryRepository: createProfileLevelHistoryRepository(pool),
+  profileProviderObservationRepository: createProfileProviderObservationRepository(pool),
   profileSummaryRepository,
   clientResidencyService,
   ...(promotionEngagementSink
@@ -1139,6 +1142,9 @@ const app = await buildApp({
   ...(trainingCatalogueSource ? { trainingCatalogueSource } : {}),
   bookingPreferencesRepository: createBookingPreferencesRepository(pool),
   upcomingBookingsRepository: createUpcomingBookingsRepository(pool),
+  // Always mounted: the observation read path is independent of the rollout flag, and the flag
+  // itself is enforced when a provider-read job is created.
+  profileProviderReadJobStore: new RedisProfileProviderReadJobStore(redis),
   ...(config.VIVA_DIRECT_READ_ENABLED || config.GAMES_READ_ENABLED
     ? {
         bookingScreenReadJobStore: new RedisBookingScreenReadJobStore(redis),

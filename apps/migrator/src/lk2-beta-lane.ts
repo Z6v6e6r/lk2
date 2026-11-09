@@ -63,8 +63,9 @@ export interface Lk2RuntimeGrant {
   readonly updateColumns: readonly string[];
 }
 
-// Tables created by 0102-0115 and the exact runtime privileges the API and Worker need on them:
-// the reviewed R1 post-119 matrix plus the 0102 photo contract (runtimePhotoAcl).
+// Tables created by 0102-0116 and the exact runtime privileges the API and Worker need on them:
+// the reviewed R1 post-119 matrix plus the 0102 photo contract (runtimePhotoAcl) and the 0116
+// Android profile-observation contract.
 // On these tables the runtime ACL is made exact (revoke all, then grant), so inherited default
 // privileges cannot widen them. Older tables keep their existing reviewed grants untouched.
 export function lk2RuntimeGrants(): Lk2RuntimeGrant[] {
@@ -79,6 +80,13 @@ export function lk2RuntimeGrants(): Lk2RuntimeGrant[] {
     }
   merged.set('locations.recommendation_card_photos', {
     privileges: new Set(['SELECT', 'INSERT', 'DELETE']),
+    columns: new Set(),
+  });
+  // Post-119 reviewed grant, deliberately outside the historical ledger-119 matrix: the API
+  // upserts one provider observation per user and never deletes it. The table is tenant-scoped
+  // with forced RLS, and the monitor role gets no access of its own.
+  merged.set('profile.provider_observations', {
+    privileges: new Set(['SELECT', 'INSERT', 'UPDATE']),
     columns: new Set(),
   });
   return [...merged.entries()]

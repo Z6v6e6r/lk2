@@ -96,6 +96,10 @@ Live-`assetlinks.json` после промоута 2026-11-08 содержит �
 - `Follow-up finding:` на хосте lk2 свободно 9.2 ГБ при 91% занятости (три бэкапа lane по ~6.2 ГБ);
   перед следующим промоутом освободить место (удалить старый бэкап или увеличить диск).
 - Проверка действующей привязки месячной подписки в Node-RED ЛК1 (только чтение) — для коммерческой фазы.
+- После вливания #621: включить `PROFILE_NATIVE_READ_ENABLED=true` (reviewed env allowlist), routing plan с
+  `profile.read` = `DIRECT_VIVA`, собрать подписанный APK 1.14/code15 и прогнать device-приёмку: один provider
+  200 → accepted relay → повторный `GET /profile` с уровнем и балансом, плюс provider-readback нулевого
+  `/end-user/api/` трафика от api/worker. Откат — флаг в `false` (немедленно скрывает merge).
 
 ## Открытые PR
 
@@ -103,3 +107,5 @@ Live-`assetlinks.json` после промоута 2026-11-08 содержит �
 - #611 — ADR 0028, LK1-attested Viva account и subscription mappings (черновик).
 - #613 — уровневые ограничения записи в турниры и тренировки (черновик; после вливания меняет eligibility).
 - #614 — LK1-attested mappings writer и join ownership reader (черновик).
+- #621 — Android `profile.read` observation (ADR 0023): уровень и баланс в приложении, миграция 0116
+  (ledger 120), критический контур — нужен owner approval (черновик).

@@ -1,0 +1,235 @@
+paths:
+  /{tenantKey}/profile/provider-read-jobs:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [profiles]
+      operationId: startProfileProviderReadJob
+      summary: Start the fixed Android provider profile read job
+      description: |
+        Issues one short-lived, single-command job for the installed Android application only. The
+        device must validate the server routing plan, obtain the short-lived delegated access token
+        and perform exactly one bounded provider profile GET on the approved origin. No provider
+        URL, identifier or credential is accepted here. A non-Android platform, a disabled feature
+        flag or a routing plan without the direct profile read fails closed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileProviderReadJobRequest'
+      responses:
+        '200':
+          description: Short-lived read job with its single fixed command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileProviderReadJob'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/profile/provider-read-jobs/{jobId}/results/{commandId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/ProfileProviderReadJobId'
+      - $ref: '#/components/parameters/ProfileProviderReadCommandId'
+    post:
+      tags: [profiles]
+      operationId: submitProfileProviderReadResult
+      summary: Relay the bounded provider profile body to its server-issued command
+      description: |
+        The body is the provider profile document exactly as the device read it. The API strictly
+        parses it and persists only the normalized assessed level and observed balance as one
+        monotonic, short-lived observation. The provider name, phone, identifier, media URL or raw
+        body is never stored or returned. An identical retry of the same command replays the stored
+        acceptance instead of writing a second observation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileProviderReadResultRequest'
+      responses:
+        '200':
+          description: Accepted or idempotently replayed command result.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileProviderReadResultAcceptance'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '410':
+          $ref: '#/components/responses/ProfileProviderReadJobExpired'
+        '413':
+          $ref: '#/components/responses/ProfileProviderReadResultTooLarge'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/profile/provider-read-jobs/{jobId}/complete:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/ProfileProviderReadJobId'
+    post:
+      tags: [profiles]
+      operationId: completeProfileProviderReadJob
+      summary: Consume the read job and confirm that the observation was accepted
+      description: |
+        Succeeds only after the single command result was accepted. The response is a closed
+        acknowledgement; the client rereads the canonical authenticated-self profile to obtain the
+        merged values. A completed job is consumed and cannot be replayed.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileProviderReadCompletionRequest'
+      responses:
+        '200':
+          description: Observation accepted and the job consumed.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileProviderReadCompletion'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/ProfileProviderReadIncomplete'
+        '410':
+          $ref: '#/components/responses/ProfileProviderReadJobExpired'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+components:
+  parameters:
+    ProfileProviderReadJobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ProfileProviderReadCommandId:
+      name: commandId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    ProfileProviderReadJobExpired:
+      description: The short-lived job expired before the command completed.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+    ProfileProviderReadIncomplete:
+      description: No accepted command result exists yet for this job.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+    ProfileProviderReadResultTooLarge:
+      description: |
+        The relayed provider body exceeds the bounded 64 KiB result limit. The Fastify body-limit
+        guard maps this condition to the standard INVALID_REQUEST error code; the response envelope
+        stays the common ApiError.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+
+  schemas:
+    ProfileProviderReadJobRequest:
+      type: object
+      additionalProperties: false
+    ProfileProviderReadJob:
+      type: object
+      additionalProperties: false
+      required: [jobId, commandId, expiresAt]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        commandId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+    ProfileProviderReadResultRequest:
+      type: object
+      additionalProperties: false
+      required: [payload]
+      properties:
+        payload:
+          type: object
+          description: Provider end-user profile document; strictly parsed and size-bounded by the API.
+    ProfileProviderReadResultAcceptance:
+      type: object
+      additionalProperties: false
+      required: [accepted, replayed, observedAt]
+      properties:
+        accepted:
+          type: boolean
+          const: true
+        replayed:
+          type: boolean
+        observedAt:
+          type: string
+          format: date-time
+    ProfileProviderReadCompletionRequest:
+      type: object
+      additionalProperties: false
+    ProfileProviderReadCompletion:
+      type: object
+      additionalProperties: false
+      required: [state, observedAt]
+      properties:
+        state:
+          type: string
+          const: refreshed
+        observedAt:
+          type: string
+          format: date-time

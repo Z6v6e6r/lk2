@@ -887,6 +887,13 @@ interface BrowserAuthGatewayOptions {
   readonly appVersion: string;
   readonly appBuild?: string;
   readonly fetchImplementation?: typeof fetch;
+  /**
+   * Android-only ADR 0023 capability: one bounded device-side provider `profile.read` whose
+   * normalized observation the API stores for the local-slice `GET /profile`. It resolves with a
+   * closed acknowledgement only, so the caller rereads the canonical profile. Absent on web and on
+   * installations without the bridge; any failure leaves the already-loaded local slice in place.
+   */
+  readonly refreshProfileObservation?: () => Promise<void>;
   /** Test seam; production always navigates to the server-provided OAuth URL. */
   readonly onVivaRecoveryRedirect?: (redirectUrl: string) => void;
 }
@@ -897,6 +904,8 @@ const VIVA_REAUTH_RETURN_PATH_STORAGE_KEY = 'phub.viva-reauth-return-path.v1';
 const VIVA_REAUTH_ATTEMPT_STORAGE_KEY = 'phub.viva-reauth-attempt.v1';
 const VIVA_REAUTH_ATTEMPT_TTL_MS = 10 * 60 * 1_000;
 const SELF_PROFILE_CACHE_TTL_MS = 60 * 1_000;
+/** One Android provider profile observation per principal per interval; never a retry loop. */
+const NATIVE_PROFILE_OBSERVATION_INTERVAL_MS = 60 * 1_000;
 const PROFILE_PHOTO_SYNC_RETRY_MAX_MS = 30 * 60 * 1_000;
 const PROFILE_PHOTO_REVALIDATE_MS = 24 * 60 * 60 * 1_000;
 const PROFILE_PHOTO_GRANT_REUSE_MS = 4 * 60 * 1_000;
@@ -1172,6 +1181,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let routingPlanPromise: Promise<ClientRoutingPlan> | undefined;
   let selfProfilePromise: Promise<UserProfile> | undefined;
   let selfProfileExpiresAt = 0;
+  let nativeProfileObservation:
+    | {
+        generation: number;
+        userId: string;
+        pending: Promise<void> | undefined;
+        attemptedAt: number;
+      }
+    | undefined;
   let currentUserId: string | undefined;
   let currentTenantId: string | undefined;
   const subjectLinkStartKeys = new Map<string, string>();
@@ -1548,6 +1565,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       routingPlanPromise = undefined;
       selfProfilePromise = undefined;
       selfProfileExpiresAt = 0;
+      nativeProfileObservation = undefined;
       playerProfilePromises.clear();
       subjectLinkStartKeys.clear();
       subjectLinkVerifyKeys.clear();
@@ -1591,25 +1609,136 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     }
   }
 
+  function acceptNativeProfile(
+    generation: number,
+    userId: string,
+  ): (profile: UserProfile) => UserProfile {
+    return (profile) => {
+      if (generation !== principalGeneration || currentUserId !== userId) {
+        throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      if (profile.userId !== userId) {
+        throw new ApiClientError(
+          'Account does not match',
+          403,
+          'NATIVE_ACCOUNT_MISMATCH',
+          'native',
+        );
+      }
+      return profile;
+    };
+  }
+
+  /**
+   * ADR 0023 Android exception: the local-slice `GET /profile` cannot observe the provider-owned
+   * level and balance. One bounded device read per principal per interval fills them through a
+   * short-lived server job, and only the canonical PadlHub reread is returned. A missing routing
+   * plan, a disabled capability, a provider denial or a bridge failure keeps the local slice, so
+   * the profile screen never fails because of this optional step.
+   */
+  async function observeNativeProfileProviderFields(
+    base: UserProfile,
+    generation: number,
+    userId: string,
+  ): Promise<UserProfile> {
+    const capability = options.refreshProfileObservation;
+    if (!capability) return base;
+    if (base.level !== undefined && base.balanceMinor !== undefined) return base;
+    const requirePrincipal = (): void => {
+      if (generation !== principalGeneration || currentUserId !== userId) {
+        throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+    };
+    // The reread never starts another refresh, so a stale or absent observation cannot loop.
+    const reread = async (): Promise<UserProfile> => {
+      let profile: UserProfile;
+      try {
+        profile = await client.getUserProfile();
+      } catch {
+        return base;
+      }
+      return acceptNativeProfile(generation, userId)(profile);
+    };
+    const currentObservation = (): typeof nativeProfileObservation =>
+      nativeProfileObservation &&
+      nativeProfileObservation.generation === generation &&
+      nativeProfileObservation.userId === userId
+        ? nativeProfileObservation
+        : undefined;
+    const previous = currentObservation();
+    if (previous?.pending) {
+      // One bridge call per principal: concurrent readers share it and reread the canonical value.
+      try {
+        await previous.pending;
+      } catch {
+        return base;
+      }
+      requirePrincipal();
+      return reread();
+    }
+    if (previous && Date.now() - previous.attemptedAt < NATIVE_PROFILE_OBSERVATION_INTERVAL_MS) {
+      return base;
+    }
+    let plan: ClientRoutingPlan;
+    try {
+      plan = await loadRoutingPlan();
+    } catch {
+      return base;
+    }
+    requirePrincipal();
+    const profileOperation = plan.operations.find(
+      (operation) => operation.operation === 'profile.read',
+    );
+    if (profileOperation?.transport !== 'DIRECT_VIVA') return base;
+    // Re-check after the plan read: a concurrent profile load may have started the single attempt.
+    const latest = currentObservation();
+    if (latest?.pending) {
+      try {
+        await latest.pending;
+      } catch {
+        return base;
+      }
+      requirePrincipal();
+      return reread();
+    }
+    if (latest && Date.now() - latest.attemptedAt < NATIVE_PROFILE_OBSERVATION_INTERVAL_MS) {
+      return base;
+    }
+    let pending: Promise<void>;
+    try {
+      pending = capability();
+    } catch {
+      return base;
+    }
+    const attempt: NonNullable<typeof nativeProfileObservation> = {
+      generation,
+      userId,
+      pending,
+      attemptedAt: Date.now(),
+    };
+    nativeProfileObservation = attempt;
+    try {
+      await pending;
+    } catch {
+      // A disabled flag, an absent plan or a provider denial keeps the already-loaded local slice.
+      return base;
+    } finally {
+      attempt.attemptedAt = Date.now();
+      attempt.pending = undefined;
+    }
+    requirePrincipal();
+    return reread();
+  }
+
   function loadSelfProfile(): Promise<UserProfile> {
     if (!currentUserId) return Promise.reject(new Error('AUTH_REQUIRED'));
     if (nativeClient) {
       const userId = currentUserId;
       const generation = principalGeneration;
-      return client.getUserProfile().then((profile) => {
-        if (generation !== principalGeneration || currentUserId !== userId) {
-          throw new Error('AUTH_PRINCIPAL_CHANGED');
-        }
-        if (profile.userId !== userId) {
-          throw new ApiClientError(
-            'Account does not match',
-            403,
-            'NATIVE_ACCOUNT_MISMATCH',
-            'native',
-          );
-        }
-        return profile;
-      });
+      return client
+        .getUserProfile()
+        .then(acceptNativeProfile(generation, userId))
+        .then((profile) => observeNativeProfileProviderFields(profile, generation, userId));
     }
     if (selfProfilePromise && selfProfileExpiresAt > Date.now()) return selfProfilePromise;
     const userId = currentUserId;
@@ -3454,6 +3583,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       routingPlanPromise = undefined;
       selfProfilePromise = undefined;
       selfProfileExpiresAt = 0;
+      nativeProfileObservation = undefined;
       currentUserId = undefined;
       currentTenantId = undefined;
       vivaReauthorizationStarted = false;

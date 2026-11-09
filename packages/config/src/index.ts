@@ -78,6 +78,13 @@ const environmentSchema = z.object({
   PROFILE_PHOTO_ALLOWED_HOSTS: z.string().min(1).default('.selcdn.ru,.selstorage.ru'),
   PROFILE_PHOTO_CLIENT_SYNC_ENABLED: booleanFromEnvironment,
   PROFILE_PHOTO_MAINTENANCE_ENABLED: booleanFromEnvironment,
+  /**
+   * Android profile.read endpoint exception (ADR-0023/0020). The flag gates only creation of the
+   * short-lived provider-read job; an already accepted observation keeps being republished for a
+   * bounded freshness window so disabling the flag never invents data.
+   */
+  PROFILE_NATIVE_READ_ENABLED: booleanFromEnvironment,
+  PROFILE_OBSERVATION_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(3_600).default(900),
   PROFILE_PHOTO_MAX_BYTES: z.coerce
     .number()
     .int()

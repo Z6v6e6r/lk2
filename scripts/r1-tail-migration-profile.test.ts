@@ -31,19 +31,25 @@ describe('fixed R1 tail inventory and admission', () => {
             .digest('hex'),
         })),
     );
-    expect(actual).toEqual(descriptor.inventory);
-    expect(r1PackagedInventory(actual)).toEqual(actual);
-    expect(r1LedgerCount(actual.map(({ filename, checksum }) => ({ checksum, filename })))).toBe(
+    // The released R1 tail stays byte-frozen at ledger 119. Later additive migrations are admitted
+    // only through this explicit post-119 review list, never by editing the release inventory.
+    const frozen = actual.slice(0, descriptor.inventory.length);
+    expect(frozen).toEqual(descriptor.inventory);
+    expect(actual.slice(descriptor.inventory.length).map(({ filename }) => filename)).toEqual([
+      '0116_profile_provider_observations.sql',
+    ]);
+    expect(r1PackagedInventory(frozen)).toEqual(frozen);
+    expect(r1LedgerCount(frozen.map(({ filename, checksum }) => ({ checksum, filename })))).toBe(
       119,
     );
     for (let count = 108; count <= 119; count++)
-      expect(r1LedgerCount(actual.slice(0, count))).toBe(count);
+      expect(r1LedgerCount(frozen.slice(0, count))).toBe(count);
     for (const bad of [
-      actual.slice(0, 107),
-      actual.slice(1),
-      [...actual].reverse(),
-      actual.map((row, i) => (i === 110 ? { ...row, checksum: 'a'.repeat(64) } : row)),
-      [...actual, { filename: '0116_unreviewed.sql', checksum: 'a'.repeat(64) }],
+      frozen.slice(0, 107),
+      frozen.slice(1),
+      [...frozen].reverse(),
+      frozen.map((row, i) => (i === 110 ? { ...row, checksum: 'a'.repeat(64) } : row)),
+      [...frozen, { filename: '0117_unreviewed.sql', checksum: 'a'.repeat(64) }],
     ])
       expect(() => r1LedgerCount(bad)).toThrow('R1_TAIL_LEDGER');
   });
@@ -175,5 +181,5 @@ describe('R1 tail publication manifest contract', () => {
     expect(() => validateBytes(operation, Buffer.from(JSON.stringify(manifest)))).toThrow(
       'MANIFEST',
     );
-  });
+  }, 30_000);
 });

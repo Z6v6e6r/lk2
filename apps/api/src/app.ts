@@ -206,7 +206,7 @@ import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-r
 import { registerProfileProviderIdentityRoutes } from './profile/profile-provider-identity-routes.js';
 import type { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
 import type { ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
-import { buildLocalHomeProfile } from './profile/local-home-profile.js';
+import { buildLocalHomeProfile, freshProviderObservation } from './profile/local-home-profile.js';
 import {
   homeProfilePhotoUserIds,
   stabilizeHomeProfilePhotos,
@@ -214,6 +214,9 @@ import {
 } from './profile/profile-photo-url.js';
 import { registerProfileContactRoutes } from './profile/profile-contact-routes.js';
 import { buildPlayerProfileView } from './profile/profile-view.js';
+import type { ProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
+import type { ProfileProviderReadJobStore } from './profile/profile-read-job-store.js';
+import { registerProfileProviderReadRoutes } from './profile/profile-provider-read-routes.js';
 import { buildClientRoutingPlan, canUseDirectViva } from './routing/client-routing-plan.js';
 import { registerRealtimeRoutes } from './realtime/realtime-routes.js';
 import {
@@ -371,6 +374,7 @@ export interface BuildAppOptions {
   readonly profileFriendshipRepository?: ProfileFriendshipRepository;
   readonly profileReachabilityRepository?: ProfileReachabilityRepository;
   readonly profileLevelHistoryRepository?: ProfileLevelHistoryRepository;
+  readonly profileProviderObservationRepository?: ProfileProviderObservationRepository;
   readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'>;
   /** One server-side answer for the verified user's configured residency product. */
   readonly clientResidencyService?: ClientResidencyService;
@@ -404,6 +408,11 @@ export interface BuildAppOptions {
   readonly communityLogoMediaRepository?: CommunityLogoMediaRepository;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
+  /**
+   * Short-lived native provider-read job store. Only the Android profile.read exception needs it;
+   * the GET /profile fallback reads the observation repository instead.
+   */
+  readonly profileProviderReadJobStore?: ProfileProviderReadJobStore;
   readonly trainingCatalogueSource?: TrainingCatalogueSource;
   readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
   readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
@@ -1637,6 +1646,19 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
+  registerProfileProviderReadRoutes(app as unknown as FastifyInstance, {
+    config: options.config,
+    ...(options.profileProviderReadJobStore
+      ? { jobStore: options.profileProviderReadJobStore }
+      : {}),
+    ...(options.profileProviderObservationRepository
+      ? { observationRepository: options.profileProviderObservationRepository }
+      : {}),
+    ...(options.clientRoutingPlanRepository
+      ? { clientRoutingPlanRepository: options.clientRoutingPlanRepository }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
   registerClientResidencyRoutes(app as unknown as FastifyInstance, {
     ...(options.clientResidencyService ? { service: options.clientResidencyService } : {}),
     ...(typeof options.authService?.getUserContext === 'function'
@@ -1765,6 +1787,27 @@ export async function buildApp(options: BuildAppOptions) {
           summary && options.profilePhotoMediaRepository
             ? await options.profilePhotoMediaRepository.getPhotoDeliveryIds(tenantId, [userId])
             : new Map<string, string>();
+        // A fresh observation only adds the provider fields the local slice cannot see; a
+        // transient observation read failure degrades to the local slice instead of failing it.
+        // The rollout flag is the read-path kill switch as well: off means no merge at all, so an
+        // immediate rollback hides an already stored observation without waiting for its age window.
+        const observation =
+          options.config.PROFILE_NATIVE_READ_ENABLED && options.profileProviderObservationRepository
+            ? freshProviderObservation(
+                await options.profileProviderObservationRepository
+                  .get(tenantId, userId)
+                  .catch((error: unknown) => {
+                    // The local slice stays authoritative when a cache read fails; the log keeps
+                    // only the error class so no provider or personal value can leak.
+                    request.log.warn(
+                      { errorClass: error instanceof Error ? error.name : 'UNKNOWN' },
+                      'profile provider observation read failed',
+                    );
+                    return undefined;
+                  }),
+                options.config.PROFILE_OBSERVATION_MAX_AGE_SECONDS,
+              )
+            : undefined;
         reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
         return buildLocalHomeProfile({
           userId,
@@ -1781,6 +1824,7 @@ export async function buildApp(options: BuildAppOptions) {
                 levelValue: summary.levelValue,
               }
             : {}),
+          ...(observation ? { observation } : {}),
         });
       }
       const parsedDashboard = homeDashboardSchema.safeParse(

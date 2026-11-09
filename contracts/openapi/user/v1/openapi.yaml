@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.28.0
+  version: 1.29.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -1800,6 +1800,12 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/provider-read-jobs:
+    $ref: ./profile-provider-read-jobs.yaml#/paths/~1{tenantKey}~1profile~1provider-read-jobs
+  /{tenantKey}/profile/provider-read-jobs/{jobId}/results/{commandId}:
+    $ref: ./profile-provider-read-jobs.yaml#/paths/~1{tenantKey}~1profile~1provider-read-jobs~1{jobId}~1results~1{commandId}
+  /{tenantKey}/profile/provider-read-jobs/{jobId}/complete:
+    $ref: ./profile-provider-read-jobs.yaml#/paths/~1{tenantKey}~1profile~1provider-read-jobs~1{jobId}~1complete
   /{tenantKey}/profile/privacy:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -7918,9 +7924,11 @@ components:
       required: [userId, displayName]
       description: |
         Profile aggregate. `balanceMinor`, `currency` and `level` are provider-owned
-        and optional: they are omitted when the section-scoped local read cannot
-        observe them, and clients must render a placeholder instead of assuming
-        zero balance, RUB or an unassessed level.
+        and optional: they are omitted when the read cannot observe them, and clients
+        must render a placeholder instead of assuming zero balance, RUB or an
+        unassessed level. On the local-slice fallback the Android provider-observation
+        exception (ADR 0023) may publish a fresh normalized `level` and `balanceMinor`;
+        a complete Home projection still takes precedence over that observation.
       properties:
         userId:
           type: string
