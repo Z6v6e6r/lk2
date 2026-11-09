@@ -202,6 +202,31 @@ describe('VivaClientPhoneLookupAdapter', () => {
     expect(double.calls).toHaveLength(2);
   });
 
+  it('fails closed when a card has no phone field at all', async () => {
+    const double = viva({
+      search: [OWNER, NEAR_A],
+      cards: {
+        [OWNER]: { id: OWNER, phone: '79990001122' },
+        [NEAR_A]: { id: NEAR_A },
+      },
+    });
+    await expect(lookup(adapter(double.fetchImplementation))).rejects.toMatchObject({
+      code: 'CLIENT_PHONE_LOOKUP_RESPONSE_INVALID',
+    });
+  });
+
+  it('returns the client id exactly as Viva wrote it', async () => {
+    const upper = OWNER.toUpperCase();
+    const double = viva({
+      search: [upper],
+      cards: { [upper]: { id: upper, phone: '79990001122' } },
+    });
+    await expect(lookup(adapter(double.fetchImplementation))).resolves.toEqual({
+      kind: 'MATCHED',
+      providerClientId: upper,
+    });
+  });
+
   it('fails closed when a card names a different client', async () => {
     const double = viva({
       search: [OWNER],

@@ -74,7 +74,8 @@ const searchSchema = z.array(z.object({ clientId: z.string() }).passthrough());
 const cardSchema = z
   .object({
     id: z.string(),
-    phone: z.string().nullable().optional(),
+    // Required: a card without the field cannot prove it is not a second owner of the phone.
+    phone: z.string().nullable(),
     deleted: z.boolean().optional(),
   })
   .passthrough();
@@ -158,31 +159,38 @@ export class VivaClientPhoneLookupAdapter {
     if (!rows.success) throw new VivaClientPhoneLookupError('CLIENT_PHONE_LOOKUP_RESPONSE_INVALID');
     if (rows.data.length >= CLIENT_SEARCH_PAGE_LIMIT) return { kind: 'AMBIGUOUS' };
 
-    const candidates = new Set<string>();
+    // Deduplicate case-insensitively but keep the identifier exactly as Viva returned it: the other
+    // `viva_profile` writers store the raw provider value and paid-flow readers match it exactly.
+    const candidates = new Map<string, string>();
     for (const row of rows.data) {
       if (!UUID_PATTERN.test(row.clientId)) {
         throw new VivaClientPhoneLookupError('CLIENT_PHONE_LOOKUP_RESPONSE_INVALID');
       }
-      candidates.add(row.clientId.toLowerCase());
+      const key = row.clientId.toLowerCase();
+      if (!candidates.has(key)) candidates.set(key, row.clientId);
     }
     if (candidates.size === 0) return { kind: 'NOT_FOUND' };
     if (candidates.size > CLIENT_SEARCH_MAX_CANDIDATES) return { kind: 'AMBIGUOUS' };
 
-    const exact: string[] = [];
-    for (const candidate of candidates) {
-      const cardUrl = new URL(
-        `/api/v1/clients/${encodeURIComponent(candidate)}`,
-        this.options.apiBaseUrl,
-      );
-      const card = cardSchema.safeParse(
-        await this.getJson(cardUrl, 'client_card', input.correlationId),
-      );
-      if (!card.success || card.data.id.toLowerCase() !== candidate) {
-        throw new VivaClientPhoneLookupError('CLIENT_PHONE_LOOKUP_RESPONSE_INVALID');
-      }
-      if (card.data.deleted === true) continue;
-      if (normalizeVivaPhone(card.data.phone) === wanted) exact.push(candidate);
-    }
+    // Card reads are independent; reading them together bounds the login latency to one round.
+    const cards = await Promise.all(
+      [...candidates].map(async ([key, candidate]) => {
+        const cardUrl = new URL(
+          `/api/v1/clients/${encodeURIComponent(candidate)}`,
+          this.options.apiBaseUrl,
+        );
+        const card = cardSchema.safeParse(
+          await this.getJson(cardUrl, 'client_card', input.correlationId),
+        );
+        if (!card.success || card.data.id.toLowerCase() !== key) {
+          throw new VivaClientPhoneLookupError('CLIENT_PHONE_LOOKUP_RESPONSE_INVALID');
+        }
+        return card.data;
+      }),
+    );
+    const exact = cards
+      .filter((card) => card.deleted !== true && normalizeVivaPhone(card.phone) === wanted)
+      .map((card) => card.id);
     if (exact.length === 0) return { kind: 'NOT_FOUND' };
     if (exact.length > 1) return { kind: 'AMBIGUOUS' };
     return { kind: 'MATCHED', providerClientId: exact[0] as string };

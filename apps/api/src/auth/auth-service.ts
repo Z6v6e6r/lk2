@@ -342,6 +342,8 @@ export interface VivaProfilePhoneLink {
     readonly correlationId: string;
   }) => Promise<'linked' | 'unchanged' | 'user_conflict' | 'client_conflict'>;
   readonly onOutcome?: (outcome: VivaProfilePhoneLinkOutcomeLabel) => void;
+  /** Total budget for the provider lookup inside the login request; default 3000 ms. */
+  readonly lookupDeadlineMs?: number;
 }
 
 export interface LegacyViewerIdentityLink {
@@ -802,10 +804,17 @@ export class AuthService {
         report('already_mapped');
         return;
       }
-      const found = await link.lookup({
-        phoneE164: input.phoneE164,
-        correlationId: input.correlationId,
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('VIVA_PROFILE_PHONE_LINK_DEADLINE')),
+          link.lookupDeadlineMs ?? 3_000,
+        );
       });
+      const found = await Promise.race([
+        link.lookup({ phoneE164: input.phoneE164, correlationId: input.correlationId }),
+        deadline,
+      ]).finally(() => clearTimeout(timer));
       if (found.kind === 'NOT_FOUND') return report('not_found');
       if (found.kind === 'AMBIGUOUS') return report('ambiguous');
       report(

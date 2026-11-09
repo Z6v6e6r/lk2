@@ -21,7 +21,8 @@ OTP login (ADR 0023) proves the phone but carries no Viva `clientId`, so lk2 has
    - 0 rows -> `NOT_FOUND`;
    - 20 rows (a full page that may be truncated) or more than 5 distinct candidates -> `AMBIGUOUS`.
 4. `GET /api/v1/clients/{id}` for each candidate. The card `id` must equal the candidate. Deleted
-   cards are ignored. The card `phone` (11 digits, `7…`; a leading `8` and formatting are
+   cards are ignored. A card without a `phone` field is an error; an explicit `null` is a non-match.
+   Cards are read in parallel. The card `phone` (11 digits, `7…`; a leading `8` and formatting are
    normalized) must equal the verified phone exactly.
    - exactly one -> `MATCHED`; none -> `NOT_FOUND`; more than one -> `AMBIGUOUS`.
 5. `MATCHED` writes the mapping under the canonical provider-client advisory lock used by
@@ -30,7 +31,12 @@ OTP login (ADR 0023) proves the phone but carries no Viva `clientId`, so lk2 has
    - same pair -> `unchanged`;
    - client owned by another user -> `client_conflict` (audit, `DENIED`), nothing changes;
    - user mapped to another client -> `user_conflict` (audit, `DENIED`), nothing changes;
-   - concurrent writer -> unique violation -> `client_conflict`.
+   - concurrent writer -> unique violation -> `user_conflict` when the canonical internal-id index
+     (0042) fired, otherwise `client_conflict`. That transaction rolls back, so this case has no audit
+     row, only the logged outcome label.
+
+   The Viva client id is stored exactly as Viva returned it (as the other `viva_profile` writers
+   do); ownership checks compare it case-insensitively.
 
 ## Failure behavior
 
@@ -39,8 +45,18 @@ a missing card and database errors report `unavailable`; `NOT_FOUND`/`AMBIGUOUS`
 nothing. Every uncertainty is an error, never `NOT_FOUND`. The next OTP login retries. Logs carry
 only the outcome label and bounded metrics; no phone, name, provider ID or payload.
 
-Login latency: only unmapped users pay it; each GET is capped at
-`min(VIVA_TIMEOUT_MS, 2000)` ms with no retry, the circuit opens after 3 failures for 60 s.
+Login latency: only unmapped users pay it. The whole lookup has a 3 s deadline (`unavailable` on
+expiry); each GET is capped at `min(VIVA_TIMEOUT_MS, 2000)` ms with no retry, card reads run in
+parallel, and the circuit opens after 3 failures for 60 s. A `NOT_FOUND`/`AMBIGUOUS` user repeats
+the lookup on each OTP login (no negative cache).
+
+## Known risk
+
+Recycled phone numbers: if Viva still holds a former owner's card under a number that now belongs
+to someone else, the new holder is mapped to that card. Viva's own OTP login has the same exposure,
+but here the mapping also feeds subscription write-offs. Mitigation is on the Viva side (stale
+cards updated or deleted); the audit rows `VIVA_PROFILE_LINKED_BY_PHONE` identify every mapping
+written by this path for review or reversal.
 
 ## Configuration
 

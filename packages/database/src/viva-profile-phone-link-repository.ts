@@ -28,15 +28,15 @@ const AUDIT_ACTION: Record<Exclude<VivaProfilePhoneLinkOutcome, 'unchanged'>, st
   client_conflict: 'VIVA_PROFILE_PHONE_LINK_CLIENT_CONFLICT',
 };
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Migration 0042 partial unique index: one canonical row per (tenant, system, type, user). */
+const CANONICAL_INTERNAL_INDEX = 'external_entity_map_canonical_internal_idx';
 
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { readonly code?: unknown }).code === '23505'
-  );
+function uniqueViolationOutcome(error: unknown): 'user_conflict' | 'client_conflict' | null {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return null;
+  const failure = error as { readonly code?: unknown; readonly constraint?: unknown };
+  if (failure.code !== '23505') return null;
+  return failure.constraint === CANONICAL_INTERNAL_INDEX ? 'user_conflict' : 'client_conflict';
 }
 
 async function audit(
@@ -71,14 +71,16 @@ export function linkVivaProfileByVerifiedPhone(input: {
   readonly providerClientId: string;
   readonly correlationId: string;
 }): Promise<VivaProfilePhoneLinkOutcome> {
-  const providerClientId = input.providerClientId.toLowerCase();
+  // Stored exactly as Viva returned it (like the other viva_profile writers); compared case-insensitively.
+  const providerClientId = input.providerClientId;
+  const clientKey = providerClientId.toLowerCase();
   if (!UUID_PATTERN.test(providerClientId)) {
     return Promise.reject(new Error('VIVA_PROFILE_PHONE_LINK_CLIENT_ID_INVALID'));
   }
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
     // Same key and lock as the canonical provider-user lock in upsertExternalUser.
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-      `${input.tenantId}\u001fVIVA\u001f${providerClientId}`,
+      `${input.tenantId}\u001fVIVA\u001f${clientKey}`,
     ]);
     const owner = await client.query<{ internal_id: string }>(
       `select internal_id
@@ -86,7 +88,7 @@ export function linkVivaProfileByVerifiedPhone(input: {
         where tenant_id = $1 and external_system = 'VIVA' and entity_type = 'viva_profile'
           and lower(external_id) = $2
         limit 2`,
-      [input.tenantId, providerClientId],
+      [input.tenantId, clientKey],
     );
     if (owner.rows.some((row) => row.internal_id !== input.userId)) {
       await audit(client, { ...input, outcome: 'client_conflict' });
@@ -100,7 +102,7 @@ export function linkVivaProfileByVerifiedPhone(input: {
         limit 2`,
       [input.tenantId, input.userId],
     );
-    if (current.rows.some((row) => row.external_id.toLowerCase() !== providerClientId)) {
+    if (current.rows.some((row) => row.external_id.toLowerCase() !== clientKey)) {
       await audit(client, { ...input, outcome: 'user_conflict' });
       return 'user_conflict';
     }
@@ -124,8 +126,10 @@ export function linkVivaProfileByVerifiedPhone(input: {
     await audit(client, { ...input, outcome: 'linked' });
     return 'linked';
   }).catch((error: unknown) => {
-    // A concurrent writer claimed the client or the user first: keep both rows untouched.
-    if (isUniqueViolation(error)) return 'client_conflict' as const;
+    // A concurrent writer claimed the client or the user first: keep both rows untouched. The
+    // rolled-back transaction carries no audit row; the caller logs the outcome label.
+    const outcome = uniqueViolationOutcome(error);
+    if (outcome) return outcome;
     throw error;
   });
 }

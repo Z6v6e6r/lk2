@@ -2346,6 +2346,16 @@ describe('Viva profile phone link after OTP login (ADR 0029 D5)', () => {
     expect(writeDown.outcomes).toEqual(['unavailable']);
   });
 
+  it('gives up at the lookup deadline and still logs in', async () => {
+    const { link, outcomes } = phoneLink({
+      lookup: vi.fn(() => new Promise<never>(() => undefined)),
+      lookupDeadlineMs: 20,
+    });
+    expect((await login(link)).statusCode).toBe(200);
+    expect(link.link).not.toHaveBeenCalled();
+    expect(outcomes).toEqual(['unavailable']);
+  });
+
   it('reports a mapping conflict without failing the login', async () => {
     const { link, outcomes } = phoneLink({
       link: vi.fn(() => Promise.resolve('client_conflict' as const)),

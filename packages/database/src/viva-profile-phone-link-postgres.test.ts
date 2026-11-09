@@ -69,6 +69,7 @@ describePostgres('Viva profile phone link against real PostgreSQL', () => {
     await expect(hasVivaProfileMapping({ pool, tenantId, userId })).resolves.toBe(false);
     await expect(link(userId, clientId)).resolves.toBe('linked');
     await expect(link(userId, clientId.toUpperCase())).resolves.toBe('unchanged');
+    // The first write keeps the provider value as given.
     await expect(hasVivaProfileMapping({ pool, tenantId, userId })).resolves.toBe(true);
     expect(await mappings()).toContain(`${userId}:${clientId}`);
     expect(await auditActions(userId)).toEqual(['VIVA_PROFILE_LINKED_BY_PHONE:SUCCESS']);
@@ -108,6 +109,16 @@ describePostgres('Viva profile phone link against real PostgreSQL', () => {
     const outcomes = await Promise.all([link(a, clientId), link(b, clientId)]);
     expect([...outcomes].sort()).toEqual(['client_conflict', 'linked']);
     expect((await mappings()).filter((row) => row.endsWith(`:${clientId}`))).toHaveLength(1);
+  });
+
+  it('treats a differently cased id owned by another user as a conflict', async () => {
+    const owner = randomUUID();
+    const intruder = randomUUID();
+    const clientId = randomUUID();
+    await expect(link(owner, clientId.toUpperCase())).resolves.toBe('linked');
+    expect(await mappings()).toContain(`${owner}:${clientId.toUpperCase()}`);
+    await expect(link(intruder, clientId)).resolves.toBe('client_conflict');
+    await expect(link(owner, clientId)).resolves.toBe('unchanged');
   });
 
   it('rejects a non-UUID client id before touching storage', async () => {
