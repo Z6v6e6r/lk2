@@ -404,6 +404,139 @@ describe('activity history routes', () => {
     expect(getPhotoDeliveryIds).toHaveBeenCalledWith(tenantId, [participantUserId]);
   });
 
+  it('shows a result submitted after the history sync by rendering the current viewer card', async () => {
+    const gameId = '11111111-1111-4111-8111-111111111111';
+    const base = repository(state());
+    const activityHistoryGameCards = vi.fn(() =>
+      Promise.resolve(
+        new Map<string, unknown>([
+          [
+            gameId,
+            {
+              id: gameId,
+              displayState: 'RESULT_PENDING',
+              participants: [
+                { userId, displayName: 'Алексей Иванов', role: 'ORGANIZER' },
+                { userId: participantUserId, displayName: 'Dmitriy Krikunov', role: 'PLAYER' },
+              ],
+              resultSummary: {
+                state: 'PENDING_CONFIRMATION',
+                submittedByUserId: participantUserId,
+                sets: [
+                  {
+                    setNumber: 1,
+                    teamA: 6,
+                    teamB: 4,
+                    teamAUserIds: [userId],
+                    teamBUserIds: [participantUserId],
+                  },
+                ],
+              },
+            },
+          ],
+        ]),
+      ),
+    );
+    const app = await buildApp({
+      config,
+      logger: createLogger('activity-history-test', 'silent'),
+      pool: fakePool(),
+      activityHistoryGameCards,
+      activityHistoryRepository: {
+        ...base,
+        list: () =>
+          Promise.resolve({
+            items: [
+              {
+                id: gameId,
+                userId,
+                kind: 'GAME' as const,
+                status: 'COMPLETED' as const,
+                occurredAt: '2026-07-20T09:00:00.000Z',
+                startsAt: '2026-07-20T09:00:00.000Z',
+                endsAt: '2026-07-20T10:00:00.000Z',
+                title: 'Игра',
+                venueName: 'Терехово',
+                route: `/games/${gameId}`,
+                gameId,
+                tournamentId: null,
+                // The row was synced before the result existed, so its own copy has no score.
+                details: {
+                  game: { id: gameId, displayState: 'RESULT_REQUIRED', resultSummary: null },
+                },
+                sourceRevision: 'game:1',
+                syncedAt: '2026-07-21T10:00:00.000Z',
+              },
+            ],
+          }),
+      },
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/bookings/history?kind=GAME',
+      headers: { authorization: `Bearer ${await token()}` },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(activityHistoryGameCards).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      gameIds: [gameId],
+    });
+    const body = response.json<{ items: { game?: unknown }[] }>();
+    expect(body.items[0]?.game).toMatchObject({
+      displayState: 'RESULT_PENDING',
+      resultSummary: { state: 'PENDING_CONFIRMATION', sets: [{ teamA: 6, teamB: 4 }] },
+    });
+  });
+
+  it('keeps the stored game card when the current card read is unavailable', async () => {
+    const gameId = '11111111-1111-4111-8111-111111111111';
+    const base = repository(state());
+    const app = await buildApp({
+      config,
+      logger: createLogger('activity-history-test', 'silent'),
+      pool: fakePool(),
+      activityHistoryGameCards: () => Promise.reject(new Error('games read unavailable')),
+      activityHistoryRepository: {
+        ...base,
+        list: () =>
+          Promise.resolve({
+            items: [
+              {
+                id: gameId,
+                userId,
+                kind: 'GAME' as const,
+                status: 'COMPLETED' as const,
+                occurredAt: '2026-07-20T09:00:00.000Z',
+                startsAt: '2026-07-20T09:00:00.000Z',
+                endsAt: '2026-07-20T10:00:00.000Z',
+                title: 'Игра',
+                venueName: 'Терехово',
+                route: `/games/${gameId}`,
+                gameId,
+                tournamentId: null,
+                details: { game: { id: gameId, displayState: 'COMPLETED', resultSummary: null } },
+                sourceRevision: 'game:1',
+                syncedAt: '2026-07-21T10:00:00.000Z',
+              },
+            ],
+          }),
+      },
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/bookings/history?kind=GAME',
+      headers: { authorization: `Bearer ${await token()}` },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ items: { game?: unknown }[] }>();
+    expect(body.items[0]?.game).toMatchObject({ displayState: 'COMPLETED' });
+  });
+
   it('refreshes an uncovered range once before returning persisted history', async () => {
     let current = state({
       coverageStatus: 'UNSYNCED',
