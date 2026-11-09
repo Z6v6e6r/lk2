@@ -24,6 +24,13 @@ export interface AndroidSessionPlugin {
   /** Fixed native capability; no provider credential or payload crosses this bridge. */
   refreshUpcomingBookings?(): Promise<{ readonly state: 'refreshed' }>;
   cancelUpcomingBookingsRefresh?(): Promise<{ readonly state: 'cancelled' }>;
+  /**
+   * Fixed native capability for the ADR 0023 Android `profile.read` exception. The device performs
+   * one bounded provider read, relays only the normalized observation to a short-lived PadlHub job
+   * and returns a closed acknowledgement; no provider credential, identifier or payload crosses
+   * this bridge. The caller must reread the canonical profile instead of trusting the ack.
+   */
+  refreshProfile?(): Promise<{ readonly state: 'refreshed' }>;
   request(input: {
     readonly path: string;
     readonly method: string;
@@ -47,6 +54,29 @@ export type NativeApiFetch = typeof fetch & {
 };
 
 export const androidSessionPlugin = registerPlugin<AndroidSessionPlugin>('PadlHubAndroidSession');
+
+/** Android-only capability handed to the auth gateway; it never returns provider data. */
+export type NativeProfileObservationRefresh = () => Promise<void>;
+
+/**
+ * Wraps the fixed native `refreshProfile` acknowledgement for the gateway. A missing or older
+ * bridge rejects here, which the gateway treats as "no observation available" and falls back to
+ * the already-loaded local profile slice.
+ */
+export function createNativeProfileObservationRefresh(
+  plugin: AndroidSessionPlugin = androidSessionPlugin,
+): NativeProfileObservationRefresh {
+  return async () => {
+    try {
+      if (typeof plugin.refreshProfile !== 'function') throw rejected();
+      const ack = await plugin.refreshProfile();
+      if (ack.state !== 'refreshed' || Object.keys(ack).length !== 1) throw rejected();
+    } catch (error) {
+      // Native messages, causes and provider payloads may contain secrets; only codes survive.
+      throw sanitizedNativeSessionError(error);
+    }
+  };
+}
 
 export interface NativeCacheObservation {
   readonly path: string;

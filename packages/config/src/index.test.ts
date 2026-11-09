@@ -1994,3 +1994,25 @@ it('keeps residency product configuration explicit and never enables a mock fall
   );
   expect(() => loadConfig({ ...configured, VIVA_RESIDENCY_PRODUCT_ID: 'invented-id' })).toThrow();
 });
+
+describe('profile native read configuration', () => {
+  it('keeps the Android profile read disabled by default with a bounded freshness window', () => {
+    const parsed = loadConfig(validEnvironment);
+    expect(parsed.PROFILE_NATIVE_READ_ENABLED).toBe(false);
+    expect(parsed.PROFILE_OBSERVATION_MAX_AGE_SECONDS).toBe(900);
+
+    expect(
+      loadConfig({ ...validEnvironment, PROFILE_NATIVE_READ_ENABLED: 'true' })
+        .PROFILE_NATIVE_READ_ENABLED,
+    ).toBe(true);
+    expect(
+      loadConfig({ ...validEnvironment, PROFILE_OBSERVATION_MAX_AGE_SECONDS: '60' })
+        .PROFILE_OBSERVATION_MAX_AGE_SECONDS,
+    ).toBe(60);
+    for (const invalid of ['29', '3601', 'not-a-number']) {
+      expect(() =>
+        loadConfig({ ...validEnvironment, PROFILE_OBSERVATION_MAX_AGE_SECONDS: invalid }),
+      ).toThrow();
+    }
+  });
+});

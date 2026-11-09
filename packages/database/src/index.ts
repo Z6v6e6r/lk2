@@ -79,6 +79,7 @@ export * from './profile-privacy-repository.js';
 export * from './profile-reachability-repository.js';
 export * from './profile-friendship-repository.js';
 export * from './profile-level-history-repository.js';
+export * from './profile-provider-observation-repository.js';
 export * from './profile-summary-repository.js';
 export * from './realtime-authorization-repository.js';
 export * from './promotion-engagement-repository.js';
