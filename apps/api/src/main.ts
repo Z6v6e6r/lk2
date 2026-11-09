@@ -62,7 +62,6 @@ import {
   createProfileFriendshipRepository,
   createProfileReachabilityRepository,
   createProfileLevelHistoryRepository,
-  createProfileProviderObservationRepository,
   createProfileSummaryRepository,
   createPhoneSubjectLinkRepository,
   createPromotionEngagementRepository,
@@ -72,6 +71,7 @@ import {
   createSubscriptionRuntimeActorContextRepository,
   projectHomeBaseUser,
 } from '@phub/database';
+import { createProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
 import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';

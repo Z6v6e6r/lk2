@@ -1,5 +1,5 @@
 import { loadConfig } from '@phub/config';
-import type { ProfileProviderObservationRepository } from '@phub/database';
+import type { ProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';

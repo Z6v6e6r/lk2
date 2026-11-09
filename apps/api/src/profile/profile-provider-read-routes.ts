@@ -1,11 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AppConfig } from '@phub/config';
-import type {
-  ClientRoutingPlanRepository,
-  ProfileProviderObservationRepository,
-  StoredClientRoutingPlan,
-} from '@phub/database';
+import type { ClientRoutingPlanRepository, StoredClientRoutingPlan } from '@phub/database';
+import type { ProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
 import type { ClientPlatform } from '@phub/domain';
 import { normalizeVivaProfileObservation, type VivaProfileObservation } from '@phub/viva-adapter';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';

@@ -84,7 +84,6 @@ import type {
   ProfileReachabilityRepository,
   ProfileLevelHistoryRepository,
   ProfilePrivacyRepository,
-  ProfileProviderObservationRepository,
   ProfileSummaryRepository,
   PromotionEngagementRepository,
   RealtimeAuthorizationRepository,
@@ -215,6 +214,7 @@ import {
 } from './profile/profile-photo-url.js';
 import { registerProfileContactRoutes } from './profile/profile-contact-routes.js';
 import { buildPlayerProfileView } from './profile/profile-view.js';
+import type { ProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
 import type { ProfileProviderReadJobStore } from './profile/profile-read-job-store.js';
 import { registerProfileProviderReadRoutes } from './profile/profile-provider-read-routes.js';
 import { buildClientRoutingPlan, canUseDirectViva } from './routing/client-routing-plan.js';

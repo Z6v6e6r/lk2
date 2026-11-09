@@ -1,9 +1,9 @@
 import { loadConfig, type AppConfig } from '@phub/config';
+import type { StoredClientRoutingPlan } from '@phub/database';
 import type {
   ProfileProviderObservation,
   ProfileProviderObservationRepository,
-  StoredClientRoutingPlan,
-} from '@phub/database';
+} from '@phub/database/profile-provider-observation';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
