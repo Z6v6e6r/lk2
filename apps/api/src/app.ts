@@ -126,6 +126,10 @@ import { registerCommunityDirectInviteAdminRoutes } from './admin/community-dire
 import { registerCommunityCreateQuotaAdminRoutes } from './admin/community-create-quota-admin-routes.js';
 import { registerCommunityContentModerationAdminRoutes } from './admin/community-content-moderation-admin-routes.js';
 import { registerMessagingModerationAdminRoutes } from './admin/messaging-moderation-admin-routes.js';
+import {
+  registerUserVivaAdminRoutes,
+  type UserVivaAdminSource,
+} from './admin/user-viva-admin-routes.js';
 import type { AuthService } from './auth/auth-service.js';
 import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
 import {
@@ -374,6 +378,12 @@ export interface BuildAppOptions {
   readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'>;
   /** One server-side answer for the verified user's configured residency product. */
   readonly clientResidencyService?: ClientResidencyService;
+  /** Read-only CUP view of a user's Viva card, subscriptions, bookings and transactions. */
+  readonly userVivaAdminSource?: UserVivaAdminSource;
+  readonly resolveUserVivaClientId?: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+  }) => Promise<string | undefined>;
   readonly promotionEngagementRepository?: PromotionEngagementRepository;
   readonly promotionEngagementSink?: PromotionEngagementSink;
   readonly profilePhotoMediaRepository?: Pick<
@@ -1117,6 +1127,13 @@ export async function buildApp(options: BuildAppOptions) {
     mediaReadUrlTtlSeconds: options.config.COMMUNITY_MEDIA_READ_URL_TTL_SECONDS,
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
+  registerUserVivaAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.userVivaAdminSource ? { source: options.userVivaAdminSource } : {}),
+    ...(options.resolveUserVivaClientId
+      ? { resolveVivaClientId: options.resolveUserVivaClientId }
+      : {}),
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
   });
   registerMessagingModerationAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.messagingModerationRepository

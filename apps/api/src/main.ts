@@ -88,6 +88,7 @@ import {
   VivaIdentityProvider,
   VivaExerciseRecommendationSourceAdapter,
   VivaResidencySourceAdapter,
+  VivaClientAdminReadSource,
 } from '@phub/viva-adapter';
 import {
   ManagedSubscriptionRuntimeQuoteClient,
@@ -356,6 +357,21 @@ const residencySource =
         circuitFailureThreshold: 3,
         circuitResetMs: 30_000,
         onMetric: (metric) => logger.info({ metric }, 'Viva residency read'),
+      })
+    : undefined;
+const userVivaAdminSource =
+  (config.VIVA_MODE === 'sandbox' || config.VIVA_MODE === 'production') &&
+  Boolean(config.VIVA_API_URL) &&
+  Boolean(config.VIVA_API_KEY)
+    ? new VivaClientAdminReadSource({
+        mode: config.VIVA_MODE,
+        apiBaseUrl: config.VIVA_API_URL as string,
+        apiKey: config.VIVA_API_KEY as string,
+        timeoutMs: Math.max(config.VIVA_TIMEOUT_MS, 5_000),
+        maxAttempts: 2,
+        circuitFailureThreshold: 5,
+        circuitResetMs: 30_000,
+        onMetric: (metric) => logger.info({ metric }, 'Viva client admin read'),
       })
     : undefined;
 const clientResidencyService = new ClientResidencyService({
@@ -1130,6 +1146,13 @@ const app = await buildApp({
   profileLevelHistoryRepository: createProfileLevelHistoryRepository(pool),
   profileSummaryRepository,
   clientResidencyService,
+  ...(userVivaAdminSource
+    ? {
+        userVivaAdminSource,
+        resolveUserVivaClientId: (input: { readonly tenantId: string; readonly userId: string }) =>
+          residencyRepository.resolveVivaClientId(input),
+      }
+    : {}),
   ...(promotionEngagementSink
     ? {
         promotionEngagementRepository: createPromotionEngagementRepository(pool),
