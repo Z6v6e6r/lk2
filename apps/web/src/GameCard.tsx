@@ -163,11 +163,6 @@ export interface GameCardProps {
    * chat screen uses when the thread is not among its newest conversations yet.
    */
   readonly onChatOpen?: (game: GameCardModel, conversationId: string) => void;
-  /**
-   * Asks the caller to create or open the game conversation for a roster member whose card carries
-   * no authorized conversation yet; the messaging command stays in the games page, never here.
-   */
-  readonly onChatRequest?: (game: GameCardModel) => void;
   readonly onParticipantProfileRequest?: (
     game: GameCardModel,
     participant: GameCardModel['participants'][number],
@@ -188,7 +183,6 @@ export function GameCard({
   showCompactLevel = false,
   onAction,
   onChatOpen,
-  onChatRequest,
   onParticipantProfileRequest,
   unsupportedActionBehavior = 'DETAILS',
 }: GameCardProps) {
@@ -477,16 +471,6 @@ export function GameCard({
                       <span aria-hidden="true">{conversation.unreadCount}</span>
                     ) : null}
                   </a>
-                ) : chatEntry === 'CREATE' ? (
-                  <button
-                    className="game-card__chat"
-                    type="button"
-                    disabled={busy}
-                    aria-label={busy ? 'Открываем чат игры…' : 'Открыть чат игры'}
-                    onClick={onChatRequest ? () => onChatRequest(game) : undefined}
-                  >
-                    <ChatIcon />
-                  </button>
                 ) : null}
                 {action && actionLabels[action] ? (
                   onAction && commandActions.has(action) ? (

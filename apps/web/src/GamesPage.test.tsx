@@ -631,7 +631,7 @@ describe('GamesPage discovery', () => {
     });
   });
 
-  it('creates the game chat from a roster card that has no conversation yet', async () => {
+  it('keeps the games list card free of a chat-create control for a roster card without a conversation', async () => {
     const viewerGame: ViewerGameCard = {
       ...game,
       surface: 'MY_UPCOMING',
@@ -661,13 +661,12 @@ describe('GamesPage discovery', () => {
 
     const tabs = await screen.findByRole('navigation', { name: 'Разделы игр' });
     await user.click(within(tabs).getByRole('button', { name: 'Для меня' }));
-    await user.click(await screen.findByRole('button', { name: 'Открыть чат игры' }));
 
-    await waitFor(() => expect(getOrCreateGameConversation).toHaveBeenCalledWith(viewerGame.id));
-    expect(getOrCreateGameConversation).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Не удалось выполнить действие. Проверьте связь и повторите.',
-    );
+    // The thread is created from the game detail screen, never from a bare card action.
+    expect(await screen.findByText(viewerGame.title)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Открыть чат игры' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
+    expect(getOrCreateGameConversation).not.toHaveBeenCalled();
   });
 
   it('uses the shared main navigation and exposes the MVP create-game call to action', async () => {
