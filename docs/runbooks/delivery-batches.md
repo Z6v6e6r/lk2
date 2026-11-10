@@ -26,12 +26,14 @@ While the production lane is paused (AGENTS.md, first-version mode), `quality-fu
 listed in `scripts/paused-release-tooling-tests.txt` (strict Timeweb route, communities role-split
 rehearsal) and leaves their tooling out of coverage when the PR or push range stays inside product
 areas: applications and packages except the migrator, Dockerfiles and migrations; API contracts;
-non-policy Markdown. Any change to `scripts/`, `deploy/`, `.github/`, the migrator, migrations, root
-manifests or an unknown path runs them, and so does `npm run source:quality`. The CI plan summary
-shows the decision as `paused release-tooling tests`. Consequence for the strict Timeweb route: a
-reused main run of a product-only commit has not executed those tests, so the pins of the paused
-tooling may be stale. Before using that route again, run `npm run source:quality` on the exact SHA
-(publication without `source_ci_run_id` does this) and remove the list.
+Markdown other than policy and Timeweb runbooks. Any change to `scripts/`, `deploy/`, `.github/`, the
+migrator, migrations, root manifests or an unknown path runs them, and so does
+`npm run source:quality`. The CI plan summary shows the decision as `paused release-tooling tests`.
+Consequence for every route that reuses a main run by its job set (strict Timeweb publication and
+upgrade, standard Web delivery): the run of a product-only commit has not executed those tests, so
+the pins of the paused tooling may be stale. The tooling code itself changes only under `scripts/`,
+which always runs them. Before using the strict route again, run `npm run source:quality` on the
+exact SHA (publication without `source_ci_run_id` does this) and remove the list.
 
 ## Optional temporary integration
 

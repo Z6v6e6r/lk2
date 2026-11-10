@@ -1,4 +1,7 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -200,5 +203,95 @@ describe('paused release-tooling test wiring', () => {
         steps.filter(({ env }) => env?.CI_TEST_SKIP_PAUSED_RELEASE_TOOLING !== undefined),
       ),
     ).toEqual([tests]);
+  });
+});
+
+describe('push plan step', () => {
+  const planStep = workflow.jobs['ci-plan']!.steps.find(({ id }) => id === 'plan')!;
+  const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
+
+  // Runs the real plan step of the workflow against a disposable repository whose scripts/ is
+  // a symlink-free copy of the planner closure. Only the push branch is exercised.
+  function runPushPlan(before: string, after: string, repository: string) {
+    const output = join(repository, 'github-output.txt');
+    writeFileSync(output, '');
+    const result = spawnSync('bash', ['-e', '-c', planStep.run!], {
+      cwd: repository,
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH ?? '',
+        RUNNER_TEMP: repository,
+        GITHUB_OUTPUT: output,
+        GITHUB_STEP_SUMMARY: join(repository, 'summary.md'),
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_SHA: after,
+        EVENT_BEFORE_SHA: before,
+        EVENT_BASE_SHA: '',
+        EVENT_HEAD_SHA: '',
+      },
+    });
+    const outputs = Object.fromEntries(
+      readFileSync(output, 'utf8')
+        .split('\n')
+        .filter((line) => line.includes('='))
+        .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+    );
+    return { status: result.status, stderr: result.stderr, outputs };
+  }
+
+  function repositoryWith(changedPath: string) {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-push-plan-'));
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: directory, encoding: 'utf8' }).trim();
+    git('init', '-q', '--initial-branch=main');
+    git('config', 'user.email', 'push-plan@example.invalid');
+    git('config', 'user.name', 'Push Plan Test');
+    execFileSync('cp', ['-R', join(repositoryRoot, 'scripts'), join(directory, 'scripts')]);
+    execFileSync('ln', [
+      '-s',
+      join(repositoryRoot, 'node_modules'),
+      join(directory, 'node_modules'),
+    ]);
+    writeFileSync(
+      join(directory, '.gitignore'),
+      'node_modules\ngithub-output.txt\nsummary.md\nci-plan.json\n',
+    );
+    git('add', '.');
+    git('commit', '-q', '-m', 'base');
+    const before = git('rev-parse', 'HEAD');
+    execFileSync('mkdir', ['-p', join(directory, changedPath, '..')]);
+    writeFileSync(join(directory, changedPath), 'changed\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'change');
+    return { directory, before, after: git('rev-parse', 'HEAD') };
+  }
+
+  it('skips only for a product-only push with a known previous commit', () => {
+    const product = repositoryWith('apps/api/src/example.ts');
+    const tooling = repositoryWith('deploy/timeweb/example.yaml');
+    try {
+      const skip = runPushPlan(product.before, product.after, product.directory);
+      expect(skip.status, skip.stderr).toBe(0);
+      expect(skip.outputs.release_tooling_tests).toBe('false');
+      expect(skip.outputs.full_quality).toBe('true');
+
+      const keep = runPushPlan(tooling.before, tooling.after, tooling.directory);
+      expect(keep.status, keep.stderr).toBe(0);
+      expect(keep.outputs.release_tooling_tests).toBe('true');
+
+      for (const before of ['', '0'.repeat(40), '1'.repeat(40), 'not-a-sha', product.after]) {
+        const result = runPushPlan(before, product.after, product.directory);
+        expect(result.status, `${before}: ${result.stderr}`).toBe(0);
+        expect(result.outputs.release_tooling_tests, before).toBe('true');
+      }
+
+      const broken = runPushPlan(product.before, '2'.repeat(40), product.directory);
+      expect(broken.status).not.toBe(0);
+      expect(broken.outputs.release_tooling_tests).toBeUndefined();
+    } finally {
+      rmSync(product.directory, { recursive: true, force: true });
+      rmSync(tooling.directory, { recursive: true, force: true });
+    }
   });
 });

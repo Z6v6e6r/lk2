@@ -38,19 +38,29 @@ function isSafeDocumentationPath(path) {
   return markdown && !SENSITIVE_FRAGMENT.test(path);
 }
 
+// Shipped product source whose only unmocked tests are in the paused list.
+const PAUSED_TOOLING_TESTED_PRODUCT_SOURCES = new Set(['apps/worker/src/fcm-rollout-gate.ts']);
+
 // Product areas whose changes are not inputs of the paused release tooling: applications and
 // packages (not the migrator, the deploy executor; not Dockerfiles or migrations, which are
-// release inputs), API contracts and non-policy documentation. An unknown location is not one.
+// release inputs), API contracts and documentation other than policy and Timeweb runbooks, which
+// the deployment-contract check reads. An unknown location is not one.
 function isProductAreaPath(path) {
-  if (isPolicyPath(path)) return false;
-  if (/^[^/]+\.md$/u.test(path) || /^docs\/.+\.md$/u.test(path)) return true;
+  if (isPolicyPath(path) || PAUSED_TOOLING_TESTED_PRODUCT_SOURCES.has(path)) return false;
+  if (/^[^/]+\.md$/u.test(path) || /^docs\/.+\.md$/u.test(path)) return !/timeweb/iu.test(path);
   if (path === 'openapi.yaml' || path.startsWith('contracts/')) return true;
   const match = /^(apps|packages)\/([a-z0-9-]+)\/(.+)$/u.exec(path);
   if (match === null) return false;
   const [, root, name, rest] = match;
   if (root === 'apps' && name === 'migrator') return false;
-  if (/^Dockerfile(?:\..+)?$/u.test(rest)) return false;
-  if (root === 'packages' && name === 'database' && rest.startsWith('migrations/')) return false;
+  if (/^Dockerfile(?:\..+)?$/u.test(rest.slice(rest.lastIndexOf('/') + 1))) return false;
+  if (
+    root === 'packages' &&
+    name === 'database' &&
+    (rest === 'migrations' || rest.startsWith('migrations/'))
+  ) {
+    return false;
+  }
   return true;
 }
 
