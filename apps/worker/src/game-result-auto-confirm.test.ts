@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { isAutoConfirmDue } from '@phub/database';
 
+import type { Pool } from 'pg';
+
 import {
+  createGameResultAutoConfirmPort,
   runGameResultAutoConfirmBatch,
   type GameResultAutoConfirmPort,
 } from './game-result-auto-confirm.js';
@@ -193,5 +196,58 @@ describe('runGameResultAutoConfirmBatch', () => {
     expect(workerMain).toContain('GAME_RESULT_AUTO_CONFIRM_ENABLED');
     expect(workerMain).toContain('void runGameResultAutoConfirmCycle();');
     expect(workerMain).toContain('createGameResultAutoConfirmPort({');
+  });
+});
+
+describe('createGameResultAutoConfirmPort', () => {
+  it('scans inside a tenant-scoped transaction, because RLS hides every row otherwise', async () => {
+    const statements: { readonly text: string; readonly values?: readonly unknown[] }[] = [];
+    const client = {
+      query: vi.fn((text: string, values?: readonly unknown[]) => {
+        statements.push({ text, ...(values ? { values } : {}) });
+        return Promise.resolve({ rows: [{ game_id: 'game-1', submission_id: 'submission-1' }] });
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+      query: vi.fn(() => {
+        throw new Error('the scan must not run outside the tenant transaction');
+      }),
+    } as unknown as Pool;
+    const confirmDueSubmission = vi.fn(() =>
+      Promise.resolve({
+        outcome: 'applied' as const,
+        commandId: 'command',
+        gameId: 'game-1',
+        submissionId: 'submission-1',
+        resultId: 'result',
+        revision: 2,
+        resultState: 'CONFIRMED' as const,
+        committedAt: '2026-11-10T00:00:00.000Z',
+        replayed: false,
+      }),
+    );
+
+    const port = createGameResultAutoConfirmPort({
+      pool,
+      repository: { autoConfirm: confirmDueSubmission },
+    });
+    const due = await port.listDueSubmissions({
+      tenantId: TENANT,
+      confirmationWindowHours: WINDOW,
+      limit: 20,
+    });
+
+    expect(due).toEqual([{ gameId: 'game-1', submissionId: 'submission-1' }]);
+    expect(statements[0]?.text).toBe('begin');
+    expect(statements[1]).toEqual({
+      text: "select set_config('app.tenant_id', $1, true)",
+      values: [TENANT],
+    });
+    expect(statements[2]?.text).toContain('from games.result_submissions');
+    expect(statements[2]?.values).toEqual([TENANT, WINDOW, 20]);
+    expect(statements[3]?.text).toBe('commit');
+    expect(client.release).toHaveBeenCalledOnce();
   });
 });
