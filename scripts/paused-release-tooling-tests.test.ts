@@ -1,7 +1,16 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -206,12 +215,22 @@ describe('paused release-tooling test wiring', () => {
   });
 });
 
+// The planner and verifier with their local imports. The push test copies exactly these files: a
+// symlinked entry point would not run as the main module.
+const PLANNER_CLOSURE = [
+  'presentation-boundary.js',
+  'safe-web-boundary.js',
+  'select-pr-ci-profile.js',
+  'select-pr-docker-services.js',
+  'verify-ci-plan.js',
+] as const;
+
 describe('push plan step', () => {
   const planStep = workflow.jobs['ci-plan']!.steps.find(({ id }) => id === 'plan')!;
   const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
-  // Runs the real plan step of the workflow against a disposable repository whose scripts/ is
-  // a symlink-free copy of the planner closure. Only the push branch is exercised.
+  // Runs the real plan step of the workflow in a disposable repository. Only the push branch is
+  // exercised.
   function runPushPlan(before: string, after: string, repository: string) {
     const output = join(repository, 'github-output.txt');
     writeFileSync(output, '');
@@ -240,58 +259,77 @@ describe('push plan step', () => {
     return { status: result.status, stderr: result.stderr, outputs };
   }
 
-  function repositoryWith(changedPath: string) {
+  // One disposable repository: base -> product-only commit -> tooling commit.
+  function repositoryWithChanges() {
     const directory = mkdtempSync(join(tmpdir(), 'phub-push-plan-'));
     const git = (...args: string[]) =>
       execFileSync('git', args, { cwd: directory, encoding: 'utf8' }).trim();
     git('init', '-q', '--initial-branch=main');
     git('config', 'user.email', 'push-plan@example.invalid');
     git('config', 'user.name', 'Push Plan Test');
-    execFileSync('cp', ['-R', join(repositoryRoot, 'scripts'), join(directory, 'scripts')]);
-    execFileSync('ln', [
-      '-s',
-      join(repositoryRoot, 'node_modules'),
-      join(directory, 'node_modules'),
-    ]);
+    mkdirSync(join(directory, 'scripts'));
+    for (const file of PLANNER_CLOSURE) {
+      copyFileSync(join(scriptsDirectory, file), join(directory, 'scripts', file));
+    }
+    symlinkSync(join(repositoryRoot, 'node_modules'), join(directory, 'node_modules'));
     writeFileSync(
       join(directory, '.gitignore'),
       'node_modules\ngithub-output.txt\nsummary.md\nci-plan.json\n',
     );
     git('add', '.');
     git('commit', '-q', '-m', 'base');
-    const before = git('rev-parse', 'HEAD');
-    execFileSync('mkdir', ['-p', join(directory, changedPath, '..')]);
-    writeFileSync(join(directory, changedPath), 'changed\n');
-    git('add', '.');
-    git('commit', '-q', '-m', 'change');
-    return { directory, before, after: git('rev-parse', 'HEAD') };
+    const base = git('rev-parse', 'HEAD');
+    const commit = (path: string) => {
+      mkdirSync(dirname(join(directory, path)), { recursive: true });
+      writeFileSync(join(directory, path), 'changed\n');
+      git('add', path);
+      git('commit', '-q', '-m', path);
+      return git('rev-parse', 'HEAD');
+    };
+    const product = commit('apps/api/src/example.ts');
+    const tooling = commit('deploy/timeweb/example.yaml');
+    return { directory, base, product, tooling };
   }
 
-  it('skips only for a product-only push with a known previous commit', () => {
-    const product = repositoryWith('apps/api/src/example.ts');
-    const tooling = repositoryWith('deploy/timeweb/example.yaml');
+  it('copies the complete local import closure of the planner and verifier', () => {
+    const seen = new Set<string>();
+    const pending = ['select-pr-ci-profile.js', 'verify-ci-plan.js'];
+    while (pending.length > 0) {
+      const file = pending.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const source = readFileSync(join(scriptsDirectory, file), 'utf8');
+      for (const match of source.matchAll(/(?:from|import\()\s*['"]\.\/([^'"]+)['"]/gu)) {
+        pending.push(match[1]!);
+      }
+    }
+    expect([...seen].sort()).toEqual([...PLANNER_CLOSURE].sort());
+  });
+
+  // Eight real planner runs; the full CI suite runs this file under coverage and parallel load.
+  it('skips only for a product-only push with a known previous commit', { timeout: 60_000 }, () => {
+    const { directory, base, product, tooling } = repositoryWithChanges();
     try {
-      const skip = runPushPlan(product.before, product.after, product.directory);
+      const skip = runPushPlan(base, product, directory);
       expect(skip.status, skip.stderr).toBe(0);
       expect(skip.outputs.release_tooling_tests).toBe('false');
       expect(skip.outputs.full_quality).toBe('true');
 
-      const keep = runPushPlan(tooling.before, tooling.after, tooling.directory);
+      const keep = runPushPlan(product, tooling, directory);
       expect(keep.status, keep.stderr).toBe(0);
       expect(keep.outputs.release_tooling_tests).toBe('true');
 
-      for (const before of ['', '0'.repeat(40), '1'.repeat(40), 'not-a-sha', product.after]) {
-        const result = runPushPlan(before, product.after, product.directory);
+      for (const before of ['', '0'.repeat(40), '1'.repeat(40), 'not-a-sha', product]) {
+        const result = runPushPlan(before, product, directory);
         expect(result.status, `${before}: ${result.stderr}`).toBe(0);
         expect(result.outputs.release_tooling_tests, before).toBe('true');
       }
 
-      const broken = runPushPlan(product.before, '2'.repeat(40), product.directory);
+      const broken = runPushPlan(base, '2'.repeat(40), directory);
       expect(broken.status).not.toBe(0);
       expect(broken.outputs.release_tooling_tests).toBeUndefined();
     } finally {
-      rmSync(product.directory, { recursive: true, force: true });
-      rmSync(tooling.directory, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });
