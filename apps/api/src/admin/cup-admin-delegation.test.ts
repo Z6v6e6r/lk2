@@ -174,8 +174,7 @@ describe('CUP admin delegation', () => {
 
     expect(response.statusCode).toBe(202);
     const input = notification.createCampaign.mock.calls[0]?.[0] as
-      | { actorUserId?: string }
-      | undefined;
+      { actorUserId?: string } | undefined;
     expect(input?.actorUserId).toBe(actorUserId);
   });
 

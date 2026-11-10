@@ -686,11 +686,19 @@ async function authenticateCupAdmin(request: FastifyRequest, reply: FastifyReply
     : '';
   if (delegationToken.length > 0 && constantTimeEquals(presented, delegationToken)) {
     if (request.headers['x-app-platform'] !== 'cup-admin') {
-      sendApiError(request, reply, 403, 'ADMIN_CLIENT_REQUIRED', 'Операция доступна только из ЦУП.');
+      sendApiError(
+        request,
+        reply,
+        403,
+        'ADMIN_CLIENT_REQUIRED',
+        'Операция доступна только из ЦУП.',
+      );
       return;
     }
     const tenantKey = (request.params as { tenantKey?: string }).tenantKey ?? '';
-    if (!cupAdminDelegationTenantKeys(config.CUP_ADMIN_DELEGATION_TENANT_KEYS).includes(tenantKey)) {
+    if (
+      !cupAdminDelegationTenantKeys(config.CUP_ADMIN_DELEGATION_TENANT_KEYS).includes(tenantKey)
+    ) {
       sendApiError(request, reply, 403, 'TENANT_ACCESS_DENIED', 'Доступ к организации запрещён.');
       return;
     }
