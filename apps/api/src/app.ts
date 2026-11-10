@@ -24,13 +24,13 @@ import { registerTrainingRegistrationRoutes } from './bookings/training-registra
 import type { TrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
 import type { ManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { attachUpcomingRosters } from './bookings/upcoming-rosters.js';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import { monthlySubscriptionLaunchOrigins } from '@phub/config';
+import { cupAdminDelegationTenantKeys, monthlySubscriptionLaunchOrigins } from '@phub/config';
 import type { AppConfig, RuntimeContourAttestation } from '@phub/config';
 import type {
   CommunityCreateService,
@@ -271,6 +271,11 @@ declare module 'fastify' {
   interface FastifyRequest {
     padlHubClaims?: PadlHubClaims;
     tenantId?: string;
+    /**
+     * Set only by `authenticateCupAdmin`: the request was authorized by the ЦУП delegation
+     * credential, which is tenant-scoped by configuration rather than by `padlHubClaims.tenants`.
+     */
+    cupAdminDelegated?: boolean;
   }
 }
 
@@ -642,6 +647,78 @@ async function authenticateAdmin(request: FastifyRequest, reply: FastifyReply): 
   return authenticateForAudience(request, reply, request.server.config.JWT_ADMIN_AUDIENCE);
 }
 
+// The ЦУП delegation credential stands for the operator console itself: it carries exactly the
+// grants the notification and station-card admin contours need and nothing else.
+const CUP_ADMIN_DELEGATION_PERMISSIONS = [
+  'notifications.manage',
+  'locations.read',
+  'locations.manage',
+  'locations.publish',
+] as const;
+// The claims shape requires a session id and the console has no PadlHub session of its own to name.
+const CUP_ADMIN_DELEGATION_SESSION_ID = '00000000-0000-4000-8000-000000000000';
+
+function constantTimeEquals(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left, 'utf8');
+  const rightBytes = Buffer.from(right, 'utf8');
+  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+}
+
+/**
+ * Authorization for the notification and station-card admin contours (`/admin/api/v1/...`).
+ *
+ * Accepts a real `phub-admin` PadlHub session, or — only while the owner-enabled
+ * `CUP_ADMIN_DELEGATION_ENABLED` switch is on — the ЦУП server credential, so the operator of the
+ * console does not need a second PadlHub session for those two blocks. The delegated principal is
+ * tenant-scoped by `CUP_ADMIN_DELEGATION_TENANT_KEYS`, keeps the ЦУП client guard, and its writes are
+ * audited under `CUP_ADMIN_DELEGATION_ACTOR_ID`.
+ */
+async function authenticateCupAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const config = request.server.config;
+  const authorization = request.headers.authorization;
+  if (!authorization?.startsWith('Bearer ')) {
+    sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+    return;
+  }
+  const presented = authorization.slice('Bearer '.length);
+  const delegationToken = config.CUP_ADMIN_DELEGATION_ENABLED
+    ? (config.CUP_ADMIN_DELEGATION_TOKEN ?? '').trim()
+    : '';
+  if (delegationToken.length > 0 && constantTimeEquals(presented, delegationToken)) {
+    if (request.headers['x-app-platform'] !== 'cup-admin') {
+      sendApiError(request, reply, 403, 'ADMIN_CLIENT_REQUIRED', 'Операция доступна только из ЦУП.');
+      return;
+    }
+    const tenantKey = (request.params as { tenantKey?: string }).tenantKey ?? '';
+    if (!cupAdminDelegationTenantKeys(config.CUP_ADMIN_DELEGATION_TENANT_KEYS).includes(tenantKey)) {
+      sendApiError(request, reply, 403, 'TENANT_ACCESS_DENIED', 'Доступ к организации запрещён.');
+      return;
+    }
+    const actorUserId = config.CUP_ADMIN_DELEGATION_ACTOR_ID;
+    if (!actorUserId) {
+      // Unreachable in a started API: the loader refuses the switch without an actor.
+      sendApiError(
+        request,
+        reply,
+        503,
+        'CUP_ADMIN_DELEGATION_UNAVAILABLE',
+        'Делегирование ЦУП не настроено.',
+      );
+      return;
+    }
+    request.padlHubClaims = {
+      sub: actorUserId,
+      tenants: [],
+      roles: ['admin'],
+      permissions: [...CUP_ADMIN_DELEGATION_PERMISSIONS],
+      sid: CUP_ADMIN_DELEGATION_SESSION_ID,
+    };
+    request.cupAdminDelegated = true;
+    return;
+  }
+  await authenticateForAudience(request, reply, config.JWT_ADMIN_AUDIENCE);
+}
+
 function authorizeNotificationAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (reply.sent) return Promise.resolve();
   if (request.headers['x-app-platform'] !== 'cup-admin') {
@@ -726,6 +803,13 @@ async function resolveTenant(request: FastifyRequest, reply: FastifyReply): Prom
   const tenantId = result.rows[0]?.id;
   if (!tenantId) {
     sendApiError(request, reply, 404, 'TENANT_NOT_FOUND', 'Организация не найдена.');
+    return;
+  }
+  // The delegated ЦУП principal has no PadlHub session of its own: `authenticateCupAdmin` already
+  // checked this same `:tenantKey` against the configured allowlist, and there is no session id to
+  // revoke here. Every other caller keeps the claim and live-session checks below.
+  if (request.cupAdminDelegated) {
+    request.tenantId = tenantId;
     return;
   }
   if (!request.padlHubClaims?.tenants.includes(tenantId)) {
@@ -1476,9 +1560,9 @@ export async function buildApp(options: BuildAppOptions) {
       ? { repository: options.notificationScenarioRepository }
       : {}),
     runtimeEnabled: options.config.NOTIFICATION_SCENARIOS_ENABLED,
-    authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    authenticatedTenantHandlers: [authenticateCupAdmin, authorizeNotificationAdmin, resolveTenant],
     commandHandlers: [
-      authenticateAdmin,
+      authenticateCupAdmin,
       authorizeNotificationAdmin,
       resolveTenant,
       requireIdempotencyKey,
@@ -1495,14 +1579,14 @@ export async function buildApp(options: BuildAppOptions) {
     webPushGloballyEnabled: options.config.WEB_PUSH_ENABLED,
     webPushAppId: options.config.WEB_PUSH_APP_ID,
     webPushEnvironment: options.config.WEB_PUSH_ENVIRONMENT,
-    authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    authenticatedTenantHandlers: [authenticateCupAdmin, authorizeNotificationAdmin, resolveTenant],
     androidPush: {
       globallyEnabled: options.config.FCM_ENABLED && Boolean(options.notificationEndpointCipher),
       appId: options.config.FCM_APP_ID,
       environment: options.config.FCM_ENVIRONMENT,
     },
     commandHandlers: [
-      authenticateAdmin,
+      authenticateCupAdmin,
       authorizeNotificationAdmin,
       resolveTenant,
       requireIdempotencyKey,
@@ -1510,8 +1594,8 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerLocationAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.locationRepository ? { repository: options.locationRepository } : {}),
-    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
-    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+    authenticatedTenantHandlers: [authenticateCupAdmin, resolveTenant],
+    commandHandlers: [authenticateCupAdmin, resolveTenant, requireIdempotencyKey],
   });
   registerLevelEligibilityAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.levelEligibilityPolicyRepository
@@ -1582,8 +1666,8 @@ export async function buildApp(options: BuildAppOptions) {
     ),
     maxDimension: options.config.LOCATION_MEDIA_MAX_DIMENSION,
     webpQuality: options.config.LOCATION_MEDIA_WEBP_QUALITY,
-    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
-    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+    authenticatedTenantHandlers: [authenticateCupAdmin, resolveTenant],
+    commandHandlers: [authenticateCupAdmin, resolveTenant, requireIdempotencyKey],
     publicTenantHandlers: [resolvePublicTenant],
   });
   registerProfilePhotoMediaRoutes(app as unknown as FastifyInstance, {

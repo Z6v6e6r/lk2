@@ -615,6 +615,26 @@ gates; остальной список — целевая карта.
 - external control: список signals/cases, назначение, PadlHub decision, срок временного ограничения,
   appeal/reopen и безопасное отключение конкретного provider account.
 
+#### Делегирование ЦУП вместо второй операторской сессии
+
+ЦУП-оператор уже аутентифицирован своим контуром, поэтому блок «Уведомления» больше не требует
+отдельного PadlHub-логина. При включённом `CUP_ADMIN_DELEGATION_ENABLED` ЦУП вызывает
+`notifications/**` (и `locations**`, см. [locations](locations.md)) server-to-server с
+`Authorization: Bearer $CUP_ADMIN_DELEGATION_TOKEN` и заголовком `X-App-Platform: cup-admin`;
+браузер этот credential не получает.
+
+- Credential принимается только этими двумя группами маршрутов и только для tenant keys из
+  `CUP_ADMIN_DELEGATION_TENANT_KEYS`; остальные admin-маршруты по-прежнему требуют `phub-admin` JWT.
+- Делегированный principal получает ровно `notifications.manage`, `locations.read`,
+  `locations.manage`, `locations.publish` и роли `admin`; его `sub` — реальный пользователь из
+  `CUP_ADMIN_DELEGATION_ACTOR_ID`, под которым пишется аудит (`actor_user_id` имеет FK на
+  `identity.users`).
+- Сессионная проверка `resolveTenant` для делегированного запроса не выполняется: у ЦУПа нет
+  PadlHub-сессии, а tenant-скоуп уже проверен по allowlist. Обычные JWT-запросы сохраняют и проверку
+  claims, и проверку активной сессии.
+- Включение без token, actor или tenant keys отклоняется на старте API, а при выключенном флаге
+  credential не принимается вообще — конфигурация может лишь отказать, но не расширить доступ.
+
 Connector webhook ingress — отдельная проверяемая machine boundary без user/admin JWT. Для каждого
 провайдера обязательны signature verification, replay protection, allowlisted content types,
 timeout и redacted telemetry.

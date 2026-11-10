@@ -102,6 +102,18 @@ const environmentSchema = z.object({
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REALTIME_SECRET: z.string().min(32).optional(),
   JWT_REFRESH_SECRET: z.string().min(32),
+  /**
+   * ЦУП operator delegation for the notification and station-card admin APIs.
+   *
+   * The CUP console (`ph-admin`) authenticates its own operator and calls those two admin route
+   * groups server-to-server with this credential instead of asking for a separate PadlHub operator
+   * session. Scope stays narrow on purpose: only the notification/location admin routes accept it,
+   * only for the tenant keys listed here, and only while the switch is on. Off by default.
+   */
+  CUP_ADMIN_DELEGATION_ENABLED: booleanFromEnvironment,
+  CUP_ADMIN_DELEGATION_TOKEN: z.string().min(32).optional(),
+  CUP_ADMIN_DELEGATION_ACTOR_ID: z.string().uuid().optional(),
+  CUP_ADMIN_DELEGATION_TENANT_KEYS: z.string().default(''),
   AUTH_ACCESS_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
   AUTH_REFRESH_TTL_SECONDS: z.coerce.number().int().min(3600).max(5_184_000).default(2_592_000),
   AUTH_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
@@ -715,6 +727,22 @@ export interface RuntimeContourAttestation {
   readonly rabbitmq?: string;
 }
 
+/**
+ * Normalized allowlist of tenant keys the ЦУП operators' delegation credential may act for. An empty
+ * list means the credential can act for no tenant at all; the loader treats that as a
+ * misconfiguration while the switch is on, so a typo can only fail closed.
+ */
+export function cupAdminDelegationTenantKeys(raw: string | undefined): readonly string[] {
+  return Array.from(
+    new Set(
+      String(raw ?? '')
+        .split(',')
+        .map((part) => part.trim())
+        .filter((part) => /^[a-z0-9][a-z0-9-]{1,62}$/.test(part)),
+    ),
+  );
+}
+
 export function runtimeContourTargetFingerprint(value: string): string {
   const url = new URL(value);
   if (url.search.length > 0 || url.hash.length > 0) {
@@ -901,6 +929,19 @@ export function loadConfig(
     throw new Error(
       'REALTIME_DATABASE_POOL_WARM_CONNECTIONS must not exceed REALTIME_DATABASE_POOL_MAX',
     );
+  }
+  if (parsed.data.CUP_ADMIN_DELEGATION_ENABLED) {
+    // Fail closed at boot: a half-configured delegation switch must never start an API that
+    // silently answers 401 to the only operator console, or accepts an unscoped credential.
+    if (!parsed.data.CUP_ADMIN_DELEGATION_TOKEN?.trim()) {
+      throw new Error('CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_TOKEN');
+    }
+    if (!parsed.data.CUP_ADMIN_DELEGATION_ACTOR_ID) {
+      throw new Error('CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_ACTOR_ID');
+    }
+    if (cupAdminDelegationTenantKeys(parsed.data.CUP_ADMIN_DELEGATION_TENANT_KEYS).length === 0) {
+      throw new Error('CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_TENANT_KEYS');
+    }
   }
 
   if (
