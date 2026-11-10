@@ -72,6 +72,10 @@ import {
   projectHomeBaseUser,
 } from '@phub/database';
 import { createProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
+import {
+  hasVivaProfileMapping,
+  linkVivaProfileByVerifiedPhone,
+} from '@phub/database/viva-profile-phone-link';
 import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
@@ -88,7 +92,9 @@ import {
   VivaHomeSourceAdapter,
   VivaIdentityProvider,
   VivaExerciseRecommendationSourceAdapter,
+  VivaClientPhoneLookupAdapter,
   VivaResidencySourceAdapter,
+  VivaClientAdminReadSource,
 } from '@phub/viva-adapter';
 import {
   ManagedSubscriptionRuntimeQuoteClient,
@@ -269,6 +275,37 @@ const providerIdentityLink = config.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED
     }
   : undefined;
 
+// ADR 0029 D5: config validation guarantees sandbox/production mode and Admin credentials here.
+const vivaProfilePhoneLink = config.VIVA_PROFILE_PHONE_LINK_ENABLED
+  ? (() => {
+      const lookup = new VivaClientPhoneLookupAdapter({
+        mode: config.VIVA_MODE,
+        apiBaseUrl: config.VIVA_API_URL as string,
+        apiKey: config.VIVA_API_KEY as string,
+        // Runs inside the login request: keep each GET short and do not retry.
+        timeoutMs: Math.min(config.VIVA_TIMEOUT_MS, 2_000),
+        maxAttempts: 1,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 60_000,
+        onMetric: (metric) => logger.info({ metric }, 'Viva client phone lookup'),
+      });
+      return {
+        enabled: true,
+        hasMapping: (input: { readonly tenantId: string; readonly userId: string }) =>
+          hasVivaProfileMapping({ pool, ...input }),
+        lookup: (input: { readonly phoneE164: string; readonly correlationId: string }) =>
+          lookup.lookup(input),
+        link: (input: {
+          readonly tenantId: string;
+          readonly userId: string;
+          readonly providerClientId: string;
+          readonly correlationId: string;
+        }) => linkVivaProfileByVerifiedPhone({ pool, ...input }),
+        onOutcome: (outcome: string) => logger.info({ outcome }, 'Viva profile phone link'),
+      };
+    })()
+  : undefined;
+
 const authRepository = new PostgresAuthRepository(pool);
 const authService = new AuthService({
   config,
@@ -286,6 +323,7 @@ const authService = new AuthService({
       'beta client access convergence could not be written; the token keeps the stored profile',
     ),
   ...(legacyViewerIdentityLink ? { legacyViewerIdentityLink } : {}),
+  ...(vivaProfilePhoneLink ? { vivaProfilePhoneLink } : {}),
 });
 // Trusted tenant bindings only; keep circuit state across requests and bound cache cardinality.
 const trainingCatalogueAdapters = new Map<string, VivaExerciseRecommendationSourceAdapter>();
@@ -358,6 +396,21 @@ const residencySource =
         circuitFailureThreshold: 3,
         circuitResetMs: 30_000,
         onMetric: (metric) => logger.info({ metric }, 'Viva residency read'),
+      })
+    : undefined;
+const userVivaAdminSource =
+  (config.VIVA_MODE === 'sandbox' || config.VIVA_MODE === 'production') &&
+  Boolean(config.VIVA_API_URL) &&
+  Boolean(config.VIVA_API_KEY)
+    ? new VivaClientAdminReadSource({
+        mode: config.VIVA_MODE,
+        apiBaseUrl: config.VIVA_API_URL as string,
+        apiKey: config.VIVA_API_KEY as string,
+        timeoutMs: Math.max(config.VIVA_TIMEOUT_MS, 5_000),
+        maxAttempts: 2,
+        circuitFailureThreshold: 5,
+        circuitResetMs: 30_000,
+        onMetric: (metric) => logger.info({ metric }, 'Viva client admin read'),
       })
     : undefined;
 const clientResidencyService = new ClientResidencyService({
@@ -1155,6 +1208,13 @@ const app = await buildApp({
   profileProviderObservationRepository: createProfileProviderObservationRepository(pool),
   profileSummaryRepository,
   clientResidencyService,
+  ...(userVivaAdminSource
+    ? {
+        userVivaAdminSource,
+        resolveUserVivaClientId: (input: { readonly tenantId: string; readonly userId: string }) =>
+          residencyRepository.resolveVivaClientId(input),
+      }
+    : {}),
   ...(promotionEngagementSink
     ? {
         promotionEngagementRepository: createPromotionEngagementRepository(pool),

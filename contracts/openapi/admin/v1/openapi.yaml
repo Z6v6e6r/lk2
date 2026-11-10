@@ -25,6 +25,8 @@ tags:
     description: Versioned tenant and sport participation eligibility policy management.
   - name: RulesRegistry
     description: Read-only operator view of CUP published policies, LK2 level policies and the LK1 rule inventory.
+  - name: UserViva
+    description: Read-only CUP view of a user's Viva card, subscriptions, bookings and transactions.
 paths:
   /admin/api/v1/{tenantKey}/community-join-requests/pending:
     get:
@@ -288,6 +290,221 @@ paths:
         '403':
           $ref: '#/components/responses/ApiError'
         '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/users/{userId}/viva/profile:
+    get:
+      tags: [UserViva]
+      operationId: getUserVivaProfile
+      summary: Read the user Viva card projection
+      description: |
+        Read-only CUP view of one PadlHub user's Viva record. Requires `X-App-Platform: cup-admin`,
+        the admin role and `support.read` or `support.manage`. Tenant and operator come from the
+        phub-admin JWT; the Viva client is resolved server-side from the synced identity mapping
+        and is never accepted from the caller. Viva is read with GET only. The response carries no
+        Viva identifiers and no contact PII. Each read is access-audited.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/UserVivaSubjectUserId'
+      responses:
+        '200':
+          description: Provider-free projection read from Viva.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserVivaProfile'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '502':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/users/{userId}/viva/summary:
+    get:
+      tags: [UserViva]
+      operationId: getUserVivaSummary
+      summary: Read Viva card counters, statistics and bonus balance
+      description: |
+        Read-only CUP view of one PadlHub user's Viva record. Requires `X-App-Platform: cup-admin`,
+        the admin role and `support.read` or `support.manage`. Tenant and operator come from the
+        phub-admin JWT; the Viva client is resolved server-side from the synced identity mapping
+        and is never accepted from the caller. Viva is read with GET only. The response carries no
+        Viva identifiers and no contact PII. Each read is access-audited.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/UserVivaSubjectUserId'
+      responses:
+        '200':
+          description: Provider-free projection read from Viva.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserVivaSummary'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '502':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/users/{userId}/viva/subscriptions:
+    get:
+      tags: [UserViva]
+      operationId: listUserVivaSubscriptions
+      summary: List the user Viva subscriptions
+      description: |
+        Read-only CUP view of one PadlHub user's Viva record. Requires `X-App-Platform: cup-admin`,
+        the admin role and `support.read` or `support.manage`. Tenant and operator come from the
+        phub-admin JWT; the Viva client is resolved server-side from the synced identity mapping
+        and is never accepted from the caller. Viva is read with GET only. The response carries no
+        Viva identifiers and no contact PII. Each read is access-audited.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/UserVivaSubjectUserId'
+        - name: group
+          in: query
+          schema:
+            type: string
+            enum: [CURRENT, ARCHIVED]
+            default: CURRENT
+          description: CURRENT is ACTIVE/NEW/HOLD; ARCHIVED is EXPIRED/REFUNDED/NO_VISITS.
+        - $ref: '#/components/parameters/UserVivaPage'
+        - $ref: '#/components/parameters/UserVivaPageSize'
+      responses:
+        '200':
+          description: Provider-free projection read from Viva.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserVivaSubscriptionPage'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '502':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/users/{userId}/viva/bookings:
+    get:
+      tags: [UserViva]
+      operationId: listUserVivaBookings
+      summary: List the user Viva bookings
+      description: |
+        Read-only CUP view of one PadlHub user's Viva record. Requires `X-App-Platform: cup-admin`,
+        the admin role and `support.read` or `support.manage`. Tenant and operator come from the
+        phub-admin JWT; the Viva client is resolved server-side from the synced identity mapping
+        and is never accepted from the caller. Viva is read with GET only. The response carries no
+        Viva identifiers and no contact PII. Each read is access-audited.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/UserVivaSubjectUserId'
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [TODAY, FUTURE, PAST]
+            default: FUTURE
+        - name: includeCancelled
+          in: query
+          schema:
+            type: string
+            enum: ['true', 'false']
+            default: 'false'
+        - $ref: '#/components/parameters/UserVivaPage'
+        - $ref: '#/components/parameters/UserVivaPageSize'
+      responses:
+        '200':
+          description: Provider-free projection read from Viva.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserVivaBookingPage'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '502':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/users/{userId}/viva/transactions:
+    get:
+      tags: [UserViva]
+      operationId: listUserVivaTransactions
+      summary: List the user Viva transactions, newest first
+      description: |
+        Read-only CUP view of one PadlHub user's Viva record. Requires `X-App-Platform: cup-admin`,
+        the admin role and `support.read` or `support.manage`. Tenant and operator come from the
+        phub-admin JWT; the Viva client is resolved server-side from the synced identity mapping
+        and is never accepted from the caller. Viva is read with GET only. The response carries no
+        Viva identifiers and no contact PII. Each read is access-audited.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/UserVivaSubjectUserId'
+        - $ref: '#/components/parameters/UserVivaPage'
+        - $ref: '#/components/parameters/UserVivaPageSize'
+      responses:
+        '200':
+          description: Provider-free projection read from Viva.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserVivaTransactionPage'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '502':
           $ref: '#/components/responses/ApiError'
         '503':
           $ref: '#/components/responses/ApiError'
@@ -1537,6 +1754,29 @@ components:
         AUTH_SESSION_CHECK_UNAVAILABLE (503). Ordinary refresh preserves earlier access JWTs
         until exp while their session family remains active.
   parameters:
+    UserVivaSubjectUserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserVivaPage:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 1000
+        default: 0
+    UserVivaPageSize:
+      name: size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 25
     TenantKey:
       name: tenantKey
       in: path
@@ -1588,6 +1828,175 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
   schemas:
+    UserVivaConsent:
+      type: object
+      additionalProperties: false
+      required: [accepted, acceptedAt]
+      properties:
+        accepted: { type: boolean }
+        acceptedAt: { type: [string, 'null'] }
+    UserVivaProfile:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          registeredAt,
+          lastLoginAt,
+          lastVisitAt,
+          depositKopecks,
+          categoryName,
+          source,
+          hasLoyaltyCard,
+          trialUsed,
+          blacklisted,
+          deleted,
+          hasFamily,
+          managerAssigned,
+          consents,
+          checkedAt,
+        ]
+      properties:
+        registeredAt: { type: [string, 'null'] }
+        lastLoginAt: { type: [string, 'null'] }
+        lastVisitAt: { type: [string, 'null'] }
+        depositKopecks: { type: integer }
+        categoryName: { type: [string, 'null'] }
+        source: { type: [string, 'null'] }
+        hasLoyaltyCard: { type: boolean }
+        trialUsed: { type: boolean }
+        blacklisted: { type: boolean }
+        deleted: { type: boolean }
+        hasFamily: { type: boolean }
+        managerAssigned: { type: boolean }
+        consents:
+          type: object
+          additionalProperties: false
+          required: [offer, personalData, privacyPolicy, marketing]
+          properties:
+            offer: { $ref: '#/components/schemas/UserVivaConsent' }
+            personalData: { $ref: '#/components/schemas/UserVivaConsent' }
+            privacyPolicy: { $ref: '#/components/schemas/UserVivaConsent' }
+            marketing: { $ref: '#/components/schemas/UserVivaConsent' }
+        checkedAt: { type: string, format: date-time }
+    UserVivaSummary:
+      type: object
+      additionalProperties: false
+      required: [counters, statistics, bonusPoints, checkedAt]
+      properties:
+        counters:
+          type: object
+          additionalProperties: { type: integer }
+          description: todayBookings, waitingTransactions, activeSubscriptions, unusedOneTimes, giftCertificates, activeGiftCertificates.
+        statistics:
+          type: object
+          description: Viva card statistics snapshot; amounts in roubles as Viva reports them.
+          additionalProperties: true
+        bonusPoints:
+          type: object
+          additionalProperties: false
+          required: [active, pending, totalEarned]
+          properties:
+            active: { type: number }
+            pending: { type: number }
+            totalEarned: { type: number }
+        checkedAt: { type: string, format: date-time }
+    UserVivaPageMeta:
+      type: object
+      required: [page, size, totalElements, hasNext, checkedAt]
+      properties:
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: [integer, 'null'] }
+        hasNext: { type: boolean }
+        checkedAt: { type: string, format: date-time }
+    UserVivaSubscription:
+      type: object
+      additionalProperties: true
+      required: [productName, status, limitations, bookingsCount]
+      properties:
+        productName: { type: string }
+        status: { type: string }
+        variant: { type: [string, 'null'] }
+        costKopecks: { type: [integer, 'null'] }
+        purchasedAt: { type: [string, 'null'] }
+        activatedAt: { type: [string, 'null'] }
+        expiresOn: { type: [string, 'null'] }
+        holdUntil: { type: [string, 'null'] }
+        visitsTotal: { type: [integer, 'null'] }
+        visitsLeft: { type: [integer, 'null'] }
+        limitations:
+          type: object
+          properties:
+            studios: { type: array, items: { type: string } }
+            exerciseTypes: { type: array, items: { type: string } }
+            directions: { type: array, items: { type: string } }
+        bookingsCount: { type: integer }
+    UserVivaSubscriptionPage:
+      allOf:
+        - $ref: '#/components/schemas/UserVivaPageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/UserVivaSubscription' }
+    UserVivaBooking:
+      type: object
+      additionalProperties: true
+      required: [startsAt, cancelled, visitConfirmed]
+      properties:
+        startsAt: { type: string }
+        duration: { type: [string, 'null'] }
+        studioName: { type: [string, 'null'] }
+        roomName: { type: [string, 'null'] }
+        directionName: { type: [string, 'null'] }
+        exerciseTypeName: { type: [string, 'null'] }
+        paymentType: { type: [string, 'null'] }
+        cancelled: { type: boolean }
+        visitConfirmed: { type: boolean }
+        settlementStatus: { type: [string, 'null'] }
+    UserVivaBookingPage:
+      allOf:
+        - $ref: '#/components/schemas/UserVivaPageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/UserVivaBooking' }
+    UserVivaTransaction:
+      type: object
+      additionalProperties: true
+      required: [createdAt, status, sumKopecks, toPayKopecks, products]
+      properties:
+        createdAt: { type: string }
+        paidAt: { type: [string, 'null'] }
+        status: { type: string }
+        paymentMethod: { type: [string, 'null'] }
+        sumKopecks: { type: integer }
+        toPayKopecks: { type: integer }
+        discountKopecks: { type: integer }
+        refundSumKopecks: { type: [integer, 'null'] }
+        products:
+          type: array
+          items:
+            type: object
+            required: [name, costKopecks, count]
+            properties:
+              name: { type: string }
+              type: { type: [string, 'null'] }
+              costKopecks: { type: integer }
+              count: { type: integer }
+              discountKopecks: { type: integer }
+    UserVivaTransactionPage:
+      allOf:
+        - $ref: '#/components/schemas/UserVivaPageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/UserVivaTransaction' }
     NotificationScenarioDefinition:
       type: object
       additionalProperties: false
