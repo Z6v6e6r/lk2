@@ -44,6 +44,7 @@ import {
   createGameRepository,
   createGameRosterRepository,
   createGameResultProjectionRepository,
+  createGameResultRepository,
   createGiftCertificateIssuanceRepository,
   createLocalCommunityDirectoryRepository,
   createMessagingRepository,
@@ -93,6 +94,10 @@ import { registerNotificationScenarioConsumer } from './notification-scenario-co
 import { runNotificationScenarioBatch } from './notification-scenarios.js';
 import { registerNotificationProjectorConsumer } from './notification-projector-consumer.js';
 import { runBookingReminderSchedulerBatch } from './booking-reminder-scheduler.js';
+import {
+  createGameResultAutoConfirmPort,
+  runGameResultAutoConfirmBatch,
+} from './game-result-auto-confirm.js';
 import {
   collectWorkerOperationalSnapshot,
   createWorkerMetricRecorder,
@@ -572,6 +577,10 @@ await registerGamesCardProjectorConsumer({
   logger,
 });
 const gameResultProjectionRepository = createGameResultProjectionRepository(pool);
+const gameResultAutoConfirmPort = createGameResultAutoConfirmPort({
+  pool,
+  repository: createGameResultRepository(pool),
+});
 await registerGameResultProjectorConsumer({
   channel: consumerChannel,
   repository: gameResultProjectionRepository,
@@ -1745,8 +1754,75 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
 
 process.once('SIGTERM', () => void shutdown('SIGTERM'));
 process.once('SIGINT', () => void shutdown('SIGINT'));
+let gameResultAutoConfirmTenantCycleStartOffset = 0;
+
+/**
+ * Confirms results nobody answered inside the configured window (12 hours by default) so a silent
+ * opponent no longer freezes the score, the rating and the LK1 import. The transition itself is the
+ * same transactional command a participant confirmation runs, with no confirming user recorded.
+ */
+const runGameResultAutoConfirmCycle = async (): Promise<void> => {
+  if (shuttingDown || !config.GAME_RESULT_AUTO_CONFIRM_ENABLED) return;
+  const startedAt = Date.now();
+  let confirmed = 0;
+  let skipped = 0;
+  let failed = 0;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true order by id',
+    );
+    const tenantCycle = await runFairTenantCycle({
+      tenants: tenants.rows,
+      startOffset: gameResultAutoConfirmTenantCycleStartOffset,
+      shouldStop: () => shuttingDown,
+      runTenant: async (tenant) => {
+        const result = await runGameResultAutoConfirmBatch({
+          port: gameResultAutoConfirmPort,
+          tenantId: tenant.id,
+          confirmationWindowHours: config.GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS,
+          batchSize: config.GAME_RESULT_AUTO_CONFIRM_BATCH_SIZE,
+          correlationId: `auto-confirm:${tenant.id}:${startedAt}`,
+          onError: ({ gameId, submissionId, error }) => {
+            logger.error(
+              { err: error, tenantId: tenant.id, gameId, submissionId },
+              'game result auto confirm failed',
+            );
+          },
+        });
+        confirmed += result.confirmed;
+        skipped += result.skipped;
+        failed += result.failed;
+      },
+      onTenantFailure: (tenant, error) => {
+        logger.error(
+          { err: error, tenantId: tenant.id },
+          'game result auto confirm tenant cycle failed',
+        );
+      },
+      onProgress: () => undefined,
+    });
+    gameResultAutoConfirmTenantCycleStartOffset = tenantCycle.nextStartOffset;
+    if (confirmed > 0 || skipped > 0 || failed > 0) {
+      logger.info(
+        { confirmed, skipped, failed, durationMs: Date.now() - startedAt },
+        'game result auto confirm cycle completed',
+      );
+    }
+  } catch (error) {
+    logger.error({ error }, 'game result auto confirm cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(
+        () => void runGameResultAutoConfirmCycle(),
+        config.GAME_RESULT_AUTO_CONFIRM_POLL_INTERVAL_MS,
+      );
+    }
+  }
+};
+
 void runCycle();
 void runBookingReminderCycle();
+void runGameResultAutoConfirmCycle();
 void runScenarioCycle();
 void runLifecycleCycle();
 if (telemetry) void runOperationalMetricsCycle();

@@ -37,6 +37,13 @@ partners and opponents only need to be stable inside one set.
    `shadow_compare` is reserved for read-only comparison and still rejects new writes;
    `local_primary` enables only the canonical PadlHub result repository. No mode performs dual-write
    to legacy LK.
+8. A submission nobody answers is confirmed by the worker once its confirmation window passes
+   (`GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS`, 12 hours by default). The automatic transition runs the
+   same transactional confirmation command, records no confirming user, and is audited under its own
+   command type `game.result.auto-confirm.v1`. A submission is only eligible while it is
+   `PENDING_CONFIRMATION` outside the window; `DISPUTED`, `CONFIRMED` and `SUPERSEDED` never are, and
+   a dispute before the window blocks the automatic decision permanently.
+   `GAME_RESULT_AUTO_CONFIRM_ENABLED` keeps the behaviour off until an environment opts in.
 
 ## Consequences
 
