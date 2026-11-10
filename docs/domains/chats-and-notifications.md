@@ -620,15 +620,21 @@ gates; остальной список — целевая карта.
 ЦУП-оператор уже аутентифицирован своим контуром, поэтому блок «Уведомления» больше не требует
 отдельного PadlHub-логина. При включённом `CUP_ADMIN_DELEGATION_ENABLED` ЦУП вызывает
 `notifications/**` (и `locations**`, см. [locations](locations.md)) server-to-server с
-`Authorization: Bearer $CUP_ADMIN_DELEGATION_TOKEN` и заголовком `X-App-Platform: cup-admin`;
-браузер этот credential не получает.
+`Authorization: Bearer cupv1.<issuedAtMs>.<hmac>` и заголовком `X-App-Platform: cup-admin`;
+браузер эти данные не получает.
 
+- Ассерция — HMAC-SHA256 от `cupv1\n{tenantKey}\n{issuedAtMs}` на ключе
+  `CUP_ADMIN_DELEGATION_TOKEN`. Секрет не передаётся; ассерция привязана к tenant и к времени и
+  принимается только внутри окна `CUP_ADMIN_DELEGATION_MAX_AGE_SECONDS` (по умолчанию 120 с), так
+  что перехваченный запрос бесполезен вне окна и не переносится на другую организацию. Сравнение идёт
+  по двум digest фиксированной длины, без length-oracle.
 - Credential принимается только этими двумя группами маршрутов и только для tenant keys из
   `CUP_ADMIN_DELEGATION_TENANT_KEYS`; остальные admin-маршруты по-прежнему требуют `phub-admin` JWT.
 - Делегированный principal получает ровно `notifications.manage`, `locations.read`,
-  `locations.manage`, `locations.publish` и роли `admin`; его `sub` — реальный пользователь из
+  `locations.manage`, `locations.publish` и роли `admin`; его `sub` — пользователь из
   `CUP_ADMIN_DELEGATION_ACTOR_ID`, под которым пишется аудит (`actor_user_id` имеет FK на
-  `identity.users`).
+  `identity.users`). Нужен реальный аккаунт; для разделения «человек против консоли» в аудите
+  предпочтителен отдельный нечеловеческий оператор, а не личный аккаунт владельца.
 - Сессионная проверка `resolveTenant` для делегированного запроса не выполняется: у ЦУПа нет
   PadlHub-сессии, а tenant-скоуп уже проверен по allowlist. Обычные JWT-запросы сохраняют и проверку
   claims, и проверку активной сессии.

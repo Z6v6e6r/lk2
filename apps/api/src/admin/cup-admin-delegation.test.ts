@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto';
+
 import { loadConfig } from '@phub/config';
 import type { AdminNotificationRepository, LocationRepository } from '@phub/database';
 import { createLogger } from '@phub/observability';
@@ -97,10 +99,23 @@ function locationRepository() {
 
 function delegationHeaders(overrides: Record<string, string> = {}): Record<string, string> {
   return {
-    authorization: `Bearer ${delegationToken}`,
+    authorization: `Bearer ${delegationAssertion()}`,
     'x-app-platform': 'cup-admin',
     ...overrides,
   };
+}
+
+// Mirrors the ЦУП side: the console signs `<version>\n<tenantKey>\n<issuedAtMs>` with the shared
+// secret, so the secret itself never travels and a captured request expires with the replay window.
+function delegationAssertion(
+  issuedAtMs: number = Date.now(),
+  tenantKey: string = 'local-padel',
+  secret: string = delegationToken,
+): string {
+  const mac = createHmac('sha256', secret)
+    .update(`cupv1\n${tenantKey}\n${issuedAtMs}`)
+    .digest('hex');
+  return `cupv1.${issuedAtMs}.${mac}`;
 }
 
 async function app(options: {
@@ -185,11 +200,67 @@ describe('CUP admin delegation', () => {
     const response = await built.inject({
       method: 'GET',
       url: '/admin/api/v1/another-padel/notifications/capabilities',
-      headers: delegationHeaders(),
+      headers: {
+        authorization: `Bearer ${delegationAssertion(Date.now(), 'another-padel')}`,
+        'x-app-platform': 'cup-admin',
+      },
     });
 
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({ code: 'TENANT_ACCESS_DENIED' });
+    expect(notification.getCapabilities).not.toHaveBeenCalled();
+  });
+
+  it('binds the assertion to the tenant it was minted for', async () => {
+    const notification = notificationRepository();
+    const built = await app({ notification, sessionActive: false });
+
+    const response = await built.inject({
+      method: 'GET',
+      url: '/admin/api/v1/another-padel/notifications/capabilities',
+      headers: delegationHeaders(),
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(notification.getCapabilities).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assertion outside the replay window', async () => {
+    const notification = notificationRepository();
+    const built = await app({ notification, sessionActive: false });
+
+    const response = await built.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/notifications/capabilities',
+      headers: {
+        authorization: `Bearer ${delegationAssertion(Date.now() - 10 * 60 * 1000)}`,
+        'x-app-platform': 'cup-admin',
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ code: 'AUTH_TOKEN_INVALID' });
+    expect(notification.getCapabilities).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assertion signed with another secret', async () => {
+    const notification = notificationRepository();
+    const built = await app({ notification, sessionActive: false });
+
+    const response = await built.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/notifications/capabilities',
+      headers: {
+        authorization: `Bearer ${delegationAssertion(
+          Date.now(),
+          'local-padel',
+          'a-different-secret-that-is-long-enough',
+        )}`,
+        'x-app-platform': 'cup-admin',
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
     expect(notification.getCapabilities).not.toHaveBeenCalled();
   });
 
@@ -200,7 +271,7 @@ describe('CUP admin delegation', () => {
     const response = await built.inject({
       method: 'GET',
       url: '/admin/api/v1/local-padel/notifications/capabilities',
-      headers: { authorization: `Bearer ${delegationToken}` },
+      headers: { authorization: `Bearer ${delegationAssertion()}` },
     });
 
     expect(response.statusCode).toBe(403);
@@ -237,6 +308,34 @@ describe('CUP admin delegation', () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.json()).toMatchObject({ code: 'AUTH_TOKEN_INVALID' });
+  });
+
+  it('authorizes the binary station-media upload through the delegation', async () => {
+    const built = await app({ sessionActive: false });
+
+    const authorized = await built.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/location-media',
+      headers: delegationHeaders({
+        'idempotency-key': 'cup-admin-delegation-media-0001',
+        'content-type': 'image/png',
+      }),
+      payload: Buffer.from('synthetic-not-an-image'),
+    });
+    // The credential passed the guard: whatever the media contour answers about these synthetic bytes,
+    // it is not the refusal an unauthorized caller gets.
+    expect([401, 403]).not.toContain(authorized.statusCode);
+
+    const wrongTenant = await built.inject({
+      method: 'POST',
+      url: '/admin/api/v1/another-padel/location-media',
+      headers: delegationHeaders({
+        'idempotency-key': 'cup-admin-delegation-media-0002',
+        'content-type': 'image/png',
+      }),
+      payload: Buffer.from('synthetic-not-an-image'),
+    });
+    expect(wrongTenant.statusCode).toBe(401);
   });
 
   it('still accepts a real phub-admin session for the same routes', async () => {

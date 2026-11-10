@@ -114,6 +114,12 @@ const environmentSchema = z.object({
   CUP_ADMIN_DELEGATION_TOKEN: z.string().min(32).optional(),
   CUP_ADMIN_DELEGATION_ACTOR_ID: z.string().uuid().optional(),
   CUP_ADMIN_DELEGATION_TENANT_KEYS: z.string().default(''),
+  /**
+   * Replay window for the ЦУП delegation assertion. The console signs the current timestamp with
+   * `CUP_ADMIN_DELEGATION_TOKEN`; anything older (or further in the future) than this is refused, so a
+   * captured request stops working almost immediately instead of living as long as the secret.
+   */
+  CUP_ADMIN_DELEGATION_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(900).default(120),
   AUTH_ACCESS_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
   AUTH_REFRESH_TTL_SECONDS: z.coerce.number().int().min(3600).max(5_184_000).default(2_592_000),
   AUTH_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),

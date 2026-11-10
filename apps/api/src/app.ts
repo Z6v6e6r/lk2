@@ -24,7 +24,7 @@ import { registerTrainingRegistrationRoutes } from './bookings/training-registra
 import type { TrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
 import type { ManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { attachUpcomingRosters } from './bookings/upcoming-rosters.js';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
@@ -657,18 +657,48 @@ const CUP_ADMIN_DELEGATION_PERMISSIONS = [
 ] as const;
 // The claims shape requires a session id and the console has no PadlHub session of its own to name.
 const CUP_ADMIN_DELEGATION_SESSION_ID = '00000000-0000-4000-8000-000000000000';
+// Versioned, tenant-bound, time-bound assertion: `cupv1.<issuedAtMs>.<hmacSha256Hex>`.
+const CUP_ADMIN_DELEGATION_ASSERTION_VERSION = 'cupv1';
+const CUP_ADMIN_DELEGATION_ASSERTION_PATTERN = /^cupv1\.(\d{10,16})\.([0-9a-f]{64})$/;
 
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBytes = Buffer.from(left, 'utf8');
-  const rightBytes = Buffer.from(right, 'utf8');
-  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+function cupAdminDelegationMac(secret: string, tenantKey: string, issuedAtMs: string): string {
+  return createHmac('sha256', secret)
+    .update(`${CUP_ADMIN_DELEGATION_ASSERTION_VERSION}\n${tenantKey}\n${issuedAtMs}`)
+    .digest('hex');
+}
+
+/**
+ * Verifies the ЦУП delegation assertion for one tenant at one moment.
+ *
+ * The shared secret never travels: the console sends an HMAC over the tenant key and the current
+ * timestamp, so a captured request is worthless outside the replay window and cannot be replayed
+ * against another tenant. Both sides of the comparison are fixed-length digests, which also removes
+ * the length oracle a raw secret comparison would leak.
+ */
+function verifyCupAdminDelegationAssertion(input: {
+  readonly presented: string;
+  readonly secret: string;
+  readonly tenantKey: string;
+  readonly maxAgeMs: number;
+  readonly nowMs: number;
+}): boolean {
+  const match = CUP_ADMIN_DELEGATION_ASSERTION_PATTERN.exec(input.presented);
+  if (!match) return false;
+  const issuedAtMs = match[1];
+  const presentedMac = match[2];
+  if (!issuedAtMs || !presentedMac) return false;
+  const issuedAt = Number(issuedAtMs);
+  if (!Number.isSafeInteger(issuedAt)) return false;
+  if (Math.abs(input.nowMs - issuedAt) > input.maxAgeMs) return false;
+  const expectedMac = cupAdminDelegationMac(input.secret, input.tenantKey, issuedAtMs);
+  return timingSafeEqual(Buffer.from(presentedMac, 'hex'), Buffer.from(expectedMac, 'hex'));
 }
 
 /**
  * Authorization for the notification and station-card admin contours (`/admin/api/v1/...`).
  *
  * Accepts a real `phub-admin` PadlHub session, or — only while the owner-enabled
- * `CUP_ADMIN_DELEGATION_ENABLED` switch is on — the ЦУП server credential, so the operator of the
+ * `CUP_ADMIN_DELEGATION_ENABLED` switch is on — the ЦУП server assertion, so the operator of the
  * console does not need a second PadlHub session for those two blocks. The delegated principal is
  * tenant-scoped by `CUP_ADMIN_DELEGATION_TENANT_KEYS`, keeps the ЦУП client guard, and its writes are
  * audited under `CUP_ADMIN_DELEGATION_ACTOR_ID`.
@@ -681,10 +711,20 @@ async function authenticateCupAdmin(request: FastifyRequest, reply: FastifyReply
     return;
   }
   const presented = authorization.slice('Bearer '.length);
-  const delegationToken = config.CUP_ADMIN_DELEGATION_ENABLED
+  const delegationSecret = config.CUP_ADMIN_DELEGATION_ENABLED
     ? (config.CUP_ADMIN_DELEGATION_TOKEN ?? '').trim()
     : '';
-  if (delegationToken.length > 0 && constantTimeEquals(presented, delegationToken)) {
+  const tenantKey = (request.params as { tenantKey?: string }).tenantKey ?? '';
+  if (
+    delegationSecret.length > 0 &&
+    verifyCupAdminDelegationAssertion({
+      presented,
+      secret: delegationSecret,
+      tenantKey,
+      maxAgeMs: config.CUP_ADMIN_DELEGATION_MAX_AGE_SECONDS * 1000,
+      nowMs: Date.now(),
+    })
+  ) {
     if (request.headers['x-app-platform'] !== 'cup-admin') {
       sendApiError(
         request,
@@ -695,7 +735,6 @@ async function authenticateCupAdmin(request: FastifyRequest, reply: FastifyReply
       );
       return;
     }
-    const tenantKey = (request.params as { tenantKey?: string }).tenantKey ?? '';
     if (
       !cupAdminDelegationTenantKeys(config.CUP_ADMIN_DELEGATION_TENANT_KEYS).includes(tenantKey)
     ) {
