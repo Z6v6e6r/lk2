@@ -9,6 +9,7 @@ const HANDOFF = {
   resultRevision: 2,
   lk1GameId: '6641ab8f9c2e1d0001a2b3c4',
   submitterPhoneE164: '+79990001122',
+  submitterClientId: '831ab3b7-adc4-455d-9f74-da5bf9c3d381',
   teams: null,
   confirmedAt: '2026-11-09T09:05:00.000Z',
 } as const;
@@ -49,6 +50,7 @@ describe('LK1 result client', () => {
       externalResultId: HANDOFF.resultId,
       externalResultRevision: HANDOFF.resultRevision,
       submitterPhone: HANDOFF.submitterPhoneE164,
+      submitterClientId: HANDOFF.submitterClientId,
       scoreA: 2,
       scoreB: 1,
       confirmedAt: HANDOFF.confirmedAt,
@@ -61,7 +63,16 @@ describe('LK1 result client', () => {
     await client(fetchImpl).importConfirmedResult({
       handoff: {
         ...HANDOFF,
-        teams: { teamA: ['+79990001122', '+79990001123'], teamB: ['+79990001124', '+79990001125'] },
+        teams: {
+          teamA: [
+            { clientId: '831ab3b7-adc4-455d-9f74-da5bf9c3d381', phone: '+79990001122' },
+            { clientId: null, phone: '+79990001123' },
+          ],
+          teamB: [
+            { clientId: '83756527-cfbe-4b7f-b143-1a6ac96d2a93', phone: null },
+            { clientId: null, phone: '+79990001125' },
+          ],
+        },
       },
       score: SCORE,
       correlationId: 'correlation-0002',
@@ -69,9 +80,16 @@ describe('LK1 result client', () => {
 
     const body = fetchImpl.mock.calls[0]?.[1]?.body;
     expect(typeof body === 'string' ? JSON.parse(body) : undefined).toMatchObject({
+      submitterClientId: '831ab3b7-adc4-455d-9f74-da5bf9c3d381',
       teams: {
-        teamA: ['+79990001122', '+79990001123'],
-        teamB: ['+79990001124', '+79990001125'],
+        teamA: [
+          { clientId: '831ab3b7-adc4-455d-9f74-da5bf9c3d381', phone: '+79990001122' },
+          { clientId: null, phone: '+79990001123' },
+        ],
+        teamB: [
+          { clientId: '83756527-cfbe-4b7f-b143-1a6ac96d2a93', phone: null },
+          { clientId: null, phone: '+79990001125' },
+        ],
       },
     });
   });

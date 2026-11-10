@@ -38,16 +38,28 @@ export interface Lk1ResultHandoff {
   readonly lk1GameId: string | null;
   /** Phone of the confirming participant; null when the profile carries no phone. Never logged. */
   readonly submitterPhoneE164: string | null;
+  /** LK1 client id of the submitter, so LK1 can place them without a phone. Null when unknown. */
+  readonly submitterClientId: string | null;
   /**
-   * The two pairings from LK2's own result, as phones. LK1 games created from the split widget keep
-   * no phones or teams of their own, so the composition must travel with the result or LK1 cannot
-   * tell which side a score belongs to. Null when either side has no participant with a phone.
+   * The two pairings from LK2's own result. LK1 games created from the split widget keep no phones
+   * and no teams of their own, so the composition must travel with the result or LK1 cannot tell
+   * which side a score belongs to. Each member carries the identifiers LK1 can match: its own client
+   * id when the legacy mapping knows it, and the phone when the profile has one. Null when either
+   * side cannot be identified at all.
    */
   readonly teams: {
-    readonly teamA: readonly string[];
-    readonly teamB: readonly string[];
+    readonly teamA: readonly Lk1TeamMember[];
+    readonly teamB: readonly Lk1TeamMember[];
   } | null;
   readonly confirmedAt: string;
+}
+
+/** One participant of a pairing as LK1 is able to recognise them. */
+export interface Lk1TeamMember {
+  /** LK1 client id of the player (`lk_games.participants[].id`), when the legacy mapping knows it. */
+  readonly clientId: string | null;
+  /** E.164 phone of the player, when the LK2 profile carries one. Never logged. */
+  readonly phone: string | null;
 }
 
 export interface Lk1ResultBridgeRepository {
@@ -59,6 +71,7 @@ export interface Lk1ResultBridgeRepository {
 
 interface HandoffRow extends QueryResultRow {
   readonly game_id: string;
+  readonly submitter_user_id: string;
   readonly result_id: string;
   readonly revision: number;
   readonly confirmed_at: Date | string;
@@ -71,6 +84,14 @@ interface RosterPhoneRow extends QueryResultRow {
   readonly user_id: string;
   readonly phone_e164: string | null;
 }
+
+interface RosterClientRow extends QueryResultRow {
+  readonly internal_id: string;
+  readonly external_id: string;
+}
+
+/** LK1 client ids are UUIDs; the same mapping table also holds pseudonymous hashes. */
+const CLIENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /**
  * LK2 records teams per set; LK1 keeps one score per game, so the first set's pairing is the
@@ -98,6 +119,7 @@ function firstSetTeams(scorePayload: unknown): {
 const HANDOFF_SQL = `
   select r.game_id, r.id as result_id, r.revision, r.confirmed_at,
          submission.score_payload,
+         coalesce(r.confirmed_by_user_id, submission.submitted_by_user_id) as submitter_user_id,
          (
            select array_agg(mapping.external_id)
              from integration.external_entity_map mapping
@@ -123,6 +145,15 @@ const ROSTER_PHONES_SQL = `
    where tenant_id = $1 and user_id = any($2::uuid[])
 `;
 
+const ROSTER_CLIENTS_SQL = `
+  select internal_id, external_id
+    from integration.external_entity_map
+   where tenant_id = $1
+     and entity_type = 'game_player'
+     and external_system = '${LK1_EXTERNAL_SYSTEM}'
+     and internal_id = any($2::uuid[])
+`;
+
 export function createLk1ResultBridgeRepository(pool: Pool): Lk1ResultBridgeRepository {
   return {
     loadHandoff(input) {
@@ -135,9 +166,14 @@ export function createLk1ResultBridgeRepository(pool: Pool): Lk1ResultBridgeRepo
         if (!row) return undefined;
         const pairing = firstSetTeams(row.score_payload);
         let teams: Lk1ResultHandoff['teams'] = null;
+        let submitterClientId: string | null = null;
         if (pairing) {
           const userIds = [...new Set([...pairing.teamAUserIds, ...pairing.teamBUserIds])];
           const phones = await client.query<RosterPhoneRow>(ROSTER_PHONES_SQL, [
+            input.tenantId,
+            userIds,
+          ]);
+          const clients = await client.query<RosterClientRow>(ROSTER_CLIENTS_SQL, [
             input.tenantId,
             userIds,
           ]);
@@ -146,14 +182,25 @@ export function createLk1ResultBridgeRepository(pool: Pool): Lk1ResultBridgeRepo
               .filter((phone) => typeof phone.phone_e164 === 'string' && phone.phone_e164 !== '')
               .map((phone) => [phone.user_id, phone.phone_e164 as string]),
           );
-          const teamAPhones = pairing.teamAUserIds.map((id) => phoneOf.get(id));
-          const teamBPhones = pairing.teamBUserIds.map((id) => phoneOf.get(id));
-          if (teamAPhones.every(Boolean) && teamBPhones.every(Boolean)) {
-            teams = {
-              teamA: teamAPhones as string[],
-              teamB: teamBPhones as string[],
-            };
+          const clientOf = new Map<string, string>();
+          for (const mapping of clients.rows) {
+            if (!CLIENT_ID.test(mapping.external_id)) continue;
+            const chosen = clientOf.get(mapping.internal_id);
+            if (!chosen || mapping.external_id < chosen) {
+              clientOf.set(mapping.internal_id, mapping.external_id);
+            }
           }
+          const member = (userId: string): Lk1TeamMember => ({
+            clientId: clientOf.get(userId) ?? null,
+            phone: phoneOf.get(userId) ?? null,
+          });
+          const teamA = pairing.teamAUserIds.map(member);
+          const teamB = pairing.teamBUserIds.map(member);
+          submitterClientId = clientOf.get(row.submitter_user_id) ?? null;
+          const identified = (members: readonly Lk1TeamMember[]) =>
+            members.length > 0 &&
+            members.every((entry) => entry.clientId !== null || entry.phone !== null);
+          if (identified(teamA) && identified(teamB)) teams = { teamA, teamB };
         }
         return {
           tenantId: input.tenantId,
@@ -162,6 +209,7 @@ export function createLk1ResultBridgeRepository(pool: Pool): Lk1ResultBridgeRepo
           resultRevision: row.revision,
           lk1GameId: selectLk1GameId(row.lk1_game_aliases ?? []),
           submitterPhoneE164: row.submitter_phone,
+          submitterClientId,
           teams,
           confirmedAt: new Date(row.confirmed_at).toISOString(),
         };
