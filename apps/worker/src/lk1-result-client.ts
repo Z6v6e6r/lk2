@@ -57,6 +57,9 @@ export class Lk1ResultClient {
         externalResultId: handoff.resultId,
         externalResultRevision: handoff.resultRevision,
         submitterPhone: handoff.submitterPhoneE164,
+        ...(handoff.teams
+          ? { teams: { teamA: [...handoff.teams.teamA], teamB: [...handoff.teams.teamB] } }
+          : {}),
         scoreA: score.scoreA,
         scoreB: score.scoreB,
         confirmedAt: handoff.confirmedAt,

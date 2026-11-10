@@ -9,6 +9,7 @@ const HANDOFF = {
   resultRevision: 2,
   lk1GameId: '6641ab8f9c2e1d0001a2b3c4',
   submitterPhoneE164: '+79990001122',
+  teams: null,
   confirmedAt: '2026-11-09T09:05:00.000Z',
 } as const;
 
@@ -52,6 +53,40 @@ describe('LK1 result client', () => {
       scoreB: 1,
       confirmedAt: HANDOFF.confirmedAt,
     });
+  });
+
+  it('sends the LK2 pairing when the handoff carries one', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 202 }));
+
+    await client(fetchImpl).importConfirmedResult({
+      handoff: {
+        ...HANDOFF,
+        teams: { teamA: ['+79990001122', '+79990001123'], teamB: ['+79990001124', '+79990001125'] },
+      },
+      score: SCORE,
+      correlationId: 'correlation-0002',
+    });
+
+    const body = fetchImpl.mock.calls[0]?.[1]?.body;
+    expect(typeof body === 'string' ? JSON.parse(body) : undefined).toMatchObject({
+      teams: {
+        teamA: ['+79990001122', '+79990001123'],
+        teamB: ['+79990001124', '+79990001125'],
+      },
+    });
+  });
+
+  it('omits the pairing entirely when the handoff has none', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 202 }));
+
+    await client(fetchImpl).importConfirmedResult({
+      handoff: HANDOFF,
+      score: SCORE,
+      correlationId: 'correlation-0003',
+    });
+
+    const body = fetchImpl.mock.calls[0]?.[1]?.body;
+    expect(typeof body === 'string' ? JSON.parse(body) : undefined).not.toHaveProperty('teams');
   });
 
   it('treats the LK1 replay answer as a delivered duplicate', async () => {
