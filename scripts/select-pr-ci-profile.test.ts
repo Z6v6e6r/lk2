@@ -19,6 +19,7 @@ function select(paths: readonly string[], event = 'pull_request', ref = 'refs/pu
   return JSON.parse(result.stdout) as {
     profile: string;
     fullQuality: boolean;
+    releaseToolingTests: boolean;
     webQuality: boolean;
     deploymentContract: boolean;
     provenanceProbe: boolean;
@@ -179,10 +180,83 @@ describe('PR CI profile planner', () => {
     (branch) => {
       expect(select([], 'push', `refs/heads/${branch}`)).toMatchObject({
         profile: 'full',
+        releaseToolingTests: true,
         deploymentContract: true,
         provenanceProbe: true,
         dockerServices: all,
       });
     },
   );
+
+  it.each([
+    ['API source', ['apps/api/src/games/game-routes.ts']],
+    ['Web source outside the leaf allowlist', ['apps/web/src/auth-gateway.ts']],
+    ['worker and package source', ['apps/worker/src/main.ts', 'packages/database/src/index.ts']],
+    ['product tests', ['apps/api/src/app.test.ts', 'packages/games/src/index.test.ts']],
+    ['package manifest', ['packages/database/src/index.ts', 'packages/database/package.json']],
+    ['native Android project', ['apps/mobile/android/app/build.gradle']],
+    ['Web public asset', ['apps/web/public/loader.js']],
+    ['API contract', ['contracts/openapi/user/v1/openapi.yaml', 'openapi.yaml']],
+    [
+      'source with its documentation',
+      ['apps/api/src/auth/auth-service.ts', 'docs/contracts/viva-profile-phone-link.md'],
+    ],
+  ])('skips the paused release-tooling tests for %s only', (_scenario, paths) => {
+    expect(select(paths)).toMatchObject({ profile: 'full', releaseToolingTests: false });
+    expect(select(paths, 'push', 'refs/heads/main')).toMatchObject({
+      profile: 'full',
+      releaseToolingTests: false,
+      deploymentContract: true,
+      provenanceProbe: true,
+      dockerServices: all,
+    });
+  });
+
+  it.each([
+    'scripts/timeweb-standard-policy.js',
+    'scripts/paused-release-tooling-tests.txt',
+    'scripts/run-ci-tests-with-diagnostics.sh',
+    'deploy/timeweb/compose.beta.yaml',
+    'deploy/lk1-results-bridge/README.md',
+    '.github/workflows/pull-request.yaml',
+    '.github/PULL_REQUEST_TEMPLATE.md',
+    '.agents/skills/lk2-dev/SKILL.md',
+    'apps/migrator/src/lk2-beta-lane.ts',
+    'apps/migrator/package.json',
+    'apps/api/Dockerfile',
+    'apps/web/Dockerfile.dev',
+    'packages/database/migrations/0117_example.sql',
+    'package.json',
+    'package-lock.json',
+    'tsconfig.json',
+    'vitest.config.ts',
+    'compose.yaml',
+    '.env.example',
+    '.dockerignore',
+    'AGENTS.md',
+    'docs/api/schema.json',
+    'tooling/new-graph.ts',
+    'apps/api/src/../Dockerfile',
+  ])('keeps the paused release-tooling tests when %s changes with product source', (path) => {
+    for (const paths of [[path], ['apps/api/src/games/game-routes.ts', path]]) {
+      const pullRequest = select(paths);
+      expect(pullRequest.releaseToolingTests).toBe(pullRequest.fullQuality);
+      expect(select(paths, 'push', 'refs/heads/main').releaseToolingTests).toBe(true);
+    }
+  });
+
+  it('never plans the paused release-tooling tests outside the full profile', () => {
+    expect(select(['docs/product-notes.md'])).toMatchObject({
+      profile: 'docs',
+      releaseToolingTests: false,
+    });
+    expect(select(['apps/web/src/styles.css'])).toMatchObject({
+      profile: 'leaf-web',
+      releaseToolingTests: false,
+    });
+  });
+
+  it('keeps the paused release-tooling tests for an empty pull-request range', () => {
+    expect(select([])).toMatchObject({ profile: 'full', releaseToolingTests: true });
+  });
 });

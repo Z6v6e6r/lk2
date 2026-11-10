@@ -38,6 +38,33 @@ function isSafeDocumentationPath(path) {
   return markdown && !SENSITIVE_FRAGMENT.test(path);
 }
 
+// Product areas whose changes are not inputs of the paused release tooling: applications and
+// packages (not the migrator, the deploy executor; not Dockerfiles or migrations, which are
+// release inputs), API contracts and non-policy documentation. An unknown location is not one.
+function isProductAreaPath(path) {
+  if (isPolicyPath(path)) return false;
+  if (/^[^/]+\.md$/u.test(path) || /^docs\/.+\.md$/u.test(path)) return true;
+  if (path === 'openapi.yaml' || path.startsWith('contracts/')) return true;
+  const match = /^(apps|packages)\/([a-z0-9-]+)\/(.+)$/u.exec(path);
+  if (match === null) return false;
+  const [, root, name, rest] = match;
+  if (root === 'apps' && name === 'migrator') return false;
+  if (/^Dockerfile(?:\..+)?$/u.test(rest)) return false;
+  if (root === 'packages' && name === 'database' && rest.startsWith('migrations/')) return false;
+  return true;
+}
+
+// The paused release tooling (scripts/paused-release-tooling-tests.txt) pins product source to
+// dormant release packages. Its tests are skipped only for a non-empty, well-formed change set
+// that stays inside product areas; every other or unknown input keeps them.
+function changesOnlyProductAreas(paths) {
+  return (
+    Array.isArray(paths) &&
+    paths.length > 0 &&
+    paths.every((path) => validPath(path) && isProductAreaPath(path))
+  );
+}
+
 function isLeafWebPath(path) {
   return isPresentationPath(path) || isSafeWebPath(path);
 }
@@ -74,6 +101,7 @@ function makePlan({
   policyValidation,
   reason,
   dockerServices,
+  releaseToolingTests = true,
 }) {
   if (!PROFILES.has(profile)) throw new Error(`Unsupported CI profile: ${profile}`);
   return {
@@ -82,6 +110,7 @@ function makePlan({
     docsQuality: profile === 'docs',
     webQuality: profile === 'leaf-web',
     fullQuality: profile === 'full',
+    releaseToolingTests: profile === 'full' && releaseToolingTests,
     deploymentContract,
     provenanceProbe,
     policyValidation,
@@ -109,6 +138,7 @@ export function selectPrCiProfile(
       deploymentContract: true,
       provenanceProbe: true,
       policyValidation: false,
+      releaseToolingTests: !changesOnlyProductAreas(paths),
       reason: `push to ${ref} requires the full integration contour`,
     });
   }
@@ -161,6 +191,7 @@ export function selectPrCiProfile(
       provenanceProbe,
       policyValidation,
       dockerServices: selectPrDockerServices(uniquePaths),
+      releaseToolingTests: !changesOnlyProductAreas(uniquePaths),
       reason: 'policy mixed with non-documentation changes requires full closure',
     });
   }
@@ -191,6 +222,7 @@ export function selectPrCiProfile(
     provenanceProbe,
     policyValidation,
     dockerServices: selectPrDockerServices(uniquePaths),
+    releaseToolingTests: !changesOnlyProductAreas(uniquePaths),
     reason: 'sensitive, shared, build, workflow, runtime, or unknown path requires full closure',
   });
 }

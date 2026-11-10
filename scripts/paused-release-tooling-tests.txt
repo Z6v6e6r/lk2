@@ -1,0 +1,21 @@
+# Tests of the paused release tooling (AGENTS.md, "First-version mode": the production lane and R1
+# custody work are paused). They pin product source to dormant release packages, so an ordinary
+# product change used to fail on them without touching any tooling.
+#
+# vitest.config.ts excludes these globs, and the tooling sources of the same name from coverage,
+# only under CI_TEST_SKIP_PAUSED_RELEASE_TOOLING=1. The quality-full job sets it when the CI plan
+# reports releaseToolingTests=false, that is, for a change set that stays inside product areas
+# (scripts/select-pr-ci-profile.js, isProductAreaPath). A change to scripts/, deploy/, .github/,
+# the migrator, migrations, Dockerfiles, root manifests or any unknown path, and
+# `npm run source:quality`, runs them all.
+#
+# One glob per line, `*` only, confined to scripts/*.test.ts. A test not listed here always runs.
+# Do not list tests of scripts that the migrator image imports at run time (closed-*, r1-*,
+# notification-migration-*): the beta lane executes that code.
+# Owner: platform/release task. Remove an entry when its tooling returns to active use; delete the
+# file together with the tooling it names.
+
+# Strict Timeweb route: enrollment, custody, publication, upgrade executors, standard delivery.
+scripts/*timeweb*.test.ts
+# Communities role-split and staged-migration rehearsal machinery.
+scripts/communities-*.test.ts
