@@ -237,6 +237,14 @@ const environmentSchema = z.object({
   CUP_RATING_API_URL: z.string().url().optional(),
   CUP_RATING_SERVICE_TOKEN: z.string().min(32).optional(),
   CUP_RATING_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  /**
+   * Publishes a confirmed LK2 result to LK1 for imported games, so the legacy cabinet shows the
+   * score and recalculates its own rating. Disabled by default: it writes to another live system.
+   */
+  LK1_RESULT_BRIDGE_ENABLED: booleanFromEnvironment,
+  LK1_RESULT_BRIDGE_URL: z.string().url().optional(),
+  LK1_RESULT_BRIDGE_TOKEN: z.string().min(32).optional(),
+  LK1_RESULT_BRIDGE_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(8_000),
   CUP_PLAYER_LEVEL_PROJECTION_ENABLED: booleanFromEnvironment,
   CUP_PLAYER_LEVEL_PROJECTION_TOKEN: z.string().min(32).optional(),
   CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY: z
@@ -841,6 +849,11 @@ export function loadConfig(
       'CUP_RATING_SERVICE_TOKEN',
       'CUP_RATING_SERVICE_TOKEN_FILE',
     ),
+    LK1_RESULT_BRIDGE_TOKEN: materializeFileSecret(
+      environment,
+      'LK1_RESULT_BRIDGE_TOKEN',
+      'LK1_RESULT_BRIDGE_TOKEN_FILE',
+    ),
     CUP_PLAYER_LEVEL_PROJECTION_TOKEN: materializeFileSecret(
       environment,
       'CUP_PLAYER_LEVEL_PROJECTION_TOKEN',
@@ -1180,6 +1193,14 @@ export function loadConfig(
   ) {
     throw new Error(
       'CUP_RATING_CONSUMER_ENABLED requires CUP_RATING_API_URL and CUP_RATING_SERVICE_TOKEN',
+    );
+  }
+  if (
+    parsed.data.LK1_RESULT_BRIDGE_ENABLED &&
+    (!parsed.data.LK1_RESULT_BRIDGE_URL || !parsed.data.LK1_RESULT_BRIDGE_TOKEN)
+  ) {
+    throw new Error(
+      'LK1_RESULT_BRIDGE_ENABLED requires LK1_RESULT_BRIDGE_URL and LK1_RESULT_BRIDGE_TOKEN',
     );
   }
   if (
