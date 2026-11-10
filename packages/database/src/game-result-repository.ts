@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   disputeGameResultInputSchema,
@@ -54,6 +54,23 @@ export interface AutoConfirmGameResultCommandInput {
   readonly submissionId: string;
   readonly confirmationWindowHours: number;
   readonly correlationId: string;
+}
+
+/**
+ * The command ledger accepts only a 64 character lowercase hex digest, so the automatic transition
+ * hashes its own identity instead of naming a request it never received.
+ */
+export function autoConfirmRequestHash(input: {
+  readonly submissionId: string;
+  readonly revision: number;
+  readonly confirmationWindowHours: number;
+}): string {
+  return createHash('sha256')
+    .update(
+      `auto-confirm:${input.submissionId}:${input.revision}:${input.confirmationWindowHours}h`,
+      'utf8',
+    )
+    .digest('hex');
 }
 
 /**
@@ -751,7 +768,11 @@ export function createGameResultRepository(pool: Pool): GameResultRepository {
           actorUserId: preloaded.submitted_by_user_id,
           gameId: input.gameId,
           idempotencyKey: `auto-confirm:${input.submissionId}:v${preloaded.revision}`,
-          requestHash: `auto-confirm:${input.confirmationWindowHours}h`,
+          requestHash: autoConfirmRequestHash({
+            submissionId: input.submissionId,
+            revision: preloaded.revision,
+            confirmationWindowHours: input.confirmationWindowHours,
+          }),
           correlationId: input.correlationId,
         };
         const replay = replayCommand(
