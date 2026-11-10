@@ -155,6 +155,14 @@ const environmentSchema = z.object({
    */
   VIVA_PROFILE_PHONE_LINK_ENABLED: booleanFromEnvironment,
   /**
+   * ADR 0029 D5: after a Viva OTP login of a user with a synced `VIVA/viva_profile` mapping, write
+   * `VIVA/subscription` mappings bound to that user from one complete server Viva Admin read of the
+   * client's subscriptions. Owner: LK2 product owner. Purpose: paid JOIN by subscription needs the
+   * mapping that lk2 never had. Activation: test-stand readback of one synced login after
+   * `VIVA_PROFILE_PHONE_LINK_ENABLED`. Review: 2027-02-09, or replace with the D2 projection refresh.
+   */
+  VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED: booleanFromEnvironment,
+  /**
    * Accepts the provider-asserted viewer phone from our own client, which reads the provider profile
    * over the only transport the provider certifies for end users. The value is linked in integration
    * custody and never becomes a PadlHub login key.
@@ -1602,6 +1610,18 @@ export function loadConfig(
     }
     if (!parsed.data.VIVA_API_URL || !parsed.data.VIVA_API_KEY) {
       throw new Error('VIVA_PROFILE_PHONE_LINK_ENABLED requires VIVA_API_URL and VIVA_API_KEY');
+    }
+  }
+  if (parsed.data.VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED) {
+    if (parsed.data.VIVA_MODE !== 'sandbox' && parsed.data.VIVA_MODE !== 'production') {
+      throw new Error(
+        'VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED requires VIVA_MODE=sandbox or production',
+      );
+    }
+    if (!parsed.data.VIVA_API_URL || !parsed.data.VIVA_API_KEY) {
+      throw new Error(
+        'VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED requires VIVA_API_URL and VIVA_API_KEY',
+      );
     }
   }
   if (parsed.data.VIVA_RESIDENCY_PRODUCT_ID) {

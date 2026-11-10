@@ -37,6 +37,7 @@ describe('fixed R1 tail inventory and admission', () => {
     expect(frozen).toEqual(descriptor.inventory);
     expect(actual.slice(descriptor.inventory.length).map(({ filename }) => filename)).toEqual([
       '0116_profile_provider_observations.sql',
+      '0117_viva_subscription_owners.sql',
     ]);
     expect(r1PackagedInventory(frozen)).toEqual(frozen);
     expect(r1LedgerCount(frozen.map(({ filename, checksum }) => ({ checksum, filename })))).toBe(
@@ -49,7 +50,7 @@ describe('fixed R1 tail inventory and admission', () => {
       frozen.slice(1),
       [...frozen].reverse(),
       frozen.map((row, i) => (i === 110 ? { ...row, checksum: 'a'.repeat(64) } : row)),
-      [...frozen, { filename: '0117_unreviewed.sql', checksum: 'a'.repeat(64) }],
+      [...frozen, { filename: '0118_unreviewed.sql', checksum: 'a'.repeat(64) }],
     ])
       expect(() => r1LedgerCount(bad)).toThrow('R1_TAIL_LEDGER');
   });

@@ -24,6 +24,25 @@ const validEnvironment = {
 } as const;
 
 describe('loadConfig', () => {
+  it('keeps the Viva subscription mapping sync off and requires Admin credentials to enable it', () => {
+    expect(loadConfig(validEnvironment).VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED).toBe(false);
+    const enabled = { ...validEnvironment, VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED: 'true' };
+    expect(() => loadConfig({ ...enabled, VIVA_MODE: 'mock' })).toThrow(
+      'VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED requires VIVA_MODE=sandbox or production',
+    );
+    expect(() => loadConfig({ ...enabled, VIVA_MODE: 'sandbox' })).toThrow(
+      'VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED requires VIVA_API_URL and VIVA_API_KEY',
+    );
+    expect(
+      loadConfig({
+        ...enabled,
+        VIVA_MODE: 'sandbox',
+        VIVA_API_URL: 'https://api.vivacrm.example',
+        VIVA_API_KEY: 'synthetic-admin-key',
+      }).VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED,
+    ).toBe(true);
+  });
+
   it('keeps CREATE binding off and requires dedicated references only for its worker', () => {
     expect(loadWorkerConfig(validEnvironment).GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED).toBe(
       false,
