@@ -88,8 +88,11 @@ mock-стека.
 Android CI собирает только неподписанный release-APK. Для тестов собран локально вне Git и подписан
 upload-ключом владельца release-APK **1.14 (15)** из main `31de9c30` для `https://lk2.padlhub.su`
 (тенант `local-padel`, Firebase `padlhub`):
-`output/android-lk2-profile-observation-20261110/PadlHub-1.14-code15-lk2-profile-observation-31de9c30.apk`,
-SHA-256 `12389fad…dff699`, сертификат `8C:59:A9:…:70:1E` (совпадает с live `assetlinks.json`). Он включает
+`output/android-lk2-profile-observation-20261110/PadlHub-1.14-code15-lk2-profile-observation-fcm-31de9c30.apk`,
+SHA-256 `675d0f0d…130c68c7`, сертификат `8C:59:A9:…:70:1E` (совпадает с live `assetlinks.json`). В сборку вшит
+публичный клиент Firebase `google-services.json` проекта `padlhub` (`google_app_id`, `gcm_defaultSenderId`,
+`PadlHubAndroidPushPlugin`), поэтому доступен Android push; сборка без этого файла даёт
+«Уведомления пока недоступны»/«Не удалось настроить уведомления». Он включает
 Android `refreshProfile` и `AndroidProfileRefresh` (ADR 0023) — уровень и баланс в профиле. Предыдущая
 сборка — 1.13 (14) из `7a16312d`. Поверх debug-сборок он не ставится: старую debug-сборку нужно удалить;
 signed release обновляется обычным install. App Links и вход через Яндекс проверяются на устройстве
