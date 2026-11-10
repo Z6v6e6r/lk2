@@ -1,4 +1,8 @@
-import type { GameResultCommandResult, GameResultRepository } from '@phub/database';
+import {
+  withTenantTransaction,
+  type GameResultCommandResult,
+  type GameResultRepository,
+} from '@phub/database';
 import type { Pool, QueryResultRow } from 'pg';
 
 export interface DueGameResultSubmission {
@@ -103,12 +107,16 @@ export function createGameResultAutoConfirmPort(input: {
 }): GameResultAutoConfirmPort {
   return {
     async listDueSubmissions({ tenantId, confirmationWindowHours, limit }) {
-      const { rows } = await input.pool.query<DueRow>(DUE_SQL, [
-        tenantId,
-        confirmationWindowHours,
-        limit,
-      ]);
-      return rows.map((row) => ({ gameId: row.game_id, submissionId: row.submission_id }));
+      // Every tenant-scoped table is behind row level security: without the tenant scope on the
+      // connection the scan legitimately sees no rows at all and the job would silently do nothing.
+      return withTenantTransaction(input.pool, tenantId, async (client) => {
+        const { rows } = await client.query<DueRow>(DUE_SQL, [
+          tenantId,
+          confirmationWindowHours,
+          limit,
+        ]);
+        return rows.map((row) => ({ gameId: row.game_id, submissionId: row.submission_id }));
+      });
     },
     confirmDueSubmission({
       tenantId,
