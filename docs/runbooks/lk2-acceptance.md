@@ -20,7 +20,7 @@
 | Тестовые аккаунты | Не нужны отдельные гранты: `games.test-courts` входит в beta-каталог `FULL_CLIENT_PERMISSIONS` (PR #617) и сохраняется при входе любого номера после промоута; для других контуров остаётся `npm run user:access:set`                                      | Вошедший номер видит каталог из двух кортов; контур без beta-флага или с выключенным `GAMES_TEST_COURTS_ENABLED` — нет                     |
 | Тестовые корты    | `GAMES_TEST_COURTS_ENABLED=true` в `api.env` и `worker.env` (нужны `APP_ENV=staging`, `GAMES_COMMANDS_ENABLED=true`), затем пересоздание API/Worker через beta-lane; порядок — [lk2-beta-test-courts](lk2-beta-test-courts.md)                             | Создание/вход на тестовом корте разрешены, публичная карточка — 404                                                                        |
 | Push              | `FCM_ENABLED=true`, `FCM_PROJECT_ID`, `FCM_APP_ID=ru.padlhub.app`, `FCM_CREDENTIAL_FILE=/run/phub/fcm-service-account.json`, bind `TIMEWEB_FCM_CREDENTIAL_SOURCE`; tenant-флаг `android_push_enabled`; порядок — [android-chats-fcm](android-chats-fcm.md) | Реальная доставка FCM на телефон подтверждена                                                                                              |
-| APK               | Пользователь ставит подписанную сборку: `output/android-lk2-profile-observation-20261110/PadlHub-1.14-code15-lk2-profile-observation-fcm-31de9c30.apk` (уровень/баланс + FCM, ADR 0023)                                                                    | `adb shell pm get-app-links ru.padlhub.app` → `lk2.padlhub.su: verified`                                                                   |
+| APK               | Пользователь ставит подписанную сборку: `output/android-lk2-1.15-code16-20261110/PadlHub-1.15-code16-lk2-pushfix-8b72bd58.apk` (уровень/баланс, FCM, push-фикс; ADR 0023)                                                                                  | `adb shell pm get-app-links ru.padlhub.app` → `lk2.padlhub.su: verified`                                                                   |
 
 Если FCM или доступ ещё не включены, соответствующие строки матрицы помечаются `BLOCKED`, а не
 `PASS`: отсутствие проверки не считается успехом.
@@ -57,7 +57,7 @@ A-запись из `deploy/timeweb/target.json`. Он не использует
 
 ```sh
 adb uninstall ru.padlhub.app          # только если стоит debug-сборка; signed release обновляется обычным install
-adb install -r output/android-lk2-profile-observation-20261110/PadlHub-1.14-code15-lk2-profile-observation-fcm-31de9c30.apk
+adb install -r output/android-lk2-1.15-code16-20261110/PadlHub-1.15-code16-lk2-pushfix-8b72bd58.apk
 adb shell pm get-app-links ru.padlhub.app
 ```
 

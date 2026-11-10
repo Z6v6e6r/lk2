@@ -92,6 +92,19 @@ export function createAndroidPushController(
     }
     await transport.finishRevoke({ idempotencyKey: pending.idempotencyKey });
   };
+  /**
+   * A stale endpoint revoke is a bookkeeping step, not a prerequisite for the new registration.
+   * Older builds could leave a pending revoke behind; a failed revoke must not hide the enable
+   * action or block the new endpoint. The native journal keeps the pending revoke for a later
+   * retry (session refresh, focus or logout), so it is never silently dropped.
+   */
+  const revokeQuietly = async (pending: PendingRevoke): Promise<void> => {
+    try {
+      await revoke(pending);
+    } catch {
+      // Deliberately ignored: registration below creates the new canonical endpoint.
+    }
+  };
   const register = async (prompt: boolean): Promise<void> => {
     const epoch = registrationEpoch;
     const current = (): void => {
@@ -108,7 +121,7 @@ export function createAndroidPushController(
       return;
     }
     current();
-    await revoke(status);
+    await revokeQuietly(status);
     current();
     const registration = await transport.registration({ requestPermission: prompt });
     if (!alive) return;
@@ -154,13 +167,13 @@ export function createAndroidPushController(
   const refresh = (): Promise<void> =>
     run(async () => {
       const status = await transport.status();
-      await revoke(status);
+      await revokeQuietly(status);
       const enabled = status.configured && (await configuration());
       if (
         (status.active || status.state === 'subscribed') &&
         (!enabled || status.state === 'denied')
       )
-        await revoke(await transport.suspend());
+        await revokeQuietly(await transport.suspend());
       update({
         enabled,
         state: status.state === 'prompt' ? 'ready' : status.state,
