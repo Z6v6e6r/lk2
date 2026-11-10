@@ -43,6 +43,39 @@ export interface DisputeGameResultCommandInput extends ReviewGameResultCommandIn
   readonly dispute: DisputeGameResultInput;
 }
 
+/**
+ * Confirms a submission nobody answered in time. The job names the submission, never an actor: the
+ * result carries no confirming user, and the command type keeps the automatic transition apart from
+ * a real participant confirmation in the audit trail.
+ */
+export interface AutoConfirmGameResultCommandInput {
+  readonly tenantId: string;
+  readonly gameId: string;
+  readonly submissionId: string;
+  readonly confirmationWindowHours: number;
+  readonly correlationId: string;
+}
+
+/**
+ * A submission may be confirmed by the system once its window has passed. A disputed or already
+ * decided submission never qualifies, and neither does one inside its window.
+ */
+export function isAutoConfirmDue(input: {
+  readonly state: 'PENDING_CONFIRMATION' | 'CONFIRMED' | 'DISPUTED' | 'SUPERSEDED';
+  readonly submittedAt: string;
+  readonly now: string;
+  readonly confirmationWindowHours: number;
+}): boolean {
+  if (input.state !== 'PENDING_CONFIRMATION') return false;
+  const submittedAt = Date.parse(input.submittedAt);
+  const now = Date.parse(input.now);
+  if (!Number.isFinite(submittedAt) || !Number.isFinite(now)) return false;
+  if (!Number.isInteger(input.confirmationWindowHours) || input.confirmationWindowHours < 1) {
+    return false;
+  }
+  return now >= submittedAt + input.confirmationWindowHours * 60 * 60_000;
+}
+
 export type GameResultCommandResult =
   | {
       readonly outcome: 'applied';
@@ -69,6 +102,7 @@ export type GameResultCommandResult =
 export interface GameResultRepository {
   submit(input: SubmitGameResultCommandInput): Promise<GameResultCommandResult>;
   confirm(input: ReviewGameResultCommandInput): Promise<GameResultCommandResult>;
+  autoConfirm(input: AutoConfirmGameResultCommandInput): Promise<GameResultCommandResult>;
   dispute(input: DisputeGameResultCommandInput): Promise<GameResultCommandResult>;
 }
 
@@ -92,6 +126,7 @@ interface SubmissionRow extends QueryResultRow {
   readonly id: string;
   readonly revision: number;
   readonly submitted_by_user_id: string;
+  readonly submitted_at: Date | string;
   readonly state: 'PENDING_CONFIRMATION' | 'CONFIRMED' | 'DISPUTED' | 'SUPERSEDED';
   readonly confirmation_quorum: number;
   readonly score_payload: unknown;
@@ -414,7 +449,7 @@ async function loadSubmission(
 ): Promise<SubmissionRow | undefined> {
   return queryOne<SubmissionRow>(
     client,
-    `select id, revision, submitted_by_user_id, state, confirmation_quorum,
+    `select id, revision, submitted_by_user_id, submitted_at, state, confirmation_quorum,
             score_payload, roster_snapshot
        from games.result_submissions
       where tenant_id = $1 and game_id = $2 and id = $3
@@ -683,6 +718,149 @@ export function createGameResultRepository(pool: Pool): GameResultRepository {
           type: 'game.result.confirmed.v1',
           payload: {
             ...eventBase(input, commandId, revision, committedAt).payload,
+            resultId,
+            participantUserIds: roster,
+          },
+        });
+        return result;
+      });
+    },
+
+    autoConfirm(input) {
+      const commandType = 'game.result.auto-confirm.v1';
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const preloaded = await queryOne<SubmissionRow>(
+          client,
+          `select id, revision, submitted_by_user_id, submitted_at, state, confirmation_quorum,
+                  score_payload, roster_snapshot
+             from games.result_submissions
+            where tenant_id = $1 and game_id = $2 and id = $3`,
+          [input.tenantId, input.gameId, input.submissionId],
+        );
+        if (!preloaded) {
+          return {
+            outcome: 'rejected' as const,
+            code: 'GAME_RESULT_SUBMISSION_NOT_FOUND' as const,
+            replayed: false,
+          };
+        }
+        // The submitter names the synthetic command: it is the only real participant known for an
+        // automatic transition. The result itself carries no confirming user.
+        const command: GameResultCommandInput = {
+          tenantId: input.tenantId,
+          actorUserId: preloaded.submitted_by_user_id,
+          gameId: input.gameId,
+          idempotencyKey: `auto-confirm:${input.submissionId}:v${preloaded.revision}`,
+          requestHash: `auto-confirm:${input.confirmationWindowHours}h`,
+          correlationId: input.correlationId,
+        };
+        const replay = replayCommand(
+          await lockIdempotency(client, command),
+          commandType,
+          command.requestHash,
+        );
+        if (replay) return replay;
+        const commandId = randomUUID();
+        const game = await lockGame(client, command);
+        if (!game) {
+          return storeRejected(client, command, commandType, commandId, 'GAME_NOT_FOUND', false);
+        }
+        const currentRevision = positiveInteger(game.revision);
+        const submission = await loadSubmission(client, {
+          ...command,
+          submissionId: input.submissionId,
+        });
+        if (!submission) {
+          return storeRejected(
+            client,
+            command,
+            commandType,
+            commandId,
+            'GAME_RESULT_SUBMISSION_NOT_FOUND',
+            true,
+            currentRevision,
+          );
+        }
+        if (
+          submission.state !== 'PENDING_CONFIRMATION' ||
+          game.result_state !== 'PENDING_CONFIRMATION'
+        ) {
+          return storeRejected(
+            client,
+            command,
+            commandType,
+            commandId,
+            'GAME_RESULT_STATE_CONFLICT',
+            true,
+            currentRevision,
+          );
+        }
+        if (
+          !isAutoConfirmDue({
+            state: submission.state,
+            submittedAt: timestamp(submission.submitted_at),
+            now: timestamp(game.database_now),
+            confirmationWindowHours: input.confirmationWindowHours,
+          })
+        ) {
+          return storeRejected(
+            client,
+            command,
+            commandType,
+            commandId,
+            'GAME_RESULT_STATE_CONFLICT',
+            true,
+            currentRevision,
+          );
+        }
+        const roster = rosterFromSnapshot(submission.roster_snapshot);
+        const score = submitGameResultInputSchema.parse(submission.score_payload);
+        const resultId = randomUUID();
+        await client.query(
+          `insert into games.results (
+             tenant_id, game_id, id, submission_id, revision, state,
+             score_payload, confirmed_by_user_id, confirmed_at
+           ) values ($1, $2, $3, $4, $5, 'CONFIRMED', $6::jsonb, null, now())`,
+          [
+            input.tenantId,
+            input.gameId,
+            resultId,
+            input.submissionId,
+            submission.revision,
+            JSON.stringify(score),
+          ],
+        );
+        await normalizeConfirmedResult(
+          client,
+          { ...command, submissionId: input.submissionId },
+          resultId,
+          score.sets,
+        );
+        await client.query(
+          `update games.result_submissions
+              set state = 'CONFIRMED', terminal_at = now()
+            where tenant_id = $1 and game_id = $2 and id = $3`,
+          [input.tenantId, input.gameId, input.submissionId],
+        );
+        const revision = await bumpRevision(client, command, 'CONFIRMED');
+        const committedAt = timestamp(game.database_now);
+        const result: Extract<GameResultCommandResult, { outcome: 'applied' }> = {
+          outcome: 'applied',
+          commandId,
+          gameId: input.gameId,
+          submissionId: input.submissionId,
+          resultId,
+          revision,
+          resultState: 'CONFIRMED',
+          committedAt,
+          replayed: false,
+        };
+        await storeCompleted(client, command, commandType, result);
+        await appendEvent(client, {
+          ...eventBase(command, commandId, revision, committedAt),
+          type: 'game.result.confirmed.v1',
+          payload: {
+            ...eventBase(command, commandId, revision, committedAt).payload,
             resultId,
             participantUserIds: roster,
           },
