@@ -38,6 +38,15 @@ export interface Lk1ResultHandoff {
   readonly lk1GameId: string | null;
   /** Phone of the confirming participant; null when the profile carries no phone. Never logged. */
   readonly submitterPhoneE164: string | null;
+  /**
+   * The two pairings from LK2's own result, as phones. LK1 games created from the split widget keep
+   * no phones or teams of their own, so the composition must travel with the result or LK1 cannot
+   * tell which side a score belongs to. Null when either side has no participant with a phone.
+   */
+  readonly teams: {
+    readonly teamA: readonly string[];
+    readonly teamB: readonly string[];
+  } | null;
   readonly confirmedAt: string;
 }
 
@@ -55,10 +64,40 @@ interface HandoffRow extends QueryResultRow {
   readonly confirmed_at: Date | string;
   readonly lk1_game_aliases: readonly string[] | null;
   readonly submitter_phone: string | null;
+  readonly score_payload: unknown;
+}
+
+interface RosterPhoneRow extends QueryResultRow {
+  readonly user_id: string;
+  readonly phone_e164: string | null;
+}
+
+/**
+ * LK2 records teams per set; LK1 keeps one score per game, so the first set's pairing is the
+ * composition that belongs with the score LK1 stores.
+ */
+function firstSetTeams(scorePayload: unknown): {
+  readonly teamAUserIds: readonly string[];
+  readonly teamBUserIds: readonly string[];
+} | null {
+  if (typeof scorePayload !== 'object' || scorePayload === null) return null;
+  const sets: unknown = (scorePayload as { readonly sets?: unknown }).sets;
+  if (!Array.isArray(sets) || sets.length === 0) return null;
+  const first: unknown = sets[0];
+  if (typeof first !== 'object' || first === null) return null;
+  const teamA = (first as { readonly teamAUserIds?: unknown }).teamAUserIds;
+  const teamB = (first as { readonly teamBUserIds?: unknown }).teamBUserIds;
+  if (!Array.isArray(teamA) || !Array.isArray(teamB)) return null;
+  if (teamA.length === 0 || teamB.length === 0) return null;
+  return {
+    teamAUserIds: teamA.filter((id): id is string => typeof id === 'string'),
+    teamBUserIds: teamB.filter((id): id is string => typeof id === 'string'),
+  };
 }
 
 const HANDOFF_SQL = `
   select r.game_id, r.id as result_id, r.revision, r.confirmed_at,
+         submission.score_payload,
          (
            select array_agg(mapping.external_id)
              from integration.external_entity_map mapping
@@ -78,6 +117,12 @@ const HANDOFF_SQL = `
    where r.tenant_id = $1 and r.id = $2 and r.state = 'CONFIRMED'
 `;
 
+const ROSTER_PHONES_SQL = `
+  select user_id, phone_e164
+    from profile.user_summaries
+   where tenant_id = $1 and user_id = any($2::uuid[])
+`;
+
 export function createLk1ResultBridgeRepository(pool: Pool): Lk1ResultBridgeRepository {
   return {
     loadHandoff(input) {
@@ -88,6 +133,28 @@ export function createLk1ResultBridgeRepository(pool: Pool): Lk1ResultBridgeRepo
         ]);
         const row = rows[0];
         if (!row) return undefined;
+        const pairing = firstSetTeams(row.score_payload);
+        let teams: Lk1ResultHandoff['teams'] = null;
+        if (pairing) {
+          const userIds = [...new Set([...pairing.teamAUserIds, ...pairing.teamBUserIds])];
+          const phones = await client.query<RosterPhoneRow>(ROSTER_PHONES_SQL, [
+            input.tenantId,
+            userIds,
+          ]);
+          const phoneOf = new Map(
+            phones.rows
+              .filter((phone) => typeof phone.phone_e164 === 'string' && phone.phone_e164 !== '')
+              .map((phone) => [phone.user_id, phone.phone_e164 as string]),
+          );
+          const teamAPhones = pairing.teamAUserIds.map((id) => phoneOf.get(id));
+          const teamBPhones = pairing.teamBUserIds.map((id) => phoneOf.get(id));
+          if (teamAPhones.every(Boolean) && teamBPhones.every(Boolean)) {
+            teams = {
+              teamA: teamAPhones as string[],
+              teamB: teamBPhones as string[],
+            };
+          }
+        }
         return {
           tenantId: input.tenantId,
           gameId: row.game_id,
@@ -95,6 +162,7 @@ export function createLk1ResultBridgeRepository(pool: Pool): Lk1ResultBridgeRepo
           resultRevision: row.revision,
           lk1GameId: selectLk1GameId(row.lk1_game_aliases ?? []),
           submitterPhoneE164: row.submitter_phone,
+          teams,
           confirmedAt: new Date(row.confirmed_at).toISOString(),
         };
       });

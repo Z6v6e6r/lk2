@@ -56,4 +56,103 @@ describe('LK1 result-import flow functions', () => {
     expect(body).toContain('LK1_BRIDGE_NOT_CONFIGURED');
     expect(body.indexOf('LK1_BRIDGE_NOT_CONFIGURED')).toBeLessThan(body.indexOf('msg.payload'));
   });
+
+  /**
+   * LK1 games created from the split widget keep no phones at all: `participants[].phone` is null,
+   * `participantPhones` is empty and the roster snapshot carries no phone. Resolving teams from the
+   * game document alone therefore failed with `LK1_GAME_TEAMS_UNAVAILABLE` and the score never
+   * arrived, so the composition has to travel with the result.
+   */
+  const runNode = (
+    id: string,
+    msg: Record<string, unknown>,
+    envValues: Record<string, string> = {},
+  ): unknown => {
+    const node = functions.find((candidate) => candidate.id === id);
+    const script = new Script(
+      `(function (msg, env, node, flow, global, context) {${node?.func ?? ''}\n})`,
+    );
+    const env = { get: (key: string) => envValues[key] ?? '' };
+    const fn = script.runInNewContext({}, { timeout: 2000 }) as (
+      msg: unknown,
+      env: unknown,
+      node: unknown,
+      flow: unknown,
+      global: unknown,
+      context: unknown,
+    ) => unknown;
+    return fn(msg, env, {}, {}, {}, {});
+  };
+
+  const TOKEN = 'x'.repeat(40);
+  const PHONES = {
+    submitter: '+79161234567',
+    partner: '+79161234568',
+    opponentA: '+79161234569',
+    opponentB: '+79161234570',
+  };
+
+  const authorize = (teams?: Record<string, readonly string[]>) => {
+    const msg: Record<string, unknown> = {
+      req: { headers: { authorization: `Bearer ${TOKEN}` } },
+      payload: {
+        gameId: 'pay_7c1f3cec-e61d-4ceb-909f-273516cdbffe',
+        externalResultId: '775ae214-2ce9-412e-94e1-77aeac076fb5',
+        externalResultRevision: 1,
+        submitterPhone: PHONES.submitter,
+        scoreA: 0,
+        scoreB: 3,
+        ...(teams ? { teams } : {}),
+      },
+    };
+    const [next] = runNode('lk2res_fn_auth_001', msg, { LK1_RESULT_BRIDGE_TOKEN: TOKEN }) as [
+      Record<string, unknown>,
+      unknown,
+    ];
+    return next;
+  };
+
+  it('carries the LK2 pairing into a game whose LK1 document has no phones', () => {
+    const authorized = authorize({
+      teamA: [PHONES.submitter, PHONES.partner],
+      teamB: [PHONES.opponentA, PHONES.opponentB],
+    });
+    const ctx = authorized._lk2Import as {
+      teams: { teamA: string[]; teamB: string[] };
+    };
+    expect(ctx.teams.teamA).toHaveLength(2);
+    expect(ctx.teams.teamB).toHaveLength(2);
+
+    const gameWithoutPhones = {
+      id: 'pay_7c1f3cec-e61d-4ceb-909f-273516cdbffe',
+      participants: [
+        { id: '831ab3b7-adc4-455d-9f74-da5bf9c3d381', name: 'Дмитрий', phone: null },
+        { id: '83756527-cfbe-4b7f-b143-1a6ac96d2a93', name: 'Alexey', phone: null },
+        { id: '6a758cce-23ab-4ffd-9c57-a1bc5d4aab70', name: 'Константин', phone: null },
+        { id: 'c68f263e-4a54-4472-9254-103e3b332538', name: 'Артём', phone: null },
+      ],
+      participantPhones: [],
+    };
+
+    const [next, failure] = runNode('lk2res_fn_check_game_001', {
+      ...authorized,
+      payload: [gameWithoutPhones],
+    }) as [Record<string, unknown>, unknown];
+
+    expect(failure).toBeNull();
+    expect(next._lk2SubmitterTeam).toBe('A');
+    expect((next._lk2Teams as { teamA: unknown[]; teamB: unknown[] }).teamB).toHaveLength(2);
+  });
+
+  it('refuses a game that has neither payload teams nor its own phones', () => {
+    const authorized = authorize();
+    expect((authorized._lk2Import as { teams: unknown }).teams).toBeNull();
+
+    const [, failure] = runNode('lk2res_fn_check_game_001', {
+      ...authorized,
+      payload: [{ id: 'pay_1', participants: [{ name: 'Игрок', phone: null }] }],
+    }) as [unknown, { payload: { code: string } }];
+
+    expect(failure.payload.code).toBe('LK1_GAME_TEAMS_UNAVAILABLE');
+  });
 });
