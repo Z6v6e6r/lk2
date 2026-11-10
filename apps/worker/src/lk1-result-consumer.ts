@@ -1,4 +1,5 @@
-import type { GameResultProjectionRepository, Lk1ResultBridgeRepository } from '@phub/database';
+import type { GameResultProjectionRepository } from '@phub/database';
+import type { Lk1ResultBridgeRepository } from '@phub/database/lk1-result-bridge';
 import { gameDomainEventSchema } from '@phub/games';
 import type { Channel, ConsumeMessage } from 'amqplib';
 import type { Logger } from 'pino';

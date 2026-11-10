@@ -45,7 +45,6 @@ import {
   createGameRosterRepository,
   createGameResultProjectionRepository,
   createGiftCertificateIssuanceRepository,
-  createLk1ResultBridgeRepository,
   createLocalCommunityDirectoryRepository,
   createMessagingRepository,
   createMessagingMediaRepository,
@@ -53,6 +52,7 @@ import {
   createProfileFriendshipRepository,
 } from '@phub/database';
 import { createSupportTicketRepository } from '@phub/database/support-tickets';
+import { createLk1ResultBridgeRepository } from '@phub/database/lk1-result-bridge';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
@@ -82,6 +82,7 @@ import { registerGameMessagingMembershipConsumer } from './game-messaging-member
 import { registerCupRatingConsumer } from './cup-rating-consumer.js';
 import { CupRatingClient } from './cup-rating-client.js';
 import { registerLk1ResultBridgeConsumer } from './lk1-result-consumer.js';
+
 import { Lk1ResultClient } from './lk1-result-client.js';
 import { S3GiftCertificateArtifactStore } from './gift-certificate-artifact-store.js';
 import { runGiftCertificateSandboxDeliveryBatch } from './gift-certificate-delivery.js';

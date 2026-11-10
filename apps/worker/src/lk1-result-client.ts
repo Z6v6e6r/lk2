@@ -1,4 +1,4 @@
-import type { Lk1ResultHandoff } from '@phub/database';
+import type { Lk1ResultHandoff } from '@phub/database/lk1-result-bridge';
 
 import type { Lk1Score } from './lk1-result-score.js';
 

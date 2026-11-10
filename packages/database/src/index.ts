@@ -26,7 +26,6 @@ export * from './game-reminder-repository.js';
 export * from './legacy-game-reminder-source-repository.js';
 export * from './game-result-repository.js';
 export * from './game-result-projection-repository.js';
-export * from './lk1-result-bridge-repository.js';
 export * from './game-roster-repository.js';
 export * from './gift-certificate-repository.js';
 export * from './gift-certificate-media-repository.js';
