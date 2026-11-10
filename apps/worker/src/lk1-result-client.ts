@@ -57,8 +57,14 @@ export class Lk1ResultClient {
         externalResultId: handoff.resultId,
         externalResultRevision: handoff.resultRevision,
         submitterPhone: handoff.submitterPhoneE164,
+        submitterClientId: handoff.submitterClientId,
         ...(handoff.teams
-          ? { teams: { teamA: [...handoff.teams.teamA], teamB: [...handoff.teams.teamB] } }
+          ? {
+              teams: {
+                teamA: handoff.teams.teamA.map((member) => ({ ...member })),
+                teamB: handoff.teams.teamB.map((member) => ({ ...member })),
+              },
+            }
           : {}),
         scoreA: score.scoreA,
         scoreB: score.scoreB,

@@ -144,6 +144,45 @@ describe('LK1 result-import flow functions', () => {
     expect((next._lk2Teams as { teamA: unknown[]; teamB: unknown[] }).teamB).toHaveLength(2);
   });
 
+  it('matches payload entries to LK1 participants by client id when no phone exists', () => {
+    const authorized = authorize({
+      teamA: [
+        { clientId: '831ab3b7-adc4-455d-9f74-da5bf9c3d381', phone: PHONES.submitter },
+        { clientId: '83756527-cfbe-4b7f-b143-1a6ac96d2a93', phone: null },
+      ],
+      teamB: [
+        { clientId: '6a758cce-23ab-4ffd-9c57-a1bc5d4aab70', phone: null },
+        { clientId: 'c68f263e-4a54-4472-9254-103e3b332538', phone: null },
+      ],
+    });
+    const msg = authorized as Record<string, unknown> & {
+      _lk2Import: { submitterClientId: string | null };
+    };
+    msg._lk2Import.submitterClientId = '831ab3b7-adc4-455d-9f74-da5bf9c3d381';
+    msg.payload = [
+      {
+        id: 'pay_7c1f3cec-e61d-4ceb-909f-273516cdbffe',
+        participants: [
+          { id: '83756527-cfbe-4b7f-b143-1a6ac96d2a93', name: 'Alexey', phone: null },
+          { id: '831ab3b7-adc4-455d-9f74-da5bf9c3d381', name: 'Дмитрий', phone: null },
+          { id: 'c68f263e-4a54-4472-9254-103e3b332538', name: 'Артём', phone: null },
+          { id: '6a758cce-23ab-4ffd-9c57-a1bc5d4aab70', name: 'Константин', phone: null },
+        ],
+      },
+    ];
+
+    const [next, failure] = runNode('lk2res_fn_check_game_001', msg) as [
+      Record<string, unknown>,
+      unknown,
+    ];
+
+    expect(failure).toBeNull();
+    expect(next._lk2SubmitterTeam).toBe('A');
+    const teams = next._lk2Teams as { teamA: { id: string; name: string }[]; teamB: unknown[] };
+    expect(teams.teamA.map((member) => member.name)).toEqual(['Дмитрий', 'Alexey']);
+    expect(teams.teamB).toHaveLength(2);
+  });
+
   it('refuses a game that has neither payload teams nor its own phones', () => {
     const authorized = authorize();
     expect((authorized._lk2Import as { teams: unknown }).teams).toBeNull();

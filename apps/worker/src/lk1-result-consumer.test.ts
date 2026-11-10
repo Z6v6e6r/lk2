@@ -37,6 +37,7 @@ const HANDOFF: Lk1ResultHandoff = {
   resultRevision: 2,
   lk1GameId: '6641ab8f9c2e1d0001a2b3c4',
   submitterPhoneE164: '+79990001122',
+  submitterClientId: null,
   teams: null,
   confirmedAt: '2026-11-09T09:05:00.000Z',
 };
