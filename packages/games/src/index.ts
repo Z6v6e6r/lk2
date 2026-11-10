@@ -281,6 +281,7 @@ const resultSchema = z
     submittedAt: dateTime.optional(),
     requiredConfirmationUserIds: z.array(uuid).max(4).default([]),
     confirmedByUserIds: z.array(uuid).max(4).default([]),
+    autoConfirmed: z.boolean().optional(),
     confirmationQuorum: z.number().int().min(1).max(3).optional(),
     sets: z
       .array(
@@ -478,16 +479,23 @@ export const gameCardProjectionInputSchema = z
           message: 'A pending result requires enough eligible reviewers for its quorum',
         });
       }
-      if (
-        result.state === 'CONFIRMED' &&
-        result.submissionId !== undefined &&
-        result.confirmedByUserIds.length < (result.confirmationQuorum ?? 1)
-      ) {
-        context.addIssue({
-          code: 'custom',
-          path: ['result', 'confirmedByUserIds'],
-          message: 'A confirmed result must satisfy its confirmation quorum',
-        });
+      if (result.state === 'CONFIRMED' && result.submissionId !== undefined) {
+        const confirmationQuorum = result.confirmationQuorum ?? 1;
+        if (result.autoConfirmed === true) {
+          if (result.confirmedByUserIds.length > 0) {
+            context.addIssue({
+              code: 'custom',
+              path: ['result', 'confirmedByUserIds'],
+              message: 'An automatically confirmed result cannot name confirming users',
+            });
+          }
+        } else if (result.confirmedByUserIds.length < confirmationQuorum) {
+          context.addIssue({
+            code: 'custom',
+            path: ['result', 'confirmedByUserIds'],
+            message: 'A confirmed result must satisfy its confirmation quorum',
+          });
+        }
       }
     }
 

@@ -1838,6 +1838,19 @@ export function createGameRepository(
             );
             const sets = scoreSets(submission.score_payload);
             if (!Array.isArray(sets)) return finish('dependency_missing');
+            const confirmedResult = await queryOne<{ confirmed_by_user_id: string | null }>(
+              client,
+              `select confirmed_by_user_id
+                 from games.results
+                where tenant_id = $1 and game_id = $2 and state = 'CONFIRMED'
+                order by revision desc, id desc
+                limit 1`,
+              [input.tenantId, input.gameId],
+            );
+            const autoConfirmed =
+              game.resultState === 'CONFIRMED' &&
+              confirmedResult !== undefined &&
+              confirmedResult.confirmed_by_user_id === null;
             result = {
               state: game.resultState,
               submissionId: submission.id,
@@ -1849,6 +1862,7 @@ export function createGameRepository(
               confirmedByUserIds: reviews.rows
                 .filter((row) => row.decision === 'CONFIRMED')
                 .map((row) => row.reviewer_user_id),
+              ...(autoConfirmed ? { autoConfirmed: true } : {}),
               confirmationQuorum: submission.confirmation_quorum,
               sets: sets as GameResultSetInput[],
             };

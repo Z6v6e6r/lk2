@@ -69,9 +69,12 @@ const HANDOFF_SQL = `
          ) as lk1_game_aliases,
          summary.phone_e164 as submitter_phone
     from games.results r
+    left join games.result_submissions submission
+      on submission.tenant_id = r.tenant_id
+     and submission.id = r.submission_id
     left join profile.user_summaries summary
       on summary.tenant_id = r.tenant_id
-     and summary.user_id = r.confirmed_by_user_id
+     and summary.user_id = coalesce(r.confirmed_by_user_id, submission.submitted_by_user_id)
    where r.tenant_id = $1 and r.id = $2 and r.state = 'CONFIRMED'
 `;
 

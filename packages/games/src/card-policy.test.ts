@@ -386,6 +386,37 @@ describe('GameCard display policy', () => {
       );
     }
   });
+
+  it('accepts a result the system confirmed when nobody answered', () => {
+    const confirmedResult = {
+      state: 'CONFIRMED' as const,
+      submissionId: '2f1d7c8a-6f2a-4a9c-9d3a-1c2b3d4e5f60',
+      submittedByUserId: IDS.organizer,
+      submittedAt: '2026-11-09T08:19:42.638Z',
+      requiredConfirmationUserIds: [],
+      confirmedByUserIds: [],
+      confirmationQuorum: 1,
+      sets: [{ teamA: 0, teamB: 3 }],
+    };
+
+    expectDomainError(
+      () =>
+        projectGameCard(
+          game({ lifecycleState: 'FINISHED', result: confirmedResult }),
+          cardContext({ surface: 'HISTORY' }),
+        ),
+      'GAME_SNAPSHOT_INVALID',
+    );
+    expect(
+      projectGameCard(
+        game({
+          lifecycleState: 'FINISHED',
+          result: { ...confirmedResult, autoConfirmed: true },
+        }),
+        cardContext({ surface: 'HISTORY' }),
+      ).displayState,
+    ).toBe('COMPLETED');
+  });
 });
 
 describe('public game card', () => {

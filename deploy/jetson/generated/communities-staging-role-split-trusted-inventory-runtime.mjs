@@ -26208,6 +26208,7 @@ var init_src2 = __esm({
       submittedAt: dateTime11.optional(),
       requiredConfirmationUserIds: external_exports.array(uuid19).max(4).default([]),
       confirmedByUserIds: external_exports.array(uuid19).max(4).default([]),
+      autoConfirmed: external_exports.boolean().optional(),
       confirmationQuorum: external_exports.number().int().min(1).max(3).optional(),
       sets: external_exports.array(
         external_exports.object({
@@ -26351,12 +26352,23 @@ var init_src2 = __esm({
             message: "A pending result requires enough eligible reviewers for its quorum"
           });
         }
-        if (result.state === "CONFIRMED" && result.submissionId !== void 0 && result.confirmedByUserIds.length < (result.confirmationQuorum ?? 1)) {
-          context.addIssue({
-            code: "custom",
-            path: ["result", "confirmedByUserIds"],
-            message: "A confirmed result must satisfy its confirmation quorum"
-          });
+        if (result.state === "CONFIRMED" && result.submissionId !== void 0) {
+          const confirmationQuorum = result.confirmationQuorum ?? 1;
+          if (result.autoConfirmed === true) {
+            if (result.confirmedByUserIds.length > 0) {
+              context.addIssue({
+                code: "custom",
+                path: ["result", "confirmedByUserIds"],
+                message: "An automatically confirmed result cannot name confirming users"
+              });
+            }
+          } else if (result.confirmedByUserIds.length < confirmationQuorum) {
+            context.addIssue({
+              code: "custom",
+              path: ["result", "confirmedByUserIds"],
+              message: "A confirmed result must satisfy its confirmation quorum"
+            });
+          }
         }
       }
       const participantIds = new Set(input2.participants.map((participant) => participant.userId));
