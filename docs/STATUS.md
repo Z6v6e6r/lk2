@@ -6,7 +6,7 @@
 
 **Коротко:** lk2.padlhub.su — единственный контур тестирования; 2026-11-10 09:07 MSK он обновлён до
 `31de9c30` (beta lane, ledger 120), включён `PROFILE_NATIVE_READ_ENABLED=true` для Android `profile.read`
-(ADR 0023), собран подписанный APK 1.14 (15). Preflight = READY: live `assetlinks.json` содержит
+(ADR 0023) и push-фикс 1.15 (16). Preflight = READY: live `assetlinks.json` содержит
 release-сертификат, FCM на сервере включён (`FCM_ENABLED=true`, tenant `android_push=true`), флаги игр и
 тестовых кортов включены. До полной приёмки остался ручной прогон матрицы и проверка уровня/баланса в
 новом APK на телефоне — см. «Ждёт владельца».
@@ -86,10 +86,13 @@ mock-стека.
 ## Мобильное приложение
 
 Android CI собирает только неподписанный release-APK. Для тестов собран локально вне Git и подписан
-upload-ключом владельца release-APK **1.14 (15)** из main `31de9c30` для `https://lk2.padlhub.su`
+upload-ключом владельца release-APK **1.15 (16)** из main `8b72bd58` для `https://lk2.padlhub.su`
 (тенант `local-padel`, Firebase `padlhub`):
-`output/android-lk2-profile-observation-20261110/PadlHub-1.14-code15-lk2-profile-observation-fcm-31de9c30.apk`,
-SHA-256 `675d0f0d…130c68c7`, сертификат `8C:59:A9:…:70:1E` (совпадает с live `assetlinks.json`). В сборку вшит
+`output/android-lk2-1.15-code16-20261110/PadlHub-1.15-code16-lk2-pushfix-8b72bd58.apk`,
+SHA-256 `3c8d27bc…aafe04048`, сертификат `8C:59:A9:…:70:1E` (совпадает с live `assetlinks.json`). В 1.15 исправлены
+bodyless-команды native-транспорта (415 на отзыве push-endpoint и других пустых DELETE) и застрявший
+pending revoke больше не блокирует включение push; прежняя 1.14 (15) без FCM-конфига и 1.14 с FCM остаются
+для истории. В сборку вшит
 публичный клиент Firebase `google-services.json` проекта `padlhub` (`google_app_id`, `gcm_defaultSenderId`,
 `PadlHubAndroidPushPlugin`), поэтому доступен Android push; сборка без этого файла даёт
 «Уведомления пока недоступны»/«Не удалось настроить уведомления». Он включает
@@ -109,7 +112,7 @@ signed release обновляется обычным install. App Links и вх�
   FCM-доставка и остальные строки матрицы — `docs/runbooks/lk2-acceptance.md`.
 - `Follow-up finding:` автоматическая веб-доставка на lk2 (`Standard Timeweb Web delivery`) падает с
   `BASELINE_ID_INVALID` с 2026-11-06; до исправления веб на lk2 обновляется только beta-lane промоутом.
-- Установить APK 1.14 (15) и проверить уровень/баланс в профиле: один provider 200 → accepted relay →
+- Установить APK 1.15 (16) и проверить уровень/баланс и push: один provider 200 → accepted relay →
   повторный `GET /profile` с уровнем и балансом (если provider-значений нет, остаются «—»). Provider-readback
   нулевого `/end-user/api/` трафика уже снят (0 в последних логах api/worker). Откат —
   `PROFILE_NATIVE_READ_ENABLED=false` + пересоздание `api`.
