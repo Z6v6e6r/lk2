@@ -1,22 +1,22 @@
 # ЛК2 — статус первой версии
 
-Обновлено: 2026-11-08. Единственная страница статуса в режиме первой версии (AGENTS.md, «First-version mode»).
+Обновлено: 2026-11-10. Единственная страница статуса в режиме первой версии (AGENTS.md, «First-version mode»).
 Приёмка на lk2 — [docs/runbooks/lk2-acceptance.md](runbooks/lk2-acceptance.md), read-only preflight — `npm run lk2:preflight`.
 История и доказательства R1 — в `docs/release/R1-*.md`; новые контрольные точки туда не добавляются.
 
-**Коротко:** lk2.padlhub.su — единственный контур тестирования; 2026-11-08 он обновлён до `04d9c2f9`
-(beta lane), preflight = READY: live `assetlinks.json` содержит release-сертификат подписанного APK, FCM на
-сервере включён (`FCM_ENABLED=true`, tenant `android_push=true`), флаги игр и тестовых кортов включены.
-До полной приёмки остался только ручной прогон матрицы на телефоне: право `games.test-courts` входит
-в beta-каталог `FULL_CLIENT_PERMISSIONS` (PR #617) и с промоута 2026-11-08 21:06 MSK выдаётся любому номеру при входе,
-гранты и список тестеров не нужны — см. «Ждёт владельца».
+**Коротко:** lk2.padlhub.su — единственный контур тестирования; 2026-11-10 09:07 MSK он обновлён до
+`31de9c30` (beta lane, ledger 120), включён `PROFILE_NATIVE_READ_ENABLED=true` для Android `profile.read`
+(ADR 0023), собран подписанный APK 1.14 (15). Preflight = READY: live `assetlinks.json` содержит
+release-сертификат, FCM на сервере включён (`FCM_ENABLED=true`, tenant `android_push=true`), флаги игр и
+тестовых кортов включены. До полной приёмки остался ручной прогон матрицы и проверка уровня/баланса в
+новом APK на телефоне — см. «Ждёт владельца».
 
 ## Где что работает
 
 | Контур                               | Версия                                                                      | Данные                                                        | Как обновляется                                                                                                      |
 | ------------------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | Тестовый стенд `test.lk2.padlhub.su` | выведен из работы: сервер удалён владельцем 2026-11-08, deploy пропускается | синтетические, `VIVA_MODE=mock`, вход `+7999000000x` / `0000` | SSH-секреты окружения `test-stand` удалены; workflow «Test stand» собирает пять образов для lk2 и пропускает выкатку |
-| Бета `lk2.padlhub.su`                | `04d9c2f9` (beta lane, 2026-11-08 21:49 MSK), ledger 119; это текущий main  | синтетические, реальных пользователей нет                     | только с одобрения владельца: `deploy/timeweb/lk2-beta-lane.sh plan/promote <green-main-sha>`                        |
+| Бета `lk2.padlhub.su`                | `31de9c30` (beta lane, 2026-11-10 09:07 MSK), ledger 120; это текущий main  | синтетические, реальных пользователей нет                     | только с одобрения владельца: `deploy/timeweb/lk2-beta-lane.sh plan/promote <green-main-sha>`                        |
 | ЛК1                                  | боевой                                                                      | реальные                                                      | основной продукт, пока ЛК2 не у пользователей                                                                        |
 
 Промоут `af57d175` → `75110af8` (2026-11-08): 0 новых миграций (ledger 119), серверное поведение меняет
@@ -26,8 +26,13 @@ UI приложения вшит в APK, обновление веба его н
 Второй промоут 2026-11-08: `75110af8` → `10705588` (beta-каталог `games.test-courts`), бэкап
 `20261108T175503Z-107055881e2f.dump` (6.2 GB). Третий: `10705588` → `04d9c2f9` (уровневые ограничения
 записи из PR #613), бэкап `20261108T183903Z-04d9c2f9eb1b.dump` (6.2 GB).
+Далее: `04d9c2f9` → `0f6165fc` (2026-11-09 03:26 MSK, бэкап `20261109T031623Z-0f6165fc95ac.dump`),
+`0f6165fc` → `340ac394` (#624, 2026-11-09 12:05 MSK, бэкап `20261109T115346Z-340ac3946ce3.dump`) и
+`340ac394` → `31de9c30` (2026-11-10 09:07 MSK, бэкап `20261110T055610Z-31de9c304850.dump`, включает #621 и
+миграцию 0116). После промоута в `api.env` добавлен `PROFILE_NATIVE_READ_ENABLED=true` и пересоздан `api`;
+старые release-образы четырёх SHA удалены для освобождения диска, retention бэкапов — 3.
 
-## Флаги и доступность lk2 (readback 2026-11-08)
+## Флаги и доступность lk2 (readback 2026-11-10)
 
 Включено: `VIVA_MODE=production`, `VIVA_OAUTH_ENABLED=true`, `VIVA_DIRECT_READ_ENABLED=true`,
 `GAMES_READ_ENABLED=true`, `GAMES_COMMANDS_ENABLED=true` (api и worker; у worker до 2026-11-08 было
@@ -48,6 +53,12 @@ JOIN по подписке всё ещё закрыт: Viva отвечает 403
 lk2 не выполняются; CREATE и запись на тренировку нельзя включать до привязки подписки к пользователю
 (ADR 0028). Возвраты Viva (CURRENCY/DEPOSIT) и возврат посещения
 тренировки в первой версии выключены, возвраты — вручную.
+
+Profile observation (ADR 0023, readback 2026-11-10): `PROFILE_NATIVE_READ_ENABLED=true`,
+`PROFILE_OBSERVATION_MAX_AGE_SECONDS=900` (api); routing plan `integration.client_routing_plans` уже
+`MIXED_END_USER_READS` rev 2 с `profile.read`, активных VIVA-делегаций — 10. Миграция 0116 применена,
+`profile.provider_observations` с forced RLS, `phub_runtime` имеет SELECT/INSERT/UPDATE и не имеет DELETE.
+API и worker не делают `/end-user/api/` запросов (0 в последних логах).
 
 Тестовые корты: флаг включён; право `games.test-courts` входит в beta-каталог
 `FULL_CLIENT_PERMISSIONS` (PR #617) и сохраняется при входе любого номера (решение владельца
@@ -74,13 +85,15 @@ mock-стека.
 
 ## Мобильное приложение
 
-Android CI собирает только неподписанный release-APK. Для тестов есть release-APK 1.13 (14) из main
-`7a16312d`, собранный локально вне Git для `https://lk2.padlhub.su` (тенант `local-padel`, Firebase
-`padlhub`) и подписанный upload-ключом владельца (сертификат SHA-256 `8C:59:A9:…:70:1E`, см.
-`docs/runbooks/android-development.md`). Поверх debug-сборок он не ставится: старую сборку нужно удалить.
-Live-`assetlinks.json` после промоута 2026-11-08 содержит оба отпечатка (release `8C:59:A9…:70:1E`),
-поэтому App Links и вход через Яндекс должны верифицироваться; проверить на устройстве
-(`adb shell pm get-app-links ru.padlhub.app` → `lk2.padlhub.su: verified`). Резервная кнопка «Открыть
+Android CI собирает только неподписанный release-APK. Для тестов собран локально вне Git и подписан
+upload-ключом владельца release-APK **1.14 (15)** из main `31de9c30` для `https://lk2.padlhub.su`
+(тенант `local-padel`, Firebase `padlhub`):
+`output/android-lk2-profile-observation-20261110/PadlHub-1.14-code15-lk2-profile-observation-31de9c30.apk`,
+SHA-256 `12389fad…dff699`, сертификат `8C:59:A9:…:70:1E` (совпадает с live `assetlinks.json`). Он включает
+Android `refreshProfile` и `AndroidProfileRefresh` (ADR 0023) — уровень и баланс в профиле. Предыдущая
+сборка — 1.13 (14) из `7a16312d`. Поверх debug-сборок он не ставится: старую debug-сборку нужно удалить;
+signed release обновляется обычным install. App Links и вход через Яндекс проверяются на устройстве
+(`adb shell pm get-app-links ru.padlhub.app` → `lk2.padlhub.su: verified`); резервная кнопка «Открыть
 приложение» остаётся страховкой. Офлайн-сборка AAB для стора — черновик PR #567; сторы отложены
 владельцем. iOS — после Android.
 
@@ -93,19 +106,21 @@ Live-`assetlinks.json` после промоута 2026-11-08 содержит �
   FCM-доставка и остальные строки матрицы — `docs/runbooks/lk2-acceptance.md`.
 - `Follow-up finding:` автоматическая веб-доставка на lk2 (`Standard Timeweb Web delivery`) падает с
   `BASELINE_ID_INVALID` с 2026-11-06; до исправления веб на lk2 обновляется только beta-lane промоутом.
-- `Follow-up finding:` на хосте lk2 свободно 9.2 ГБ при 91% занятости (три бэкапа lane по ~6.2 ГБ);
-  перед следующим промоутом освободить место (удалить старый бэкап или увеличить диск).
+- Установить APK 1.14 (15) и проверить уровень/баланс в профиле: один provider 200 → accepted relay →
+  повторный `GET /profile` с уровнем и балансом (если provider-значений нет, остаются «—»). Provider-readback
+  нулевого `/end-user/api/` трафика уже снят (0 в последних логах api/worker). Откат —
+  `PROFILE_NATIVE_READ_ENABLED=false` + пересоздание `api`.
+- `Follow-up finding:` диск lk2 после промоута 2026-11-10: ~16 ГБ свободно (84%), меньше 2× размера БД;
+  старые release-образы четырёх SHA удалены, retention бэкапов — 3. Capacity остаётся provisioning-свойством.
+- `Follow-up finding:` промоут 2026-11-10, запущенный в интерактивной SSH-сессии, оборвался при разрыве
+  сессии после бэкапа (worker был остановлен); восстановлено повторным запуском detached (`setsid nohup`).
+  Запускать lane detached и не закрывать сессию до строки `OK:`.
 - Проверка действующей привязки месячной подписки в Node-RED ЛК1 (только чтение) — для коммерческой фазы.
-- После вливания #621: включить `PROFILE_NATIVE_READ_ENABLED=true` (reviewed env allowlist), routing plan с
-  `profile.read` = `DIRECT_VIVA`, собрать подписанный APK 1.14/code15 и прогнать device-приёмку: один provider
-  200 → accepted relay → повторный `GET /profile` с уровнем и балансом, плюс provider-readback нулевого
-  `/end-user/api/` трафика от api/worker. Откат — флаг в `false` (немедленно скрывает merge).
 
 ## Открытые PR
 
 - #567 — опциональная офлайн-подпись Android (черновик).
 - #611 — ADR 0028, LK1-attested Viva account и subscription mappings (черновик).
-- #613 — уровневые ограничения записи в турниры и тренировки (черновик; после вливания меняет eligibility).
-- #614 — LK1-attested mappings writer и join ownership reader (черновик).
-- #621 — Android `profile.read` observation (ADR 0023): уровень и баланс в приложении, миграция 0116
-  (ledger 120), критический контур — нужен owner approval (черновик).
+- #622 — subscriptions: аттестация по LK1 alias `pay_<uuid>` (черновик).
+- #629 — публикация подтверждённых результатов LK2 в LK1 (готов).
+- #630 — user-bound Viva subscription mappings после OTP-входа, ADR 0029 D5 (черновик).
