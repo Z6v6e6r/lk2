@@ -11,7 +11,11 @@ const deliveryId = '22222222-2222-4222-8222-222222222222';
 function result(rows: readonly unknown[] = [], rowCount = rows.length): QueryResult<never> {
   return { command: '', rowCount, oid: 0, fields: [], rows: [...rows] as never[] };
 }
-function row(status: 'ACTIVE' | 'REVOKED' = 'ACTIVE', attempts = 0) {
+function row(
+  status: 'ACTIVE' | 'REVOKED' = 'ACTIVE',
+  attempts = 0,
+  copy: { titleTemplate?: string; renderedTitle?: string; category?: string } = {},
+) {
   return {
     id: deliveryId,
     intent_id: '33333333-3333-4333-8333-333333333333',
@@ -22,6 +26,9 @@ function row(status: 'ACTIVE' | 'REVOKED' = 'ACTIVE', attempts = 0) {
     encryption_key_id: 'v1',
     notification_id: '66666666-6666-4666-8666-666666666666',
     deep_link: '/chats/77777777-7777-4777-8777-777777777777',
+    rendered_title: copy.renderedTitle ?? 'Напоминание о записи',
+    title_template: copy.titleTemplate ?? 'Напоминание о записи',
+    category: copy.category ?? 'BOOKING',
     attempt_count: attempts,
   };
 }
@@ -213,6 +220,65 @@ describe('FCM delivery state machine', () => {
       notificationId: 'notification',
       deepLink: '/notifications',
     });
+  });
+
+  it('carries the template headline and the type line to the data-only push', async () => {
+    const queries: { text: string; values: readonly unknown[] }[] = [];
+    const send = vi
+      .fn()
+      .mockResolvedValue({ outcome: 'accepted', externalMessageId: 'projects/p/messages/1' });
+    await expect(
+      runFcmDeliveryBatch(
+        options(
+          fakePool(row('ACTIVE'), queries),
+          {
+            decrypt: vi.fn().mockReturnValue('fcm-token'),
+          } as unknown as NotificationEndpointCipher,
+          { platform: 'ANDROID', send } as unknown as NotificationPushDeliveryPort,
+        ),
+      ),
+    ).resolves.toEqual({ claimed: 1, sent: 1, retried: 0, dead: 0, stale: 0 });
+    expect(send).toHaveBeenCalledOnce();
+    const request = send.mock.calls[0]?.[0] as {
+      notification: { title: string; preview: string };
+      data: Record<string, string>;
+    };
+    expect(request.notification.title).toBe('Напоминание о записи');
+    expect(request.notification.preview).toBe('Не пропусти занятие');
+    expect(request.data).toMatchObject({
+      title: 'Напоминание о записи',
+      typeText: 'Не пропусти занятие',
+    });
+    expect(JSON.stringify(request.data)).not.toContain('{{');
+  });
+
+  it('drops an interpolated headline from the lock-screen payload', async () => {
+    const queries: { text: string; values: readonly unknown[] }[] = [];
+    const send = vi
+      .fn()
+      .mockResolvedValue({ outcome: 'accepted', externalMessageId: 'projects/p/messages/2' });
+    await runFcmDeliveryBatch(
+      options(
+        fakePool(
+          row('ACTIVE', 0, {
+            titleTemplate: 'Игра {{locationName}}',
+            renderedTitle: 'Игра на Селигерской',
+            category: 'GAME',
+          }),
+          queries,
+        ),
+        { decrypt: vi.fn().mockReturnValue('fcm-token') } as unknown as NotificationEndpointCipher,
+        { platform: 'ANDROID', send } as unknown as NotificationPushDeliveryPort,
+      ),
+    );
+    const request = send.mock.calls[0]?.[0] as {
+      notification: { title: string; preview: string };
+      data: Record<string, string>;
+    };
+    expect(request.notification.title).toBe('ПадлхАБ');
+    expect(request.notification.preview).toBe('Не пропусти игру');
+    expect(request.data.title).toBeUndefined();
+    expect(request.data.typeText).toBe('Не пропусти игру');
   });
 
   it('defers an open FCM circuit without burning the attempt or calling finalization', async () => {
