@@ -24,6 +24,17 @@
 4. Deploy → вкладка активна. Без токена эндпоинт отвечает `503 LK1_BRIDGE_NOT_CONFIGURED`, то есть
    до настройки он безопасен.
 
+## Ограничения функции Node-RED
+
+В function-узлах Node-RED нет `require`, `crypto` и нет гарантированного `Buffer`: первый деплой на
+147 упал на `ReferenceError: require is not defined` и запрос висел без ответа. Поэтому:
+
+- токен сравнивается в чистом JS (XOR по charCode с проверкой длины), без `crypto.timingSafeEqual`;
+- id документа результата детерминированный — `res_lk2_<externalResultId>`, без `crypto.randomUUID()`.
+
+Правило для будущих правок этой вкладки: только `msg`, `env`, `node`, `flow`, `context` и обычный
+JS. Проверка компиляции без деплоя: `new Function('msg','env','node','flow','global','context', func)`.
+
 ## Контракт
 
 `POST /lk-bridge/api/v1/game-results/import`
