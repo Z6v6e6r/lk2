@@ -4,16 +4,18 @@ import type { MouseEvent } from 'react';
 import { handleGameDetailBack } from './game-detail-navigation.js';
 
 function click(overrides: Partial<MouseEvent<HTMLAnchorElement>> = {}) {
-  return {
+  const preventDefault = vi.fn();
+  const event = {
     defaultPrevented: false,
     button: 0,
     metaKey: false,
     ctrlKey: false,
     shiftKey: false,
     altKey: false,
-    preventDefault: vi.fn(),
+    preventDefault,
     ...overrides,
   } as unknown as MouseEvent<HTMLAnchorElement>;
+  return { event, preventDefault };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -22,18 +24,18 @@ describe('shared Web and Android detail back navigation', () => {
   it('traverses existing history instead of replacing the source with a fixed game list', () => {
     vi.spyOn(window.history, 'length', 'get').mockReturnValue(2);
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
-    const event = click();
+    const { event, preventDefault } = click();
     handleGameDetailBack(event);
-    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(preventDefault).toHaveBeenCalledOnce();
     expect(back).toHaveBeenCalledOnce();
   });
 
   it('keeps the home-link fallback for a direct entry without previous history', () => {
     vi.spyOn(window.history, 'length', 'get').mockReturnValue(1);
     const back = vi.spyOn(window.history, 'back');
-    const event = click();
+    const { event, preventDefault } = click();
     handleGameDetailBack(event);
-    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
     expect(back).not.toHaveBeenCalled();
   });
 
@@ -47,9 +49,9 @@ describe('shared Web and Android detail back navigation', () => {
   ])('does not intercept native or already handled link activation: %j', (overrides) => {
     vi.spyOn(window.history, 'length', 'get').mockReturnValue(2);
     const back = vi.spyOn(window.history, 'back');
-    const event = click(overrides);
+    const { event, preventDefault } = click(overrides);
     handleGameDetailBack(event);
-    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
     expect(back).not.toHaveBeenCalled();
   });
 });
