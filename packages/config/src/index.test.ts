@@ -24,6 +24,33 @@ const validEnvironment = {
 } as const;
 
 describe('loadConfig', () => {
+  it('keeps the ЦУП delegation off by default and refuses half of it at boot', () => {
+    expect(loadConfig(validEnvironment).CUP_ADMIN_DELEGATION_ENABLED).toBe(false);
+    const enabled = {
+      ...validEnvironment,
+      CUP_ADMIN_DELEGATION_ENABLED: 'true',
+      CUP_ADMIN_DELEGATION_TOKEN: 'cup-admin-delegation-token-at-least-32-chars',
+      CUP_ADMIN_DELEGATION_ACTOR_ID: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      CUP_ADMIN_DELEGATION_TENANT_KEYS: 'local-padel',
+    };
+    expect(loadConfig(enabled).CUP_ADMIN_DELEGATION_MAX_AGE_SECONDS).toBe(120);
+    // Each partial configuration must fail at boot instead of starting an API that cannot serve the
+    // only operator console or that would accept an unscoped credential.
+    expect(() => loadConfig({ ...enabled, CUP_ADMIN_DELEGATION_TOKEN: undefined })).toThrow(
+      'CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_TOKEN',
+    );
+    expect(() => loadConfig({ ...enabled, CUP_ADMIN_DELEGATION_ACTOR_ID: undefined })).toThrow(
+      'CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_ACTOR_ID',
+    );
+    expect(() => loadConfig({ ...enabled, CUP_ADMIN_DELEGATION_TENANT_KEYS: ' , ' })).toThrow(
+      'CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_TENANT_KEYS',
+    );
+    // One actor id cannot live in two tenants: the audited write carries a composite FK.
+    expect(() =>
+      loadConfig({ ...enabled, CUP_ADMIN_DELEGATION_TENANT_KEYS: 'local-padel,second-padel' }),
+    ).toThrow('supports exactly one CUP_ADMIN_DELEGATION_TENANT_KEYS entry');
+  });
+
   it('keeps the Viva subscription mapping sync off and requires Admin credentials to enable it', () => {
     expect(loadConfig(validEnvironment).VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED).toBe(false);
     const enabled = { ...validEnvironment, VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED: 'true' };

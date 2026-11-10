@@ -640,6 +640,11 @@ gates; остальной список — целевая карта.
   claims, и проверку активной сессии.
 - Включение без token, actor или tenant keys отклоняется на старте API, а при выключенном флаге
   credential не принимается вообще — конфигурация может лишь отказать, но не расширить доступ.
+  Поддерживается ровно один tenant key: один actor id не может существовать в двух организациях, а
+  каждая аудируемая запись несёт составной FK на `identity.users`.
+- Ротация: заменить `CUP_ADMIN_DELEGATION_TOKEN` (и тот же секрет в ЦУПе) и перезапустить оба
+  сервиса — после этого ни одна ранее выданная ассерция не пройдёт проверку. Env-ключи объявлены в
+  `deploy/timeweb/runtime-environment.contract.json` (`services.api.allowed`) и `.env.example`.
 
 Connector webhook ingress — отдельная проверяемая machine boundary без user/admin JWT. Для каждого
 провайдера обязательны signature verification, replay protection, allowlisted content types,

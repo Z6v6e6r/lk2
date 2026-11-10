@@ -945,8 +945,18 @@ export function loadConfig(
     if (!parsed.data.CUP_ADMIN_DELEGATION_ACTOR_ID) {
       throw new Error('CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_ACTOR_ID');
     }
-    if (cupAdminDelegationTenantKeys(parsed.data.CUP_ADMIN_DELEGATION_TENANT_KEYS).length === 0) {
+    const delegationTenantKeys = cupAdminDelegationTenantKeys(
+      parsed.data.CUP_ADMIN_DELEGATION_TENANT_KEYS,
+    );
+    if (delegationTenantKeys.length === 0) {
       throw new Error('CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_TENANT_KEYS');
+    }
+    if (delegationTenantKeys.length > 1) {
+      // One actor id cannot exist in two tenants (`identity.users` is tenant-scoped and every audited
+      // write carries the composite FK), so a multi-tenant credential could only fail at write time.
+      throw new Error(
+        'CUP_ADMIN_DELEGATION_ENABLED supports exactly one CUP_ADMIN_DELEGATION_TENANT_KEYS entry',
+      );
     }
   }
 
