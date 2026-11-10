@@ -19,6 +19,7 @@ import {
   type RefreshSessionRotation,
   type TenantAuthBinding,
   type VivaProfilePhoneLink,
+  type VivaSubscriptionMappingSync,
 } from './auth-service.js';
 import { MemoryAuthChallengeStore } from './challenge-store.js';
 import { MemoryAndroidOAuthStore } from './android-oauth-store.js';
@@ -2264,6 +2265,7 @@ describe('Viva profile phone link after OTP login (ADR 0029 D5)', () => {
   async function login(
     link: VivaProfilePhoneLink,
     identityProvider: IdentityProviderPort = provider,
+    subscriptionSync?: VivaSubscriptionMappingSync,
   ) {
     const phoneConfig = loadVivaPhoneConfig();
     const authService = new AuthService({
@@ -2272,6 +2274,7 @@ describe('Viva profile phone link after OTP login (ADR 0029 D5)', () => {
       challengeStore: new MemoryAuthChallengeStore(),
       providers: new Map([['VIVA', identityProvider]]),
       vivaProfilePhoneLink: link,
+      ...(subscriptionSync ? { vivaSubscriptionMappingSync: subscriptionSync } : {}),
     });
     const app = await buildApp({
       config: phoneConfig,
@@ -2383,8 +2386,82 @@ describe('Viva profile phone link after OTP login (ADR 0029 D5)', () => {
         }),
     };
     const { link } = phoneLink();
-    expect((await login(link, otherPhoneProvider)).statusCode).toBe(200);
+    const sync = subscriptionSync();
+    expect((await login(link, otherPhoneProvider, sync.sync)).statusCode).toBe(200);
     expect(link.hasMapping).not.toHaveBeenCalled();
     expect(link.lookup).not.toHaveBeenCalled();
+    expect(sync.sync.sync).not.toHaveBeenCalled();
+    expect(sync.outcomes).toEqual([]);
+  });
+
+  function subscriptionSync(overrides: Partial<VivaSubscriptionMappingSync> = {}) {
+    const outcomes: string[] = [];
+    const sync: VivaSubscriptionMappingSync = {
+      enabled: true,
+      sync: vi.fn(() => Promise.resolve('synced' as const)),
+      onOutcome: (outcome) => outcomes.push(outcome),
+      ...overrides,
+    };
+    return { sync, outcomes };
+  }
+
+  it.each([
+    ['a fresh link', {}],
+    ['an unchanged link', { link: vi.fn(() => Promise.resolve('unchanged' as const)) }],
+    ['an existing mapping', { hasMapping: vi.fn(() => Promise.resolve(true)) }],
+    ['a disabled profile link', { enabled: false }],
+  ] as const)('syncs subscription mappings after %s', async (_name, overrides) => {
+    const { link } = phoneLink(overrides);
+    const sync = subscriptionSync();
+    const response = await login(link, provider, sync.sync);
+    expect(response.statusCode).toBe(200);
+    expect(sync.sync.sync).toHaveBeenCalledTimes(1);
+    expect(sync.sync.sync).toHaveBeenCalledWith({
+      tenantId: binding.tenantId,
+      userId: user.id,
+      correlationId: expect.any(String) as string,
+    });
+    expect(sync.outcomes).toEqual(['synced']);
+  });
+
+  it.each([
+    ['not found', { lookup: vi.fn(() => Promise.resolve({ kind: 'NOT_FOUND' as const })) }],
+    ['ambiguous', { lookup: vi.fn(() => Promise.resolve({ kind: 'AMBIGUOUS' as const })) }],
+    ['a user conflict', { link: vi.fn(() => Promise.resolve('user_conflict' as const)) }],
+    ['a client conflict', { link: vi.fn(() => Promise.resolve('client_conflict' as const)) }],
+    ['an unavailable lookup', { lookup: vi.fn(() => Promise.reject(new Error('down'))) }],
+  ] as const)('never syncs subscription mappings after %s', async (_name, overrides) => {
+    const { link } = phoneLink(overrides);
+    const sync = subscriptionSync();
+    expect((await login(link, provider, sync.sync)).statusCode).toBe(200);
+    expect(sync.sync.sync).not.toHaveBeenCalled();
+    expect(sync.outcomes).toEqual(['skipped_profile_link']);
+  });
+
+  it('keeps the login when the subscription sync fails, hangs or its telemetry throws', async () => {
+    const failing = subscriptionSync({ sync: vi.fn(() => Promise.reject(new Error('db down'))) });
+    expect((await login(phoneLink().link, provider, failing.sync)).statusCode).toBe(200);
+    expect(failing.outcomes).toEqual(['unavailable']);
+
+    const hanging = subscriptionSync({
+      sync: vi.fn(() => new Promise<never>(() => undefined)),
+      deadlineMs: 20,
+    });
+    expect((await login(phoneLink().link, provider, hanging.sync)).statusCode).toBe(200);
+    expect(hanging.outcomes).toEqual(['unavailable']);
+
+    const noisy = subscriptionSync({
+      onOutcome: () => {
+        throw new Error('telemetry down');
+      },
+    });
+    expect((await login(phoneLink().link, provider, noisy.sync)).statusCode).toBe(200);
+  });
+
+  it('does not sync subscription mappings when the flag is off', async () => {
+    const sync = subscriptionSync({ enabled: false });
+    expect((await login(phoneLink().link, provider, sync.sync)).statusCode).toBe(200);
+    expect(sync.sync.sync).not.toHaveBeenCalled();
+    expect(sync.outcomes).toEqual([]);
   });
 });

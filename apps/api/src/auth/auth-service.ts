@@ -292,6 +292,8 @@ export interface AuthServiceOptions {
   readonly legacyViewerIdentityLink?: LegacyViewerIdentityLink;
   /** ADR 0029 D5: canonical Viva profile mapping from an Admin lookup by the verified phone. */
   readonly vivaProfilePhoneLink?: VivaProfilePhoneLink;
+  /** ADR 0029 D5: `VIVA/subscription` mappings from a server Admin read after a Viva OTP login. */
+  readonly vivaSubscriptionMappingSync?: VivaSubscriptionMappingSync;
   /**
    * Reports a beta client-access convergence that could not be written. The token is still issued
    * from the stored profile, so this is the only trace of a divergence that will be retried on the
@@ -344,6 +346,31 @@ export interface VivaProfilePhoneLink {
   readonly onOutcome?: (outcome: VivaProfilePhoneLinkOutcomeLabel) => void;
   /** Total budget for the provider lookup inside the login request; default 3000 ms. */
   readonly lookupDeadlineMs?: number;
+}
+
+export type VivaSubscriptionMappingSyncOutcomeLabel =
+  | 'synced'
+  | 'synced_with_conflicts'
+  | 'unmapped'
+  | 'profile_changed'
+  | 'ownership_conflict'
+  | 'unavailable'
+  | 'skipped_profile_link';
+
+/**
+ * Best-effort post-login step after the profile link. It never fails the login, waits at most
+ * `deadlineMs`, and never deletes or overwrites a mapping owned by someone else.
+ */
+export interface VivaSubscriptionMappingSync {
+  readonly enabled: boolean;
+  readonly sync: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+  }) => Promise<Exclude<VivaSubscriptionMappingSyncOutcomeLabel, 'skipped_profile_link'>>;
+  readonly onOutcome?: (outcome: VivaSubscriptionMappingSyncOutcomeLabel) => void;
+  /** Longest the login waits for the sync; default 2500 ms. The sync itself is not cancelled. */
+  readonly deadlineMs?: number;
 }
 
 export interface LegacyViewerIdentityLink {
@@ -789,20 +816,22 @@ export class AuthService {
     readonly userId: string;
     readonly phoneE164: string;
     readonly correlationId: string;
-  }): Promise<void> {
+  }): Promise<VivaProfilePhoneLinkOutcomeLabel | 'disabled'> {
     const link = this.options.vivaProfilePhoneLink;
-    if (!link?.enabled) return;
-    const report = (outcome: VivaProfilePhoneLinkOutcomeLabel): void => {
+    if (!link?.enabled) return 'disabled';
+    const report = (
+      outcome: VivaProfilePhoneLinkOutcomeLabel,
+    ): VivaProfilePhoneLinkOutcomeLabel => {
       try {
         link.onOutcome?.(outcome);
       } catch {
         // Telemetry must never change the login result.
       }
+      return outcome;
     };
     try {
       if (await link.hasMapping({ tenantId: input.tenantId, userId: input.userId })) {
-        report('already_mapped');
-        return;
+        return report('already_mapped');
       }
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {
@@ -817,7 +846,7 @@ export class AuthService {
       ]).finally(() => clearTimeout(timer));
       if (found.kind === 'NOT_FOUND') return report('not_found');
       if (found.kind === 'AMBIGUOUS') return report('ambiguous');
-      report(
+      return report(
         await link.link({
           tenantId: input.tenantId,
           userId: input.userId,
@@ -826,7 +855,59 @@ export class AuthService {
         }),
       );
     } catch {
+      return report('unavailable');
+    }
+  }
+
+  /**
+   * Writes the user's `VIVA/subscription` mappings after the profile step. It runs only when the
+   * profile step left a mapping it trusts (or is disabled); a profile conflict or an unmapped user
+   * skips it. Never fails the login.
+   */
+  private async syncVivaSubscriptionMappings(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+    readonly profileLink: VivaProfilePhoneLinkOutcomeLabel | 'disabled';
+  }): Promise<void> {
+    const sync = this.options.vivaSubscriptionMappingSync;
+    if (!sync?.enabled) return;
+    const report = (outcome: VivaSubscriptionMappingSyncOutcomeLabel): void => {
+      try {
+        sync.onOutcome?.(outcome);
+      } catch {
+        // Telemetry must never change the login result.
+      }
+    };
+    if (
+      input.profileLink !== 'disabled' &&
+      input.profileLink !== 'linked' &&
+      input.profileLink !== 'unchanged' &&
+      input.profileLink !== 'already_mapped'
+    ) {
+      report('skipped_profile_link');
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('VIVA_SUBSCRIPTION_MAPPING_SYNC_DEADLINE')),
+          sync.deadlineMs ?? 2_500,
+        );
+      });
+      const running = sync.sync({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        correlationId: input.correlationId,
+      });
+      // A sync that outlives the deadline still finishes on its own; its result is not awaited.
+      running.catch(() => undefined);
+      report(await Promise.race([running, deadline]));
+    } catch {
       report('unavailable');
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -1847,11 +1928,17 @@ export class AuthService {
       });
       await this.options.challengeStore.delete(challenge.id);
       if (verifiedVivaPhone) {
-        await this.linkVivaProfileByPhone({
+        const profileLink = await this.linkVivaProfileByPhone({
           tenantId: challenge.tenantId,
           userId: user.id,
           phoneE164: verifiedVivaPhone,
           correlationId: input.correlationId,
+        });
+        await this.syncVivaSubscriptionMappings({
+          tenantId: challenge.tenantId,
+          userId: user.id,
+          correlationId: input.correlationId,
+          profileLink,
         });
       }
       return this.sessionResult(

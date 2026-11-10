@@ -76,7 +76,12 @@ import {
   hasVivaProfileMapping,
   linkVivaProfileByVerifiedPhone,
 } from '@phub/database/viva-profile-phone-link';
+import {
+  readVivaSubscriptionSyncProfile,
+  recordVivaSubscriptionMappings,
+} from '@phub/database/viva-subscription-mapping';
 import { createSupportTicketRepository } from '@phub/database/support-tickets';
+import { createVivaSubscriptionMappingSync } from './subscriptions/viva-subscription-mapping-sync.js';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
 import {
@@ -93,6 +98,8 @@ import {
   VivaIdentityProvider,
   VivaExerciseRecommendationSourceAdapter,
   VivaClientPhoneLookupAdapter,
+  VivaClientSubscriptionMappingError,
+  VivaClientSubscriptionMappingSource,
   VivaResidencySourceAdapter,
   VivaClientAdminReadSource,
 } from '@phub/viva-adapter';
@@ -306,6 +313,35 @@ const vivaProfilePhoneLink = config.VIVA_PROFILE_PHONE_LINK_ENABLED
     })()
   : undefined;
 
+// ADR 0029 D5: config validation guarantees sandbox/production mode and Admin credentials here.
+const vivaSubscriptionMappingSync = config.VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED
+  ? (() => {
+      const source = new VivaClientSubscriptionMappingSource({
+        mode: config.VIVA_MODE,
+        apiBaseUrl: config.VIVA_API_URL as string,
+        apiKey: config.VIVA_API_KEY as string,
+        // Runs inside the login request after the profile link: short GETs, one retry at most.
+        timeoutMs: Math.min(config.VIVA_TIMEOUT_MS, 2_000),
+        maxAttempts: 2,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 60_000,
+        onMetric: (metric) => logger.info({ metric }, 'Viva client subscriptions read'),
+      });
+      return {
+        enabled: true,
+        sync: createVivaSubscriptionMappingSync({
+          readProfile: (input) => readVivaSubscriptionSyncProfile({ pool, ...input }),
+          readSubscriptions: (input) => source.read(input),
+          record: (input) => recordVivaSubscriptionMappings({ pool, ...input }),
+          isOwnershipConflict: (error) =>
+            error instanceof VivaClientSubscriptionMappingError &&
+            error.code === 'CLIENT_SUBSCRIPTIONS_OWNERSHIP_CONFLICT',
+        }),
+        onOutcome: (outcome: string) => logger.info({ outcome }, 'Viva subscription mapping sync'),
+      };
+    })()
+  : undefined;
+
 const authRepository = new PostgresAuthRepository(pool);
 const authService = new AuthService({
   config,
@@ -324,6 +360,7 @@ const authService = new AuthService({
     ),
   ...(legacyViewerIdentityLink ? { legacyViewerIdentityLink } : {}),
   ...(vivaProfilePhoneLink ? { vivaProfilePhoneLink } : {}),
+  ...(vivaSubscriptionMappingSync ? { vivaSubscriptionMappingSync } : {}),
 });
 // Trusted tenant bindings only; keep circuit state across requests and bound cache cardinality.
 const trainingCatalogueAdapters = new Map<string, VivaExerciseRecommendationSourceAdapter>();
