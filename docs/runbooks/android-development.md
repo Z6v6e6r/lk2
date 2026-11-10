@@ -84,6 +84,14 @@ plus a provider readback that API/worker containers send no `/end-user/api/` tra
 Version 1.14/code15 ships this transport; the installed 1.13/code14 build predates it and cannot
 observe provider fields.
 
+Version 1.15/code16 fixes two notification defects: Android's HTTPS stack adds
+`application/x-www-form-urlencoded` to every empty POST/DELETE, which Fastify rejected with 415, so a
+bodyless command (notification-endpoint revoke, session refresh/logout, self-leave) could never
+succeed from the native transport; the sender now labels every bodyless non-GET request
+`text/plain`. The push controller also treats a stale endpoint revoke as best-effort bookkeeping, so
+a pending revoke left by an older installation cannot block enabling push (after that fix a stale
+revoke is retried on session refresh, focus or logout instead of failing the enable action).
+
 Version 1.10/code11 corrects a 1.9 contract mismatch: delegated Viva access tokens are opaque,
 not necessarily JWTs with a `tenant_key` claim. Native code accepts only bounded Bearer-safe token
 bytes from the authenticated endpoint and keeps the fixed plan tenant/host and current user lease.
