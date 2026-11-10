@@ -4982,16 +4982,16 @@
 }
 
 .game-detail-tabs {
+  box-sizing: border-box;
   display: flex;
   width: 100%;
-  height: 50px;
-  padding: 0;
+  height: 36px;
+  padding: 4px;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
+  gap: 6px;
   border: 0;
-  border-radius: 16px 16px 0 0;
-  background: linear-gradient(155.73deg, #8a63ff -7.01%, #9576ff 28.39%, #d2c8ff 69.68%);
+  border-radius: 12px;
+  background: #f6f6f6;
   box-shadow: none;
   overflow: hidden;
 }
@@ -5008,42 +5008,35 @@
 }
 
 .game-detail-tabs button {
-  position: relative;
   display: flex;
-  width: 148px;
-  height: 50px;
-  padding: 16px 0 0;
+  min-width: 0;
+  height: 28px;
+  padding: 8px 14px;
+  flex: 1 1 0;
   align-items: center;
-  justify-content: flex-start;
-  flex-direction: column;
-  gap: 13px;
+  justify-content: center;
+  gap: 4px;
   border: 0;
+  border-radius: 8px;
   background: transparent;
-  color: rgb(255 255 255 / 40%);
+  color: #353436;
   cursor: pointer;
-  font-family: 'RF Dewi', 'Inter Display', sans-serif;
-  font-size: 18px;
+  font-family: 'Inter Display', Inter, sans-serif;
+  font-size: 12px;
   font-style: normal;
-  font-weight: 700;
-  line-height: 18px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 100%;
 }
 
 .game-detail-tabs button.is-active {
-  color: #fff;
-}
-
-.game-detail-tabs button.is-active::after {
-  width: 148px;
-  height: 3px;
-  flex: 0 0 3px;
-  border-radius: 40px 40px 0 0;
   background: #fff;
-  content: '';
+  color: #1f1e20;
 }
 
 .game-detail-tabs button:focus-visible {
   border-radius: 8px;
-  outline: 2px solid rgb(255 255 255 / 90%);
+  outline: 2px solid #8a63ff;
   outline-offset: -2px;
 }
 
@@ -5110,6 +5103,110 @@
   border-radius: 24px;
   background: #fff;
   box-shadow: 0 0 8px rgb(0 0 0 / 2%);
+}
+
+.game-detail-players__invite {
+  display: grid;
+  min-width: 0;
+  margin-top: 4px;
+  gap: 8px;
+}
+
+.game-detail-invite {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 52px;
+  padding: 9px 12px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e8defa;
+  border-radius: 16px;
+  background: #f5f1ff;
+  color: #7658d6;
+  font-family: 'Inter Display', 'RF Dewi', sans-serif;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.game-detail-invite:hover:not(:disabled) {
+  background: #eee7ff;
+}
+
+.game-detail-invite:focus-visible {
+  outline: 2px solid #8766eb;
+  outline-offset: 2px;
+}
+
+.game-detail-invite:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.game-detail-invite__icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border-radius: 50%;
+  background: #8766eb;
+  color: #fff;
+}
+
+.game-detail-invite__notice,
+.game-detail-invite__link {
+  margin: 0;
+  color: #888889;
+  font-family: 'Inter Display', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.game-detail-invite__link {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.game-detail-invite__link input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #e8defa;
+  border-radius: 10px;
+  background: #fff;
+  color: #353436;
+  font: inherit;
+}
+
+.game-detail-native-actions {
+  margin-top: 16px;
+  padding: 16px 20px;
+  border: 0.5px solid #ededed;
+  border-radius: 24px;
+  background: #fff;
+}
+
+.game-detail-native-actions[hidden] {
+  display: none;
+}
+
+.game-detail-native-actions:empty {
+  display: none;
+}
+
+.game-detail-native-actions > section {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
 }
 
 .game-detail-players__summary {

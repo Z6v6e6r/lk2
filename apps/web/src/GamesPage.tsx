@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { BookingActivityCard } from './BookingRecommendations.js';
 import { GameCard, type GameCardAction, type GameCardModel } from './GameCard.js';
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
+import { handleGameDetailBack } from './game-detail-navigation.js';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
 import {
   MainBottomNavigation,
@@ -2398,7 +2399,7 @@ function GamesPageContent({
     return (
       <main className="games-page games-page--detail">
         <header className="games-header">
-          <a className="games-back" href="/games" aria-label="Назад к играм">
+          <a className="games-back" href="/" aria-label="Назад" onClick={handleGameDetailBack}>
             <span aria-hidden="true">←</span>
             Назад
           </a>
@@ -2503,7 +2504,7 @@ function GamesPageContent({
     return (
       <main className="games-page games-page--detail games-page--booking-detail">
         <header className="games-header">
-          <a className="games-back" href="/" aria-label="Назад к моим записям">
+          <a className="games-back" href="/" aria-label="Назад" onClick={handleGameDetailBack}>
             <span aria-hidden="true">←</span>
             Назад
           </a>

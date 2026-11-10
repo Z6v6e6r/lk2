@@ -3828,14 +3828,19 @@ it('native game detail exposes only reviewed participation controls', async () =
   const gateway = createGateway({
     restoreSession: vi.fn().mockResolvedValue(session),
     quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
-    getGame: vi.fn().mockResolvedValue(game),
+    getGame: vi.fn().mockResolvedValue({
+      ...game,
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index + 1}`,
+      })),
+      resultSummary: null,
+      conversation: null,
+    }),
   });
   render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
   await waitFor(() => expect(gateway.getGame).toHaveBeenCalledWith(game.id));
-  expect(await screen.findByRole('link', { name: 'К списку игр' })).toHaveAttribute(
-    'href',
-    '/games',
-  );
+  expect(await screen.findByRole('link', { name: 'Назад' })).toHaveAttribute('href', '/');
   expect(screen.queryByRole('button', { name: /Вступить|Отменить игру/ })).not.toBeInTheDocument();
   expect(gateway.joinGame).not.toHaveBeenCalled();
 });
