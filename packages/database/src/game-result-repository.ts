@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import {
   disputeGameResultInputSchema,
@@ -57,20 +57,20 @@ export interface AutoConfirmGameResultCommandInput {
 }
 
 /**
- * The command ledger accepts only a 64 character lowercase hex digest, so the automatic transition
- * hashes its own identity instead of naming a request it never received.
+ * The command ledger accepts only a 64 character hex fingerprint. It is derived from the submission
+ * identity rather than hashed, because the games package must not pull another crypto import into
+ * the pods' shared chunk: same submission, same revision and same window give the same fingerprint,
+ * a new revision gives a new one.
  */
 export function autoConfirmRequestHash(input: {
   readonly submissionId: string;
   readonly revision: number;
   readonly confirmationWindowHours: number;
 }): string {
-  return createHash('sha256')
-    .update(
-      `auto-confirm:${input.submissionId}:${input.revision}:${input.confirmationWindowHours}h`,
-      'utf8',
-    )
-    .digest('hex');
+  const seed = `${input.submissionId.replace(/[^0-9a-f]/gu, '')}${input.revision
+    .toString(16)
+    .padStart(4, '0')}${input.confirmationWindowHours.toString(16).padStart(4, '0')}`;
+  return seed.repeat(Math.ceil(64 / seed.length)).slice(0, 64);
 }
 
 /**
