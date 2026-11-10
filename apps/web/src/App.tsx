@@ -9,7 +9,8 @@ import { TournamentChatPage } from './TournamentChatPage.js';
 import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
 import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
 import { QuarterCreatePanel } from './QuarterCreatePanel.js';
-import { GameCard } from './GameCard.js';
+import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
+import { handleGameDetailBack } from './game-detail-navigation.js';
 import { normalizePhoneE164 } from '@phub/auth';
 import { PrimaryButton } from '@phub/ui';
 import { lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
@@ -708,11 +709,14 @@ function NativeCreatedGame({
   gateway,
   gameId,
   scope,
+  publicGameOrigin,
 }: {
   gateway: AuthGateway;
   gameId: string;
   scope: { tenantId: string; userId: string };
+  publicGameOrigin?: string;
 }) {
+  const [detailTab, setDetailTab] = useState<GameDetailTab>('GAME');
   const joinGateway = useMemo(
     () => ({
       principal: () => gateway.quarterCreatePrincipal?.() ?? null,
@@ -826,37 +830,76 @@ function NativeCreatedGame({
     }
   }
   return (
-    <main>
-      <a href="/games">К списку игр</a>
-      <button type="button" disabled={busy} onClick={() => void run(false)}>
+    <main className="games-page games-page--detail">
+      <header className="games-header">
+        <a className="games-back" href="/" aria-label="Назад" onClick={handleGameDetailBack}>
+          <span aria-hidden="true">←</span>Назад
+        </a>
+        <div>
+          <h1>Детали матча</h1>
+        </div>
+      </header>
+      <button
+        className="game-detail-secondary"
+        type="button"
+        disabled={busy}
+        onClick={() => void run(false)}
+      >
         Обновить статус игры
       </button>
       {game ? (
         <>
-          <GameCard game={game} readOnly />
-          {game.viewerRelation === 'ORGANIZER' && game.allowedActions.includes('CANCEL') && (
-            <button type="button" disabled={busy} onClick={() => void run(true)}>
-              Отменить игру
-            </button>
-          )}
-          <NativeGameJoin
+          <GameDetailView
             game={game}
-            gateway={joinGateway}
-            scope={scope}
-            onCanonicalGame={adoptGame}
+            activeTab={detailTab}
+            onTabChange={setDetailTab}
+            busy={busy}
+            viewerUserId={scope.userId}
+            readOnly
+            publicGameOrigin={publicGameOrigin ?? null}
+            onAction={() => {
+              throw new Error('NATIVE_GAME_ACTION_REQUIRES_CONTROLLER');
+            }}
+            onChatOpen={() => {
+              throw new Error('NATIVE_GAME_CHAT_REQUIRES_CONTROLLER');
+            }}
+            onSubmit={() => Promise.reject(new Error('NATIVE_GAME_RESULT_UNAVAILABLE'))}
           />
-          <NativeSelfLeave
-            key={`${game.id}:${game.viewerRelation}`}
-            game={game}
-            gateway={leaveGateway}
-            scope={scope}
-          />
-          <NativeGameChat
-            key={game.id}
-            game={game}
-            principal={() => gateway.quarterCreatePrincipal?.() ?? null}
-            open={(id) => gateway.getOrCreateGameConversation(id)}
-          />
+          {/* Keep command owners mounted across tabs: pending attempts retain their lifetime/key. */}
+          <section
+            className="game-detail-native-actions game-detail-card"
+            aria-label="Действия игры"
+            hidden={detailTab !== 'GAME'}
+          >
+            {game.viewerRelation === 'ORGANIZER' && game.allowedActions.includes('CANCEL') && (
+              <button
+                className="game-detail-secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => void run(true)}
+              >
+                Отменить игру
+              </button>
+            )}
+            <NativeGameJoin
+              game={game}
+              gateway={joinGateway}
+              scope={scope}
+              onCanonicalGame={adoptGame}
+            />
+            <NativeSelfLeave
+              key={`${game.id}:${game.viewerRelation}`}
+              game={game}
+              gateway={leaveGateway}
+              scope={scope}
+            />
+            <NativeGameChat
+              key={game.id}
+              game={game}
+              principal={() => gateway.quarterCreatePrincipal?.() ?? null}
+              open={(id) => gateway.getOrCreateGameConversation(id)}
+            />
+          </section>
         </>
       ) : (
         <p role="status">{failed ? 'Игра пока недоступна.' : 'Загружаем игру…'}</p>
@@ -3221,6 +3264,7 @@ export function App({
           gateway={gateway}
           gameId={protectedRoute.gameId}
           scope={{ tenantId: context.tenant.id, userId: context.user.id }}
+          {...(realtimeBaseUrl ? { publicGameOrigin: realtimeBaseUrl } : {})}
         />
       );
     }

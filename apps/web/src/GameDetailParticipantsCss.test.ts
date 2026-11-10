@@ -12,6 +12,20 @@ function ruleBody(selector: string): string {
 }
 
 describe('Game participants Figma typography', () => {
+  it('styles the invite action to match the rounded participant card without legacy italics', () => {
+    const invite = ruleBody('.game-detail-invite');
+    expect(invite).toMatch(/width:\s*100%;/);
+    expect(invite).toMatch(/min-height:\s*52px;/);
+    expect(invite).toMatch(/border-radius:\s*16px;/);
+    expect(invite).toMatch(/background:\s*#f5f1ff;/);
+    expect(invite).toMatch(/color:\s*#7658d6;/);
+    expect(invite).toMatch(/font-style:\s*normal;/);
+    expect(invite).toMatch(/font-size:\s*14px;/);
+    expect(ruleBody('.game-detail-invite__icon')).toMatch(/width:\s*32px;/);
+    expect(ruleBody('.game-detail-invite:focus-visible')).toMatch(/outline:\s*2px solid #8766eb;/);
+    expect(ruleBody('.game-detail-native-actions[hidden]')).toMatch(/display:\s*none;/);
+  });
+
   it('uses the Figma organizer badge and preserves participant name typography', () => {
     expect(styles).toMatch(
       /font-family: 'Game Participants RF Dewi';\s*src: url\('\.\/assets\/recommendation-cards\/rf-dewi-bold\.ttf'\)/,
