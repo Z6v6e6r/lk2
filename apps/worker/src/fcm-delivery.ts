@@ -19,6 +19,7 @@ import {
   deferNotificationDeliveryWithoutAttempt,
   finalizeNotificationDelivery,
 } from './notification-delivery-finalizer.js';
+import { lockScreenTitle, lockScreenTypeText } from './lock-screen-notification.js';
 
 interface Row extends QueryResultRow {
   readonly id: string;
@@ -32,6 +33,9 @@ interface Row extends QueryResultRow {
   readonly encryption_key_id: string;
   readonly notification_id: string;
   readonly deep_link: string | null;
+  readonly rendered_title: string | null;
+  readonly title_template: string | null;
+  readonly category: string | null;
 }
 
 export function buildFcmData(input: {
@@ -39,6 +43,8 @@ export function buildFcmData(input: {
   deliveryId: string;
   notificationId: string;
   deepLink?: string | null;
+  title?: string;
+  typeText?: string;
 }): Readonly<Record<string, string>> {
   return {
     endpointId: input.endpointId,
@@ -54,6 +60,8 @@ export function buildFcmData(input: {
               : '/notifications',
         }
       : {}),
+    ...(input.title ? { title: input.title } : {}),
+    ...(input.typeText ? { typeText: input.typeText } : {}),
   };
 }
 
@@ -106,8 +114,10 @@ export async function runFcmDeliveryBatch(options: {
       `select d.id, d.intent_id, d.endpoint_id, d.attempt_count, a.id provider_account_id,
               ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at) is not null' : 'false'} scenario_delivery,
               e.status endpoint_status, e.address_ciphertext, e.encryption_key_id,
-              coalesce(inbox.id, i.id) notification_id, i.rendered_deep_link deep_link
+              coalesce(inbox.id, i.id) notification_id, i.rendered_deep_link deep_link,
+              i.rendered_title rendered_title, t.title_template title_template, t.category category
          from notifications.deliveries d join notifications.intents i on i.tenant_id=d.tenant_id and i.id=d.intent_id
+         left join notifications.templates t on t.tenant_id=i.tenant_id and t.id=i.template_id
          join integration.notification_endpoints e on e.tenant_id=d.tenant_id and e.id=d.endpoint_id
          join integration.notification_provider_accounts a on a.tenant_id=e.tenant_id and a.id=e.provider_account_id
          left join notifications.inbox_items inbox on inbox.tenant_id=i.tenant_id and inbox.intent_id=i.id
@@ -197,6 +207,11 @@ export async function runFcmDeliveryBatch(options: {
       }
     }
     const startedAt = new Date().toISOString();
+    const title = lockScreenTitle({
+      titleTemplate: row.title_template,
+      renderedTitle: row.rendered_title,
+    });
+    const typeText = lockScreenTypeText(row.category);
     let result: PushDeliveryResult;
     try {
       result =
@@ -212,8 +227,8 @@ export async function runFcmDeliveryBatch(options: {
               ),
               notification: {
                 id: row.notification_id,
-                title: 'ПадлхАБ',
-                preview: 'Новое уведомление',
+                title: title ?? 'ПадлхАБ',
+                preview: typeText,
                 ...(row.deep_link ? { deepLink: row.deep_link } : {}),
               },
               data: buildFcmData({
@@ -221,6 +236,8 @@ export async function runFcmDeliveryBatch(options: {
                 deliveryId: row.id,
                 notificationId: row.notification_id,
                 deepLink: row.deep_link,
+                ...(title ? { title } : {}),
+                typeText,
               }),
               providerIdempotencyKey: `fcm:${row.id}`,
             })

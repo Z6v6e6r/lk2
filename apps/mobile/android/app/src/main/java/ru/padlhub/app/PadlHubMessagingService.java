@@ -13,7 +13,11 @@ import androidx.core.content.ContextCompat;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
-/** Data-only FCM: native identity and local consent are checked before displaying anything. */
+/**
+ * Data-only FCM: native identity and local consent are checked before displaying anything.
+ * The provider carries only identifiers plus the PII-free lock-screen headline and type line;
+ * rendered bodies stay in the authenticated inbox.
+ */
 public final class PadlHubMessagingService extends FirebaseMessagingService {
     static final String CHANNEL = "padlhub_events";
     @Override public void onNewToken(String token) { PadlHubAndroidPushPlugin.changed(); }
@@ -33,8 +37,10 @@ public final class PadlHubMessagingService extends FirebaseMessagingService {
                 intent.setData(android.net.Uri.parse("padlhub-push://delivery/" + delivery));
                 PendingIntent open = PendingIntent.getActivity(this, delivery.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
                 manager.notify(delivery, 0, new NotificationCompat.Builder(this, CHANNEL)
-                    .setSmallIcon(R.drawable.ic_stat_padlhub).setContentTitle("ПадлхАБ")
-                    .setContentText("У вас новое уведомление").setContentIntent(open).setAutoCancel(true)
+                    .setSmallIcon(R.drawable.ic_stat_padlhub)
+                    .setContentTitle(LockScreenText.title(message.getData().get("title")))
+                    .setContentText(LockScreenText.body(message.getData().get("typeText")))
+                    .setContentIntent(open).setAutoCancel(true)
                     .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).build());
             } catch (Exception ignored) { /* Fail closed; no payload, token or exception logging. */ }
         }
