@@ -120,7 +120,7 @@
     "type": "function",
     "z": "lk2resultsbridge",
     "name": "Build game update",
-    "func": "\nconst ctx = msg._lk2Import || {};\nconst doc = msg._lk2Doc || {};\nconst nowIso = new Date().toISOString();\nmsg.payload = {\n  $set: {\n    resultStatus: 'CONFIRMED',\n    resultId: doc.id,\n    resultScore: { teamA: ctx.scoreA, teamB: ctx.scoreB },\n    lastResultAt: nowIso,\n    updatedAt: nowIso,\n  },\n};\nmsg.query = { id: ctx.gameId };\nreturn msg;\n",
+    "func": "\nconst ctx = msg._lk2Import || {};\nconst doc = msg._lk2Doc || {};\nconst nowIso = new Date().toISOString();\n// mongodb4 calls collection[operation](...msg.payload), so an updateOne needs the filter and the\n// update document as an argument list. A bare {$set} here reaches the driver as the filter and the\n// node fails with MongoInvalidArgumentError after the result document is already written.\nmsg.payload = [\n  { id: ctx.gameId },\n  {\n    $set: {\n      resultStatus: 'CONFIRMED',\n      resultId: doc.id,\n      resultScore: { teamA: ctx.scoreA, teamB: ctx.scoreB },\n      lastResultAt: nowIso,\n      updatedAt: nowIso,\n    },\n  },\n];\ndelete msg.query;\nreturn msg;\n",
     "outputs": 1,
     "timeout": "",
     "noerr": 0,

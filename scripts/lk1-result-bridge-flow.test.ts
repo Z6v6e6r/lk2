@@ -92,7 +92,7 @@ describe('LK1 result-import flow functions', () => {
     opponentB: '+79161234570',
   };
 
-  const authorize = (teams?: Record<string, readonly string[]>) => {
+  const authorize = (teams?: Record<string, readonly unknown[]>) => {
     const msg: Record<string, unknown> = {
       req: { headers: { authorization: `Bearer ${TOKEN}` } },
       payload: {
@@ -181,6 +181,12 @@ describe('LK1 result-import flow functions', () => {
     const teams = next._lk2Teams as { teamA: { id: string; name: string }[]; teamB: unknown[] };
     expect(teams.teamA.map((member) => member.name)).toEqual(['Дмитрий', 'Alexey']);
     expect(teams.teamB).toHaveLength(2);
+  });
+
+  it('hands the update node an argument list, not a bare $set', () => {
+    const node = functions.find((candidate) => candidate.id === 'lk2res_fn_game_update_001');
+    expect(node?.func).toContain('msg.payload = [');
+    expect(node?.func).not.toContain('msg.query =');
   });
 
   it('refuses a game that has neither payload teams nor its own phones', () => {
