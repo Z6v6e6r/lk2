@@ -57,6 +57,23 @@ export interface AutoConfirmGameResultCommandInput {
 }
 
 /**
+ * The command ledger accepts only a 64 character hex fingerprint. It is derived from the submission
+ * identity rather than hashed, because the games package must not pull another crypto import into
+ * the pods' shared chunk: same submission, same revision and same window give the same fingerprint,
+ * a new revision gives a new one.
+ */
+export function autoConfirmRequestHash(input: {
+  readonly submissionId: string;
+  readonly revision: number;
+  readonly confirmationWindowHours: number;
+}): string {
+  const seed = `${input.submissionId.replace(/[^0-9a-f]/gu, '')}${input.revision
+    .toString(16)
+    .padStart(4, '0')}${input.confirmationWindowHours.toString(16).padStart(4, '0')}`;
+  return seed.repeat(Math.ceil(64 / seed.length)).slice(0, 64);
+}
+
+/**
  * A submission may be confirmed by the system once its window has passed. A disputed or already
  * decided submission never qualifies, and neither does one inside its window.
  */
@@ -751,7 +768,11 @@ export function createGameResultRepository(pool: Pool): GameResultRepository {
           actorUserId: preloaded.submitted_by_user_id,
           gameId: input.gameId,
           idempotencyKey: `auto-confirm:${input.submissionId}:v${preloaded.revision}`,
-          requestHash: `auto-confirm:${input.confirmationWindowHours}h`,
+          requestHash: autoConfirmRequestHash({
+            submissionId: input.submissionId,
+            revision: preloaded.revision,
+            confirmationWindowHours: input.confirmationWindowHours,
+          }),
           correlationId: input.correlationId,
         };
         const replay = replayCommand(
