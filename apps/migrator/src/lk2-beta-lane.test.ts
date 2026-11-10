@@ -49,10 +49,10 @@ describe('lk2 beta lane target binding', () => {
 });
 
 describe('lk2 beta lane runtime grants', () => {
-  it('covers every table created by 0102-0116 and nothing else', async () => {
+  it('covers every table created by 0102-0117 and nothing else', async () => {
     const { readdir } = await import('node:fs/promises');
     const files = (await readdir('packages/database/migrations'))
-      .filter((file) => file >= '0102' && file < '0117')
+      .filter((file) => file >= '0102' && file < '0118')
       .sort();
     const created = new Set<string>();
     for (const file of files) {
@@ -84,6 +84,11 @@ describe('lk2 beta lane runtime grants', () => {
       relation: 'profile.provider_observations',
       privileges: ['INSERT', 'SELECT', 'UPDATE'],
       updateColumns: [],
+    });
+    expect(grants.get('integration.viva_subscription_owners')).toEqual({
+      relation: 'integration.viva_subscription_owners',
+      privileges: ['INSERT', 'SELECT'],
+      updateColumns: ['last_observed_at'],
     });
     expect(grants.get('integration.game_create_location_bindings')?.privileges).toEqual([
       'INSERT',

@@ -63,9 +63,9 @@ export interface Lk2RuntimeGrant {
   readonly updateColumns: readonly string[];
 }
 
-// Tables created by 0102-0116 and the exact runtime privileges the API and Worker need on them:
-// the reviewed R1 post-119 matrix plus the 0102 photo contract (runtimePhotoAcl) and the 0116
-// Android profile-observation contract.
+// Tables created by 0102-0117 and the exact runtime privileges the API and Worker need on them:
+// the reviewed R1 post-119 matrix plus the 0102 photo contract (runtimePhotoAcl), the 0116
+// Android profile-observation contract and the 0117 Viva subscription owner binding.
 // On these tables the runtime ACL is made exact (revoke all, then grant), so inherited default
 // privileges cannot widen them. Older tables keep their existing reviewed grants untouched.
 export function lk2RuntimeGrants(): Lk2RuntimeGrant[] {
@@ -88,6 +88,12 @@ export function lk2RuntimeGrants(): Lk2RuntimeGrant[] {
   merged.set('profile.provider_observations', {
     privileges: new Set(['SELECT', 'INSERT', 'UPDATE']),
     columns: new Set(),
+  });
+  // Post-119 reviewed grant (ADR 0029 D5): the API binds a subscription mapping to its owner and
+  // refreshes `last_observed_at`; it never deletes a binding. Forced RLS, no monitor access.
+  merged.set('integration.viva_subscription_owners', {
+    privileges: new Set(['SELECT', 'INSERT']),
+    columns: new Set(['last_observed_at']),
   });
   return [...merged.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
