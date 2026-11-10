@@ -407,3 +407,56 @@ it.each(['accepted', 'rejected'] as const)(
     });
   },
 );
+
+it('enables push even when a stale endpoint revoke fails', async () => {
+  const revokeAndroidPushEndpoint = vi.fn().mockRejectedValue(new Error('unsupported media type'));
+  const api = gateway({ revokeAndroidPushEndpoint });
+  const publish = vi.fn();
+  const native = plugin({
+    status: vi.fn().mockResolvedValue({
+      configured: true,
+      state: 'prompt',
+      installationId: 'install-1',
+      pendingRevoke: true,
+      idempotencyKey: 'revoke-key-1',
+    }),
+  });
+  const controller = createAndroidPushController(api, publish, native.transport);
+
+  await controller.enable();
+
+  expect(revokeAndroidPushEndpoint).toHaveBeenCalledWith('install-1', 'revoke-key-1');
+  expect(native.transport.registration).toHaveBeenCalledWith({ requestPermission: true });
+  expect(api.registerAndroidPushEndpoint).toHaveBeenCalledWith(
+    { installationId: 'install-1', token: 'fcm-token' },
+    'native-key-1',
+  );
+  expect(native.transport.activate).toHaveBeenCalled();
+  expect(publish).toHaveBeenLastCalledWith(
+    expect.objectContaining({ enabled: true, state: 'subscribed', busy: false }),
+  );
+});
+
+it('keeps the notification screen usable when a stale endpoint revoke fails on refresh', async () => {
+  const revokeAndroidPushEndpoint = vi.fn().mockRejectedValue(new Error('network down'));
+  const api = gateway({ revokeAndroidPushEndpoint });
+  const publish = vi.fn();
+  const native = plugin({
+    status: vi.fn().mockResolvedValue({
+      configured: true,
+      state: 'prompt',
+      installationId: 'install-1',
+      pendingRevoke: true,
+      idempotencyKey: 'revoke-key-1',
+    }),
+  });
+  const controller = createAndroidPushController(api, publish, native.transport);
+
+  await controller.refresh();
+
+  expect(revokeAndroidPushEndpoint).toHaveBeenCalledWith('install-1', 'revoke-key-1');
+  expect(publish).toHaveBeenLastCalledWith(
+    expect.objectContaining({ enabled: true, state: 'ready', error: undefined }),
+  );
+  expect(native.transport.registration).not.toHaveBeenCalled();
+});
