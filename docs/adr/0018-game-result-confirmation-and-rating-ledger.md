@@ -44,6 +44,8 @@ partners and opponents only need to be stable inside one set.
    `PENDING_CONFIRMATION` outside the window; `DISPUTED`, `CONFIRMED` and `SUPERSEDED` never are, and
    a dispute before the window blocks the automatic decision permanently.
    `GAME_RESULT_AUTO_CONFIRM_ENABLED` keeps the behaviour off until an environment opts in.
+   The card projection marks such a result with `autoConfirmed` and no confirming users, so a
+   confirmed result without a reviewer is valid only when the system made the decision.
 
 ## Consequences
 
