@@ -995,6 +995,50 @@ paths:
           $ref: '#/components/responses/ApiError'
         '403':
           $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/notifications/native-push-subscribers:
+    get:
+      tags: [Notifications]
+      operationId: listAdminNotificationNativePushSubscribers
+      summary: List accounts with registered Android or iOS push devices
+      description: >
+        Active registered endpoints for the configured platform, app and environment. This read does
+        not require sending to be enabled and is not a delivery guarantee. Phones are masked and no
+        tokens or encrypted addresses are returned. Requires notifications.manage or CUP delegation.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: platform
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [ANDROID, IOS]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: One page of native push subscribers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminNativePushSubscriberPage'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
   /admin/api/v1/{tenantKey}/notifications/delivery-stats:
     get:
       tags: [Notifications]
@@ -3717,6 +3761,37 @@ components:
           type: integer
           minimum: 0
           description: Live endpoints whose stored address could not be read with the current keyring.
+    AdminNativePushSubscriber:
+      type: object
+      additionalProperties: false
+      description: An account with active registered native push endpoints; not a delivery guarantee.
+      required: [userId, displayName, endpointCount]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        phoneMasked:
+          type: string
+        endpointCount:
+          type: integer
+          minimum: 1
+        lastConfirmedAt:
+          type: string
+          format: date-time
+    AdminNativePushSubscriberPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminNativePushSubscriber'
+        nextCursor:
+          type: string
+          format: uuid
     AdminWebPushSubscriberPage:
       type: object
       additionalProperties: false

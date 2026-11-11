@@ -1632,6 +1632,10 @@ export async function buildApp(options: BuildAppOptions) {
       appId: options.config.FCM_APP_ID,
       environment: options.config.FCM_ENVIRONMENT,
     },
+    iosPush: {
+      appId: options.config.APNS_APP_ID,
+      environment: options.config.APNS_ENVIRONMENT,
+    },
     commandHandlers: [
       authenticateCupAdmin,
       authorizeNotificationAdmin,
