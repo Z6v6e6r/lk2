@@ -91,6 +91,11 @@ import {
   getWebPushBrowserState,
   type WebPushBrowserState,
 } from './web-push-client.js';
+import {
+  rememberAuthContinuation,
+  safeCommunityReturnTo,
+  takeAuthContinuation,
+} from './push-opt-in.js';
 
 const BookingsPage = lazy(() =>
   import('./BookingsPage.js').then((module) => ({ default: module.BookingsPage })),
@@ -136,6 +141,9 @@ const LocationsPage = lazy(() =>
 const NotificationsPage = lazy(() =>
   import('./NotificationsPage.js').then((module) => ({ default: module.NotificationsPage })),
 );
+const PushOptInPage = lazy(() =>
+  import('./PushOptInPage.js').then((module) => ({ default: module.PushOptInPage })),
+);
 const SubscriptionsPage = lazy(() =>
   import('./SubscriptionsPage.js').then((module) => ({ default: module.SubscriptionsPage })),
 );
@@ -175,6 +183,7 @@ type ProtectedRoute =
       readonly conversationId?: string;
     }
   | { readonly kind: 'notifications' }
+  | { readonly kind: 'push' }
   | { readonly kind: 'support'; readonly ticketId?: string }
   | { readonly kind: 'communities' }
   | { readonly kind: 'community'; readonly communityId: string }
@@ -224,6 +233,7 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
     return { kind: 'chats', mode: 'thread', conversationId: chatMatch[1] };
   }
   if (normalizedPath === '/notifications') return { kind: 'notifications' };
+  if (normalizedPath === '/push') return { kind: 'push' };
   if (normalizedPath === '/support') return { kind: 'support' };
   const supportMatch = normalizedPath.match(
     /^\/support\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
@@ -1225,6 +1235,10 @@ export function App({
     protectedRoute.mode === 'new' &&
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('open') === '1';
+  const pushReturnTo =
+    protectedRoute.kind === 'push' && typeof window !== 'undefined'
+      ? safeCommunityReturnTo(new URLSearchParams(window.location.search).get('returnTo'))
+      : null;
   const isHomeRoute =
     protectedRoute.kind === 'home' ||
     protectedRoute.kind === 'home-v2' ||
@@ -1336,6 +1350,20 @@ export function App({
       active = false;
     };
   }, [entryView, gateway, publicGiftRoute]);
+
+  // Viva OAuth returns to the app root, so the push opt-in deep link is restored after login
+  // instead of dropping the visitor on the home screen. The stored target is a fixed internal
+  // /push path with a short TTL (see push-opt-in.ts).
+  const [, forceRouteRender] = useReducer((value: number) => value + 1, 0);
+  useEffect(() => {
+    if (state.view !== 'home' || !state.session) return;
+    const target = takeAuthContinuation();
+    if (!target) return;
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (current === target) return;
+    window.history.replaceState(window.history.state, '', target);
+    forceRouteRender();
+  }, [state.session, state.view]);
 
   useEffect(() => {
     if (state.view !== 'home' || !state.session || !isHomeRoute) return;
@@ -1825,6 +1853,33 @@ export function App({
         window.clearInterval(refreshInterval);
       };
     }
+    if (protectedRoute.kind === 'push') {
+      const serviceWorkerUrl =
+        window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
+      void Promise.allSettled([
+        clientPlatform === 'android'
+          ? Promise.resolve({ enabled: false })
+          : gateway.getWebPushConfiguration(),
+        clientPlatform === 'android'
+          ? Promise.resolve('unsupported' as const)
+          : getWebPushBrowserState(serviceWorkerUrl),
+      ]).then(([configurationResult, browserStateResult]) => {
+        if (!active) return;
+        if (configurationResult.status !== 'fulfilled') {
+          setWebPushConfiguration({ enabled: false, reason: 'RUNTIME_UNAVAILABLE' });
+          setNotificationsError('Настройки уведомлений временно недоступны.');
+          return;
+        }
+        setWebPushConfiguration(configurationResult.value);
+        setWebPushBrowserState(
+          browserStateResult.status === 'fulfilled' ? browserStateResult.value : 'unsupported',
+        );
+        setNotificationsError(null);
+      });
+      return () => {
+        active = false;
+      };
+    }
     if (protectedRoute.kind === 'notifications') {
       const serviceWorkerUrl =
         window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
@@ -2186,6 +2241,7 @@ export function App({
       });
       return;
     }
+    rememberAuthContinuation(window.location.href);
     dispatch({ type: 'oauth-started' });
     void gateway
       .startVivaOAuth({
@@ -3066,6 +3122,31 @@ export function App({
               handleSetConversationNotificationPolicy(requestedConversationId, update);
             }
           }}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'push') {
+      if (!webPushConfiguration) {
+        return (
+          <main className="app-shell app-shell-loading" aria-labelledby="push-loading-title">
+            <Brand />
+            <section className="loading-card" aria-busy="true">
+              <span className="loader" aria-hidden="true" />
+              <h1 id="push-loading-title">Настраиваем уведомления</h1>
+              <p role="status">Проверяем доступность уведомлений…</p>
+            </section>
+          </main>
+        );
+      }
+      return (
+        <PushOptInPage
+          webPush={devicePush ? { enabled: devicePush.enabled } : webPushConfiguration}
+          browserState={devicePush?.state ?? webPushBrowserState}
+          busy={notificationsBusy || Boolean(devicePush?.busy)}
+          error={devicePush?.error ?? notificationsError}
+          ios={iosBrowser}
+          returnTo={pushReturnTo}
+          onEnable={devicePush?.enable ?? handleEnableWebPush}
         />
       );
     }
