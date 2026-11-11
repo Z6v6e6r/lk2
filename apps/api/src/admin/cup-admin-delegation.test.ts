@@ -82,14 +82,16 @@ function notificationRepository() {
     suppressedCount: 0,
     replayed: false,
   });
+  const listNativePushSubscribers = vi.fn().mockResolvedValue({ items: [] });
   const value = {
     getCapabilities,
     resolveRecipients: vi.fn(),
     listWebPushSubscribers: vi.fn(),
+    listNativePushSubscribers,
     getDeliveryStats: vi.fn(),
     createCampaign,
   } as unknown as AdminNotificationRepository & { getCapabilities: typeof getCapabilities };
-  return { value, getCapabilities, createCampaign };
+  return { value, getCapabilities, createCampaign, listNativePushSubscribers };
 }
 
 function locationRepository() {
@@ -156,6 +158,27 @@ describe('CUP admin delegation', () => {
     const inApp = payload.channels.find((entry) => entry.channel === 'IN_APP');
     expect(inApp?.enabled).toBe(true);
   });
+
+  it.each(['ANDROID', 'IOS'])(
+    'reads %s subscriber lists through tenant-bound CUP delegation',
+    async (platform) => {
+      const notification = notificationRepository();
+      const built = await app({ notification, sessionActive: false });
+      const response = await built.inject({
+        method: 'GET',
+        url: `/admin/api/v1/local-padel/notifications/native-push-subscribers?platform=${platform}`,
+        headers: delegationHeaders(),
+      });
+      expect(response.statusCode).toBe(200);
+      const denied = await built.inject({
+        method: 'GET',
+        url: `/admin/api/v1/another-padel/notifications/native-push-subscribers?platform=${platform}`,
+        headers: delegationHeaders(),
+      });
+      expect(denied.statusCode).toBe(401);
+      expect(notification.listNativePushSubscribers).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('opens the station-card block for the configured tenant without a PadlHub session', async () => {
     const location = locationRepository();
