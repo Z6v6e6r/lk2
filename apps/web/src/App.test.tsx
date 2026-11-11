@@ -1385,9 +1385,7 @@ describe('PadlHub web authentication', () => {
       await screen.findByRole('link', { name: 'Открыть подписку: Лето · Падел · Спорт' }),
     ).toBeVisible();
     expect(
-      screen.queryByText(
-        'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
-      ),
+      within(screen.getByRole('region', { name: 'Подписки и абонементы' })).queryByRole('alert'),
     ).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Мои абонементы' })).toHaveAttribute(
       'href',

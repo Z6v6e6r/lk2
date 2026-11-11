@@ -61,7 +61,7 @@ interface ProfilePageProps {
   readonly bookingPreferencesNotice?: string | null;
   readonly stationChoices?: readonly { readonly id: string; readonly name: string }[];
   readonly subscriptions?: HomeDashboard['subscriptions'] | null;
-  readonly subscriptionsError?: string | null;
+  readonly subscriptionsUnavailable?: boolean;
   readonly communities?: CommunityMembershipPage | null;
   readonly communitiesError?: string | null;
   readonly loadCommunityPage?: (cursor?: string) => Promise<CommunityMembershipPage>;
@@ -1365,11 +1365,11 @@ function subscriptionBadgeStyle([
 
 function ProfileSubscriptions({
   subscriptions,
-  error,
+  unavailable = false,
   renewalAvailable = true,
 }: {
   readonly subscriptions?: HomeDashboard['subscriptions'] | null;
-  readonly error?: string | null;
+  readonly unavailable?: boolean;
   readonly renewalAvailable?: boolean;
 }): React.JSX.Element {
   const current =
@@ -1386,10 +1386,9 @@ function ProfileSubscriptions({
         <h2 id="profile-subscriptions-title">Подписки и абонементы</h2>
       </header>
 
-      <p className="profile-subscriptions-note">Неполная подборка с Главной: до 6 абонементов.</p>
-      {error ? (
-        <p role="alert">{error}</p>
-      ) : !subscriptions ? (
+      {/* This section mirrors the Home pickup, so an unavailable pickup stays quiet: it is
+          not a profile failure and a loading state would never resolve. */}
+      {unavailable ? null : !subscriptions ? (
         <p role="status">Загружаем действующие подписки…</p>
       ) : current.length === 0 ? (
         <p>В текущей подборке нет действующих абонементов.</p>
@@ -2111,7 +2110,7 @@ export function ProfilePage({
   bookingPreferencesNotice,
   stationChoices = [],
   subscriptions,
-  subscriptionsError,
+  subscriptionsUnavailable = false,
   communities,
   communitiesError,
   loadCommunityPage,
@@ -2522,7 +2521,7 @@ export function ProfilePage({
               <ProfileSubscriptions
                 renewalAvailable={subscriptionRenewalAvailable}
                 {...(subscriptions !== undefined ? { subscriptions } : {})}
-                {...(subscriptionsError !== undefined ? { error: subscriptionsError } : {})}
+                {...(subscriptionsUnavailable ? { unavailable: true } : {})}
               />
             </>
           ) : null}
