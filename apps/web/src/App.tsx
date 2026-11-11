@@ -1097,7 +1097,7 @@ export function App({
   const [profileSubscriptions, setProfileSubscriptions] = useState<
     HomeDashboard['subscriptions'] | null
   >(null);
-  const [profileSubscriptionsError, setProfileSubscriptionsError] = useState<string | null>(null);
+  const [profileSubscriptionsUnavailable, setProfileSubscriptionsUnavailable] = useState(false);
   const [profileFriends, setProfileFriends] = useState<ProfileFriendPage | null>(null);
   const [profileFriendship, setProfileFriendship] = useState<ProfileFriendship | null>(null);
   const [profileFriendsBusy, setProfileFriendsBusy] = useState(false);
@@ -1509,14 +1509,12 @@ export function App({
           (dashboard) => {
             if (!active) return;
             setProfileSubscriptions(dashboard.subscriptions);
-            setProfileSubscriptionsError(null);
+            setProfileSubscriptionsUnavailable(false);
           },
           () => {
             if (!active) return;
             setProfileSubscriptions(null);
-            setProfileSubscriptionsError(
-              'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
-            );
+            setProfileSubscriptionsUnavailable(true);
           },
         );
         void gateway.listProfileFriends(8).then(
@@ -1590,7 +1588,7 @@ export function App({
               setProfileCommunities(null);
               setProfileCommunitiesError(null);
               setProfileSubscriptions(null);
-              setProfileSubscriptionsError(null);
+              setProfileSubscriptionsUnavailable(false);
             }
           }
         },
@@ -2259,7 +2257,7 @@ export function App({
           setProfileCommunities(null);
           setProfileCommunitiesError(null);
           setProfileSubscriptions(null);
-          setProfileSubscriptionsError(null);
+          setProfileSubscriptionsUnavailable(false);
           setUpcomingBookings(null);
           setBookingsError(null);
           setConversations(null);
@@ -2964,7 +2962,7 @@ export function App({
           bookingPreferencesNotice={bookingPreferencesNotice}
           stationChoices={bookingPreferenceStations}
           subscriptions={profileSubscriptions}
-          subscriptionsError={profileSubscriptionsError}
+          subscriptionsUnavailable={profileSubscriptionsUnavailable}
           communities={profileCommunities}
           communitiesError={profileCommunitiesError}
           loadCommunityPage={gateway.listMyCommunities}

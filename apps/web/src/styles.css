@@ -14395,16 +14395,6 @@ button.participant-avatar-stack__open-slot:focus-visible {
   backdrop-filter: blur(12px);
 }
 
-.profile-page .fh-bottom-nav {
-  border-top-color: rgb(90 73 112 / 10%);
-  background: rgb(250 250 250 / 92%);
-  backdrop-filter: blur(16px);
-}
-
-.profile-page .fh-bottom-nav > a[aria-current='page'] {
-  color: var(--profile-level-accent);
-}
-
 .profile-settings-backdrop {
   position: fixed;
   z-index: 20;
