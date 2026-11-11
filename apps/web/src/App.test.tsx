@@ -27,6 +27,7 @@ import type { TournamentLocalResult, TournamentLocalInput } from '@phub/api-cont
 import { consumeCommunityInviteToken } from './community-invite-token.js';
 import { prepareCreateGameAttempt } from './create-game-attempt.js';
 import { rememberGameChatNavigation } from './game-chat-navigation.js';
+import { rememberAuthContinuation } from './push-opt-in.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
@@ -3944,5 +3945,77 @@ describe('Android concrete tournament navigation and custody', () => {
     } finally {
       stop();
     }
+  });
+});
+
+describe('Exhibition push opt-in', () => {
+  const communityReturn = 'https://padlhub.ru/lk_new?authMode=viva&openCommunity=community_1';
+
+  it('opens the push opt-in page with the validated community return link', async () => {
+    window.history.replaceState({}, '', '/push?returnTo=' + encodeURIComponent(communityReturn));
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getWebPushConfiguration: vi.fn().mockResolvedValue({
+        enabled: true,
+        publicKey: 'public-vapid-key-value',
+      }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Уведомления о результатах' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Вернуться в сообщество' })).toHaveAttribute(
+      'href',
+      communityReturn,
+    );
+    expect(gateway.getWebPushConfiguration).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an outside return URL and keeps a safe in-app destination', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/push?returnTo=' + encodeURIComponent('https://evil.example/community'),
+    );
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getWebPushConfiguration: vi.fn().mockResolvedValue({
+        enabled: true,
+        publicKey: 'public-vapid-key-value',
+      }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Уведомления о результатах' })).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'Вернуться в сообщество' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Перейти к уведомлениям' })).toHaveAttribute(
+      'href',
+      '/notifications',
+    );
+  });
+
+  it('restores the push opt-in deep link after the Viva OAuth root redirect', async () => {
+    rememberAuthContinuation(
+      'https://lk2.padlhub.su/push?returnTo=' + encodeURIComponent(communityReturn),
+      window.sessionStorage,
+    );
+    window.history.replaceState({}, '', '/');
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getWebPushConfiguration: vi.fn().mockResolvedValue({
+        enabled: true,
+        publicKey: 'public-vapid-key-value',
+      }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Уведомления о результатах' })).toBeVisible();
+    expect(window.location.pathname).toBe('/push');
+    expect(screen.getByRole('link', { name: 'Вернуться в сообщество' })).toHaveAttribute(
+      'href',
+      communityReturn,
+    );
   });
 });

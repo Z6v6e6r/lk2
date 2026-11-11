@@ -15322,3 +15322,124 @@ button.participant-avatar-stack__open-slot:focus-visible {
   color: var(--games-muted);
   font-size: 13px;
 }
+
+/* Exhibition Web Push opt-in: reached from the LK1 community page, then returns to it. */
+.push-opt-in-page {
+  min-height: 100vh;
+  background: #f6f4f0;
+  color: #211b2f;
+}
+
+.push-opt-in-header {
+  padding: 32px 20px 64px;
+  background: linear-gradient(145deg, #5634ad 0%, #7958d4 100%);
+  color: #fff;
+}
+
+.push-opt-in-header h1 {
+  max-width: 560px;
+  margin: 0 auto;
+  font-family: 'RF Dewi', 'Inter Display', sans-serif;
+  font-size: clamp(25px, 7vw, 36px);
+  line-height: 1.15;
+}
+
+.push-opt-in-content {
+  display: grid;
+  max-width: 560px;
+  margin: -32px auto 0;
+  padding: 0 20px 48px;
+}
+
+.push-opt-in-card {
+  display: grid;
+  padding: 24px 20px;
+  border: 1px solid rgb(74 56 104 / 8%);
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 14px 38px rgb(66 47 96 / 10%);
+  gap: 16px;
+}
+
+.push-opt-in-lead {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.push-opt-in-status {
+  margin: 0;
+  color: #5d5566;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.push-opt-in-status--success {
+  color: #237a45;
+  font-weight: 600;
+}
+
+.push-opt-in-hint {
+  display: grid;
+  padding: 14px;
+  border-radius: 14px;
+  background: #f4f0fb;
+  color: #4a3d63;
+  font-size: 14px;
+  line-height: 1.5;
+  gap: 6px;
+}
+
+.push-opt-in-primary {
+  min-height: 50px;
+  padding: 13px 18px;
+  border: 0;
+  border-radius: 12px;
+  background: #6b4acb;
+  color: #fff;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.push-opt-in-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.push-opt-in-primary:focus-visible,
+.push-opt-in-link:focus-visible {
+  outline: 3px solid #8766eb;
+  outline-offset: 3px;
+}
+
+.push-opt-in-error {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fff1f0;
+  color: #a72d29;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.push-opt-in-link {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(74 56 104 / 14%);
+  border-radius: 12px;
+  color: #3c2d5c;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.push-opt-in-note {
+  margin: 0;
+  color: #7a7284;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
