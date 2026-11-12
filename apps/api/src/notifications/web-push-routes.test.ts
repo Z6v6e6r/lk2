@@ -167,9 +167,7 @@ describe('Web Push endpoint User API', () => {
       attributionCommunity: string | null;
     };
     expect(input.attributionSource).toBe('korp-sport-2026');
-    expect(input.attributionCommunity).toBe(
-      'community_1794221739126_корпспорт-падлхаб-2026',
-    );
+    expect(input.attributionCommunity).toBe('community_1794221739126_корпспорт-падлхаб-2026');
     expect(input.ciphertext.toString('utf8')).not.toContain(subscription.endpoint);
     expect(input.addressHash).toBe(
       createHash('sha256').update('https://push.example.test/subscriptions/secret').digest('hex'),

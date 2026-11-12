@@ -63,7 +63,9 @@ describe('push attribution', () => {
       community: 'community_1794221739126_корпспорт',
     });
     expect(readPushAttribution('?source=KORP-SPORT&community=')).toEqual({});
-    expect(readPushAttribution('?source=ok&community=' + 'x'.repeat(201))).toEqual({ source: 'ok' });
+    expect(readPushAttribution('?source=ok&community=' + 'x'.repeat(201))).toEqual({
+      source: 'ok',
+    });
     expect(readPushAttribution('?source=' + 'a'.repeat(81))).toEqual({});
   });
 });

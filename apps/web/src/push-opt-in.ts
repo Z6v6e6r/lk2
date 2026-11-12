@@ -39,10 +39,12 @@ export interface PushAttribution {
 function safeAttributionValue(value: string | null, maxLength: number): string | undefined {
   const normalized = (value ?? '').trim();
   if (!normalized || normalized.length > maxLength) return undefined;
-  if ([...normalized].some((character) => {
-    const code = character.codePointAt(0) ?? 0;
-    return code < 0x20 || code === 0x7f;
-  }))
+  if (
+    [...normalized].some((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 0x20 || code === 0x7f;
+    })
+  )
     return undefined;
   return normalized;
 }
