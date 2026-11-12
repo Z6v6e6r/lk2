@@ -92,6 +92,7 @@ import {
   type WebPushBrowserState,
 } from './web-push-client.js';
 import {
+  readPushAttribution,
   rememberAuthContinuation,
   safeCommunityReturnTo,
   takeAuthContinuation,
@@ -1239,6 +1240,10 @@ export function App({
     protectedRoute.kind === 'push' && typeof window !== 'undefined'
       ? safeCommunityReturnTo(new URLSearchParams(window.location.search).get('returnTo'))
       : null;
+  const pushAttribution =
+    protectedRoute.kind === 'push' && typeof window !== 'undefined'
+      ? readPushAttribution(window.location.search)
+      : {};
   const isHomeRoute =
     protectedRoute.kind === 'home' ||
     protectedRoute.kind === 'home-v2' ||
@@ -2668,6 +2673,7 @@ export function App({
       gateway,
       publicKey: webPushConfiguration.publicKey,
       serviceWorkerUrl: window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js',
+      ...pushAttribution,
     }).then(
       () => {
         setWebPushBrowserState('subscribed');

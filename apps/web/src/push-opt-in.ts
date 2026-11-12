@@ -2,6 +2,7 @@ const AUTH_CONTINUATION_STORAGE_KEY = 'phub.pushOptIn.authContinuation.v1';
 const AUTH_CONTINUATION_TTL_MS = 20 * 60 * 1000;
 const PUSH_OPT_IN_PATH = '/push';
 const COMMUNITY_RETURN_PREFIXES = ['https://padlhub.ru/', 'https://padlhub.su/lk/'] as const;
+const ATTRIBUTION_SOURCE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 
 function sessionStorageOrNull(): Storage | null {
   try {
@@ -28,6 +29,38 @@ export function safeCommunityReturnTo(value: string | null | undefined): string 
   } catch {
     return null;
   }
+}
+
+export interface PushAttribution {
+  readonly source?: string;
+  readonly community?: string;
+}
+
+function safeAttributionValue(value: string | null, maxLength: number): string | undefined {
+  const normalized = (value ?? '').trim();
+  if (!normalized || normalized.length > maxLength) return undefined;
+  if (
+    [...normalized].some((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 0x20 || code === 0x7f;
+    })
+  )
+    return undefined;
+  return normalized;
+}
+
+/**
+ * Reads the bounded community markers from the LK1 hand-off. They are presentation/analytics
+ * attribution only; no authority is derived from them on the client.
+ */
+export function readPushAttribution(search: string): PushAttribution {
+  const params = new URLSearchParams(search);
+  const source = safeAttributionValue(params.get('source'), 80);
+  const community = safeAttributionValue(params.get('community'), 200);
+  return {
+    ...(source && ATTRIBUTION_SOURCE_PATTERN.test(source) ? { source } : {}),
+    ...(community ? { community } : {}),
+  };
 }
 
 /**

@@ -38,6 +38,7 @@ describe('fixed R1 tail inventory and admission', () => {
     expect(actual.slice(descriptor.inventory.length).map(({ filename }) => filename)).toEqual([
       '0116_profile_provider_observations.sql',
       '0117_viva_subscription_owners.sql',
+      '0118_push_attribution.sql',
     ]);
     expect(r1PackagedInventory(frozen)).toEqual(frozen);
     expect(r1LedgerCount(frozen.map(({ filename, checksum }) => ({ checksum, filename })))).toBe(

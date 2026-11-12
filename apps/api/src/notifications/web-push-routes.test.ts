@@ -151,14 +151,23 @@ describe('Web Push endpoint User API', () => {
       method: 'POST',
       url: '/user/api/v1/local-padel/notification-endpoints/web',
       headers: { authorization, 'idempotency-key': 'web-push-register-test-0001' },
-      payload: { installationId, subscription },
+      payload: {
+        installationId,
+        subscription,
+        source: 'korp-sport-2026',
+        community: 'community_1794221739126_корпспорт-падлхаб-2026',
+      },
     });
     expect(registered.statusCode).toBe(200);
     const input = registerWebPush.mock.calls[0]?.[0] as {
       ciphertext: Buffer;
       addressHash: string;
       encryptionKeyId: string;
+      attributionSource: string | null;
+      attributionCommunity: string | null;
     };
+    expect(input.attributionSource).toBe('korp-sport-2026');
+    expect(input.attributionCommunity).toBe('community_1794221739126_корпспорт-падлхаб-2026');
     expect(input.ciphertext.toString('utf8')).not.toContain(subscription.endpoint);
     expect(input.addressHash).toBe(
       createHash('sha256').update('https://push.example.test/subscriptions/secret').digest('hex'),
@@ -166,6 +175,36 @@ describe('Web Push endpoint User API', () => {
     expect(cipher.decrypt(input.ciphertext, input.encryptionKeyId)).toContain(
       '"endpoint":"https://push.example.test/subscriptions/secret"',
     );
+
+    const generic = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/notification-endpoints/web',
+      headers: { authorization, 'idempotency-key': 'web-push-generic-test-0001' },
+      payload: { installationId, subscription },
+    });
+    expect(generic.statusCode).toBe(200);
+    expect(registerWebPush.mock.calls[1]?.[0]).toMatchObject({
+      attributionSource: null,
+      attributionCommunity: null,
+    });
+
+    const invalidSource = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/notification-endpoints/web',
+      headers: { authorization, 'idempotency-key': 'web-push-invalid-source-0001' },
+      payload: { installationId, subscription, source: 'KORP-SPORT' },
+    });
+    expect(invalidSource.statusCode).toBe(400);
+    expect(invalidSource.json()).toMatchObject({ code: 'WEB_PUSH_ATTRIBUTION_INVALID' });
+
+    const invalidCommunity = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/notification-endpoints/web',
+      headers: { authorization, 'idempotency-key': 'web-push-invalid-community-0001' },
+      payload: { installationId, subscription, community: 'bad\u0001community' },
+    });
+    expect(invalidCommunity.statusCode).toBe(400);
+    expect(invalidCommunity.json()).toMatchObject({ code: 'WEB_PUSH_ATTRIBUTION_INVALID' });
 
     const revoked = await app.inject({
       method: 'DELETE',

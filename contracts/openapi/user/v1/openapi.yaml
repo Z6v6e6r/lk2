@@ -9712,6 +9712,15 @@ components:
           format: uuid
         subscription:
           $ref: '#/components/schemas/WebPushSubscription'
+        source:
+          type: string
+          maxLength: 80
+          pattern: '^[a-z0-9][a-z0-9._-]*$'
+          description: Optional community attribution from the referring LK1 hand-off.
+        community:
+          type: string
+          maxLength: 200
+          description: Optional community identifier from the referring LK1 hand-off.
     WebPushSubscription:
       type: object
       additionalProperties: false

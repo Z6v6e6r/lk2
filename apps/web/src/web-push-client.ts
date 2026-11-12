@@ -85,6 +85,7 @@ function serviceWorkerScriptUrl(value: string): URL {
 function registrationInput(
   installationId: string,
   subscription: PushSubscription,
+  attribution: { readonly source?: string; readonly community?: string } = {},
 ): WebPushEndpointRegistration {
   const json = subscription.toJSON();
   if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) {
@@ -100,6 +101,8 @@ function registrationInput(
         auth: json.keys.auth,
       },
     },
+    ...(attribution.source ? { source: attribution.source } : {}),
+    ...(attribution.community ? { community: attribution.community } : {}),
   };
 }
 
@@ -144,6 +147,9 @@ export async function enableWebPush(input: {
   readonly gateway: AuthGateway;
   readonly publicKey: string;
   readonly serviceWorkerUrl: string;
+  /** Community attribution from the LK1 hand-off; absent for the generic notifications page. */
+  readonly source?: string;
+  readonly community?: string;
 }): Promise<void> {
   if (!webPushSupported()) throw new Error('WEB_PUSH_UNSUPPORTED');
   // An iOS tab has no push at all, and the permission prompt is the person's one-time decision: refuse
@@ -166,7 +172,10 @@ export async function enableWebPush(input: {
       applicationServerKey: applicationServerKey(input.publicKey),
     }));
   await input.gateway.registerWebPushEndpoint(
-    registrationInput(getOrCreateInstallationId(), subscription),
+    registrationInput(getOrCreateInstallationId(), subscription, {
+      ...(input.source ? { source: input.source } : {}),
+      ...(input.community ? { community: input.community } : {}),
+    }),
   );
 }
 
