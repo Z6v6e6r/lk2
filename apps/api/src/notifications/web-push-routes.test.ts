@@ -151,14 +151,25 @@ describe('Web Push endpoint User API', () => {
       method: 'POST',
       url: '/user/api/v1/local-padel/notification-endpoints/web',
       headers: { authorization, 'idempotency-key': 'web-push-register-test-0001' },
-      payload: { installationId, subscription },
+      payload: {
+        installationId,
+        subscription,
+        source: 'korp-sport-2026',
+        community: 'community_1794221739126_корпспорт-падлхаб-2026',
+      },
     });
     expect(registered.statusCode).toBe(200);
     const input = registerWebPush.mock.calls[0]?.[0] as {
       ciphertext: Buffer;
       addressHash: string;
       encryptionKeyId: string;
+      attributionSource: string | null;
+      attributionCommunity: string | null;
     };
+    expect(input.attributionSource).toBe('korp-sport-2026');
+    expect(input.attributionCommunity).toBe(
+      'community_1794221739126_корпспорт-падлхаб-2026',
+    );
     expect(input.ciphertext.toString('utf8')).not.toContain(subscription.endpoint);
     expect(input.addressHash).toBe(
       createHash('sha256').update('https://push.example.test/subscriptions/secret').digest('hex'),

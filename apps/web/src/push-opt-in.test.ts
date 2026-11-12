@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  readPushAttribution,
   rememberAuthContinuation,
   safeCommunityReturnTo,
   takeAuthContinuation,
@@ -48,6 +49,22 @@ describe('safeCommunityReturnTo', () => {
     ]) {
       expect(safeCommunityReturnTo(value)).toBeNull();
     }
+  });
+});
+
+describe('push attribution', () => {
+  it('reads only the bounded source slug and a control-free community marker', () => {
+    expect(
+      readPushAttribution(
+        '?returnTo=https%3A%2F%2Fpadlhub.ru%2Flk_new&source=korp-sport-2026&community=community_1794221739126_%D0%BA%D0%BE%D1%80%D0%BF%D1%81%D0%BF%D0%BE%D1%80%D1%82',
+      ),
+    ).toEqual({
+      source: 'korp-sport-2026',
+      community: 'community_1794221739126_корпспорт',
+    });
+    expect(readPushAttribution('?source=KORP-SPORT&community=')).toEqual({});
+    expect(readPushAttribution('?source=ok&community=' + 'x'.repeat(201))).toEqual({ source: 'ok' });
+    expect(readPushAttribution('?source=' + 'a'.repeat(81))).toEqual({});
   });
 });
 

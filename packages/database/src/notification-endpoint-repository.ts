@@ -65,6 +65,8 @@ export interface NotificationEndpointRepository {
     readonly ciphertext: Buffer;
     readonly addressHash: string;
     readonly encryptionKeyId: string;
+    readonly attributionSource?: string | null;
+    readonly attributionCommunity?: string | null;
     readonly endpointsPerUserMax: number;
     readonly requestHash: string;
     readonly idempotencyKey: string;
@@ -524,6 +526,8 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
                       address_ciphertext = $5,
                       address_hash = $6,
                       encryption_key_id = $7,
+                      attribution_source = coalesce($8, attribution_source),
+                      attribution_community = coalesce($9, attribution_community),
                       status = 'ACTIVE',
                       last_confirmed_at = now(),
                       updated_at = now()
@@ -537,14 +541,17 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
                   input.ciphertext,
                   input.addressHash,
                   input.encryptionKeyId,
+                  input.attributionSource,
+                  input.attributionCommunity,
                 ],
               )
             : await queryOne<EndpointRow>(
                 client,
                 `insert into integration.notification_endpoints (
                  tenant_id, user_id, provider_account_id, channel, installation_id,
-                 address_ciphertext, address_hash, encryption_key_id, status, last_confirmed_at
-               ) values ($1, $2, $3, 'PUSH', $4, $5, $6, $7, 'ACTIVE', now())
+                 address_ciphertext, address_hash, encryption_key_id,
+                 attribution_source, attribution_community, status, last_confirmed_at
+               ) values ($1, $2, $3, 'PUSH', $4, $5, $6, $7, $8, $9, 'ACTIVE', now())
                returning id, installation_id, address_hash, status`,
                 [
                   input.tenantId,
@@ -554,6 +561,8 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
                   input.ciphertext,
                   input.addressHash,
                   input.encryptionKeyId,
+                  input.attributionSource,
+                  input.attributionCommunity,
                 ],
               );
           if (!endpoint) throw new Error('NOTIFICATION_ENDPOINT_WRITE_LOST');
@@ -585,6 +594,8 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
                 status: 'ACTIVE',
                 addressHash: input.addressHash,
                 encryptionKeyId: input.encryptionKeyId,
+                attributionSource: input.attributionSource,
+                attributionCommunity: input.attributionCommunity,
               }),
             ],
           );

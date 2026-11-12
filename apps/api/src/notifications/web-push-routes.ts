@@ -14,6 +14,16 @@ import { z } from 'zod';
 import { sendApiError } from '../http-errors.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ATTRIBUTION_SOURCE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
+
+function attributionText(value: unknown, maxLength: number): string | null | undefined {
+  if (value === undefined) return null;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (normalized.length > maxLength || /[\u0000-\u001f\u007f]/.test(normalized)) return undefined;
+  return normalized;
+}
 
 function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
   const notificationRequest = request as FastifyRequest & {
@@ -128,8 +138,13 @@ export function registerWebPushRoutes(
       if (
         !body ||
         Array.isArray(body) ||
-        Object.keys(body).some((key) => key !== 'installationId' && key !== 'subscription') ||
-        Object.keys(body).length !== 2 ||
+        Object.keys(body).some(
+          (key) =>
+            key !== 'installationId' &&
+            key !== 'subscription' &&
+            key !== 'source' &&
+            key !== 'community',
+        ) ||
         typeof body.installationId !== 'string' ||
         !UUID_PATTERN.test(body.installationId)
       ) {
@@ -139,6 +154,21 @@ export function registerWebPushRoutes(
           400,
           'WEB_PUSH_SUBSCRIPTION_INVALID',
           'Некорректная подписка Web Push.',
+        );
+      }
+      const attributionSource = attributionText(body.source, 80);
+      const attributionCommunity = attributionText(body.community, 200);
+      if (
+        attributionSource === undefined ||
+        attributionCommunity === undefined ||
+        (attributionSource !== null && !ATTRIBUTION_SOURCE_PATTERN.test(attributionSource))
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'WEB_PUSH_ATTRIBUTION_INVALID',
+          'Некорректный источник подписки.',
         );
       }
       const subscription = webPushSubscriptionSchema.safeParse(body.subscription);
@@ -175,8 +205,13 @@ export function registerWebPushRoutes(
         ciphertext: encrypted.ciphertext,
         addressHash: createHash('sha256').update(subscription.data.endpoint).digest('hex'),
         encryptionKeyId: encrypted.keyId,
+        attributionSource,
+        attributionCommunity,
         endpointsPerUserMax: options.maxEndpointsPerUser,
-        requestHash: commandHash('REGISTER', `${body.installationId}:${canonical}`),
+        requestHash: commandHash(
+          'REGISTER',
+          `${body.installationId}:${canonical}:${attributionSource ?? ''}:${attributionCommunity ?? ''}`,
+        ),
         idempotencyKey,
         correlationId: request.id,
       });
