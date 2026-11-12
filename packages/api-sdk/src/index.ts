@@ -300,11 +300,7 @@ export type NotificationPreferencesView = components['schemas']['NotificationPre
 export type NotificationPreferencesUpdateRequest =
   components['schemas']['NotificationPreferencesUpdateRequest'];
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
-export type WebPushEndpointRegistration = components['schemas']['WebPushEndpointRegistration'] & {
-  /** Optional community attribution carried by the exhibition push hand-off. */
-  readonly source?: string;
-  readonly community?: string;
-};
+export type WebPushEndpointRegistration = components['schemas']['WebPushEndpointRegistration'];
 export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpointCommandResult'];
 /** Additive Android endpoint contract until the generated OpenAPI snapshot is refreshed in integration. */
 export interface AndroidPushConfiguration {

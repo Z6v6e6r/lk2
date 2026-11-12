@@ -173,8 +173,8 @@ export async function enableWebPush(input: {
     }));
   await input.gateway.registerWebPushEndpoint(
     registrationInput(getOrCreateInstallationId(), subscription, {
-      source: input.source,
-      community: input.community,
+      ...(input.source ? { source: input.source } : {}),
+      ...(input.community ? { community: input.community } : {}),
     }),
   );
 }

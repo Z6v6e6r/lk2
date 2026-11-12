@@ -21,7 +21,14 @@ function attributionText(value: unknown, maxLength: number): string | null | und
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim();
   if (!normalized) return null;
-  if (normalized.length > maxLength || /[\u0000-\u001f\u007f]/.test(normalized)) return undefined;
+  if (normalized.length > maxLength) return undefined;
+  if (
+    [...normalized].some((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 0x20 || code === 0x7f;
+    })
+  )
+    return undefined;
   return normalized;
 }
 
