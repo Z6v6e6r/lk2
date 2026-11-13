@@ -137,6 +137,26 @@ afterEach(() => {
 });
 
 describe('Home return to profile', () => {
+  it('opens the explicit canonical game association from My bookings despite a legacy route', () => {
+    render(
+      <UpcomingBookingCard
+        item={{
+          id: '88888888-8888-4888-8888-888888888888',
+          gameId: '11111111-1111-4111-8111-111111111111',
+          kind: 'game',
+          title: 'Утренняя игра',
+          startsAt: '2026-11-15T04:00:00Z',
+          venue: 'Терехово',
+          status: 'confirmed',
+          route: '/games?event=88888888-8888-4888-8888-888888888888',
+        }}
+      />,
+    );
+    expect(screen.getByRole('link', { name: 'Открыть' })).toHaveAttribute(
+      'href',
+      '/games/11111111-1111-4111-8111-111111111111',
+    );
+  });
   it.each(['default', 'v2', 'v3'] as const)(
     'returns %s Home to its profile without changing the selected tab',
     async (layoutVariant) => {

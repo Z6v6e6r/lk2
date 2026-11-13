@@ -275,8 +275,15 @@ describe('GamesPage discovery', () => {
 
     render(<GamesPage gateway={api} eventId={eventId} />);
 
-    expect(await screen.findByRole('heading', { name: 'Карточка игры' })).toBeVisible();
-    const card = await screen.findByRole('article', { name: 'Открытая игра' });
+    expect(await screen.findByRole('heading', { name: 'Детали матча' })).toBeVisible();
+    const card = await screen.findByRole('region', { name: 'Карточка игры' });
+    expect(within(card).getByRole('region', { name: 'Участники игры' })).toBeVisible();
+    expect(within(card).getByRole('tab', { name: 'Игра' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await userEvent.click(within(card).getByRole('tab', { name: 'Результат' }));
+    expect(within(card).getByText('Результат пока недоступен')).toBeVisible();
     expect(within(card).getByText('Сочи')).toBeVisible();
     expect(within(card).queryByRole('link', { name: 'Открыть' })).not.toBeInTheDocument();
     expect(api.getUpcomingBookings).toHaveBeenCalledOnce();

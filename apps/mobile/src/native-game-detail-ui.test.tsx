@@ -4,7 +4,11 @@ import { webcrypto } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from '../../web/src/App.js';
-import { createBrowserAuthGateway, type GameCard } from '../../web/src/auth-gateway.js';
+import {
+  createBrowserAuthGateway,
+  type GameCard,
+  type UserUpcomingBookings,
+} from '../../web/src/auth-gateway.js';
 import { createNativeApiFetch, type AndroidSessionPlugin } from './native-api-fetch.js';
 import { auth, config, game as publicGame, viewerId } from './ios/testing/cabinet-fixtures.js';
 
@@ -36,7 +40,7 @@ const nativeGame: GameCard = {
   conversation: null,
   resultSummary: null,
 };
-function setup(overrides: Partial<GameCard> = {}) {
+function setup(overrides: Partial<GameCard> = {}, booking?: UserUpcomingBookings['items'][number]) {
   vi.stubGlobal('crypto', webcrypto);
   vi.stubGlobal('scrollTo', vi.fn());
   Object.defineProperty(navigator, 'locks', {
@@ -71,7 +75,15 @@ function setup(overrides: Partial<GameCard> = {}) {
               ? pendingLeave
               : input.path.endsWith('/games/' + game.id)
                 ? { game }
-                : { items: [] },
+                : input.path.endsWith('/bookings/upcoming')
+                  ? {
+                      state: 'READY',
+                      version: 'synthetic-booking',
+                      generatedAt: '2026-11-13T00:00:00Z',
+                      staleAt: '2099-01-01T00:00:00Z',
+                      items: booking ? [booking] : [],
+                    }
+                  : { items: [] },
         ),
       ).toString('base64'),
     }),
@@ -90,7 +102,9 @@ function setup(overrides: Partial<GameCard> = {}) {
   window.history.replaceState(
     null,
     '',
-    `/games/${game.id}?invitationId=do-not-share#private-state`,
+    booking
+      ? `/games?event=${booking.id}`
+      : `/games/${game.id}?invitationId=do-not-share#private-state`,
   );
   render(
     <App
@@ -163,4 +177,44 @@ it('preserves the existing native leave controller and original-key recovery acr
   expect(read.method).toBe('GET');
   expect(read.headers['idempotency-key']).toBe(original.headers['idempotency-key']);
   expect(request.mock.calls.filter(([v]) => v.path.endsWith('/participants/me'))).toHaveLength(1);
+});
+
+const snapshotBooking: UserUpcomingBookings['items'][number] = {
+  id: '88888888-8888-4888-8888-888888888888',
+  kind: 'game',
+  title: 'Утренняя игра',
+  startsAt: '2026-11-15T04:00:00Z',
+  endsAt: '2026-11-15T05:00:00Z',
+  venue: 'Терехово',
+  status: 'confirmed',
+  route: '/games?event=88888888-8888-4888-8888-888888888888',
+  roster: { state: 'UNAVAILABLE' },
+};
+
+it('opens an unlinked My bookings snapshot with the detail design through Android transport', async () => {
+  const request = setup({}, snapshotBooking);
+  expect(await screen.findByRole('heading', { name: 'Детали матча' })).toBeVisible();
+  expect(await screen.findByRole('region', { name: 'Участники игры' })).toBeVisible();
+  expect(screen.getByText('Состав временно недоступен')).toBeVisible();
+  expect(screen.queryByText('Свободное место')).toBeNull();
+  fireEvent.click(screen.getByRole('tab', { name: 'Результат' }));
+  expect(screen.getByText('Результат пока недоступен')).toBeVisible();
+  expect(request.mock.calls.some(([v]) => v.path.endsWith('/bookings/upcoming'))).toBe(true);
+  expect(
+    request.mock.calls.every(
+      ([v]) => v.method === 'GET' || v.path.endsWith('/auth/session/refresh'),
+    ),
+  ).toBe(true);
+});
+
+it('resolves an explicitly linked legacy booking to the canonical Android card', async () => {
+  const request = setup({}, { ...snapshotBooking, gameId: nativeGame.id });
+  expect(await screen.findByRole('heading', { name: 'Стартовый состав' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Пригласить в игру' })).toBeVisible();
+  expect(window.location.pathname).toBe(`/games/${nativeGame.id}`);
+  expect(window.location.search).toBe('');
+  expect(request.mock.calls.some(([v]) => v.path.endsWith('/games/' + nativeGame.id))).toBe(true);
+  expect(request.mock.calls.some(([v]) => /\/participants\/me|\/join$|\/result/.test(v.path))).toBe(
+    false,
+  );
 });

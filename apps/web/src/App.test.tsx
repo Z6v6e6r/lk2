@@ -1737,10 +1737,40 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Карточка игры' })).toBeVisible();
-    expect(await screen.findByRole('article', { name: 'Открытая игра' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Детали матча' })).toBeVisible();
+    const card = await screen.findByRole('region', { name: 'Карточка игры' });
+    expect(within(card).getByRole('heading', { name: 'Открытая игра' })).toBeVisible();
+    expect(within(card).getByRole('region', { name: 'Участники игры' })).toBeVisible();
     expect(gateway.listEventCatalog).not.toHaveBeenCalled();
   });
+
+  it.each(['web', 'android'] as const)(
+    'replaces a linked legacy booking URL with the canonical card in %s without a game command',
+    async (clientPlatform) => {
+      const { game } = await import('../../mobile/src/ios/testing/cabinet-fixtures.js');
+      const eventId = '8a830ad0-a8c7-479b-a239-5b434c42148f';
+      window.history.replaceState({ fromMyBookings: true }, '', `/games?event=${eventId}`);
+      const gateway = createGateway({
+        restoreSession: vi.fn().mockResolvedValue(session),
+        quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
+        getUpcomingBookings: vi.fn().mockResolvedValue({
+          ...upcomingBookings,
+          items: [
+            { ...upcomingBookings.items[0]!, gameId: game.id, route: `/games?event=${eventId}` },
+          ],
+        }),
+        getGame: vi.fn().mockResolvedValue({ ...game, resultSummary: null, conversation: null }),
+      });
+      render(<App gateway={gateway} tenantKey="padlhub" clientPlatform={clientPlatform} />);
+      expect(await screen.findByRole('heading', { name: 'Стартовый состав' })).toBeVisible();
+      expect(gateway.getGame).toHaveBeenCalledWith(game.id);
+      expect(window.location.pathname).toBe(`/games/${game.id}`);
+      expect(window.history.state).toEqual({ fromMyBookings: true });
+      expect(gateway.listEventCatalog).not.toHaveBeenCalled();
+      expect(gateway.joinGame).not.toHaveBeenCalled();
+      expect(gateway.leaveGame).not.toHaveBeenCalled();
+    },
+  );
 
   it('loads and continues the communities directory without requesting Home', async () => {
     window.history.replaceState({}, '', '/communities');

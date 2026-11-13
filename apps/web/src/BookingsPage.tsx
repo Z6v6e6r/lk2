@@ -9,6 +9,7 @@ import type {
 import { ActivityHistoryPanel } from './ActivityHistory.js';
 import { BookingRecommendations } from './BookingRecommendations.js';
 import { MainBottomNavigation } from './HomeDashboardPage.js';
+import { upcomingBookingDetailsRoute } from './upcoming-booking-route.js';
 
 interface BookingsPageProps {
   readonly bookings: UserUpcomingBookings;
@@ -158,7 +159,11 @@ export function BookingsPage({
                 </div>
               ) : (
                 bookings.items.map((item) => (
-                  <a className="bookings-item" href={item.route} key={item.id}>
+                  <a
+                    className="bookings-item"
+                    href={upcomingBookingDetailsRoute(item)}
+                    key={item.id}
+                  >
                     <time dateTime={item.startsAt}>
                       <strong>{eventTime(item.startsAt)}</strong>
                       <span>{eventDate(item.startsAt)}</span>
