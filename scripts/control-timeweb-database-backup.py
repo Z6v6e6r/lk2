@@ -3153,8 +3153,9 @@ def cutover_backup_marker(marker, operation_sha, file_sha, transaction):
 
 
 def cutover_dump_shell(operation_sha):
-    # timeout owns the in-container process group even if the Docker client disappears.
-    return READ_ONLY + 'export PGAPPNAME=' + cutover_dump_name(operation_sha) + '; exec /usr/bin/timeout --signal=TERM --kill-after=10s 580s ' + SOURCE_DUMP.removeprefix(READ_ONLY).removeprefix('exec ')
+    # The pinned Alpine image provides BusyBox timeout. Bound the direct serial pg_dump
+    # inside the container even if the Docker client disappears; no parallel jobs are used.
+    return READ_ONLY + 'export PGAPPNAME=' + cutover_dump_name(operation_sha) + '; exec /usr/bin/timeout -s TERM -k 10 580 ' + SOURCE_DUMP.removeprefix(READ_ONLY).removeprefix('exec ')
 
 
 def cutover_dump_stopped(op, operation_sha):

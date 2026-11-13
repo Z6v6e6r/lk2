@@ -170,11 +170,12 @@ network-none/read-only-root tmpfs isolation, capacity gate, phase journal and no
 remain unchanged. All source queries/dump use the request's verified
 PostgreSQL container, not a stale global ID. A failed capacity check has no disk/namespace fallback.
 
-Only this cutover profile uses a unique `PGAPPNAME` plus an in-container 580-second GNU timeout
-(TERM, then KILL after 10 seconds), with a 620-second outer client timeout. A zero matching-backend
+Only this cutover profile uses a unique `PGAPPNAME` plus an in-container 580-second BusyBox-compatible timeout
+(`-s TERM -k 10 580`: TERM, then KILL after 10 seconds), with a 620-second outer client timeout. A zero matching-backend
 readback is mandatory before dump success or cleanup. An active/unknown backend blocks cleanup;
 never terminate an unrelated session or replay the dump. The canonical PostgreSQL image must
-provide `/usr/bin/timeout` before live use.
+provide `/usr/bin/timeout` with those short options before live use. The dump is serial
+without parallel jobs; this bounds the direct `pg_dump`, not arbitrary child process groups.
 
 Failed cutover attempts use `--reconcile-cutover-tmpfs` with the same exact installed tool and
 root-owned request. The reconciler reattests source/runtime/controller/boundary and marker custody,

@@ -1,4 +1,4 @@
-"""Mock regression scenarios and owned process-group checks; no Docker/provider/database calls."""
+"""Mock regression scenarios and owned process checks; no Docker/provider/database calls."""
 import base64
 from contextlib import ExitStack
 import copy
@@ -1093,7 +1093,7 @@ class ProductionCutoverBackupTests(unittest.TestCase):
                 self.assertTrue((scenario.root/'standard/active').is_dir())
 
     def test_failed_cutover_can_cleanup_only_owned_tmpfs_without_replaying_dump(self):
-        for fault in ['DUMP','RESTORE_CREATE','RESTORE_START','DUMP_TOC','RESTORE','restore-accounts-mismatch','RESTORE_STOP','RESTORE_REMOVE']:
+        for fault in ['DUMP','RESTORE_CREATE','RESTORE_START','DUMP_TOC','RESTORE','restore-accounts-mismatch','RESTORE_STOP','RESTORE_REMOVE','dump-still-active']:
             with self.subTest(fault=fault),tempfile.TemporaryDirectory(prefix='phub-cutover-reconcile-') as directory:
                 scenario=Scenario(directory,fault=fault,operation=cutover_backup_operation(),ledger=CUTOVER_LEDGER)
                 with self.assertRaises(m.Stop):scenario.invoke()
@@ -1127,22 +1127,22 @@ class ProductionCutoverBackupTests(unittest.TestCase):
     def test_cutover_dump_is_named_and_bounded_inside_container(self):
         sha='a'*64;shell=m.cutover_dump_shell(sha)
         self.assertIn('PGAPPNAME=phub_lk2_cutover_'+sha[:40],shell)
-        self.assertIn('exec /usr/bin/timeout --signal=TERM --kill-after=10s 580s pg_dump',shell)
+        self.assertIn('exec /usr/bin/timeout -s TERM -k 10 580 pg_dump',shell)
         self.assertIn('--serializable-deferrable',shell)
         self.assertNotIn('--table',shell)
 
-    @unittest.skipUnless(sys.platform=='linux' and Path('/usr/bin/timeout').exists(), 'requires Linux GNU timeout/procfs')
-    def test_in_container_timeout_kills_term_ignoring_dump_process_group(self):
+    @unittest.skipUnless(sys.platform=='linux' and Path('/usr/bin/timeout').exists(), 'requires Linux timeout/procfs')
+    def test_in_container_timeout_kills_term_ignoring_serial_dump(self):
         with tempfile.TemporaryDirectory(prefix='phub-cutover-timeout-') as directory:
-            root=Path(directory);script=root/'dump-fixture.sh'
-            script.write_text('#!/bin/sh\ntrap "" TERM\necho $$ > "$PID_DIR/parent"\nsh -c \'trap "" TERM; echo $$ > "$PID_DIR/child"; while :; do sleep 1; done\' &\nwait\n')
+            root=Path(directory);script=root/'dump-fixture.py'
+            script.write_text('#!/usr/bin/python3\nimport signal,time,os,pathlib\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\npathlib.Path(os.environ["PID_DIR"],"parent").write_text(str(os.getpid()))\nwhile True: time.sleep(1)\n')
             script.chmod(0o700)
             shell=m.cutover_dump_shell('a'*64).split(' pg_dump ',1)[0]+' '+m.shlex.quote(str(script))
-            shell=shell.replace('580s','0.3s').replace('--kill-after=10s','--kill-after=0.3s')
+            shell=shell.replace('-k 10 580 ','-k 0.3 0.3 ')
             process=subprocess.Popen(['/bin/sh','-eu','-c',shell],env={'PATH':'/usr/bin:/bin','PID_DIR':directory},stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
             try:
                 self.assertNotEqual(process.wait(timeout=5),0)
-                pids=[int((root/name).read_text()) for name in ('parent','child')]
+                pids=[int((root/name).read_text()) for name in ('parent',)]
                 for pid in pids:
                     path=Path(f'/proc/{pid}/stat')
                     if path.exists():self.assertIn(path.read_text().rsplit(')',1)[1].split()[0],('Z','X'))
