@@ -156,3 +156,45 @@ Before this format can support delivery, establish actual nonce/template feasibi
 Run focused Vitest tests and `python3 -I -S -B scripts/test-timeweb-database-backup.py`; all Docker/Git/server interfaces in pipeline scenarios are mocked and temporary files are task-owned. For this CRITICAL operational-code preparation also run the existing `npm run check`, configured secret/PII checks and independent security/release review. Use CI evidence for the exact task head; a missing local scanner is reported rather than silently claimed.
 
 Remaining before live execution: current source decision/eligibility, exact installation plan/approval, physical pinned-image and phase-recovery rehearsal, real private captures and native nonce/template feasibility, independently reviewed original-record assertions or fixed native adapters, canonical collector/writer and explicit new-policy adoption, fresh bounded proofs and exact live approval. Neither preparation nor a green Draft PR authorizes a deploy.
+
+## Account-preserving cutover backup
+
+`PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1` is a closed production, tmpfs-only profile of the
+existing producer. Candidate, controller and tool commit are identical. It binds the actual API
+preimage (`lk2-beta-759083e37b40`, revision null), actual pinned PostgreSQL preimage, cluster
+`phub_beta` / `7679125609183186977`, exact 122-row ledger hash and predecessor-attestation SHA-256.
+The output directory is `backups/<candidate-sha>-<publication-run>-1-api-web`.
+
+Existing source read-only sessions, container-boundary checks, immutable PostgreSQL restore image,
+network-none/read-only-root tmpfs isolation, capacity gate, phase journal and no-replay behavior
+remain unchanged. All source queries/dump use the request's verified
+PostgreSQL container, not a stale global ID. A failed capacity check has no disk/namespace fallback.
+
+Only this cutover profile uses a unique `PGAPPNAME` plus an in-container 580-second GNU timeout
+(TERM, then KILL after 10 seconds), with a 620-second outer client timeout. A zero matching-backend
+readback is mandatory before dump success or cleanup. An active/unknown backend blocks cleanup;
+never terminate an unrelated session or replay the dump. The canonical PostgreSQL image must
+provide `/usr/bin/timeout` before live use.
+
+Failed cutover attempts use `--reconcile-cutover-tmpfs` with the same exact installed tool and
+root-owned request. The reconciler reattests source/runtime/controller/boundary and marker custody,
+stops/removes only the operation-labeled and fully inspected isolated restore container, proves its
+absence, retains the partial dump/journals, and emits `CUTOVER_RECONCILED` without authorizing deploy
+or replay. Foreign containers/locks, changed source custody, active dump backends and uncertain
+stop/remove acknowledgements remain STOP. Acquisition publishes a complete pending marker with
+atomic no-replace rename; retirement preserves the complete lock directory under the transaction,
+so a crash cannot expose an unowned empty global lock. The new execute/reconcile entries share the
+existing host-local mutation flock. Ordinary tmpfs/disk profiles retain their existing behavior.
+
+The complete dump is restored independently. Aggregate witnesses cover users, external identities,
+profile identity keys, refresh-session chains/status and Viva delegation identity/key version/status;
+only counts and hashes leave PostgreSQL. They are additional continuity evidence, not a substitute
+for the full restore. Normal identity/session updates between source and dump snapshots may safely
+abort this witness; reconcile retained state rather than retrying automatically.
+
+`PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V1` extends the previous receipt only for this profile with the
+producer operation hash, predecessor-attestation hash, database target and matching source/restored
+account witness hashes. The consuming cutover checks the retained producer capsule, installed helper
+custody, cleanup phase and dump bytes. Ordinary V1 receipts remain unchanged and cannot substitute
+for this proof. This profile does not activate an application, change a live row, or authorize a
+live database restore.

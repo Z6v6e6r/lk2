@@ -66,6 +66,26 @@ import {
   ADOPTED_MANUAL_FULL_KIND,
   validateAdoptedBaseline,
 } from './timeweb-adopt-manual-baseline.js';
+import {
+  CUTOVER_PLAN,
+  CUTOVER_RECEIPT,
+  isProductionCutover,
+  validateProductionCutover,
+  legacyBaselineHash,
+  legacyReleaseEnvPath,
+  legacyBuildArchivePath,
+  legacyEnvironment,
+  validateLegacyRuntime,
+  validateLegacyRun,
+  validateLegacyArtifact,
+  validateLegacyBuildRecord,
+  validateCutoverLineage,
+  validateCutoverBackupOperation,
+  assertCutoverBackupFiles,
+  validateCutoverPlanProofs,
+  assertCutoverReadbackFreshness,
+  COMPONENTS,
+} from './timeweb-production-cutover.js';
 
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
@@ -109,6 +129,8 @@ const CONTROLLER_FILES = new Set([
   'scripts/timeweb-critical-web.test.ts',
   'scripts/timeweb-api-web-upgrade.js',
   'scripts/timeweb-api-web-upgrade.test.ts',
+  'scripts/timeweb-production-cutover.js',
+  'scripts/timeweb-production-cutover.test.ts',
   'scripts/timeweb-api-worker-contract.d.ts',
   'scripts/control-timeweb-location-photo-acl.py',
   'scripts/control-timeweb-location-photo-acl.test.ts',
@@ -184,6 +206,7 @@ function exact(value, keys) {
     fail('invalid_keys');
 }
 export function validateApiWebOperation(value) {
+  if (isProductionCutover(value)) return validateProductionCutover(value);
   if (isJoinOperation(value)) return validateJoinOperation(value);
   if (value?.schema === 'PHUB_TIMEWEB_API_WEB_OPERATION_V2')
     return validateDirectApiWebOperation(value);
@@ -500,6 +523,17 @@ export async function reconcileApiWebPhase(receipt, ops) {
   await ops.journalReconciled(terminal);
   await ops.releaseLock();
   return 'RECONCILED';
+}
+// A lost disaster-recovery dump blocks forward success, never verification of a safe abort
+// or restoration of the recorded images. All other configuration/runtime guards still run.
+export async function attestApiWebTerminal(terminal, attest) {
+  if (!['SUCCESS', 'ROLLED_BACK', 'ABORTED'].includes(terminal)) fail('invalid_terminal');
+  await attest(terminal !== 'SUCCESS');
+}
+export function retainLegacyAttestation(path, bytes, readExisting, create) {
+  if (existsSync(path)) {
+    if (!readExisting(path).equals(bytes)) fail('legacy_attestation_drift');
+  } else create(path, bytes, true);
 }
 function secure(path, mode) {
   const value = lstatSync(path);
@@ -819,13 +853,16 @@ async function candidateAuthority(op, directory) {
     fail('manifest_source');
   return manifest;
 }
-function imagePresent(ref, source) {
+function imagePresent(ref, source, legacyImageId = undefined) {
   const v = JSON.parse(docker(['image', 'inspect', ref]))[0];
   if (
     v.Os !== 'linux' ||
     v.Architecture !== 'amd64' ||
     !v.RepoDigests?.includes(ref) ||
-    v.Config.Labels?.['org.opencontainers.image.revision'] !== source
+    (legacyImageId
+      ? v.Id !== legacyImageId ||
+        (v.Config.Labels?.['org.opencontainers.image.revision'] ?? null) !== null
+      : v.Config.Labels?.['org.opencontainers.image.revision'] !== source)
   )
     fail('image_identity');
 }
@@ -910,7 +947,11 @@ async function wait(service, expected) {
       if (
         v.image !== expected.image ||
         v.releaseId !== expected.releaseId ||
-        v.revision !== expected.releaseId.slice(0, 40) ||
+        v.revision !==
+          (Object.hasOwn(expected, 'revision')
+            ? expected.revision
+            : expected.releaseId.slice(0, 40)) ||
+        (expected.imageId !== undefined && v.imageId !== expected.imageId) ||
         v.restarts !== 0
       )
         fail('runtime_identity');
@@ -922,7 +963,7 @@ async function wait(service, expected) {
   }
   fail('readiness_timeout');
 }
-function validateBackupProof(directory, previous, profile = 'beta') {
+function validateBackupProof(directory, previous, profile = 'beta', cutover = undefined) {
   // Operator-authorized degraded proof: when an interrupted transition left no receipt,
   // bind a deterministic marker. The authoritative database backup and restore evidence
   // remains in the release evidence store. A present receipt is still validated strictly.
@@ -948,9 +989,21 @@ function validateBackupProof(directory, previous, profile = 'beta') {
     'restoreImage',
     'restoredLedgerSha256',
     'sourceLedgerSha256',
+    ...(cutover
+      ? [
+          'operationSha256',
+          'predecessorAttestationSha256',
+          'databaseTarget',
+          'sourceAccountsSha256',
+          'restoredAccountsSha256',
+        ]
+      : []),
   ]);
   if (
-    v.schema !== 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1' ||
+    v.schema !==
+      (cutover
+        ? 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V1'
+        : 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1') ||
     v.baselineReleaseId !== previous.releaseId ||
     v.restoreVerified !== true ||
     !/^docker\.io\/library\/postgres@sha256:[a-f0-9]{64}$/.test(v.restoreImage ?? '') ||
@@ -964,6 +1017,61 @@ function validateBackupProof(directory, previous, profile = 'beta') {
     hashBackupFile(v.backupFile) !== v.backupSha256
   )
     fail('backup_restore_proof');
+  if (
+    cutover &&
+    (v.predecessorAttestationSha256 !== legacyBaselineHash(cutover.legacyBaseline) ||
+      !equal(v.databaseTarget, cutover.legacyBaseline.databaseTarget) ||
+      v.sourceLedgerSha256 !== cutover.legacyBaseline.ledgerSha256 ||
+      !HASH.test(v.sourceAccountsSha256 ?? '') ||
+      v.sourceAccountsSha256 !== v.restoredAccountsSha256)
+  )
+    fail('cutover_backup_binding');
+  if (cutover) {
+    const operationPath = `${directory}/backup-operation.json`;
+    const operationBytes = read(operationPath);
+    const operationSha256 = hash(operationBytes);
+    if (v.operationSha256 !== operationSha256) fail('cutover_backup_operation');
+    validateCutoverBackupOperation(cutover, operationBytes, {
+      directory,
+      postgres: inspect('postgres', 'phub-timeweb-beta-dependencies'),
+      toolFileSha256: hash(read(`${SOURCE}/scripts/control-timeweb-database-backup.py`, 0o644)),
+      configSha256: hash(read(CONFIG)),
+    });
+    // Pure request validation and local installation/Git-object custody checks. This entry calls
+    // neither execute() nor any Docker/database operation in the producer.
+    const program = `import importlib.util,json,sys,time
+spec=importlib.util.spec_from_file_location('backup','${SOURCE}/scripts/control-timeweb-database-backup.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+op=m.strict(sys.stdin.buffer.read());m.validate_operation(op,time.time(),op['toolFileSha256'],allow_expired=True)
+m.tool_custody(op);sys.stdout.write('CUTOVER_BACKUP_CUSTODY_VERIFIED')`;
+    if (
+      command('/usr/bin/python3', ['-I', '-S', '-B', '-c', program], {
+        input: operationBytes,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 30000,
+      }) !== 'CUTOVER_BACKUP_CUSTODY_VERIFIED'
+    )
+      fail('cutover_backup_custody');
+    const terminal = parseStrictJson(read(`${directory}/SUCCESS_CLEANUP_VERIFIED.json`));
+    exact(terminal, ['phase', 'operationSha256', 'observedAt', 'receiptSha256']);
+    if (
+      terminal.phase !== 'SUCCESS_CLEANUP_VERIFIED' ||
+      terminal.operationSha256 !== operationSha256 ||
+      terminal.receiptSha256 !== hash(bytes) ||
+      !Number.isFinite(Date.parse(terminal.observedAt)) ||
+      Date.parse(terminal.observedAt) < Date.parse(v.completedAt)
+    )
+      fail('cutover_backup_terminal');
+    return {
+      path,
+      sha256: hash(bytes),
+      operationPath,
+      operationSha256,
+      receiptPath: path,
+      receiptSha256: hash(bytes),
+      dumpSha256: v.backupSha256,
+    };
+  }
   return { path, sha256: hash(bytes) };
 }
 
@@ -1062,7 +1170,7 @@ export function validateUpgradeMonitoring(provider, alerts, contract, observedAt
   const alertTest = validateTimewebAlertReadback(alerts, contract);
   validateTimewebMonitoringEvidence({ monitors, alertTest }, contract, observedAt);
 }
-function validateMonitoring(transaction, profile = 'beta') {
+function validateMonitoring(transaction, profile = 'beta', { fresh = false } = {}) {
   const providerPath = `${ROOT}/observability/timeweb-monitor-readback.json`;
   const alertPath = `${ROOT}/observability/alert-test-readback.json`;
   const provider = read(providerPath),
@@ -1072,14 +1180,15 @@ function validateMonitoring(transaction, profile = 'beta') {
     // acknowledgement and recovery semantics. The snapshot is validated against its own
     // readAt, so a long apply cannot invalidate it by wall-clock age (the beta lesson).
     const contract = parseStrictJson(
-      read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`),
+      read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`, 0o644),
     );
     const providerValue = parseStrictJson(provider);
+    if (fresh) assertCutoverReadbackFreshness(providerValue.readAt);
     validateUpgradeMonitoring(
       providerValue,
       parseStrictJson(alerts),
       contract,
-      providerValue.readAt,
+      fresh ? new Date().toISOString() : providerValue.readAt,
     );
   }
   // Beta records monitoring as evidence: keep immutable hash binding, but do not block on a
@@ -1219,6 +1328,8 @@ export function validateUpgradeReceipt(
     return validateJoinReceipt(receipt, planSha256, op, plan, planBytes);
   const keys = ['schema', 'status', 'planSha256', 'observedAt'];
   const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
+  const cutover = receipt.schema === CUTOVER_RECEIPT;
+  if (cutover) keys.push('legacyBaselineSha256');
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
   if (
     receipt.status === 'SUCCESS' ||
@@ -1234,11 +1345,14 @@ export function validateUpgradeReceipt(
   if (receipt.status === 'RECONCILED') keys.push('reconciledStatus');
   exact(receipt, keys);
   if (
-    !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
-      receipt.schema,
-    ) ||
+    ![
+      'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
+      'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
+      CUTOVER_RECEIPT,
+    ].includes(receipt.schema) ||
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
+    (cutover && !HASH.test(receipt.legacyBaselineSha256 ?? '')) ||
     !Number.isFinite(Date.parse(receipt.observedAt)) ||
     ![
       'PREPARING',
@@ -1274,11 +1388,20 @@ export function validateUpgradeReceipt(
       !op ||
       !plan ||
       isDirectOperation(op) !== direct ||
+      isProductionCutover(op) !== cutover ||
       !Buffer.isBuffer(planBytes) ||
       hash(planBytes) !== planSha256 ||
       !equal(JSON.parse(planBytes), plan) ||
       plan.controllerSha !== op.controllerSha ||
-      plan.schema !== (direct ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2' : 'PHUB_TIMEWEB_API_WEB_PLAN_V1')
+      plan.schema !==
+        (cutover
+          ? CUTOVER_PLAN
+          : direct
+            ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
+            : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
+      (cutover &&
+        (plan.legacyBaselineSha256 !== legacyBaselineHash(op.legacyBaseline) ||
+          receipt.legacyBaselineSha256 !== plan.legacyBaselineSha256))
     )
       fail('receipt_context');
     if (
@@ -1437,11 +1560,19 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
       key.startsWith('PHUB_CANONICAL_') ||
       key.startsWith('PHUB_PUBLICATION_') ||
       key.startsWith('PHUB_ADOPTION_') ||
+      key.startsWith('PHUB_LEGACY_') ||
       key.endsWith('_RUNTIME_DIGEST') ||
       key === 'PHUB_RELEASE_SOURCE_SHA' ||
       key === 'PHUB_RELEASE_SOURCE_TREE'
     )
       delete next[key];
+  if (plan.legacyBaselineSha256) {
+    next.PHUB_ROLLBACK_MODE = 'attested-previous-runtime';
+    next.PHUB_ROLLBACK_PREVIOUS_RELEASE_ID = 'NONE';
+    next.PHUB_LEGACY_PREDECESSOR_SHA256 = plan.legacyBaselineSha256;
+    next.PHUB_LEGACY_PREDECESSOR_RELEASE_ID = plan.previous.api.releaseId;
+    next.PHUB_LEGACY_PREDECESSOR_RECEIPT = `${dirname(journalPath)}/legacy-predecessor-attestation.json`;
+  }
   return Buffer.from(
     Object.entries(next)
       .map(([k, v]) => `${k}=${v}`)
@@ -1514,6 +1645,69 @@ export function readInstalledWorkerGate(receiptPath, installedWorkerImage) {
   );
   return { receiptPath, directory, override, binding, configHash };
 }
+export function readLegacyPredecessor(op, recovering = false) {
+  const legacy = op.legacyBaseline;
+  validateProductionCutover(op);
+  const transaction = `${ROOT}/backups/${op.candidateSha}-${op.publicationRunId}-1-api-web`;
+  if (recovering) {
+    if (
+      hash(read(`${transaction}/legacy-predecessor-attestation.json`)) !==
+      legacyBaselineHash(legacy)
+    )
+      fail('legacy_attestation_drift');
+  } else {
+    const current = read(`${ROOT}/beta-lane/current`);
+    const history = read(`${ROOT}/beta-lane/history`);
+    if (
+      current.toString() !== `${legacy.sourceSha}\n` ||
+      hash(current) !== legacy.laneCurrentSha256 ||
+      hash(history) !== legacy.laneHistorySha256 ||
+      history.toString().trimEnd().split('\n').at(-1)?.split(' ')[1] !== legacy.sourceSha ||
+      git(['rev-parse', `${legacy.sourceSha}^{tree}`]) !== legacy.sourceTree
+    )
+      fail('legacy_lane_drift');
+  }
+  const path = recovering ? `${transaction}/legacy-release.env` : legacyReleaseEnvPath(legacy),
+    bytes = read(path);
+  const identity = parseStrictJson(read(`${RUNTIME}/.release-identity.json`));
+  const values = legacyEnvironment(legacy, bytes, identity);
+  const secrets = secretHashes();
+  if (!SECRET_NAMES.every((name) => secrets[name] === legacy.secretHashes[name]))
+    fail('legacy_secret_drift');
+  for (const record of recovering ? [] : legacy.buildRecords)
+    if (
+      `sha256:${hash(read(legacyBuildArchivePath(legacy, record.component)))}` !==
+      record.archiveDigest
+    )
+      fail('legacy_build_record_drift');
+  return { path, bytes, values, secretSetReleaseId: legacy.secretSetReleaseId };
+}
+async function verifyLegacyAuthority(op) {
+  const legacy = op.legacyBaseline;
+  await verifyCi(legacy.sourceCiRunId, legacy.sourceSha);
+  const run = await githubPublic(`actions/runs/${legacy.testStandRunId}`);
+  validateLegacyRun(run, legacy);
+  const list = await githubPublic(`actions/runs/${legacy.testStandRunId}/artifacts?per_page=100`);
+  if (list.total_count !== list.artifacts?.length) fail('truncated_legacy_artifacts');
+  for (const component of COMPONENTS) {
+    const record = legacy.buildRecords.find((v) => v.component === component);
+    const matches = list.artifacts.filter((v) => String(v.id) === record.artifactId);
+    if (matches.length !== 1) fail('legacy_artifact_missing');
+    validateLegacyArtifact(matches[0], record, legacy);
+    const archive = legacyBuildArchivePath(legacy, component);
+    validateLegacyBuildRecord(
+      legacy,
+      component,
+      read(archive),
+      command('/usr/bin/tar', ['-xOzf', archive, 'index.json'], { encoding: null }),
+      (digest) =>
+        command('/usr/bin/tar', ['-xOzf', archive, `blobs/sha256/${digest.slice(7)}`], {
+          encoding: null,
+        }),
+    );
+  }
+}
+
 export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true } = {}) {
   if (!ID.test(releaseId)) fail('baseline_release_id');
   const directory = `${ROOT}/releases/${releaseId}`;
@@ -1648,6 +1842,24 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
       validateUpgradeReceipt(receipt, hash(planBytes));
       const transaction = `${ROOT}/backups/${releaseId}-api-web`;
       const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
+      if (receipt.schema === CUTOVER_RECEIPT) {
+        const operationBytes = read(`${transaction}/operation.json`);
+        const operation = validateProductionCutover(parseStrictJson(operationBytes));
+        validateUpgradeReceipt(receipt, hash(planBytes), operation, plan, planBytes);
+        validateCutoverLineage(receipt, plan, operation, values, operationBytes);
+        validateCutoverPlanProofs(operation, plan, transaction);
+        if (
+          hash(read(plan.backup.operationPath)) !== operation.backupOperationSha256 ||
+          hash(read(plan.backup.receiptPath)) !== plan.backup.receiptSha256
+        )
+          fail('installed_cutover_backup_drift');
+        if (
+          values.PHUB_LEGACY_PREDECESSOR_RECEIPT !==
+            `${transaction}/legacy-predecessor-attestation.json` ||
+          hash(read(values.PHUB_LEGACY_PREDECESSOR_RECEIPT)) !== plan.legacyBaselineSha256
+        )
+          fail('installed_legacy_attestation_drift');
+      }
       for (const [file, key] of direct
         ? [
             ['observation.json', 'observationSha256'],
@@ -1673,9 +1885,11 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           },
         );
       if (
-        !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
-          receipt.schema,
-        ) ||
+        ![
+          'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
+          'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
+          CUTOVER_RECEIPT,
+        ].includes(receipt.schema) ||
         !(
           receipt.status === 'SUCCESS' ||
           (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
@@ -1733,9 +1947,13 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const opBytes = read(recoveredTransaction ? `${recoveredTransaction}/operation.json` : REQUEST);
   const parsedOperation = JSON.parse(opBytes);
   const op = validateApiWebOperation(
-    isJoinOperation(parsedOperation) ? parseStrictJson(opBytes) : parsedOperation,
+    isJoinOperation(parsedOperation) || isProductionCutover(parsedOperation)
+      ? parseStrictJson(opBytes)
+      : parsedOperation,
   );
   const join = isJoinOperation(op);
+  const cutover = isProductionCutover(op);
+  if (mode === 'deploy' && cutover) validateProductionCutover(op, true);
   const profile = join ? 'production' : (op.profile ?? 'beta');
   if (mode === 'deploy' && join) validateJoinOperation(op, true);
   if (mode === 'deploy' && isDirectOperation(op)) validateDirectApiWebOperation(op, true);
@@ -1808,10 +2026,20 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const planPath = `${transaction}/plan.json`;
   const previousApi = op.expectedApi,
     previousWeb = op.expectedWeb;
-  const previousBaseline = readInstalledApiBaseline(previousApi.releaseId, {
-    checkRuntimeSecrets: !join || mode === 'deploy',
-  });
-  const { path: baseline, bytes: baselineBytes, values, secretSetReleaseId } = previousBaseline;
+  const previousBaseline = cutover
+    ? readLegacyPredecessor(op, mode !== 'deploy')
+    : readInstalledApiBaseline(previousApi.releaseId, {
+        checkRuntimeSecrets: !join || mode === 'deploy',
+      });
+  const predecessorSource = (previous) =>
+    cutover ? op.legacyBaseline.sourceSha : previous.releaseId.slice(0, 40);
+  const {
+    path: predecessorPath,
+    bytes: baselineBytes,
+    values,
+    secretSetReleaseId,
+  } = previousBaseline;
+  const baseline = cutover ? `${transaction}/legacy-release.env` : predecessorPath;
   if (
     values.PHUB_RELEASE_ID !== previousApi.releaseId ||
     values.TIMEWEB_RUNTIME_ENV_ROOT !== RUNTIME ||
@@ -1900,9 +2128,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       receipt.schema !==
         (join
           ? JOIN_RECEIPT
-          : isDirectOperation(op)
-            ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
-            : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1') ||
+          : cutover
+            ? CUTOVER_RECEIPT
+            : isDirectOperation(op)
+              ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
+              : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1') ||
       ![
         'PREPARING',
         'PREPARED',
@@ -1927,8 +2157,19 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     if (existsSync(LOCK) || existsSync(planPath) || existsSync(journalPath))
       fail('unreconciled_transaction');
     await verifyCi(op.sourceCiRunId, op.candidateSha);
+    if (cutover) {
+      await verifyLegacyAuthority(op);
+      validateLegacyRuntime(
+        op.legacyBaseline,
+        Object.fromEntries(
+          ['api', 'web', 'worker', 'realtime'].map((service) => [service, inspect(service)]),
+        ),
+        excluded(),
+        secretHashes(),
+      );
+    }
     for (const previous of [previousApi, previousWeb]) {
-      git(['merge-base', '--is-ancestor', previous.releaseId.slice(0, 40), op.candidateSha]);
+      git(['merge-base', '--is-ancestor', predecessorSource(previous), op.candidateSha]);
       const entries = parseRuntimeDelta(
         git([
           'diff',
@@ -1936,7 +2177,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           '--no-abbrev',
           '--no-renames',
           '-z',
-          previous.releaseId.slice(0, 40),
+          predecessorSource(previous),
           op.candidateSha,
         ]),
       ).map((v) => ({
@@ -1947,7 +2188,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       if (!join)
         validateRuntimeUpgrade(
           {
-            previousSha: previous.releaseId.slice(0, 40),
+            previousSha: predecessorSource(previous),
             candidateSha: op.candidateSha,
             candidateTree: op.candidateTree,
           },
@@ -1994,20 +2235,25 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     }
     const backup = join
       ? readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']))
-      : validateBackupProof(transaction, previousApi, profile);
+      : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
     const direct = isDirectOperation(op);
     let ownerBytes;
-    if (!direct) validateMonitoring(transaction, profile);
+    const monitoring = !direct
+      ? validateMonitoring(transaction, profile, { fresh: cutover })
+      : null;
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
     }
     plan = {
-      schema: join
-        ? JOIN_PLAN
-        : direct
-          ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
-          : 'PHUB_TIMEWEB_API_WEB_PLAN_V1',
+      schema: cutover
+        ? CUTOVER_PLAN
+        : join
+          ? JOIN_PLAN
+          : direct
+            ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
+            : 'PHUB_TIMEWEB_API_WEB_PLAN_V1',
       operationSha256: hash(opBytes),
+      ...(cutover ? { legacyBaselineSha256: legacyBaselineHash(op.legacyBaseline) } : {}),
       controllerSha: op.controllerSha,
       manifestSha256: op.manifestSha256,
       artifactDigest: op.artifactDigest,
@@ -2036,6 +2282,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       secretHashes: secretHashes(),
       backup,
       createdAt: new Date().toISOString(),
+      ...(cutover
+        ? {
+            monitoring: {
+              providerSha256: monitoring.providerSha256,
+              alertSha256: monitoring.alertSha256,
+            },
+          }
+        : {}),
       ...(join
         ? {
             baselinePath: baseline,
@@ -2071,6 +2325,15 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     if (existsSync(operationCopy)) {
       if (!read(operationCopy).equals(opBytes)) fail('operation_copy_drift');
     } else durable(operationCopy, opBytes, true);
+    if (cutover)
+      retainLegacyAttestation(
+        `${transaction}/legacy-predecessor-attestation.json`,
+        Buffer.from(JSON.stringify(op.legacyBaseline)),
+        read,
+        durable,
+      );
+    if (cutover)
+      retainLegacyAttestation(`${transaction}/legacy-release.env`, baselineBytes, read, durable);
     durable(LOCK, `${planPath}\n`, true);
     if (direct) durable(`${transaction}/release-owner-observation.json`, ownerBytes, true);
     durable(planPath, `${JSON.stringify(plan)}\n`, true);
@@ -2079,17 +2342,19 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     durable(`${transaction}/backup.complete`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: join ? JOIN_RECEIPT : direct ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2' : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1', status: 'PREPARING', planSha256: hash(read(planPath)), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: cutover ? CUTOVER_RECEIPT : join ? JOIN_RECEIPT : direct ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2' : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1', status: 'PREPARING', planSha256: hash(read(planPath)), ...(cutover ? { legacyBaselineSha256: plan.legacyBaselineSha256 } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
   if (
     plan.schema !==
-      (join
-        ? JOIN_PLAN
-        : isDirectOperation(op)
-          ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
-          : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
+      (cutover
+        ? CUTOVER_PLAN
+        : join
+          ? JOIN_PLAN
+          : isDirectOperation(op)
+            ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
+            : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
     plan.controllerSha !== op.controllerSha ||
     !equal(plan.previous.api.image, previousApi.image) ||
     plan.previous.api.releaseId !== previousApi.releaseId ||
@@ -2113,6 +2378,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     'secretHashes',
     'backup',
     'createdAt',
+    ...(cutover ? ['legacyBaselineSha256', 'monitoring'] : []),
     ...(join
       ? [
           'baselinePath',
@@ -2157,6 +2423,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     )
       fail('no_op_upgrade');
   const planSha256 = hash(read(planPath));
+  if (cutover) validateCutoverPlanProofs(op, plan, transaction);
   if (!read(`${transaction}/backup.complete`).equals(Buffer.from(`${planSha256}\n`)))
     fail('backup_incomplete');
   const expectedDescriptor = join
@@ -2208,7 +2475,27 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       fail('compose_input_drift');
     return docker(apiWebComposeArgs(baseline, path, action, service));
   };
-  const attest = () => {
+  const attest = (recovering = false) => {
+    if (cutover) {
+      readLegacyPredecessor(op, recovering);
+      if (
+        plan.legacyBaselineSha256 !== legacyBaselineHash(op.legacyBaseline) ||
+        hash(read(`${transaction}/legacy-predecessor-attestation.json`)) !==
+          plan.legacyBaselineSha256
+      )
+        fail('legacy_attestation_drift');
+      // Forward admission requires the sealed backup and monitoring inputs. Image-only
+      // recovery still restores the predecessor if these inputs disappear or rotate.
+      if (!recovering) {
+        assertCutoverBackupFiles(op, plan, transaction, read, hashBackupFile);
+        const monitoring = validateMonitoring(transaction, profile);
+        if (
+          monitoring.providerSha256 !== plan.monitoring.providerSha256 ||
+          monitoring.alertSha256 !== plan.monitoring.alertSha256
+        )
+          fail('cutover_monitoring_drift');
+      }
+    }
     if (
       hash(read(COMPOSE, 0o644)) !== plan.composeSha256 ||
       !equal(excluded(), plan.excluded) ||
@@ -2241,11 +2528,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       `${JSON.stringify({
         schema: join
           ? JOIN_RECEIPT
-          : isDirectOperation(op)
-            ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
-            : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
+          : cutover
+            ? CUTOVER_RECEIPT
+            : isDirectOperation(op)
+              ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
+              : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
         status,
         planSha256,
+        ...(cutover ? { legacyBaselineSha256: plan.legacyBaselineSha256 } : {}),
         ...(isDirectOperation(op)
           ? {
               evidencePolicy: CALLBACK_DIRECT_POLICY,
@@ -2350,12 +2640,12 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         }
       : {}),
     attestRestored: async () => {
-      attest();
+      await attestApiWebTerminal('ROLLED_BACK', attest);
       attestJoinRunningEnv();
     },
     abort: async () => {
       if (join) expectedSecrets = plan.previousSecrets;
-      attest();
+      await attestApiWebTerminal('ABORTED', attest);
       for (const service of ['api', 'web'])
         if (!equal(inspect(service), plan.previous[service])) fail('abort_baseline_changed');
     },
@@ -2382,7 +2672,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       attestJoinBackup();
       for (const s of ['api', 'web']) {
         if (!equal(inspect(s), plan.previous[s])) fail('baseline_drift');
-        imagePresent(plan.previous[s].image, plan.previous[s].releaseId.slice(0, 40));
+        imagePresent(
+          plan.previous[s].image,
+          predecessorSource(plan.previous[s]),
+          cutover ? plan.previous[s].imageId : undefined,
+        );
         const rendered = JSON.parse(compose('candidate', 'config', s));
         for (const component of ['api', 'web', 'realtime', 'worker', 'migrator']) {
           const expected = ['api', 'web'].includes(component)
@@ -2405,6 +2699,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     },
     activate: async (s) => {
       if (join) validateJoinOperation(op, true);
+      if (cutover) validateProductionCutover(op, true);
       if (isDirectOperation(op)) validateDirectApiWebOperation(op, true);
       attest();
       compose('candidate', 'up', s);
@@ -2526,7 +2821,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         )
       )
         fail('foreign_recovery_image');
-      imagePresent(plan.previous[s].image, plan.previous[s].releaseId.slice(0, 40));
+      imagePresent(
+        plan.previous[s].image,
+        predecessorSource(plan.previous[s]),
+        cutover ? plan.previous[s].imageId : undefined,
+      );
       compose(`previous-${s}`, 'up', s);
       await wait(s, plan.previous[s]);
     },
@@ -2545,7 +2844,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         attestJoinBackup();
         if (join)
           expectedSecrets = terminal === 'SUCCESS' ? plan.candidateSecrets : plan.previousSecrets;
-        attest();
+        await attestApiWebTerminal(terminal, attest);
         for (const service of ['api', 'web'])
           await wait(
             service,
@@ -2637,4 +2936,5 @@ export {
   probe as probeUpgradeService,
   validateBackupProof as validateUpgradeBackup,
   validateMonitoring as readUpgradeMonitoring,
+  wait as waitUpgradeService,
 };

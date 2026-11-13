@@ -137,6 +137,19 @@ READ_ONLY = "export PGOPTIONS='-c default_transaction_read_only=on -c lock_timeo
 SOURCE_LEDGER = READ_ONLY + 'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc --tuples-only --no-align --set=ON_ERROR_STOP=1 --command=' + shlex.quote(LEDGER_SQL)
 SOURCE_SIZE = READ_ONLY + 'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc --tuples-only --no-align --set=ON_ERROR_STOP=1 --command=\'select pg_database_size(current_database())\''
 SOURCE_DUMP = READ_ONLY + 'exec pg_dump --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --format=custom --serializable-deferrable --no-owner --no-acl'
+CUTOVER_TARGET_SQL = "select json_build_object('databaseName',current_database(),'systemIdentifier',(select system_identifier::text from pg_control_system()),'inRecovery',pg_is_in_recovery())::text"
+CUTOVER_ACCOUNT_TABLES = (
+    ('identity.users', '(tenant_id,id,status)', 'tenant_id,id'),
+    ('integration.external_identity_map', '(tenant_id,id,user_id,provider,issuer,subject)', 'tenant_id,id'),
+    ('profile.user_summaries', '(tenant_id,user_id)', 'tenant_id,user_id'),
+    ('identity.refresh_sessions', '(tenant_id,id,user_id,family_id,parent_session_id,replaced_by_session_id,extract(epoch from expires_at),extract(epoch from rotated_at),extract(epoch from revoked_at))', 'tenant_id,id'),
+    ('integration.user_delegations', '(tenant_id,id,user_id,provider,issuer,subject,encryption_key_version,extract(epoch from refresh_expires_at),extract(epoch from revoked_at))', 'tenant_id,id'),
+)
+CUTOVER_ACCOUNTS_SQL = "select json_build_array(" + ','.join(
+    "(select json_build_object('table','" + table + "','count',count(*),'hash',md5(coalesce(string_agg(" + projection + "::text,',' order by " + ordering + "),''))) from " + table + ")"
+    for table,projection,ordering in CUTOVER_ACCOUNT_TABLES) + ')::text'
+SOURCE_CUTOVER_TARGET = READ_ONLY + 'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" -qAt --set=ON_ERROR_STOP=1 --command=' + shlex.quote(CUTOVER_TARGET_SQL)
+SOURCE_CUTOVER_ACCOUNTS = READ_ONLY + 'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" -qAt --set=ON_ERROR_STOP=1 --command=' + shlex.quote(CUTOVER_ACCOUNTS_SQL)
 INSPECT_FORMAT = '{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Image":{{json .Config.Image}},"Labels":{{json .Config.Labels}}},"RestartCount":{{json .RestartCount}},"State":{"Status":{{json .State.Status}},"StartedAt":{{json .State.StartedAt}},"Health":{"Status":{{with index .State "Health"}}{{json .Status}}{{else}}null{{end}}}}}'
 RESTORE_FORMAT = '{"Id":{{json .Id}},"Config":{"Image":{{json .Config.Image}},"User":{{json .Config.User}},"Volumes":{{json .Config.Volumes}},"Labels":{{json .Config.Labels}}},"HostConfig":{' + ','.join('"'+key+'":{{json .HostConfig.'+key+'}}' for key in ['NetworkMode','ReadonlyRootfs','Binds','PortBindings','Tmpfs','Privileged','AutoRemove','RestartPolicy','CapAdd','CapDrop','SecurityOpt','PidsLimit','Memory','MemorySwap','NanoCpus','PublishAllPorts','Links','Devices','DeviceRequests','VolumesFrom','PidMode','IpcMode']) + '},"Mounts":{{json .Mounts}},"State":{"Status":{{json .State.Status}}}}'
 
@@ -147,6 +160,7 @@ DISK_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_V1'
 NS_PRE_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_NAMESPACE_V2'
 NS_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_NAMESPACE_V2'
 WEB8158_SCHEMA = 'PHUB_TIMEWEB_BACKUP_WEB_API8158_V1'
+CUTOVER_BACKUP_SCHEMA = 'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1'
 NOTIFICATION_PRE105_SCHEMA = 'PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1'
 JOIN_POST105_SCHEMA = 'PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1'
 JOIN_POST105_LEDGER = '7bd0476427e40967f4531972829a86f578d0e9d844ab9e92f16637b868e207fd'
@@ -262,7 +276,7 @@ def is_web8158_operation(op):
 
 
 def backup_baseline(op):
-    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or is_owner_acl_backup(op) else BASELINE
+    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or is_owner_acl_backup(op) or op.get('schema') == CUTOVER_BACKUP_SCHEMA else BASELINE
 
 NS_DAEMON_MEMORY = 2 * 1024 ** 3
 DISK_MEMORY = 2 * 1024 ** 3
@@ -1980,6 +1994,8 @@ def now_iso():
 
 
 def operation_mode(value):
+    if value.get('schema') == CUTOVER_BACKUP_SCHEMA:
+        return 'api-web', value['releaseId']
     if is_closed_application_backup(value):return closed_application_backup_mode(value), value['releaseId']
     if value['schema'] == JOIN_POST105_SCHEMA:
         return 'join-post105', value['releaseId']
@@ -2053,7 +2069,17 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if isinstance(value, dict) and 'controllerPromotion' in value:
         need(schema != 'PHUB_TIMEWEB_BACKUP_OPERATION_V1', 'CONTROLLER_PROMOTION_SCHEMA')
         common += ['controllerPromotion']
-    if schema == JOIN_POST105_SCHEMA:
+    if schema == CUTOVER_BACKUP_SCHEMA:
+        exact(value, common + ['profile','candidateSha','publicationRunId','releaseId','expectedLedgerSha256','expectedDatabaseTarget','predecessorAttestationSha256'])
+        mode,release_id = 'api-web',value['releaseId']
+        need(profile == 'production' and 'controllerPromotion' not in value
+             and value['candidateSha'] == value['controllerSha'] == value['toolCommit']
+             and re.fullmatch(r'[1-9][0-9]*',value['publicationRunId'] or '')
+             and release_id == value['candidateSha'] + '-' + value['publicationRunId'] + '-1'
+             and HASH.fullmatch(value['expectedLedgerSha256'] or '')
+             and HASH.fullmatch(value['predecessorAttestationSha256'] or '')
+             and value['expectedDatabaseTarget'] == LOCATION_PHOTO_DATABASE_TARGET, 'CUTOVER_OPERATION')
+    elif schema == JOIN_POST105_SCHEMA:
         exact(value, common + ['profile','releaseId','controllerSourceCiRunId','expectedLedgerSha256','packageDescriptorSha256','catalogsSha256','notificationBundleSha256'])
         mode = 'join-post105'; release_id = value['releaseId']
         need(value['profile'] == 'production' and 'controllerPromotion' not in value
@@ -2157,7 +2183,17 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and type(row['restarts']) is int and (row['restarts'] == 0 or profile == 'beta')
              and isinstance(row['startedAt'], str), 'BASELINE')
     api, pg = value['expectedApi'], value['expectedPostgres']
-    if schema == JOIN_POST105_SCHEMA:
+    if schema == CUTOVER_BACKUP_SCHEMA:
+        need(re.fullmatch(r'ghcr\.io/z6v6e6r/phub-api@sha256:[a-f0-9]{64}',api['image'] or '')
+             and api['imageId'] == api['image'].split('@')[1]
+             and api['releaseId'] == 'lk2-beta-759083e37b40' and api['revision'] is None,
+             'CUTOVER_API_BASELINE')
+        need(pg['image'] == PG_IMAGE and pg['imageId'] == PG_IMAGE.split('@')[1]
+             and pg['releaseId'] is None and pg['revision'] is None, 'POSTGRES_BASELINE')
+        for row in (api,pg):
+            need(re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,9}Z',row['startedAt']) is not None,'BASELINE_TIME')
+            utc(row['startedAt'][:23]+'Z')
+    elif schema == JOIN_POST105_SCHEMA:
         need(re.fullmatch(r'ghcr\.io/z6v6e6r/phub-api@sha256:[a-f0-9]{64}', api['image'] or '')
              and api['imageId'] == api['image'].split('@')[1]
              and RELEASE.fullmatch(api['releaseId'] or '') and api['revision'] == api['releaseId'][:40], 'API_BASELINE')
@@ -2206,6 +2242,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if schema == LOCATION_PHOTO_PRE0102_SCHEMA:
         confirmation = 'BACKUP_RESTORE_LOCATION_PHOTO_PRE0102_PRIVATE_NAMESPACE_KEEP_RUNTIME'
     if is_closed_application_backup(value):confirmation='BACKUP_RESTORE_'+CLOSED_APPLICATION_BACKUPS[schema]['kind'].upper()+'_PRIVATE_NAMESPACE_KEEP_RUNTIME'
+    if schema == CUTOVER_BACKUP_SCHEMA:
+        confirmation='BACKUP_RESTORE_ATTESTED_BETA122_'+value['candidateSha'][:12].upper()+'_FROM_LK2_BETA_759083E37B40'
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
 
@@ -3040,9 +3078,10 @@ def service(project, name):
             'restarts': row['RestartCount'], 'startedAt': state['StartedAt']}
 
 
-def source_query(shell):
-    need(shell in (SOURCE_LEDGER, SOURCE_SIZE), 'SOURCE_QUERY')
-    return docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', shell], 'SOURCE_QUERY')
+def source_query(shell, container=PG_ID):
+    need(shell in (SOURCE_LEDGER, SOURCE_SIZE, SOURCE_CUTOVER_TARGET, SOURCE_CUTOVER_ACCOUNTS)
+         and HASH.fullmatch(container or ''), 'SOURCE_QUERY')
+    return docker(['exec', container, '/bin/sh', '-eu', '-c', shell], 'SOURCE_QUERY')
 
 
 def restore_image_admitted(image):
@@ -3101,13 +3140,43 @@ def restore_create_args(name, operation_sha, tmpfs_bytes):
     return args
 
 
-def execute_tmpfs(op, request_bytes, file_sha):
+def cutover_dump_name(operation_sha):
+    need(HASH.fullmatch(operation_sha or ''), 'CUTOVER_DUMP_ID')
+    return 'phub_lk2_cutover_' + operation_sha[:40]
+
+
+def cutover_backup_marker(marker, operation_sha, file_sha, transaction):
+    exact(marker,['schema','operationSha256','toolFileSha256','transaction','createdAt'])
+    need(marker['schema']=='PHUB_TIMEWEB_BACKUP_LOCK_V1' and marker['operationSha256']==operation_sha
+         and marker['toolFileSha256']==file_sha and marker['transaction']==str(transaction),'LOCK_DRIFT')
+    utc(marker['createdAt'])
+
+
+def cutover_dump_shell(operation_sha):
+    # timeout owns the in-container process group even if the Docker client disappears.
+    return READ_ONLY + 'export PGAPPNAME=' + cutover_dump_name(operation_sha) + '; exec /usr/bin/timeout --signal=TERM --kill-after=10s 580s ' + SOURCE_DUMP.removeprefix(READ_ONLY).removeprefix('exec ')
+
+
+def cutover_dump_stopped(op, operation_sha):
+    query = "select count(*) from pg_stat_activity where application_name='" + cutover_dump_name(operation_sha) + "'"
+    shell = READ_ONLY + 'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" -qAt --set=ON_ERROR_STOP=1 --command=' + shlex.quote(query)
+    result = docker(['exec', op['expectedPostgres']['id'], '/bin/sh', '-eu', '-c', shell], 'CUTOVER_DUMP_ACTIVITY')
+    need(result.strip() == b'0', 'CUTOVER_DUMP_STILL_ACTIVE')
+
+
+def execute_tmpfs(op, request_bytes, file_sha, reconcile=False):
     mode, release_id = operation_mode(op)
+    cutover = op.get('schema') == CUTOVER_BACKUP_SCHEMA
+    source_pg = op['expectedPostgres']['id'] if cutover else PG_ID
     transaction = ROOT / ('backups/' + release_id + '-' + mode)
+    pending_lock=transaction/'pending-lock'
+    retired_lock=transaction/'retired-lock'
     incoming = transaction / 'database.pgcustom.incoming'
     final = transaction / 'database.pgcustom'
     receipt_path = transaction / 'database-backup-receipt.json'
-    need(not os.path.lexists(LOCK) and not os.path.lexists(transaction), 'EXISTING_STATE')
+    need(not reconcile or cutover, 'CUTOVER_RECONCILIATION_ONLY')
+    if not reconcile:
+        need(not os.path.lexists(LOCK) and not os.path.lexists(transaction), 'EXISTING_STATE')
     for path in [ROOT, ROOT/'standard', ROOT/'operator', ROOT/'backups']:
         secure(path, 'dir')
     config_path = Path('/etc/phub/timeweb-beta-standard-delivery.json')
@@ -3135,7 +3204,21 @@ def execute_tmpfs(op, request_bytes, file_sha):
             secure(source/relative)
     controller_guard()
     migration_attestation=v2_migration_proof(op, request_bytes, source)
+    operation_sha = digest(request_bytes)
+    match=RELEASE.fullmatch(release_id)
+    name='phub-timeweb-restore-'+match[1][:12]+'-'+match[2]+'-1'
     restore_id=None
+    capsule_present=True
+    if reconcile:
+        secure(transaction, 'dir', 0o700)
+        capsule_present=(transaction/'backup-operation.json').exists()
+        if capsule_present:
+            need(read_secure(transaction/'backup-operation.json') == request_bytes, 'CUTOVER_CAPSULE_DRIFT')
+        else:
+            need(not os.path.lexists(LOCK) and not list(transaction.iterdir()),'CUTOVER_CAPSULE_DRIFT')
+        ids=docker(['ps','-aq','--no-trunc','--filter','name=^/'+name+'$']).decode().split()
+        need(len(ids)<=1 and all(HASH.fullmatch(v) for v in ids), 'RESTORE_ID')
+        restore_id=ids[0] if ids else None
     def container_boundary():
         ids=docker(['ps','-aq','--no-trunc']).decode().split()
         need(len(ids)==len(set(ids)), 'CONTAINER_ID')
@@ -3152,7 +3235,7 @@ def execute_tmpfs(op, request_bytes, file_sha):
         need(any(row['Id']==migration_attestation['containerId'] for row in boundary), 'MIGRATION_CONTAINER_BOUNDARY')
     need(digest(encoded(boundary))==op['expectedBoundarySha256'], 'BASELINE_BOUNDARY')
     def guard():
-        need(time.time()<utc(op['expiresAt']),'EXPIRED_OPERATION')
+        need(reconcile or time.time()<utc(op['expiresAt']),'EXPIRED_OPERATION')
         need(service('phub-timeweb-beta', 'api') == op['expectedApi']
              and service('phub-timeweb-beta-dependencies', 'postgres') == op['expectedPostgres'], 'RUNTIME_DRIFT')
         need(not docker(['ps','-q','--no-trunc','--filter','label=com.docker.compose.service=migrator']).strip(), 'ACTIVE_MIGRATOR')
@@ -3164,19 +3247,98 @@ def execute_tmpfs(op, request_bytes, file_sha):
             current=v2_migration_proof(op, request_bytes, source, {'id':restore_id,'operationSha256':operation_sha} if restore_id else None)
             need(current==migration_attestation,'MIGRATION_ATTESTATION_DRIFT')
     guard()
+    if reconcile:
+        if not capsule_present:
+            need(restore_id is None and not os.path.lexists(LOCK),'CUTOVER_CLEANUP_DRIFT')
+            cutover_dump_stopped(op,operation_sha)
+            return {'status':'CUTOVER_PREPARATION_NOT_STARTED','operationSha256':operation_sha,'authorizesDeploy':False,'replayAllowed':False}
+        if not os.path.lexists(LOCK):
+            need(restore_id is None,'CUTOVER_CLEANUP_DRIFT')
+            terminal_path=transaction/'CUTOVER_RECONCILED.json'
+            if terminal_path.exists():
+                terminal=strict(read_secure(terminal_path))
+                need(terminal.get('phase')=='CUTOVER_RECONCILED' and terminal.get('operationSha256')==operation_sha,'CUTOVER_CLEANUP_DRIFT')
+            elif retired_lock.exists():
+                marker=strict(read_secure(retired_lock/'backup-restore.json'))
+                cutover_backup_marker(marker,operation_sha,file_sha,transaction)
+                need((transaction/'SUCCESS_CLEANUP_VERIFIED.json').exists(),'CUTOVER_CLEANUP_DRIFT')
+            else:
+                # Atomic acquisition never exposed a global lock. Retain any pending files;
+                # no dump or restore is permitted before the published marker exists.
+                need(not (transaction/'DUMP_INTENT.json').exists(),'CUTOVER_CLEANUP_DRIFT')
+                if pending_lock.exists():
+                    secure(pending_lock,'dir',0o700)
+                    need(sorted(p.name for p in pending_lock.iterdir()) in ([],['backup-restore.json']),'LOCK_DRIFT')
+                    if (pending_lock/'backup-restore.json').exists():
+                        marker=strict(read_secure(pending_lock/'backup-restore.json'))
+                        cutover_backup_marker(marker,operation_sha,file_sha,transaction)
+            cutover_dump_stopped(op,operation_sha)
+            if not terminal_path.exists():exclusive(terminal_path,encoded({'phase':'CUTOVER_RECONCILED','operationSha256':operation_sha,'observedAt':now_iso()}))
+            return {'status':'CUTOVER_BACKUP_RECONCILED','operationSha256':operation_sha,'authorizesDeploy':False,'replayAllowed':False}
+        lock_info=secure(LOCK, 'dir', 0o700)
+        marker_info=secure(LOCK/'backup-restore.json', mode=0o600)
+        marker_bytes=read_secure(LOCK/'backup-restore.json')
+        marker=strict(marker_bytes)
+        cutover_backup_marker(marker,operation_sha,file_sha,transaction)
+        def cleanup_lock_guard():
+            need(identity(secure(LOCK,'dir',0o700))==identity(lock_info)
+                 and sorted(p.name for p in LOCK.iterdir())==['backup-restore.json']
+                 and identity(secure(LOCK/'backup-restore.json',mode=0o600))==identity(marker_info)
+                 and read_secure(LOCK/'backup-restore.json')==marker_bytes, 'LOCK_DRIFT')
+        cleanup_lock_guard()
+        cutover_dump_stopped(op, operation_sha)
+        target=strict(source_query(SOURCE_CUTOVER_TARGET,source_pg))
+        need(target=={**op['expectedDatabaseTarget'],'inRecovery':False}
+             and digest(ledger_bytes(source_query(SOURCE_LEDGER,source_pg)))==op['expectedLedgerSha256'], 'CUTOVER_SOURCE_DRIFT')
+        def cleanup_phase(phase):
+            path=transaction/(phase+'.json')
+            if path.exists():
+                value=strict(read_secure(path))
+                need(value.get('phase')==phase and value.get('operationSha256')==operation_sha, 'CUTOVER_CLEANUP_DRIFT')
+            else:
+                exclusive(path,encoded({'phase':phase,'operationSha256':operation_sha,'observedAt':now_iso()}))
+        cleanup_phase('CUTOVER_CLEANUP_INTENT')
+        if restore_id:
+            intent=strict(read_secure(transaction/'DUMP_INTENT.json'))
+            need(intent.get('phase')=='DUMP_INTENT' and intent.get('operationSha256')==operation_sha
+                 and type(intent.get('restoreTmpfsBytes')) is int and 512*1024**2<=intent['restoreTmpfsBytes']<=64*1024**3,'CUTOVER_RESTORE_PLAN')
+            tmpfs=intent['restoreTmpfsBytes']
+            row=strict(docker(['inspect','--format',RESTORE_FORMAT,restore_id]))
+            state=row['State']['Status']
+            need(state in ('created','running','exited'),'CUTOVER_RESTORE_STATE')
+            inspect_restore(restore_id,operation_sha,tmpfs,state)
+            guard();cleanup_lock_guard()
+            if state=='running':
+                docker(['stop','--time','30',restore_id],'RESTORE_STOP')
+                inspect_restore(restore_id,operation_sha,tmpfs,'exited')
+            docker(['rm',restore_id],'RESTORE_REMOVE')
+            need(not docker(['ps','-aq','--no-trunc','--filter','name=^/'+name+'$']).strip(),'RESTORE_REMOVE_UNPROVEN')
+        guard();cleanup_lock_guard();cutover_dump_stopped(op,operation_sha)
+        cleanup_phase('CUTOVER_RECONCILED')
+        rename_noreplace(LOCK,retired_lock);sync_directory(transaction);sync_directory(LOCK.parent)
+        return {'status':'CUTOVER_BACKUP_RECONCILED','operationSha256':operation_sha,'authorizesDeploy':False,'replayAllowed':False}
     image = strict(docker(['image','inspect','--format','{"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}}}', PG_IMAGE]))
     need(restore_image_admitted(image), 'RESTORE_IMAGE')
-    operation_sha = digest(request_bytes)
     marker = encoded({'schema':'PHUB_TIMEWEB_BACKUP_LOCK_V1','operationSha256':operation_sha,
                       'toolFileSha256':file_sha,'transaction':str(transaction),'createdAt':now_iso()})
-    LOCK.mkdir(mode=0o700)
-    sync_directory(LOCK.parent)
-    lock_info = secure(LOCK, 'dir', 0o700)
-    exclusive(LOCK/'backup-restore.json', marker)
-    marker_info=secure(LOCK/'backup-restore.json',mode=0o600)
-    transaction.mkdir(mode=0o700)
-    sync_directory(transaction.parent)
-    exclusive(transaction/'backup-operation.json', request_bytes)
+    if cutover:
+        # Publish only a complete marker; a process crash cannot expose an unowned empty lock.
+        transaction.mkdir(mode=0o700);sync_directory(transaction.parent)
+        exclusive(transaction/'backup-operation.json',request_bytes)
+        pending_lock.mkdir(mode=0o700);sync_directory(transaction)
+        exclusive(pending_lock/'backup-restore.json',marker)
+        rename_noreplace(pending_lock,LOCK);sync_directory(transaction);sync_directory(LOCK.parent)
+        lock_info=secure(LOCK,'dir',0o700)
+        marker_info=secure(LOCK/'backup-restore.json',mode=0o600)
+    else:
+        LOCK.mkdir(mode=0o700)
+        sync_directory(LOCK.parent)
+        lock_info = secure(LOCK, 'dir', 0o700)
+        exclusive(LOCK/'backup-restore.json', marker)
+        marker_info=secure(LOCK/'backup-restore.json',mode=0o600)
+        transaction.mkdir(mode=0o700)
+        sync_directory(transaction.parent)
+        exclusive(transaction/'backup-operation.json', request_bytes)
     def phase(name, **fields):
         exclusive(transaction/(name+'.json'), encoded({'phase':name,'operationSha256':operation_sha,'observedAt':now_iso(),**fields}))
     def owned_lock():
@@ -3186,10 +3348,16 @@ def execute_tmpfs(op, request_bytes, file_sha):
              and identity(secure(LOCK/'backup-restore.json',mode=0o600))==identity(marker_info)
              and read_secure(LOCK/'backup-restore.json')==marker,'LOCK_DRIFT')
     guard(); owned_lock(); phase('LOCKED')
-    before = ledger_bytes(source_query(SOURCE_LEDGER))
+    before = ledger_bytes(source_query(SOURCE_LEDGER, source_pg))
+    accounts_before = None
+    if cutover:
+        target = strict(source_query(SOURCE_CUTOVER_TARGET, source_pg))
+        need(target == {**op['expectedDatabaseTarget'], 'inRecovery':False}, 'CUTOVER_DATABASE_TARGET')
+        need(len(strict(before)) == 122 and digest(before) == op['expectedLedgerSha256'], 'CUTOVER_LEDGER')
+        accounts_before = digest(encoded(strict(source_query(SOURCE_CUTOVER_ACCOUNTS, source_pg))))
     if mode == 'api-worker' or is_web8158_operation(op):
         need(digest(before) == API_WORKER_LEDGER_SHA256, 'API_WORKER_LEDGER')
-    size_data = source_query(SOURCE_SIZE).decode().strip()
+    size_data = source_query(SOURCE_SIZE, source_pg).decode().strip()
     need(re.fullmatch(r'[1-9][0-9]*',size_data),'DATABASE_SIZE')
     memory = Path('/proc/meminfo').read_text()
     found = re.search(r'^MemAvailable:\s+([0-9]+) kB$', memory, re.M)
@@ -3200,18 +3368,17 @@ def execute_tmpfs(op, request_bytes, file_sha):
     fd=os.open(incoming,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
     try:
         with os.fdopen(os.dup(fd),'wb') as stream:
-            docker(['exec',PG_ID,'/bin/sh','-eu','-c',SOURCE_DUMP],'DUMP',stdout=stream,timeout=600,file_limit=min(MAX_DUMP,int(size_data)*2+256*1024**2))
+            docker(['exec',source_pg,'/bin/sh','-eu','-c',cutover_dump_shell(operation_sha) if cutover else SOURCE_DUMP],'DUMP',stdout=stream,timeout=620 if cutover else 600,file_limit=min(MAX_DUMP,int(size_data)*2+256*1024**2))
             stream.flush()
         os.fsync(fd)
     finally:
         os.close(fd)
     sync_directory(transaction)
+    if cutover:cutover_dump_stopped(op,operation_sha)
     dump_sha=file_digest(incoming)
     guard(); owned_lock()
-    need(ledger_bytes(source_query(SOURCE_LEDGER))==before,'SOURCE_LEDGER_DRIFT')
+    need(ledger_bytes(source_query(SOURCE_LEDGER, source_pg))==before,'SOURCE_LEDGER_DRIFT')
     phase('DUMP_VERIFIED',dumpSha256=dump_sha,sourceLedgerSha256=digest(before))
-    match=RELEASE.fullmatch(release_id)
-    name='phub-timeweb-restore-'+match[1][:12]+'-'+match[2]+'-1'
     phase('RESTORE_CREATE_INTENT',containerName=name,restoreImage=PG_IMAGE)
     container=docker(restore_create_args(name,operation_sha,tmpfs),'RESTORE_CREATE').decode().strip()
     need(HASH.fullmatch(container),'RESTORE_ID')
@@ -3236,7 +3403,10 @@ def execute_tmpfs(op, request_bytes, file_sha):
                 '--no-owner','--no-acl','--exit-on-error'],'RESTORE',stdin=stream,stdout=subprocess.DEVNULL,timeout=3600)
     restored=ledger_bytes(docker(['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore',
                                  '--no-psqlrc','--tuples-only','--no-align','--set=ON_ERROR_STOP=1','--command='+LEDGER_SQL],'RESTORED_LEDGER'))
-    need(restored==before and ledger_bytes(source_query(SOURCE_LEDGER))==before,'LEDGER_MISMATCH')
+    need(restored==before and ledger_bytes(source_query(SOURCE_LEDGER, source_pg))==before,'LEDGER_MISMATCH')
+    if cutover:
+        restored_accounts = digest(encoded(strict(docker(['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','-qAt','--set=ON_ERROR_STOP=1','--command='+CUTOVER_ACCOUNTS_SQL],'RESTORED_ACCOUNTS'))))
+        need(restored_accounts == accounts_before == digest(encoded(strict(source_query(SOURCE_CUTOVER_ACCOUNTS, source_pg)))), 'CUTOVER_ACCOUNTS_MISMATCH')
     need(file_digest(incoming)==dump_sha,'DUMP_CHANGED')
     guard(); owned_lock(); inspect_restore(container,operation_sha,tmpfs,'running')
     phase('RESTORE_VERIFIED',containerId=container,sourceLedgerSha256=digest(before),restoredLedgerSha256=digest(restored))
@@ -3246,6 +3416,11 @@ def execute_tmpfs(op, request_bytes, file_sha):
     receipt={'schema':'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1','baselineReleaseId':backup_baseline(op),
              'completedAt':now_iso(),'backupFile':str(final),'backupSha256':dump_sha,'restoreVerified':True,
              'restoreImage':PG_IMAGE,'restoredLedgerSha256':digest(restored),'sourceLedgerSha256':digest(before)}
+    if cutover:
+        receipt.update(schema='PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V1',operationSha256=operation_sha,
+                       predecessorAttestationSha256=op['predecessorAttestationSha256'],
+                       databaseTarget=op['expectedDatabaseTarget'],
+                       sourceAccountsSha256=accounts_before,restoredAccountsSha256=restored_accounts)
     exclusive(receipt_path,encoded(receipt))
     guard(); owned_lock(); inspect_restore(container,operation_sha,tmpfs,'running')
     phase('SUCCESS_RECEIPT',receiptSha256=digest(read_secure(receipt_path)),containerId=container)
@@ -3254,11 +3429,14 @@ def execute_tmpfs(op, request_bytes, file_sha):
     docker(['rm',container],'RESTORE_REMOVE')
     need(not docker(['ps','-aq','--no-trunc','--filter','name=^/'+name+'$']).strip(),'RESTORE_REMOVE_UNPROVEN')
     guard(); owned_lock()
-    need(ledger_bytes(source_query(SOURCE_LEDGER))==before,'FINAL_LEDGER_DRIFT')
+    need(ledger_bytes(source_query(SOURCE_LEDGER, source_pg))==before,'FINAL_LEDGER_DRIFT')
     need(file_digest(final)==dump_sha and strict(read_secure(receipt_path))==receipt,'FINAL_RECEIPT_DRIFT')
     phase('SUCCESS_CLEANUP_VERIFIED',receiptSha256=digest(read_secure(receipt_path)))
     guard(); owned_lock()
-    (LOCK/'backup-restore.json').unlink();sync_directory(LOCK);LOCK.rmdir();sync_directory(LOCK.parent)
+    if cutover:
+        rename_noreplace(LOCK,retired_lock);sync_directory(transaction);sync_directory(LOCK.parent)
+    else:
+        (LOCK/'backup-restore.json').unlink();sync_directory(LOCK);LOCK.rmdir();sync_directory(LOCK.parent)
     return {'status':'BACKUP_RESTORE_VERIFIED','receiptSha256':digest(read_secure(receipt_path)),
             'releaseId':release_id,'authorizesDeploy':False,'dumpBytesPrinted':False}
 
@@ -4601,7 +4779,7 @@ def main():
         need(sys.argv[2]==str(ROOT/'operator/notification-pre105-retirement.json'),'PRE105_RETIREMENT_ENTRY')
         pre105_retirement_main();return
     supervisor = len(sys.argv) == 4 and sys.argv[1] == '--disk-runtime-supervisor' and sys.argv[2] == str(REQUEST)
-    need(os.getuid()==0 and (supervisor or len(sys.argv)==3 and sys.argv[1] in ('--execute', '--reconcile-disk', '--attest-disk') and sys.argv[2]==str(REQUEST)), 'ENTRY')
+    need(os.getuid()==0 and (supervisor or len(sys.argv)==3 and sys.argv[1] in ('--execute', '--reconcile-disk', '--attest-disk', '--reconcile-cutover-tmpfs') and sys.argv[2]==str(REQUEST)), 'ENTRY')
     os.umask(0o077)
     file=Path(__file__)
     file_sha=digest(read_secure(file,0o755))
@@ -4627,7 +4805,11 @@ def main():
         namespace_supervisor(op, request_bytes, plan); return
     for sig in (signal.SIGTERM,signal.SIGINT):
         signal.signal(sig,lambda *_: (_ for _ in ()).throw(Stop('INTERRUPTED_UNCERTAIN')))
-    if sys.argv[1] == '--attest-disk':
+    if sys.argv[1] == '--reconcile-cutover-tmpfs':
+        need(op.get('schema')==CUTOVER_BACKUP_SCHEMA,'CUTOVER_RECONCILIATION_ONLY')
+        with disk_mutation_lock():
+            result=execute_tmpfs(op,request_bytes,file_sha,reconcile=True)
+    elif sys.argv[1] == '--attest-disk':
         result = notification_backup_reference(op, request_bytes, file_sha) if is_owner_acl_backup(op) else (namespace_verify_reference(op, request_bytes, file_sha) if is_namespace_operation(op) else disk_verify_reference(op, request_bytes, file_sha))
     elif sys.argv[1] == '--reconcile-disk':
         need(is_disk_operation(op), 'DISK_RECONCILIATION_ONLY')
@@ -4636,6 +4818,9 @@ def main():
     elif is_disk_operation(op):
         with disk_mutation_lock():
             result = execute(op, request_bytes, file_sha)
+    elif op.get('schema')==CUTOVER_BACKUP_SCHEMA:
+        with disk_mutation_lock():
+            result=execute_tmpfs(op,request_bytes,file_sha)
     else:
         result = execute_tmpfs(op, request_bytes, file_sha)
     print(json.dumps(result,separators=(',',':')))
