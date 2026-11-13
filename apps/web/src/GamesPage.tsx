@@ -5,13 +5,10 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { BookingActivityCard } from './BookingRecommendations.js';
 import { GameCard, type GameCardAction, type GameCardModel } from './GameCard.js';
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
+import { UpcomingGameDetailView } from './UpcomingGameDetailView.js';
 import { handleGameDetailBack } from './game-detail-navigation.js';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
-import {
-  MainBottomNavigation,
-  UpcomingBookingCard,
-  type HomeUpcomingItem,
-} from './HomeDashboardPage.js';
+import { MainBottomNavigation, type HomeUpcomingItem } from './HomeDashboardPage.js';
 import { TournamentSummaryCard } from './TournamentSummaryCard.js';
 import {
   rememberGameChatNavigation,
@@ -882,9 +879,19 @@ function GamesPageContent({
           if (!active) return;
           const selected = bookings.items.find((item) => {
             if (item.kind !== 'game') return false;
+            if (item.id === eventId) return true;
             const query = item.route.split('?')[1];
             return query ? new URLSearchParams(query).get('event') === eventId : false;
           });
+          if (selected?.gameId) {
+            window.history.replaceState(
+              window.history.state,
+              '',
+              `/games/${encodeURIComponent(selected.gameId)}`,
+            );
+            window.dispatchEvent(new PopStateEvent('popstate'));
+            return;
+          }
           setEventBooking(selected ?? null);
           setError(selected ? null : 'Карточка этой игры пока недоступна.');
           setLoading(false);
@@ -2509,7 +2516,7 @@ function GamesPageContent({
             Назад
           </a>
           <div>
-            <h1>Карточка игры</h1>
+            <h1>Детали матча</h1>
           </div>
         </header>
         {loading ? (
@@ -2522,11 +2529,7 @@ function GamesPageContent({
             {error}
           </p>
         ) : null}
-        {eventBooking ? (
-          <section className="game-booking-detail" aria-label="Выбранная игра">
-            <UpcomingBookingCard item={eventBooking} showAction={false} />
-          </section>
-        ) : null}
+        {eventBooking ? <UpcomingGameDetailView item={eventBooking} /> : null}
         <MainBottomNavigation active="games" gamesDestination="games" />
         {renderLevelRecoveryDialog()}
       </main>

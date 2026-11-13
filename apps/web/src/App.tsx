@@ -3340,7 +3340,11 @@ export function App({
       }
       return <LocationDetailPage location={locationDetail} />;
     }
-    if (clientPlatform === 'android' && protectedRoute.kind === 'games')
+    const bookingEventId =
+      protectedRoute.kind === 'games'
+        ? new URLSearchParams(window.location.search).get('event')
+        : null;
+    if (clientPlatform === 'android' && protectedRoute.kind === 'games' && !bookingEventId)
       return <NativeGames gateway={gateway} />;
     if (clientPlatform === 'android' && protectedRoute.kind === 'game') {
       return (
@@ -3354,17 +3358,13 @@ export function App({
       );
     }
     if (protectedRoute.kind === 'games' || protectedRoute.kind === 'game') {
-      const eventId =
-        protectedRoute.kind === 'games' && typeof window !== 'undefined'
-          ? new URLSearchParams(window.location.search).get('event')
-          : null;
       return (
         <GamesPage
           gateway={gateway}
           chatNavigationScope={{ tenantKey, userId: context.user.id }}
           joinPrincipal={{ tenantId: context.tenant.id, userId: context.user.id }}
           {...(protectedRoute.kind === 'game' ? { gameId: protectedRoute.gameId } : {})}
-          {...(eventId ? { eventId } : {})}
+          {...(bookingEventId ? { eventId: bookingEventId } : {})}
         />
       );
     }
