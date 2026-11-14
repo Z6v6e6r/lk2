@@ -43,15 +43,20 @@ describe('provider account attestation request', () => {
       parseProviderAccountAttestationRequest({
         contractVersion: 1,
         operationId,
-        target: { exerciseId: 'ex-77' },
+        target: { legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666' },
       }).target,
-    ).toEqual({ exerciseId: 'ex-77' });
+    ).toEqual({ legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666' });
     for (const bad of [
       { contractVersion: 2, operationId },
       { contractVersion: 1, operationId: 'nope' },
       { contractVersion: 1, operationId, providerClientId: 'client-42' },
-      { contractVersion: 1, operationId, target: { exerciseId: 'ex', extra: 1 } },
-      { contractVersion: 1, operationId, target: { exerciseId: 'a b' } },
+      {
+        contractVersion: 1,
+        operationId,
+        target: { legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666', extra: 1 },
+      },
+      { contractVersion: 1, operationId, target: { legacyGameId: 'a'.repeat(64) } },
+      { contractVersion: 1, operationId, target: { exerciseId: 'ex-77' } },
     ])
       expect(() => parseProviderAccountAttestationRequest(bad)).toThrow(ProviderAccountOwnerError);
   });
@@ -61,7 +66,7 @@ describe('provider account attestation request', () => {
     const target = providerAccountAttestationRequestSha256({
       contractVersion: 1,
       operationId,
-      target: { exerciseId: 'ex-77' },
+      target: { legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666' },
     });
     expect(plain).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(target).not.toBe(plain);
@@ -113,9 +118,12 @@ describe('provider account attestation response', () => {
       now,
     );
     expect(parsed.subscriptions[0]).toMatchObject({ state: 'NOT_ACTIVATED', title: null });
-    const targeted = { ...request, target: { exerciseId: 'ex-77' } };
+    const targeted = {
+      ...request,
+      target: { legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666' },
+    };
     const proof = {
-      exerciseId: 'ex-77',
+      legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666',
       startsAt: '2026-11-09T10:00:00.000Z',
       durationMinutes: 120,
       ownedClientSubscriptionIds: ['sub-1001'],
@@ -136,9 +144,12 @@ describe('provider account attestation response', () => {
   });
 
   it('requires a target proof for a targeted request', () => {
-    const targeted = { ...request, target: { exerciseId: 'ex-77' } };
+    const targeted = {
+      ...request,
+      target: { legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666' },
+    };
     const proof = {
-      exerciseId: 'ex-77',
+      legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666',
       startsAt: '2026-11-09T10:00:00.000Z',
       durationMinutes: 60,
       ownedClientSubscriptionIds: ['sub-1001'],
@@ -177,7 +188,9 @@ describe('provider account attestation response', () => {
     ).toThrow(ProviderAccountOwnerError);
     expect(() =>
       parseProviderAccountAttestation(
-        response({ targetProof: { ...proof, exerciseId: 'ex-other' } }),
+        response({
+          targetProof: { ...proof, legacyGameId: 'pay_265afb2d-1111-4222-8333-444455556666' },
+        }),
         targeted,
         now,
       ),

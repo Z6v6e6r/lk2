@@ -51,7 +51,7 @@ const context = {
   revision: 8,
   sourceVersion: 'synthetic-owner-version',
   providerTenantKey: 'iSkq6G',
-  legacyGameId: 'pay_synthetic-existing-game',
+  legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666',
   providerClientId: id(7),
   providerSubscriptionId: id(6),
   startsAt: '2099-09-21T07:00:00+03:00',
@@ -198,7 +198,6 @@ describe('existing-game advisory runtime composition', () => {
   });
 
   it('reads conditions end to end through the LK1 reader with a fresh attestation per call', async () => {
-    harness.resolve.mockResolvedValue({ ...context, providerExerciseId: 'synthetic-exercise' });
     const attest = vi.fn((request: { operationId: string }) =>
       Promise.resolve({
         contractVersion: 1 as const,
@@ -208,7 +207,7 @@ describe('existing-game advisory runtime composition', () => {
         subscriptions: [],
         attestedAt: new Date().toISOString(),
         targetProof: {
-          exerciseId: 'synthetic-exercise',
+          legacyGameId: context.legacyGameId,
           startsAt: context.startsAt,
           durationMinutes: 90,
           ownedClientSubscriptionIds: [context.providerSubscriptionId],
