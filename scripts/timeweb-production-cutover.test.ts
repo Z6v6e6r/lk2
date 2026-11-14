@@ -126,57 +126,56 @@ describe('three-service roster cutover inside the existing canonical controller'
     scenario(`${rosterOperation}const failure='';${lifecycle}
       await runApiWebTransition(ops);assert.deepEqual(calls,['preflight','pull','journal:PREPARED','journal:WORKER_STOP_INTENT','contain','journal:WORKER_STOPPED','journal:API_INTENT','activate:api','journal:API_ACTIVE','journal:WORKER_INTENT','activate:worker','journal:WORKER_ACTIVE','journal:WEB_INTENT','activate:web','journal:OBSERVING','observe','attest','journal:BASELINE_INTENT','baseline','journal:SUCCESS']);`);
   });
-  it.each([
-    'preflight',
-    'pull',
-    'journal:PREPARED',
-    'journal:WORKER_STOP_INTENT',
-    'contain',
-    'journal:WORKER_STOPPED',
-    'journal:API_INTENT',
-    'activate:api',
-    'journal:API_ACTIVE',
-    'journal:WORKER_INTENT',
-    'activate:worker',
-    'journal:WORKER_ACTIVE',
-    'journal:WEB_INTENT',
-    'activate:web',
-    'journal:OBSERVING',
-    'observe',
-    'attest',
-    'journal:BASELINE_INTENT',
-    'baseline',
-    'journal:SUCCESS',
-  ])('recovers injected failure or lost acknowledgement at %s', (failure) => {
-    scenario(`${rosterOperation}const failure=${JSON.stringify(failure)};${lifecycle}
+  it('recovers every injected boundary failure and lost acknowledgement in one isolated runtime', () => {
+    const failures = [
+      'preflight',
+      'pull',
+      'journal:PREPARED',
+      'journal:WORKER_STOP_INTENT',
+      'contain',
+      'journal:WORKER_STOPPED',
+      'journal:API_INTENT',
+      'activate:api',
+      'journal:API_ACTIVE',
+      'journal:WORKER_INTENT',
+      'activate:worker',
+      'journal:WORKER_ACTIVE',
+      'journal:WEB_INTENT',
+      'activate:web',
+      'journal:OBSERVING',
+      'observe',
+      'attest',
+      'journal:BASELINE_INTENT',
+      'baseline',
+      'journal:SUCCESS',
+    ];
+    scenario(`${rosterOperation}for(const failure of ${JSON.stringify(failures)}){${lifecycle}
       await assert.rejects(()=>runApiWebTransition(ops),/injected/);
       if(['preflight','pull','journal:PREPARED'].includes(failure)){assert.ok(calls.includes('abort'));assert.ok(!calls.includes('contain'));assert.equal(calls.at(-1),'journal:ABORTED');}
-      else{const index=calls.indexOf('journal:ROLLBACK_INTENT');assert.ok(index>=0);assert.deepEqual(calls.slice(index),['journal:ROLLBACK_INTENT','contain','restore:web','restore:api','restore:worker','removeBaseline','restored','journal:ROLLED_BACK']);}`);
+      else{const index=calls.indexOf('journal:ROLLBACK_INTENT');assert.ok(index>=0,failure);assert.deepEqual(calls.slice(index),['journal:ROLLBACK_INTENT','contain','restore:web','restore:api','restore:worker','removeBaseline','restored','journal:ROLLED_BACK'],failure);}}`);
   });
-  it.each([
-    'WORKER_STOP_INTENT',
-    'WORKER_STOPPED',
-    'API_INTENT',
-    'API_ACTIVE',
-    'WORKER_INTENT',
-    'WORKER_ACTIVE',
-    'WEB_INTENT',
-    'OBSERVING',
-    'BASELINE_INTENT',
-    'ROLLBACK_INTENT',
-    'ROLLBACK_FAILED',
-  ])('recovers durable %s without replaying forward activation', (phase) => {
-    scenario(`${rosterOperation}const failure='';${lifecycle}
-      assert.equal(await engine.recoverApiWebPhase(${JSON.stringify(phase)},ops),'ROLLED_BACK');assert.deepEqual(calls,['journal:ROLLBACK_INTENT','contain','restore:web','restore:api','restore:worker','removeBaseline','restored','journal:ROLLED_BACK']);
-      if(${JSON.stringify(['WORKER_STOP_INTENT', 'WORKER_STOPPED', 'WORKER_INTENT', 'WORKER_ACTIVE', 'BASELINE_INTENT'])}.includes(${JSON.stringify(phase)})){delete ops.workerMode;await assert.rejects(()=>engine.recoverApiWebPhase(${JSON.stringify(phase)},ops),/invalid_recovery_phase/);}`);
+  it('recovers every durable phase without replaying forward activation', () => {
+    const phases = [
+      'WORKER_STOP_INTENT',
+      'WORKER_STOPPED',
+      'API_INTENT',
+      'API_ACTIVE',
+      'WORKER_INTENT',
+      'WORKER_ACTIVE',
+      'WEB_INTENT',
+      'OBSERVING',
+      'BASELINE_INTENT',
+      'ROLLBACK_INTENT',
+      'ROLLBACK_FAILED',
+    ];
+    scenario(`${rosterOperation}for(const phase of ${JSON.stringify(phases)}){const failure='';${lifecycle}
+      assert.equal(await engine.recoverApiWebPhase(phase,ops),'ROLLED_BACK',phase);assert.deepEqual(calls,['journal:ROLLBACK_INTENT','contain','restore:web','restore:api','restore:worker','removeBaseline','restored','journal:ROLLED_BACK'],phase);
+      if(${JSON.stringify(['WORKER_STOP_INTENT', 'WORKER_STOPPED', 'WORKER_INTENT', 'WORKER_ACTIVE', 'BASELINE_INTENT'])}.includes(phase)){delete ops.workerMode;await assert.rejects(()=>engine.recoverApiWebPhase(phase,ops),/invalid_recovery_phase/);}}`);
   });
-  it.each(['contain', 'restore:web', 'restore:api', 'restore:worker'])(
-    'retains a failed rollback and attempts independent restores after %s fails',
-    (failure) => {
-      scenario(`${rosterOperation}const failure=${JSON.stringify(failure)};${lifecycle}
-      await assert.rejects(()=>engine.recoverApiWebTransition(ops),/rollback_failed/);for(const service of ['web','api','worker'])assert.equal(calls.includes('restore:'+service),failure!=='contain');assert.equal(calls.at(-1),'journal:ROLLBACK_FAILED');assert.ok(!calls.includes('journal:ROLLED_BACK'));`);
-    },
-  );
+  it('retains failed rollback for each containment and component restoration failure', () => {
+    scenario(`${rosterOperation}for(const failure of ['contain','restore:web','restore:api','restore:worker']){${lifecycle}
+      await assert.rejects(()=>engine.recoverApiWebTransition(ops),/rollback_failed/);for(const service of ['web','api','worker'])assert.equal(calls.includes('restore:'+service),failure!=='contain',failure);assert.equal(calls.at(-1),'journal:ROLLBACK_FAILED',failure);assert.ok(!calls.includes('journal:ROLLED_BACK'),failure);}`);
+  });
   it('contains only an exact recognized Worker, including a stopped Worker after lost stop ACK', () => {
     scenario(`${rosterOperation}
       const plan={previous:{worker:b.containers.worker},candidate:{worker:{image:'ghcr.io/z6v6e6r/phub-worker@sha256:'+'9'.repeat(64),releaseId:null,revision:op.candidateSha}}};
