@@ -1717,3 +1717,54 @@ Success emits an ordinary canonical `API_WEB` installed descriptor and a distinc
 attestation; rollback mode is `attested-previous-runtime`, not a fabricated canonical previous
 release. The installed reader verifies this lineage before a subsequent ordinary release. A later
 successful release removes those one-shot predecessor fields and uses its own canonical predecessor.
+
+### Worker-aware roster cutover
+
+For an approved roster synchronization repair requiring the candidate Worker, select
+`PHUB_TIMEWEB_API_WORKER_WEB_PRODUCTION_CUTOVER_V2` through the **same** `--critical-api-web`
+entry, request path, shared lock and retained transaction. V1 remains API/Web-only. V2 additionally
+requires `expectedWorker` with the exact legacy Worker ID, digest and truthful `releaseId: null`.
+Use confirmation
+`CUTOVER_PRODUCTION_API_WORKER_WEB_<CANDIDATE12>_FROM_<ATTESTATION12>_KEEP_DATA_AND_ACCOUNTS`.
+The five-image canonical publication, full backup/restore, account witnesses, fresh monitoring,
+unchanged secrets and no-migrator gates above still apply.
+
+Before approving this package, review the complete Worker dependency delta and read back the
+existing enabled job/provider channels. Preserve the exact `worker.env` bytes and mounted credentials;
+do not enable a channel or infer that the Android FCM gate holds APNS, Web Push, SMTP or provider
+writes. An API/Web-only approval does not authorize Worker activation. The exact three-service
+package must explicitly cover resuming its existing channels; any new side effect needs separate
+scope and evidence. V2 grants no configuration, provider, migration or identity-change authority.
+
+The sealed V2 plan contains all three previous and candidate identities and only Realtime in
+`unchangedServiceImages`. Candidate Worker has OCI revision equal to the candidate SHA and no
+`phub.release-id` label, matching the existing Compose definition. Offline smoke uses no network and
+checks both Worker `main.js` and `repair-legacy-game-rosters.js` without executing their business logic.
+
+After preflight/pull/smoke, the controller journals `WORKER_STOP_INTENT`, stops only a recognized
+previous/candidate Worker and verifies it exited, then records `WORKER_STOPPED`. API activates first,
+then Worker under the existing background profile with `--no-deps`, then Web. Durable
+`WORKER_INTENT`/`WORKER_ACTIVE` phases fence the ambiguous Worker activation. All 61 observation
+rounds check Worker immutable identity, zero restarts and private readiness in addition to the
+existing API/Web private/public probes and unchanged Realtime/secrets. `BASELINE_INTENT` precedes
+the distinct `API_WORKER_WEB_PRODUCTION_CUTOVER` installed descriptor. The receipt schema is
+`PHUB_TIMEWEB_API_WORKER_WEB_CUTOVER_RECEIPT_V2`; never label the result `API_WEB`.
+
+After any activation intent, recovery contains a recognized Worker before restoring Web, API and
+Worker from the sealed predecessor images. It attempts independent component restores even after
+one fails after successful containment; a containment failure prevents every component restore. Any partial failure retains
+`ROLLBACK_FAILED` and the lock. Recovery verifies old Worker null labels/revision and exact image ID;
+it does not restore the live database. Pre-intent abort attests all three original containers.
+Use the existing recovery/reconciliation entry with the retained exact operation, never chain the
+historical API/Worker and API/Web executors.
+V2 retains the shared lock after `SUCCESS`, `ROLLED_BACK` or `ABORTED`; only exact terminal
+reconciliation verifies all three services and releases it. A successful installed reader also
+checks the distinct kind/receipt, Worker identity and real 61-sample, at-least-900-second observation.
+
+Only after rollout and successful reconciliation, perform each separately authorized exact roster
+repair using the [existing repair command](games-legacy-server-migration.md). Run one canonical Game
+UUID per operation in the exact verified Worker container, inspect its read-only plan, and apply
+only that plan hash. Seal operator identity/approval, protected roster preimage and compensating
+rollback before apply. No blanket conflict clearing, alias reassignment, user creation or direct SQL
+is part of this route. Verify canonical participants, projection and the authenticated Web/Android
+view separately before claiming recovery.

@@ -6,6 +6,10 @@ import { parseStrictJson } from './strict-json.js';
 export const CUTOVER_OPERATION = 'PHUB_TIMEWEB_API_WEB_PRODUCTION_CUTOVER_V1';
 export const CUTOVER_PLAN = 'PHUB_TIMEWEB_API_WEB_CUTOVER_PLAN_V1';
 export const CUTOVER_RECEIPT = 'PHUB_TIMEWEB_API_WEB_CUTOVER_RECEIPT_V1';
+export const ROSTER_CUTOVER_OPERATION = 'PHUB_TIMEWEB_API_WORKER_WEB_PRODUCTION_CUTOVER_V2';
+export const ROSTER_CUTOVER_PLAN = 'PHUB_TIMEWEB_API_WORKER_WEB_CUTOVER_PLAN_V2';
+export const ROSTER_CUTOVER_RECEIPT = 'PHUB_TIMEWEB_API_WORKER_WEB_CUTOVER_RECEIPT_V2';
+export const ROSTER_CUTOVER_KIND = 'API_WORKER_WEB_PRODUCTION_CUTOVER';
 export const LEGACY_RUNTIME = 'LEGACY_TEST_STAND_RUNTIME_V1';
 export const LEGACY_SOURCE_SHA = '759083e37b4026f9690a3775a391f59f68f716a5';
 export const COMPONENTS = ['api', 'web', 'worker', 'realtime', 'migrator'];
@@ -43,7 +47,13 @@ function timestamp(value) {
     new Date(value).toISOString().slice(0, 19) === value.slice(0, 19)
   );
 }
-export const isProductionCutover = (value) => value?.schema === CUTOVER_OPERATION;
+export const isRosterCutover = (value) => value?.schema === ROSTER_CUTOVER_OPERATION;
+export const isProductionCutover = (value) =>
+  value?.schema === CUTOVER_OPERATION || isRosterCutover(value);
+export const cutoverPlanSchema = (value) =>
+  isRosterCutover(value) ? ROSTER_CUTOVER_PLAN : CUTOVER_PLAN;
+export const cutoverReceiptSchema = (value) =>
+  isRosterCutover(value) ? ROSTER_CUTOVER_RECEIPT : CUTOVER_RECEIPT;
 export const legacyBaselineHash = (baseline) => hash(JSON.stringify(baseline));
 export function validateLegacyBaseline(value) {
   exact(value, [
@@ -146,6 +156,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
     'backupOperationSha256',
     'expectedApi',
     'expectedWeb',
+    ...(isRosterCutover(value) ? ['expectedWorker'] : []),
     'legacyBaseline',
     'expiresAt',
     'confirmation',
@@ -171,6 +182,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
   for (const [key, service] of [
     ['expectedApi', 'api'],
     ['expectedWeb', 'web'],
+    ...(isRosterCutover(value) ? [['expectedWorker', 'worker']] : []),
   ]) {
     exact(value[key], ['id', 'image', 'releaseId']);
     if (
@@ -180,7 +192,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
     )
       fail('previous_identity');
   }
-  const expected = `CUTOVER_PRODUCTION_${value.candidateSha.slice(0, 12).toUpperCase()}_FROM_${legacyBaselineHash(baseline).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+  const expected = `CUTOVER_PRODUCTION_${isRosterCutover(value) ? 'API_WORKER_WEB_' : ''}${value.candidateSha.slice(0, 12).toUpperCase()}_FROM_${legacyBaselineHash(baseline).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
   if (value.confirmation !== expected) fail('confirmation');
   if (
     fresh &&
@@ -323,8 +335,8 @@ export function validateCutoverLineage(receipt, plan, operation, descriptor, ope
   validateProductionCutover(operation);
   const digest = legacyBaselineHash(operation.legacyBaseline);
   if (
-    receipt.schema !== CUTOVER_RECEIPT ||
-    plan.schema !== CUTOVER_PLAN ||
+    receipt.schema !== cutoverReceiptSchema(operation) ||
+    plan.schema !== cutoverPlanSchema(operation) ||
     receipt.legacyBaselineSha256 !== digest ||
     plan.legacyBaselineSha256 !== digest ||
     descriptor.PHUB_LEGACY_PREDECESSOR_SHA256 !== digest ||
@@ -380,6 +392,46 @@ export function assertCutoverBackupFiles(operation, plan, transaction, read, has
 export function assertCutoverReadbackFreshness(readAt, now = Date.now()) {
   if (!timestamp(readAt) || now - Date.parse(readAt) < 0 || now - Date.parse(readAt) > 30000)
     fail('monitoring_stale');
+}
+
+export function validateRosterCutoverObservation(value, receiptAt = undefined) {
+  exact(value, [
+    'windowSeconds',
+    'samplesPerService',
+    'latencyMs',
+    'serverErrors',
+    'startedAt',
+    'completedAt',
+    'elapsedSeconds',
+  ]);
+  exact(value.latencyMs, ['api', 'worker', 'web']);
+  if (
+    value.windowSeconds !== 900 ||
+    value.samplesPerService !== 61 ||
+    value.serverErrors !== 0 ||
+    !timestamp(value.startedAt) ||
+    !timestamp(value.completedAt) ||
+    !Number.isFinite(value.elapsedSeconds) ||
+    value.elapsedSeconds < 900 ||
+    value.elapsedSeconds > 7200 ||
+    value.elapsedSeconds !== (Date.parse(value.completedAt) - Date.parse(value.startedAt)) / 1000 ||
+    (receiptAt !== undefined &&
+      (!timestamp(receiptAt) || Date.parse(value.completedAt) > Date.parse(receiptAt)))
+  )
+    fail('roster_observation');
+  for (const service of ['api', 'worker', 'web']) {
+    const values = value.latencyMs[service];
+    if (
+      !Array.isArray(values) ||
+      values.length !== 61 ||
+      values.some((v) => !Number.isFinite(v) || v < 0 || v > 10000)
+    )
+      fail('roster_observation_samples');
+    const p95 = [...values].sort((a, b) => a - b)[57];
+    if (p95 > (service === 'api' ? 1500 : service === 'web' ? 1000 : 10000))
+      fail('roster_observation_latency');
+  }
+  return value;
 }
 
 export function validateCutoverBackupOperation(operation, bytes, facts) {

@@ -1670,10 +1670,19 @@ class CutoverDiskTests(unittest.TestCase):
         self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
         self.assertTrue(m.is_disk_operation(op));self.assertFalse(m.is_namespace_operation(op))
         required=m.CUTOVER_DUMP_LIMIT+m.CUTOVER_IMAGE_BYTES+m.DISK_HEADROOM+m.CUTOVER_CONTROL_BYTES
-        sizing=m.cutover_disk_sizing(17*1024**3,4*1024**3,required)
+        sizing=m.cutover_disk_sizing(m.CUTOVER_DATABASE_LIMIT,4*1024**3,required)
         self.assertEqual(sizing['dumpLimitBytes'],13*1024**3//2)
-        for db,mem,free in [(17*1024**3+1,10**12,10**12),(1024,4*1024**3-1,10**12),(1024,10**12,required-1)]:
+        self.assertEqual(m.CUTOVER_DATABASE_LIMIT,18_522_046_464)
+        self.assertEqual(sizing['imageBytes'],18*1024**3)
+        self.assertEqual(sizing['diskReserveBytes'],5*1024**3+256*1024**2)
+        self.assertEqual(required,31_943_819_264)
+        current=m.cutover_disk_sizing(18_317_433_879,4*1024**3,required)
+        self.assertEqual(current['restoreDataBytes'],18_317_433_879+256*1024**2)
+        self.assertEqual(m.cutover_disk_sizing(m.CUTOVER_DATABASE_LIMIT,4*1024**3,required-m.CUTOVER_DUMP_LIMIT,True),sizing)
+        for db,mem,free in [(m.CUTOVER_DATABASE_LIMIT+1,10**12,10**12),(True,10**12,10**12),(0,10**12,10**12),(1024,4*1024**3-1,10**12),(1024,10**12,required-1)]:
             with self.assertRaises(m.Stop):m.cutover_disk_sizing(db,mem,free)
+        with self.assertRaisesRegex(m.Stop,'CUTOVER_DISK_CAPACITY'):
+            m.cutover_disk_sizing(m.CUTOVER_DATABASE_LIMIT,4*1024**3,required-m.CUTOVER_DUMP_LIMIT-1,True)
         self.assertEqual(m.disk_container_args(m.disk_plan(op,m.encoded(op),sizing))[-9:],m.cutover_restore_command())
 
     def test_snapshot_command_is_serial_read_only_and_compressed(self):

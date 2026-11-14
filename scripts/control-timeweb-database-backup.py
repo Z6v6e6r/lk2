@@ -166,6 +166,7 @@ CUTOVER_DISK_PLAN = 'PHUB_TIMEWEB_CUTOVER_DISK_RESTORE_PLAN_V1'
 CUTOVER_DISK_RECEIPT = 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V2'
 CUTOVER_DUMP_LIMIT = 13 * 1024**3 // 2
 CUTOVER_IMAGE_BYTES = 18 * 1024**3
+CUTOVER_DATABASE_LIMIT = 69 * 1024**3 // 4
 CUTOVER_CONTROL_BYTES = 256 * 1024**2
 NOTIFICATION_PRE105_SCHEMA = 'PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1'
 JOIN_POST105_SCHEMA = 'PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1'
@@ -322,7 +323,7 @@ def disk_sizing(database_bytes, available_memory, free_disk, after_dump=False):
 
 
 def cutover_disk_sizing(database_bytes, available_memory, free_disk, after_dump=False):
-    need(type(database_bytes) is int and 0<database_bytes<=17*1024**3,'CUTOVER_DATABASE_SIZE')
+    need(type(database_bytes) is int and 0<database_bytes<=CUTOVER_DATABASE_LIMIT,'CUTOVER_DATABASE_SIZE')
     need(database_bytes+256*1024**2<CUTOVER_IMAGE_BYTES,'CUTOVER_FILESYSTEM_CAPACITY')
     need(type(available_memory) is int and available_memory>=DISK_MEMORY+2*1024**3,'CUTOVER_MEMORY_CAPACITY')
     reserve=DISK_HEADROOM+CUTOVER_CONTROL_BYTES
