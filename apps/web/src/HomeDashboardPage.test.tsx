@@ -1309,7 +1309,7 @@ describe('Home upcoming bookings', () => {
     expect(screen.getByRole('article', { name: 'Воскресный турнир' })).toBeVisible();
   });
 
-  it('shows decorative roster placeholders without announcing free seats when unavailable', () => {
+  it('visibly explains an unavailable roster without rendering false free seats', () => {
     const item = {
       id: '55555555-5555-4555-8555-555555555555',
       kind: 'game' as const,
@@ -1325,10 +1325,8 @@ describe('Home upcoming bookings', () => {
       container.querySelectorAll(
         '.fh-event__roster-placeholder .participant-avatar-stack__open-slot',
       ),
-    ).toHaveLength(4);
-    expect(
-      container.querySelector('.fh-event__roster-placeholder [aria-hidden="true"]'),
-    ).toContainElement(container.querySelector('.participant-avatar-stack'));
+    ).toHaveLength(0);
+    expect(screen.getByRole('status')).toHaveTextContent('Состав временно недоступен');
     rerender(
       <UpcomingBookingCard
         item={{ ...item, participants: [], openSlots: 2, roster: { state: 'UNAVAILABLE' } }}
@@ -1338,10 +1336,8 @@ describe('Home upcoming bookings', () => {
       container.querySelectorAll(
         '.fh-event__roster-placeholder .participant-avatar-stack__open-slot',
       ),
-    ).toHaveLength(4);
-    expect(
-      container.querySelector('.fh-event__roster-placeholder [aria-hidden="true"]'),
-    ).toContainElement(container.querySelector('.participant-avatar-stack'));
+    ).toHaveLength(0);
+    expect(screen.getByRole('status')).toHaveTextContent('Состав временно недоступен');
     rerender(
       <UpcomingBookingCard
         item={{

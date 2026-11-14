@@ -469,7 +469,7 @@ export async function getViewerGameCardBatch(input: {
   readonly viewerUserId: string;
   readonly gameIds: readonly string[];
   readonly now: string;
-}): Promise<ReadonlyMap<string, { card: ViewerGameCard; generatedAt: string }>> {
+}): Promise<ReadonlyMap<string, { card: ViewerGameCard; generatedAt: string | null }>> {
   const ids = [...new Set(input.gameIds)].slice(0, 50);
   if (ids.length === 0) return new Map();
   const projections = input.repository.getCardProjections
@@ -502,7 +502,7 @@ export async function getViewerGameCardBatch(input: {
       );
     },
   };
-  const result = new Map<string, { card: ViewerGameCard; generatedAt: string }>();
+  const result = new Map<string, { card: ViewerGameCard; generatedAt: string | null }>();
   for (const id of ids) {
     const card = await getViewerGameCard({
       repository,
@@ -512,7 +512,14 @@ export async function getViewerGameCardBatch(input: {
       now: input.now,
     });
     const projection = projections.get(id);
-    if (card && projection) result.set(id, { card, generatedAt: projection.projectedAt });
+    if (card && projection)
+      result.set(id, {
+        card,
+        generatedAt:
+          projection.rosterVerifiedAt === undefined
+            ? projection.projectedAt
+            : projection.rosterVerifiedAt,
+      });
   }
   return result;
 }

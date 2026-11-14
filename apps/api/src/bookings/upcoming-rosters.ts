@@ -30,6 +30,7 @@ export async function attachUpcomingRosters(
     const { card, generatedAt } = snapshot;
     if (card.capacity.total !== 2 && card.capacity.total !== 4)
       return { ...item, roster: { state: 'UNAVAILABLE' as const } };
+    if (generatedAt === null) return { ...item, roster: { state: 'UNAVAILABLE' as const } };
     const age = Date.parse(input.now) - Date.parse(generatedAt);
     const maxAge = 60_000 + (input.maxStaleSeconds ?? 300) * 1_000;
     if (!Number.isFinite(age) || age < 0 || age > maxAge)

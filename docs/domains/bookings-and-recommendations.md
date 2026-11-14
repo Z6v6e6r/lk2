@@ -144,11 +144,18 @@ legacy items without it stay unavailable until the existing booking read refresh
 The upcoming GET reads at most 50 unique game projections in one tenant-scoped batch and
 reuses the game-detail visibility policy. It additionally requires a viewer relationship;
 an unrelated public-game viewer does not receive participant identities through this endpoint.
-Participants, open seats, capacity, revision and projection timestamp describe one game snapshot.
-`roster.state` is READY for a projection no older than 60 seconds, STALE for at most the configured HOME_PROJECTION_MAX_STALE_SECONDS beyond that, or
-UNAVAILABLE when expired, unlinked, denied or missing. READY measures local projection age, not confirmed
-Viva freshness. No provider refresh or roster mutation is initiated by enrichment.
+Participants, open seats, capacity and revision describe one game snapshot. The batch read
+requires the current aggregate revision/lifecycle/visibility to agree with that projection.
+For a legacy-imported Game, freshness comes from the last successful source reconciliation:
+`MIRROR`, no conflict, the same aggregate revision and a synced/no-error source mapping with the
+same source version. A bootstrap or unchanged, fully compared source read refreshes verification
+without changing the Game revision, card timestamp, audit history or outbox. A quarantined or
+revision-mismatched roster is unavailable even when the card was just projected. Non-legacy Games
+retain their projection timestamp policy.
+`roster.state` is READY for verification no older than 60 seconds, STALE for at most the configured
+HOME_PROJECTION_MAX_STALE_SECONDS beyond that, or UNAVAILABLE when expired, unlinked, denied or
+missing. This proves the configured legacy source read, not a fresh Viva booking/payment read. No provider refresh or roster mutation is initiated by enrichment.
 The enriched response is private/no-store and its version includes roster content. A roster read
 failure is logged as `upcoming_roster_read_failed` and leaves bookings usable without roster data.
 The UI never infers four free places from missing participants; it only renders explicitly supplied
-open seats and labels stale/unavailable rosters. Existing mock and legacy fields remain compatible.
+open seats and visibly labels stale/unavailable rosters. An unavailable roster renders no decorative free-seat buttons. Existing mock and legacy fields remain compatible.

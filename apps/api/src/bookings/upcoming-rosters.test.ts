@@ -141,6 +141,33 @@ describe('upcoming roster snapshots', () => {
       expect(result.items[0]?.openSlots).toBeUndefined();
     },
   );
+  it('uses fresh source verification for an unchanged day-old card, preserving its original revision', async () => {
+    const value = {
+      ...projection(snapshot()),
+      projectedAt: '2026-07-16T20:00:00.000Z',
+      rosterVerifiedAt: now,
+    };
+    const result = await attachUpcomingRosters(booking, { repository: repository(value), now });
+    expect(result.items[0]).toMatchObject({
+      roster: { state: 'READY', generatedAt: now, revision: 3 },
+      participants: [{ displayName: 'Алексей' }, { displayName: 'Мария' }],
+    });
+  });
+  it('does not expose a quarantined or revision-mismatched card even if it was projected just now', async () => {
+    const value = { ...projection(snapshot()), projectedAt: now, rosterVerifiedAt: null };
+    const result = await attachUpcomingRosters(booking, { repository: repository(value), now });
+    expect(result.items[0]?.roster?.state).toBe('UNAVAILABLE');
+    expect(result.items[0]?.participants).toBeUndefined();
+  });
+  it('does not replace expired source verification with a recent projection timestamp', async () => {
+    const value = {
+      ...projection(snapshot()),
+      projectedAt: now,
+      rosterVerifiedAt: '2026-07-16T20:00:00.000Z',
+    };
+    const result = await attachUpcomingRosters(booking, { repository: repository(value), now });
+    expect(result.items[0]?.roster?.state).toBe('UNAVAILABLE');
+  });
   it('labels an old projection stale instead of refreshing its timestamp', async () => {
     const result = await attachUpcomingRosters(booking, {
       repository: repository(),

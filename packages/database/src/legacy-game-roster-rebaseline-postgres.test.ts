@@ -3,9 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { createGameRepository } from './game-repository.js';
 import { withTenantTransaction } from './connection.js';
 import {
   createLegacyGameImportRepository,
+  attestExactRosterPlayerMappings,
   type LegacyGameImportSnapshot,
 } from './legacy-game-import-repository.js';
 
@@ -135,12 +137,16 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
     await tolerate(() =>
       withTenantTransaction(pool, tenantId, async (client) => {
         for (const table of [
+          'games.scheduled_commands',
+          'games.card_projections',
           'games.participations',
           'integration.legacy_game_roster_sync_state',
           'integration.external_entity_map',
+          'audit.inbox_events',
           'audit.outbox_events',
           'audit.audit_log',
           'games.games',
+          'profile.user_summaries',
           'identity.users',
         ]) {
           await client.query(`delete from ${table} where tenant_id = $1`, [tenantId]);
@@ -235,5 +241,245 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
     expect(freshRepair.rebaselined).toEqual([]);
     expect(freshRepair.deferred).toEqual([]);
     expect(freshRepair.skipped).toBe(1);
+  });
+  it('bootstraps aliases once and verifies an unchanged old card without changing its revision', async () => {
+    const original = snapshot({ label: 'alias-heartbeat', players: 2, capacity: 4 });
+    const aliased = {
+      ...original,
+      participants: original.participants.map((p) => ({
+        ...p,
+        externalAliases: ['raw-' + p.externalId],
+      })),
+    };
+    const imported = await repository.importSnapshots({
+      tenantKey,
+      snapshots: [aliased],
+      correlationId: 'alias-heartbeat-import',
+    });
+    const gameId = imported.imported[0]!.gameId;
+    const cards = createGameRepository(pool);
+    await cards.projectCardEvent({
+      tenantId,
+      gameId,
+      eventId: imported.imported[0]!.projectionEventId,
+    });
+    expect(
+      (
+        await repository.synchronizeParticipants({
+          tenantKey,
+          snapshots: [aliased],
+          correlationId: 'alias-heartbeat-bootstrap',
+        })
+      ).bootstrapped,
+    ).toBe(1);
+    const baseline = await cards.getCardProjections!(tenantId, [gameId]);
+    expect(baseline.get(gameId)?.rosterVerifiedAt).toBeTruthy();
+    await withTenantTransaction(pool, tenantId, async (c) => {
+      await c.query(
+        "update games.card_projections set projected_at=now()-interval '1 day' where tenant_id=$1 and game_id=$2",
+        [tenantId, gameId],
+      );
+      await c.query(
+        "update integration.legacy_game_roster_sync_state set last_synced_at=now()-interval '1 day' where tenant_id=$1 and game_id=$2",
+        [tenantId, gameId],
+      );
+    });
+    const before = await auditActions(gameId);
+    expect(
+      (
+        await repository.synchronizeParticipants({
+          tenantKey,
+          snapshots: [aliased],
+          correlationId: 'alias-heartbeat-unchanged',
+        })
+      ).unchanged,
+    ).toBe(1);
+    const refreshed = (await cards.getCardProjections!(tenantId, [gameId])).get(gameId)!;
+    expect(Date.parse(refreshed.rosterVerifiedAt!)).toBeGreaterThan(Date.now() - 60_000);
+    expect(Date.parse(refreshed.projectedAt)).toBeLessThan(Date.now() - 23 * 3_600_000);
+    expect(refreshed.aggregateRevision).toBe(1);
+    expect(await auditActions(gameId)).toEqual(before);
+    await quarantine(gameId, aliased.externalVersion);
+    expect(
+      (await cards.getCardProjections!(tenantId, [gameId])).get(gameId)?.rosterVerifiedAt,
+    ).toBeNull();
+    await withTenantTransaction(pool, tenantId, (c) =>
+      c.query(
+        "update integration.legacy_game_roster_sync_state set mode='MIRROR',conflict_code=null where tenant_id=$1 and game_id=$2",
+        [tenantId, gameId],
+      ),
+    );
+    await withTenantTransaction(pool, tenantId, (c) =>
+      c.query('update games.games set revision=revision+1 where tenant_id=$1 and id=$2', [
+        tenantId,
+        gameId,
+      ]),
+    );
+    expect(
+      (await cards.getCardProjections!(tenantId, [gameId])).get(gameId)?.rosterVerifiedAt,
+    ).toBeNull();
+  });
+  it('preserves existing profile values and timestamps during an audited repair', async () => {
+    const original = snapshot({ label: 'preserve-profile', players: 2, capacity: 4 });
+    const aliased = {
+      ...original,
+      participants: original.participants.map((p) => ({
+        ...p,
+        externalAliases: ['raw-' + p.externalId],
+      })),
+    };
+    const imported = await repository.importSnapshots({
+      tenantKey,
+      snapshots: [aliased],
+      correlationId: 'preserve-profile-import',
+    });
+    const gameId = imported.imported[0]!.gameId;
+    await quarantine(gameId, aliased.externalVersion);
+    const names = await withTenantTransaction(pool, tenantId, async (c) => {
+      await c.query(
+        "update profile.user_summaries set display_name='Сохранённое имя' where tenant_id=$1",
+        [tenantId],
+      );
+      return (
+        await c.query<{ user_id: string; display_name: string; updated_at: Date }>(
+          'select user_id,display_name,updated_at from profile.user_summaries where tenant_id=$1 order by user_id',
+          [tenantId],
+        )
+      ).rows;
+    });
+    const repaired = await repository.rebaselineParticipants({
+      tenantKey,
+      snapshots: [aliased],
+      correlationId: 'preserve-profile-repair',
+    });
+    expect(repaired.rebaselined).toHaveLength(1);
+    expect(
+      await withTenantTransaction(
+        pool,
+        tenantId,
+        async (c) =>
+          (
+            await c.query<{ user_id: string; display_name: string; updated_at: Date }>(
+              'select user_id,display_name,updated_at from profile.user_summaries where tenant_id=$1 order by user_id',
+              [tenantId],
+            )
+          ).rows,
+      ),
+    ).toEqual(names);
+  });
+  it('fences an additive participant identity in PostgreSQL and never creates a replacement account', async () => {
+    const original = snapshot({ label: 'exact-identity-cas', players: 2, capacity: 4 });
+    const expanded = {
+      ...original,
+      externalVersion: 'c'.repeat(64),
+      participants: [
+        ...original.participants,
+        {
+          ...original.participants[1]!,
+          externalId: 'exact-identity-third',
+          displayName: 'Третий участник',
+        },
+      ],
+    };
+    const first = await repository.importSnapshots({
+      tenantKey,
+      snapshots: [original],
+      correlationId: 'exact-identity-target-import',
+    });
+    const gameId = first.imported[0]!.gameId;
+    await repository.importSnapshots({
+      tenantKey,
+      snapshots: [
+        {
+          ...expanded,
+          externalId: original.externalId + '-registry',
+          vivaExerciseExternalId: randomUUID(),
+        },
+      ],
+      correlationId: 'exact-identity-registry-import',
+    });
+    await quarantine(gameId, 'b'.repeat(64));
+    const aliases = expanded.participants.map((p) => p.externalId);
+    const identities = await withTenantTransaction(
+      pool,
+      tenantId,
+      async (c) =>
+        (
+          await c.query<{
+            external_id: string;
+            internal_id: string;
+            sync_status: string;
+            sync_error_code: string | null;
+          }>(
+            "select external_id,internal_id,sync_status,sync_error_code from integration.external_entity_map where tenant_id=$1 and external_system='LK_LEGACY_SNAPSHOT' and entity_type='game_player' and external_id=any($2::text[])",
+            [tenantId, aliases],
+          )
+        ).rows,
+    );
+    const expected = {
+      gameId,
+      revision: 1,
+      sourceVersion: expanded.externalVersion,
+      syncSourceVersion: 'b'.repeat(64),
+      playerMappingsSha256: attestExactRosterPlayerMappings(expanded, identities).sha256,
+    };
+    const extraUser = randomUUID();
+    await withTenantTransaction(pool, tenantId, async (c) => {
+      await c.query('insert into identity.users(id,tenant_id) values($1,$2)', [
+        extraUser,
+        tenantId,
+      ]);
+      await c.query(
+        "update integration.external_entity_map set internal_id=$3 where tenant_id=$1 and external_system='LK_LEGACY_SNAPSHOT' and entity_type='game_player' and external_id=$2",
+        [tenantId, 'exact-identity-third', extraUser],
+      );
+    });
+    const repair = {
+      tenantKey,
+      snapshots: [expanded],
+      correlationId: 'exact-identity-reviewed-operation',
+      allowLocalRemovals: false,
+      expected,
+    };
+    await expect(repository.rebaselineParticipants(repair)).rejects.toThrow(
+      'LEGACY_GAME_EXACT_REPAIR_DRIFT',
+    );
+    expect(await activeParticipants(gameId)).toBe(2);
+    expect(
+      (await auditActions(gameId)).includes('GAME_PARTICIPANTS_REBASELINED_FROM_LEGACY_SNAPSHOT'),
+    ).toBe(false);
+    const third = identities.find((row) => row.external_id === 'exact-identity-third')!;
+    await withTenantTransaction(pool, tenantId, (c) =>
+      c.query(
+        "update integration.external_entity_map set internal_id=$3 where tenant_id=$1 and external_system='LK_LEGACY_SNAPSHOT' and entity_type='game_player' and external_id=$2",
+        [tenantId, third.external_id, third.internal_id],
+      ),
+    );
+    const usersBefore = await withTenantTransaction(
+      pool,
+      tenantId,
+      async (c) =>
+        (
+          await c.query<{ count: string }>(
+            'select count(*)::text as count from identity.users where tenant_id=$1',
+            [tenantId],
+          )
+        ).rows[0]!.count,
+    );
+    expect((await repository.rebaselineParticipants(repair)).rebaselined).toHaveLength(1);
+    expect(await activeParticipants(gameId)).toBe(3);
+    expect(
+      await withTenantTransaction(
+        pool,
+        tenantId,
+        async (c) =>
+          (
+            await c.query<{ count: string }>(
+              'select count(*)::text as count from identity.users where tenant_id=$1',
+              [tenantId],
+            )
+          ).rows[0]!.count,
+      ),
+    ).toBe(usersBefore);
   });
 });
