@@ -233,6 +233,8 @@ export interface StoredGame {
 export interface StoredGameCardProjection {
   /** Private, same-statement/revision canonical evidence; never a public payment heuristic. */
   readonly localCancellationOrganizerUserId?: string | null;
+  /** Private evidence from the current aggregate/source reconciliation, never card creation age. */
+  readonly rosterVerifiedAt?: string | null;
   readonly gameId: string;
   readonly aggregateRevision: number;
   readonly projectionRevision: number;
@@ -524,6 +526,7 @@ interface CanonicalGameLevelRow extends QueryResultRow {
 
 interface ProjectionRow extends QueryResultRow {
   readonly local_cancellation_organizer_user_id?: string | null;
+  readonly roster_verified_at?: Date | string | null;
   readonly game_id: string;
   readonly aggregate_revision: string | number;
   readonly projection_revision: string | number;
@@ -679,6 +682,12 @@ function localCancellationOrganizerSql(projection: 'games.card_projections' | 'p
 function mapProjection(row: ProjectionRow): StoredGameCardProjection {
   return {
     localCancellationOrganizerUserId: row.local_cancellation_organizer_user_id ?? null,
+    ...(row.roster_verified_at !== undefined
+      ? {
+          rosterVerifiedAt:
+            row.roster_verified_at === null ? null : timestamp(row.roster_verified_at),
+        }
+      : {}),
     gameId: row.game_id,
     aggregateRevision: positiveInteger(row.aggregate_revision),
     projectionRevision: positiveInteger(row.projection_revision),
@@ -1509,7 +1518,28 @@ export function createGameRepository(
         const result = await client.query<ProjectionRow & { requested_id: string }>(
           `select requested.id as requested_id, p.game_id, p.aggregate_revision, p.projection_revision, p.lifecycle_state,
                   p.visibility, p.starts_at, p.ends_at, p.base_payload, p.projected_at,
-                  ${localCancellationOrganizerSql('p')}
+                  ${localCancellationOrganizerSql('p')},
+                  (select case
+                     when g.revision = p.aggregate_revision
+                       and g.lifecycle_state = p.lifecycle_state and g.visibility = p.visibility
+                     then case when exists (
+                       select 1 from integration.external_entity_map origin
+                        where origin.tenant_id = g.tenant_id and origin.internal_id = g.id
+                          and origin.external_system = 'LK_LEGACY_SNAPSHOT' and origin.entity_type = 'game'
+                     ) then (
+                       select s.last_synced_at from integration.legacy_game_roster_sync_state s
+                        where s.tenant_id = g.tenant_id and s.game_id = g.id and s.mode = 'MIRROR' and s.conflict_code is null
+                          and s.last_synced_game_revision = p.aggregate_revision
+                          and exists (
+                            select 1 from integration.external_entity_map verified
+                             where verified.tenant_id = g.tenant_id and verified.internal_id = g.id
+                               and verified.external_system = 'LK_LEGACY_SNAPSHOT' and verified.entity_type = 'game'
+                               and verified.external_version = s.source_external_version
+                               and verified.sync_status = 'synced' and verified.sync_error_code is null
+                          )
+                     ) else p.projected_at end else null end
+                     from games.games g where g.tenant_id = p.tenant_id and g.id = p.game_id
+                  ) as roster_verified_at
              from unnest($2::uuid[]) as requested(id)
              left join integration.legacy_game_merge_redirects r
                on r.tenant_id = $1 and r.source_game_id = requested.id

@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import type * as NativeFs from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
 
 const legacySha = '759083e37b4026f9690a3775a391f59f68f716a5';
 const components = ['api', 'web', 'worker', 'realtime', 'migrator'];
@@ -83,6 +84,519 @@ function scenario(body: string) {
   });
   expect(result.status, result.stderr).toBe(0);
 }
+const rosterOperation = String.raw`
+  const profile=await import('./scripts/timeweb-production-cutover.js');
+  const engine=await import('./scripts/timeweb-api-web-upgrade.js');
+  op.schema=profile.ROSTER_CUTOVER_OPERATION;
+  op.expectedWorker={id:b.containers.worker.id,image:b.containers.worker.image,releaseId:null};
+  const rosterConfirm=()=>{op.confirmation='CUTOVER_PRODUCTION_API_WORKER_WEB_'+op.candidateSha.slice(0,12).toUpperCase()+'_FROM_'+legacyBaselineHash(b).slice(0,12).toUpperCase()+'_KEEP_DATA_AND_ACCOUNTS';};rosterConfirm();
+`;
+describe('three-service roster cutover inside the existing canonical controller', () => {
+  it('binds the Worker preimage and cannot be relabeled as the old API/Web operation', () => {
+    scenario(`${rosterOperation}
+      assert.equal(validateApiWebOperation(op),op);
+      for(const mutation of [v=>delete v.expectedWorker,v=>v.expectedWorker.id='f'.repeat(64),v=>v.expectedWorker.image='ghcr.io/z6v6e6r/phub-worker@sha256:'+'f'.repeat(64),v=>v.expectedWorker.releaseId='release',v=>v.expectedWorker.extra=true,v=>v.schema='PHUB_TIMEWEB_API_WEB_PRODUCTION_CUTOVER_V1',v=>v.confirmation=v.confirmation.replace('API_WORKER_WEB_','')]){const bad=structuredClone(op);mutation(bad);assert.throws(()=>validateApiWebOperation(bad));}
+      assert.equal(profile.cutoverPlanSchema(op),profile.ROSTER_CUTOVER_PLAN);
+      assert.equal(profile.cutoverReceiptSchema(op),profile.ROSTER_CUTOVER_RECEIPT);`);
+  });
+  it('renders only explicit Worker stages and smoke checks both immutable entrypoints without network', () => {
+    scenario(`${rosterOperation}
+      const image='ghcr.io/z6v6e6r/phub-worker@sha256:'+'9'.repeat(64);
+      for(const action of ['config','pull','up']){
+        assert.throws(()=>engine.apiWebComposeArgs('/baseline','/overlay',action,'worker'));
+        const args=engine.apiWebComposeArgs('/baseline','/overlay',action,'worker',true);
+        assert.ok(args.includes('--profile'));assert.ok(!args.includes('build'));
+        if(action==='up')assert.deepEqual(args.slice(-4),['up','-d','--no-deps','worker']);
+      }
+      for(const s of ['realtime','migrator'])assert.throws(()=>engine.apiWebComposeArgs('/b','/o','up',s,true));
+      assert.throws(()=>engine.apiWebArtifactSmokeArgs('worker',image));
+      const smoke=engine.apiWebArtifactSmokeArgs('worker',image,true);assert.ok(smoke.includes('none'));assert.ok(smoke.includes('--read-only'));assert.ok(smoke.at(-1).includes('dist/main.js'));assert.ok(smoke.at(-1).includes('dist/repair-legacy-game-rosters.js'));
+      const p={candidate:{api:{image:b.containers.api.image,releaseId:op.candidateSha+'-101-1'},web:{image:b.containers.web.image},worker:{image,releaseId:null,revision:op.candidateSha}},previous:b.containers,secretSetReleaseId:b.secretSetReleaseId,unchangedServiceImages:{realtime:b.containers.realtime.image},legacyBaselineSha256:legacyBaselineHash(b)};
+      const candidate=engine.overlayBytes(p,'candidate');assert.ok(candidate.includes('WORKER_IMAGE_DIGEST='+image.split('@')[1]));assert.ok(!candidate.includes('PHUB_WORKER_ENABLED'));
+      assert.equal(engine.overlayBytes(p,'previous-worker'),'PHUB_RELEASE_ID='+b.containers.api.releaseId+'\\nWORKER_IMAGE_DIGEST='+b.containers.worker.image.split('@')[1]+'\\n');
+      engine.validateUnchangedImages(p.unchangedServiceImages,true);assert.throws(()=>engine.validateUnchangedImages({...p.unchangedServiceImages,worker:image},true));
+      const descriptor=buildApiWebInstalledDescriptor({},p,op.candidateSha+'-101-1','/synthetic/rollout-receipt.json').toString();assert.ok(descriptor.includes('PHUB_COMPONENT_ROLLOUT_KIND='+profile.ROSTER_CUTOVER_KIND+'\\n'));assert.ok(descriptor.includes('WORKER_IMAGE_DIGEST='+image.split('@')[1]));`);
+  });
+  const lifecycle = String.raw`
+    const calls=[];let failed=false;
+    const call=async label=>{calls.push(label);if(label===failure&&!failed){failed=true;throw Error('injected:'+label);}};
+    const ops={workerMode:'legacy-roster-cutover',preflight:()=>call('preflight'),pullAndSmoke:()=>call('pull'),journal:s=>call('journal:'+s),containWorker:()=>call('contain'),activate:s=>call('activate:'+s),observe:()=>call('observe'),attest:()=>call('attest'),installBaseline:()=>call('baseline'),restore:s=>call('restore:'+s),removeCandidateBaseline:()=>call('removeBaseline'),attestRestored:()=>call('restored'),abort:()=>call('abort')};
+  `;
+  it('journals containment before API, Worker and Web activation and seals all three together', () => {
+    scenario(`${rosterOperation}const failure='';${lifecycle}
+      await runApiWebTransition(ops);assert.deepEqual(calls,['preflight','pull','journal:PREPARED','journal:WORKER_STOP_INTENT','contain','journal:WORKER_STOPPED','journal:API_INTENT','activate:api','journal:API_ACTIVE','journal:WORKER_INTENT','activate:worker','journal:WORKER_ACTIVE','journal:WEB_INTENT','activate:web','journal:OBSERVING','observe','attest','journal:BASELINE_INTENT','baseline','journal:SUCCESS']);`);
+  });
+  it('recovers every injected boundary failure and lost acknowledgement in one isolated runtime', () => {
+    const failures = [
+      'preflight',
+      'pull',
+      'journal:PREPARED',
+      'journal:WORKER_STOP_INTENT',
+      'contain',
+      'journal:WORKER_STOPPED',
+      'journal:API_INTENT',
+      'activate:api',
+      'journal:API_ACTIVE',
+      'journal:WORKER_INTENT',
+      'activate:worker',
+      'journal:WORKER_ACTIVE',
+      'journal:WEB_INTENT',
+      'activate:web',
+      'journal:OBSERVING',
+      'observe',
+      'attest',
+      'journal:BASELINE_INTENT',
+      'baseline',
+      'journal:SUCCESS',
+    ];
+    scenario(`${rosterOperation}for(const failure of ${JSON.stringify(failures)}){${lifecycle}
+      await assert.rejects(()=>runApiWebTransition(ops),/injected/);
+      if(['preflight','pull','journal:PREPARED'].includes(failure)){assert.ok(calls.includes('abort'));assert.ok(!calls.includes('contain'));assert.equal(calls.at(-1),'journal:ABORTED');}
+      else{const index=calls.indexOf('journal:ROLLBACK_INTENT');assert.ok(index>=0,failure);assert.deepEqual(calls.slice(index),['journal:ROLLBACK_INTENT','contain','restore:web','restore:api','restore:worker','removeBaseline','restored','journal:ROLLED_BACK'],failure);}}`);
+  });
+  it('recovers every durable phase without replaying forward activation', () => {
+    const phases = [
+      'WORKER_STOP_INTENT',
+      'WORKER_STOPPED',
+      'API_INTENT',
+      'API_ACTIVE',
+      'WORKER_INTENT',
+      'WORKER_ACTIVE',
+      'WEB_INTENT',
+      'OBSERVING',
+      'BASELINE_INTENT',
+      'ROLLBACK_INTENT',
+      'ROLLBACK_FAILED',
+    ];
+    scenario(`${rosterOperation}for(const phase of ${JSON.stringify(phases)}){const failure='';${lifecycle}
+      assert.equal(await engine.recoverApiWebPhase(phase,ops),'ROLLED_BACK',phase);assert.deepEqual(calls,['journal:ROLLBACK_INTENT','contain','restore:web','restore:api','restore:worker','removeBaseline','restored','journal:ROLLED_BACK'],phase);
+      if(${JSON.stringify(['WORKER_STOP_INTENT', 'WORKER_STOPPED', 'WORKER_INTENT', 'WORKER_ACTIVE', 'BASELINE_INTENT'])}.includes(phase)){delete ops.workerMode;await assert.rejects(()=>engine.recoverApiWebPhase(phase,ops),/invalid_recovery_phase/);}}`);
+  });
+  it('retains failed rollback for each containment and component restoration failure', () => {
+    scenario(`${rosterOperation}for(const failure of ['contain','restore:web','restore:api','restore:worker']){${lifecycle}
+      await assert.rejects(()=>engine.recoverApiWebTransition(ops),/rollback_failed/);for(const service of ['web','api','worker'])assert.equal(calls.includes('restore:'+service),failure!=='contain',failure);assert.equal(calls.at(-1),'journal:ROLLBACK_FAILED',failure);assert.ok(!calls.includes('journal:ROLLED_BACK'),failure);}`);
+  });
+  it('contains only an exact recognized Worker, including a stopped Worker after lost stop ACK', () => {
+    scenario(`${rosterOperation}
+      const plan={previous:{worker:b.containers.worker},candidate:{worker:{image:'ghcr.io/z6v6e6r/phub-worker@sha256:'+'9'.repeat(64),releaseId:null,revision:op.candidateSha}}};
+      const v=b.containers.worker;let state={Id:v.id,Image:v.imageId,Config:{Image:v.image,Labels:{'phub.release-id':null,'org.opencontainers.image.revision':null}},State:{Status:'running',Running:true}};
+      const actions=[];const docker=args=>{actions.push(args);if(args[0]==='ps')return v.id;if(args[0]==='inspect')return JSON.stringify([state]);if(args[0]==='image')return JSON.stringify([{Id:v.imageId,RepoDigests:[v.image]}]);if(args[0]==='stop'){state.State={Status:'exited',Running:false};return v.id;}throw Error('unexpected');};
+      assert.equal(engine.containRosterCutoverWorker(plan,docker),v.id);assert.equal(actions.filter(a=>a[0]==='stop').length,1);engine.containRosterCutoverWorker(plan,docker);assert.equal(actions.filter(a=>a[0]==='stop').length,1);
+      for(const mutate of [s=>s.Config.Image='foreign',s=>s.Config.Labels['org.opencontainers.image.revision']='f'.repeat(40),s=>s.Config.Labels['phub.release-id']='foreign',s=>s.Image='sha256:'+'e'.repeat(64)]){const saved=structuredClone(state);mutate(state);assert.throws(()=>engine.containRosterCutoverWorker(plan,docker));state=saved;}
+      assert.throws(()=>engine.containRosterCutoverWorker(plan,args=>args[0]==='ps'?'':docker(args)),/containment_count/);`);
+  });
+  it('rejects mismatched installed kinds and malformed or short three-service observations', () => {
+    scenario(`${rosterOperation}
+      engine.validateInstalledCutoverKind('API_WEB','PHUB_TIMEWEB_API_WEB_RECEIPT_V1');
+      assert.throws(()=>engine.validateInstalledCutoverKind(profile.ROSTER_CUTOVER_KIND,'PHUB_TIMEWEB_API_WEB_RECEIPT_V1'));
+      assert.throws(()=>engine.validateInstalledCutoverKind('API_WEB',profile.ROSTER_CUTOVER_RECEIPT));
+      engine.validateInstalledCutoverKind(profile.ROSTER_CUTOVER_KIND,profile.ROSTER_CUTOVER_RECEIPT);
+      const value={windowSeconds:900,samplesPerService:61,latencyMs:{api:Array(61).fill(1),worker:Array(61).fill(1),web:Array(61).fill(1)},serverErrors:0,startedAt:'2026-11-13T17:00:00.000Z',completedAt:'2026-11-13T17:15:00.000Z',elapsedSeconds:900};
+      profile.validateRosterCutoverObservation(value,'2026-11-13T17:16:00.000Z');
+      for(const mutate of [v=>v.latencyMs.worker.pop(),v=>v.latencyMs.worker[0]=-1,v=>v.latencyMs.worker[0]=10001,v=>v.latencyMs.web=Array(61).fill(1001),v=>v.serverErrors=1,v=>v.elapsedSeconds=899,v=>v.extra=true]){const bad=structuredClone(value);mutate(bad);assert.throws(()=>profile.validateRosterCutoverObservation(bad));}
+      assert.throws(()=>profile.validateRosterCutoverObservation(value,'2026-11-13T17:14:00.000Z'));`);
+  });
+});
+// The real retained-terminal controller runs against an entirely in-memory root/host fixture.
+// Unrelated monitoring parser semantics have their own suites; this fixture tests custody,
+// evidence hash binding, all three runtime identities and the actual lock-release path.
+it.each(['SUCCESS', 'ROLLED_BACK', 'ABORTED'] as const)(
+  'reconciles a real V2 %s controller transaction before releasing its retained lock',
+  async (terminal) => {
+    const { createHash } = await import('node:crypto');
+    const profile = await import('./timeweb-production-cutover.js');
+    const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+    const json = (value: unknown) => Buffer.from(JSON.stringify(value));
+    const root = '/opt/phub/timeweb-beta',
+      source = `${root}/standard/source`,
+      runtime = '/etc/phub/timeweb-beta';
+    const id = `${operation.candidateSha}-${operation.publicationRunId}-1`,
+      tx = `${root}/backups/${id}-api-web`;
+    const lockPath = `${root}/standard/active`,
+      receiptPath = `${tx}/rollout-receipt.json`;
+    const files = new Map<string, Buffer>();
+    const put = (path: string, value: string | Buffer) => files.set(path, Buffer.from(value));
+    const b = structuredClone(baseline);
+    for (const name of Object.keys(b.secretHashes)) {
+      const value =
+        name === '.release-identity.json'
+          ? json({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId: b.secretSetReleaseId })
+          : Buffer.from('SYNTHETIC=1\n');
+      put(`${runtime}/${name}`, value);
+      b.secretHashes[name] = hash(value);
+    }
+    const legacyEnv = Buffer.from(
+      `PHUB_RELEASE_ID=${b.containers.api!.releaseId}\nTIMEWEB_RUNTIME_ENV_ROOT=${runtime}\nTIMEWEB_FCM_CREDENTIAL_SOURCE=/etc/phub/timeweb-beta-fcm/fcm-service-account.json\n${b.buildRecords.map((v) => `${v.component.toUpperCase()}_IMAGE_DIGEST=${v.imageDigest}`).join('\n')}\n`,
+    );
+    b.releaseEnvSha256 = hash(legacyEnv);
+    put(`${root}/beta-lane/releases/${b.sourceSha}.env`, legacyEnv);
+    const laneCurrent = `${b.sourceSha}\n`,
+      laneHistory = `2026-11-12T10:00:00Z ${b.sourceSha}\n`;
+    put(`${root}/beta-lane/current`, laneCurrent);
+    put(`${root}/beta-lane/history`, laneHistory);
+    b.laneCurrentSha256 = hash(laneCurrent);
+    b.laneHistorySha256 = hash(laneHistory);
+    for (const record of b.buildRecords) {
+      const archive = Buffer.from('synthetic legacy build record');
+      record.archiveDigest = `sha256:${hash(archive)}`;
+      put(`${root}/legacy-baselines/${b.sourceSha}/build-${record.component}.tar.gz`, archive);
+    }
+    const producer = json({ synthetic: 'sealed producer request' }),
+      dump = Buffer.from('complete synthetic dump');
+    const op = {
+      ...operation,
+      schema: profile.ROSTER_CUTOVER_OPERATION,
+      legacyBaseline: b,
+      expectedWorker: {
+        id: b.containers.worker!.id,
+        image: b.containers.worker!.image,
+        releaseId: null,
+      },
+      backupOperationSha256: hash(producer),
+    };
+    op.confirmation = `CUTOVER_PRODUCTION_API_WORKER_WEB_${op.candidateSha.slice(0, 12).toUpperCase()}_FROM_${profile.legacyBaselineHash(b).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+    const backup = json({ backupSha256: hash(dump) }),
+      provider = json({ readAt: '2026-11-13T17:16:00.000Z', synthetic: 'provider' }),
+      alerts = json({ synthetic: 'alerts' });
+    const composePath = `${source}/deploy/timeweb/compose.beta.yaml`;
+    put(composePath, 'synthetic compose');
+    const plan = {
+      schema: profile.ROSTER_CUTOVER_PLAN,
+      operationSha256: hash(json(op)),
+      controllerSha: op.controllerSha,
+      manifestSha256: op.manifestSha256,
+      artifactDigest: op.artifactDigest,
+      composeSha256: hash(files.get(composePath)!),
+      legacyBaselineSha256: profile.legacyBaselineHash(b),
+      previous: { api: b.containers.api!, web: b.containers.web!, worker: b.containers.worker! },
+      candidate: Object.fromEntries(
+        ['api', 'worker', 'web'].map((service, n) => [
+          service,
+          {
+            image: `ghcr.io/z6v6e6r/phub-${service}@sha256:${String(n + 6).repeat(64)}`,
+            releaseId: service === 'worker' ? null : id,
+            ...(service === 'worker' ? { revision: op.candidateSha } : {}),
+          },
+        ]),
+      ),
+      excluded: [] as {
+        id: string;
+        image: string;
+        imageId: string;
+        restarts: number;
+        startedAt: string;
+        status: string;
+        health: string;
+      }[],
+      unchangedServiceImages: { realtime: b.containers.realtime!.image },
+      secretSetReleaseId: b.secretSetReleaseId,
+      baselineSha256: hash(legacyEnv),
+      secretHashes: Object.fromEntries(
+        ['api.env', 'worker.env', 'realtime.env', 'migrator.env', '.release-identity.json'].map(
+          (name) => [name, b.secretHashes[name]],
+        ),
+      ),
+      backup: {
+        path: `${tx}/database-backup-receipt.json`,
+        sha256: hash(backup),
+        receiptPath: `${tx}/database-backup-receipt.json`,
+        receiptSha256: hash(backup),
+        operationPath: `${tx}/backup-operation.json`,
+        operationSha256: hash(producer),
+        dumpSha256: hash(dump),
+      },
+      monitoring: { providerSha256: hash(provider), alertSha256: hash(alerts) },
+      createdAt: '2026-11-13T17:00:00.000Z',
+    };
+    const values = profile.legacyEnvironment(b, legacyEnv, {
+      schema: 'PHUB_TIMEWEB_SECRET_SET_V1',
+      releaseId: b.secretSetReleaseId,
+    });
+    const rows = Object.fromEntries(
+      ['api', 'worker', 'web', 'realtime'].map((service, n) => {
+        const legacy = b.containers[service]!;
+        const candidate = plan.candidate[service];
+        const selected =
+          terminal === 'SUCCESS' && candidate
+            ? {
+                ...legacy,
+                ...candidate,
+                id: String(n + 6).repeat(64),
+                imageId: `sha256:${String(n + 6).repeat(64)}`,
+                revision: op.candidateSha,
+              }
+            : legacy;
+        return [
+          service,
+          {
+            Id: selected.id,
+            Image: selected.imageId,
+            Config: {
+              Image: selected.image,
+              Labels: {
+                'com.docker.compose.project': 'phub-timeweb-beta',
+                'com.docker.compose.service': service,
+                'phub.release-id': selected.releaseId,
+                'org.opencontainers.image.revision': selected.revision,
+              },
+            },
+            State: {
+              Status: 'running',
+              Running: true,
+              Health: { Status: 'healthy' },
+              StartedAt: selected.startedAt,
+            },
+            RestartCount: 0,
+          },
+        ];
+      }),
+    );
+    plan.excluded = [
+      {
+        id: rows.realtime!.Id,
+        image: rows.realtime!.Config.Image,
+        imageId: rows.realtime!.Image,
+        restarts: 0,
+        startedAt: rows.realtime!.State.StartedAt,
+        status: 'running',
+        health: 'healthy',
+      },
+    ];
+    const observation = json({
+      windowSeconds: 900,
+      samplesPerService: 61,
+      latencyMs: { api: Array(61).fill(1), worker: Array(61).fill(1), web: Array(61).fill(1) },
+      serverErrors: 0,
+      startedAt: '2026-11-13T17:00:00.000Z',
+      completedAt: '2026-11-13T17:15:00.000Z',
+      elapsedSeconds: 900,
+    });
+    for (const [path, value] of [
+      [`${tx}/operation.json`, json(op)],
+      [`${tx}/plan.json`, json(plan)],
+      [`${tx}/legacy-predecessor-attestation.json`, json(b)],
+      [`${tx}/legacy-release.env`, legacyEnv],
+      [`${tx}/backup-operation.json`, producer],
+      [`${tx}/database-backup-receipt.json`, backup],
+      [`${tx}/database.pgcustom`, dump],
+      [`${tx}/timeweb-monitor-readback.json`, provider],
+      [`${tx}/alert-test-readback.json`, alerts],
+      [`${tx}/observation.json`, observation],
+      [`${root}/operator/api-web-upgrade.json`, json(op)],
+      [
+        '/etc/phub/timeweb-beta-standard-delivery.json',
+        json({ schema: 1, enabled: true, controllerSha: op.controllerSha }),
+      ],
+    ] as [string, Buffer][])
+      put(path, value);
+    put(`${tx}/backup.complete`, `${hash(json(plan))}\n`);
+    put(lockPath, `${tx}/plan.json\n`);
+    put(`${root}/observability/timeweb-monitor-readback.json`, provider);
+    put(`${root}/observability/alert-test-readback.json`, alerts);
+    put(`${source}/deploy/timeweb/api-web-observability.v1.json`, json({ synthetic: 'contract' }));
+    const descriptors = new Map<number, string>();
+    let nextFd = 100;
+    const stat = (path: string) => ({
+      uid: 0,
+      gid: 0,
+      mode: files.has(path)
+        ? path === composePath || path.endsWith('api-web-observability.v1.json')
+          ? 0o644
+          : 0o600
+        : 0o700,
+      nlink: 1,
+      ino: 1,
+      dev: 1,
+      size: files.get(path)?.length ?? 0,
+      isSymbolicLink: () => false,
+      isDirectory: () => !files.has(path),
+      isFile: () => files.has(path),
+    });
+    const inspected = new Set<string>();
+    const mutations: string[] = [];
+    vi.doMock('node:fs', async (importOriginal) => {
+      const actual = await importOriginal<typeof NativeFs>();
+      return {
+        ...actual,
+        existsSync: (path: string) => files.has(path),
+        lstatSync: stat,
+        openSync: (path: string, flags: number | string) => {
+          if (typeof flags === 'number' && flags & actual.constants.O_CREAT) put(path, '');
+          const fd = nextFd++;
+          descriptors.set(fd, path);
+          return fd;
+        },
+        fstatSync: (fd: number) => stat(descriptors.get(fd)!),
+        readFileSync: (path: string | number | URL, options?: 'utf8') => {
+          if (
+            typeof path !== 'number' &&
+            (typeof path !== 'string' ||
+              (!path.startsWith(root + '/') && !path.startsWith('/etc/phub/')))
+          )
+            return actual.readFileSync(path, options);
+          const name = typeof path === 'number' ? descriptors.get(path)! : path;
+          const value = files.get(name);
+          if (!value) throw Error('unexpected fixture read:' + name);
+          return value;
+        },
+        readSync: (fd: number, buffer: Buffer, offset: number, length: number, position: number) =>
+          files.get(descriptors.get(fd)!)!.copy(buffer, offset, position, position + length),
+        closeSync: (fd: number) => descriptors.delete(fd),
+        fsyncSync: () => {},
+        writeFileSync: (fd: number, value: string | Buffer) => put(descriptors.get(fd)!, value),
+        renameSync: (from: string, to: string) => {
+          put(to, files.get(from)!);
+          files.delete(from);
+        },
+        linkSync: (from: string, to: string) => put(to, files.get(from)!),
+        unlinkSync: (path: string) => {
+          if (path === lockPath)
+            expect(
+              (JSON.parse(files.get(receiptPath)!.toString()) as { status: string }).status,
+            ).toBe('RECONCILED');
+          files.delete(path);
+        },
+      };
+    });
+    vi.doMock('node:child_process', async (importOriginal) => ({
+      ...(await importOriginal<object>()),
+      execFileSync: (program: string, args: string[]) => {
+        if (program === '/usr/bin/git') {
+          if (args.includes('HEAD')) return op.controllerSha + '\n';
+          if (args.includes(`${op.candidateSha}^{tree}`)) return op.candidateTree + '\n';
+          if (args.includes(`${b.sourceSha}^{tree}`)) return b.sourceTree + '\n';
+          if (args.includes('status') || args.includes('ls-files') || args.includes('merge-base'))
+            return '';
+          throw Error('unexpected fixture git:' + args.join(' '));
+        }
+        if (program !== '/usr/bin/docker') throw Error('unexpected fixture command');
+        if (args[0] === 'ps') {
+          const service = args
+            .find((v) => v.startsWith('label=com.docker.compose.service='))
+            ?.split('=')
+            .at(-1);
+          return service
+            ? (rows[service]?.Id ?? '')
+            : Object.values(rows)
+                .map((v) => v.Id)
+                .join('\n');
+        }
+        if (args[0] === 'inspect') {
+          const entry = Object.entries(rows).find(([, v]) => v.Id === args[1]);
+          if (!entry) throw Error('foreign fixture container');
+          inspected.add(entry[0]);
+          return JSON.stringify([entry[1]]);
+        }
+        mutations.push(args.join(' '));
+        throw Error('unexpected fixture Docker write');
+      },
+    }));
+    vi.doMock('./produce-timeweb-api-web-observability-evidence.js', () => ({
+      validateTimewebMonitorReadback: () => ({}),
+      validateTimewebAlertReadback: () => ({}),
+    }));
+    vi.doMock('./verify-timeweb-api-web-observability.js', () => ({
+      validateTimewebMonitoringEvidence: () => {},
+    }));
+    const uid = vi.spyOn(process, 'getuid').mockReturnValue(0);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      status: 200,
+      text: () => Promise.resolve('<div id="phub-app"></div>'),
+    } as Response);
+    try {
+      vi.resetModules();
+      const controller = await import('./timeweb-api-web-upgrade.js');
+      for (const name of ['candidate', 'previous-api', 'previous-worker', 'previous-web'])
+        put(`${tx}/${name}.env`, controller.overlayBytes(plan, name));
+      const descriptor = controller.buildApiWebInstalledDescriptor(values, plan, id, receiptPath);
+      if (terminal === 'SUCCESS')
+        put(`${root}/releases/${id}/installed-components.env`, descriptor);
+      const receipt = {
+        schema: profile.ROSTER_CUTOVER_RECEIPT,
+        status: terminal,
+        planSha256: hash(json(plan)),
+        legacyBaselineSha256: profile.legacyBaselineHash(b),
+        observedAt: '2026-11-13T17:16:00.000Z',
+        ...(terminal === 'SUCCESS'
+          ? {
+              installedBaselineSha256: hash(descriptor),
+              observationSha256: hash(observation),
+              providerReadbackSha256: hash(provider),
+              alertReadbackSha256: hash(alerts),
+            }
+          : {}),
+      };
+      put(receiptPath, json(receipt));
+      if (terminal === 'SUCCESS') {
+        // Direct reader negatives avoid readiness retry delays and prove terminal identity gates.
+        for (const mutate of [
+          (v: NonNullable<typeof rows.worker>) => (v.RestartCount = 1),
+          (v: NonNullable<typeof rows.worker>) =>
+            (v.Config.Labels['org.opencontainers.image.revision'] = 'e'.repeat(40)),
+          (v: NonNullable<typeof rows.worker>) => (v.Config.Labels['phub.release-id'] = id),
+          (v: NonNullable<typeof rows.worker>) =>
+            (v.Config.Image = 'ghcr.io/z6v6e6r/phub-worker@sha256:' + '0'.repeat(64)),
+        ]) {
+          const saved = structuredClone(rows.worker!);
+          mutate(rows.worker!);
+          expect(() => controller.readInstalledApiBaseline(id)).toThrow();
+          rows.worker = saved;
+          expect(files.get(receiptPath)!.equals(json(receipt))).toBe(true);
+          expect(files.has(lockPath)).toBe(true);
+        }
+        put(
+          `${tx}/observation.json`,
+          json({
+            ...(JSON.parse(observation.toString()) as Record<string, unknown>),
+            samplesPerService: 60,
+          }),
+        );
+        expect(() => controller.readInstalledApiBaseline(id)).toThrow();
+        put(`${tx}/observation.json`, observation);
+      } else {
+        const path = `${root}/releases/${id}/installed-components.env`;
+        put(path, descriptor);
+        await expect(
+          controller.runManualApiWebUpgrade('reconcile', `${root}/operator/api-web-upgrade.json`),
+        ).rejects.toThrow('non_success_candidate_descriptor');
+        expect(files.get(receiptPath)!.equals(json(receipt))).toBe(true);
+        expect(files.has(lockPath)).toBe(true);
+        files.delete(path);
+      }
+      const result = await controller.runManualApiWebUpgrade(
+        'reconcile',
+        `${root}/operator/api-web-upgrade.json`,
+      );
+      expect(result.status).toBe('RECONCILED');
+      expect(files.has(lockPath)).toBe(false);
+      const reconciled = JSON.parse(files.get(receiptPath)!.toString()) as Record<string, unknown>;
+      const { observedAt, ...preservedReceipt } = receipt;
+      expect(reconciled).toMatchObject({
+        ...preservedReceipt,
+        status: 'RECONCILED',
+        reconciledStatus: terminal,
+      });
+      expect(Date.parse(String(reconciled.observedAt))).toBeGreaterThanOrEqual(
+        Date.parse(observedAt),
+      );
+      expect([...inspected]).toEqual(expect.arrayContaining(['api', 'worker', 'web']));
+      expect(mutations).toEqual([]);
+    } finally {
+      uid.mockRestore();
+      fetch.mockRestore();
+      for (const name of [
+        'node:fs',
+        'node:child_process',
+        './produce-timeweb-api-web-observability-evidence.js',
+        './verify-timeweb-api-web-observability.js',
+      ])
+        vi.doUnmock(name);
+      vi.resetModules();
+    }
+  },
+  30000,
+);
+
 describe('explicit production cutover from the observed noncanonical predecessor', () => {
   it('admits only the explicit new schema and leaves ordinary baseline readers closed', () => {
     scenario(

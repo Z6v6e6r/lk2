@@ -79,7 +79,7 @@ function poolWithHandler(
         rowCount: stationAdmissible ? 1 : 0,
       });
     }
-    if (text.includes('from integration.external_entity_map')) {
+    if (text.includes('from integration.external_entity_map') && !text.includes('from unnest')) {
       return Promise.resolve({
         rows: courtAdmissible ? [{ internal_id: values[1] }] : [],
         rowCount: courtAdmissible ? 1 : 0,

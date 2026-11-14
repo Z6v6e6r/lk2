@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   gameDomainEventSchema,
@@ -84,6 +84,63 @@ export interface LegacyGameRosterRebaselineResult {
   readonly skipped: number;
 }
 
+export interface LegacyGameExactRepairFence {
+  readonly gameId: string;
+  readonly revision: number;
+  readonly sourceVersion: string;
+  readonly syncSourceVersion: string;
+  readonly playerMappingsSha256: string;
+}
+
+export interface LegacyGameExactPlayerMapping {
+  readonly external_id: string;
+  readonly internal_id: string;
+  readonly sync_status: string;
+  readonly sync_error_code: string | null;
+}
+
+/** Private identity preimage, shared by the read-only plan and the locked exact repair.
+ * Exact recovery adopts existing synced aliases only; it never creates or rebinds an account.
+ */
+export function attestExactRosterPlayerMappings(
+  snapshot: Pick<LegacyGameImportSnapshot, 'participants'>,
+  rows: readonly LegacyGameExactPlayerMapping[],
+): { readonly sha256: string; readonly users: ReadonlyMap<string, string> } {
+  const aliases = new Set(
+    snapshot.participants.flatMap((p) => canonicalAndAliases(p.externalId, p.externalAliases)),
+  );
+  if (
+    rows.length !== aliases.size ||
+    new Set(rows.map((r) => r.external_id)).size !== rows.length ||
+    rows.some(
+      (r) =>
+        !aliases.has(r.external_id) ||
+        !r.internal_id ||
+        r.sync_status !== 'synced' ||
+        r.sync_error_code !== null,
+    )
+  )
+    throw new Error('LEGACY_GAME_EXACT_REPAIR_IDENTITY');
+  const byAlias = new Map(rows.map((r) => [r.external_id, r.internal_id]));
+  const users = new Map<string, string>();
+  for (const participant of snapshot.participants) {
+    const owners = new Set(
+      canonicalAndAliases(participant.externalId, participant.externalAliases).map((a) =>
+        byAlias.get(a),
+      ),
+    );
+    if (owners.size !== 1 || owners.has(undefined))
+      throw new Error('LEGACY_GAME_EXACT_REPAIR_IDENTITY');
+    users.set(participant.externalId, [...owners][0]!);
+  }
+  if (users.size !== snapshot.participants.length || new Set(users.values()).size !== users.size)
+    throw new Error('LEGACY_GAME_EXACT_REPAIR_IDENTITY');
+  const canonical = [...rows]
+    .sort((a, b) => (a.external_id < b.external_id ? -1 : a.external_id > b.external_id ? 1 : 0))
+    .map((r) => [r.external_id, r.internal_id, r.sync_status, r.sync_error_code]);
+  return { sha256: createHash('sha256').update(JSON.stringify(canonical)).digest('hex'), users };
+}
+
 export interface LegacyGameImportRepository {
   /** Server-only lookup used to bind the authenticated viewer to a sanitized CUP participant. */
   resolveVivaProfileExternalId(input: {
@@ -138,6 +195,7 @@ export interface LegacyGameImportRepository {
     readonly snapshots: readonly LegacyGameImportSnapshot[];
     readonly correlationId: string;
     readonly allowLocalRemovals?: boolean;
+    readonly expected?: LegacyGameExactRepairFence;
     readonly now?: Date;
   }): Promise<LegacyGameRosterRebaselineResult>;
 }
@@ -179,6 +237,7 @@ interface RosterSyncStateRow extends QueryResultRow {
   readonly source_external_version: string;
   readonly last_synced_game_revision: string | number;
   readonly mode: 'MIRROR' | 'CONFLICT' | 'DISABLED';
+  readonly conflict_code?: string | null;
 }
 
 function cleanText(value: string, maxLength: number, fallback: string): string {
@@ -435,6 +494,7 @@ async function resolvePlayer(
   boundUserId?: string,
   proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE' = 'VIVA_PROFILE',
   sourcePlayerAssociationId = participant.externalId,
+  preserveExistingProfile = false,
 ): Promise<string> {
   const persistedBinding = await queryOne<{ readonly user_id: string } & QueryResultRow>(
     client,
@@ -466,6 +526,8 @@ async function resolvePlayer(
   }
   const externalIds = canonicalAndAliases(participant.externalId, participant.externalAliases);
   const mappings = await findMappings(client, tenantId, 'game_player', externalIds);
+  if (new Set(mappings.map((row) => row.internal_id)).size > 1)
+    throw new Error('LEGACY_GAME_PARTICIPANT_ALIAS_CONFLICT');
   const existing = mappings[0]?.internal_id;
   const userId = provenUserId ?? existing ?? randomUUID();
   if (!existing && !provenUserId) {
@@ -485,9 +547,13 @@ async function resolvePlayer(
     `insert into profile.user_summaries (
        tenant_id, user_id, display_name, level_label, level_value
      ) values ($1, $2, $3, $4, $5)
-     on conflict (tenant_id, user_id) do update set
+     on conflict (tenant_id, user_id) ${
+       preserveExistingProfile
+         ? 'do nothing'
+         : `do update set
        display_name = excluded.display_name,
-       updated_at = now()`,
+       updated_at = now()`
+     }`,
     [
       tenantId,
       userId,
@@ -1284,6 +1350,49 @@ function participantFingerprint(input: {
   return `${input.externalId}\u0000${input.role}\u0000${input.paymentState}`;
 }
 
+/** A player may have both a raw and a pseudonymous integration alias. The SQL join
+ * locks each active participation but returns one row per alias; business comparisons and
+ * audit counts must use one participation, resolved to the source's canonical player key.
+ * Ambiguous aliases never authorize merging accounts or dropping a participant.
+ */
+function normalizeActiveParticipants(
+  rows: readonly ActiveParticipantRow[],
+  snapshot: LegacyGameImportSnapshot,
+): readonly ActiveParticipantRow[] {
+  const groups = new Map<string, { row: ActiveParticipantRow; aliases: Set<string> }>();
+  for (const row of rows) {
+    const group = groups.get(row.id);
+    if (group) {
+      if (
+        group.row.user_id !== row.user_id ||
+        group.row.role !== row.role ||
+        group.row.payment_state !== row.payment_state
+      )
+        throw new Error('LEGACY_GAME_PARTICIPANT_ALIAS_CONFLICT');
+      if (row.external_id) group.aliases.add(row.external_id);
+    } else groups.set(row.id, { row, aliases: new Set(row.external_id ? [row.external_id] : []) });
+  }
+  const ownerBySourcePlayer = new Map<string, { userId: string; participationId: string }>();
+  return [...groups.values()].map(({ row, aliases }) => {
+    const matches = new Set(
+      snapshot.participants
+        .filter((p) =>
+          canonicalAndAliases(p.externalId, p.externalAliases).some((alias) => aliases.has(alias)),
+        )
+        .map((p) => p.externalId),
+    );
+    if (matches.size > 1) throw new Error('LEGACY_GAME_PARTICIPANT_ALIAS_CONFLICT');
+    const sourcePlayer = [...matches][0];
+    if (sourcePlayer) {
+      const owner = ownerBySourcePlayer.get(sourcePlayer);
+      if (owner && (owner.userId !== row.user_id || owner.participationId !== row.id))
+        throw new Error('LEGACY_GAME_PARTICIPANT_ALIAS_CONFLICT');
+      ownerBySourcePlayer.set(sourcePlayer, { userId: row.user_id, participationId: row.id });
+    }
+    return { ...row, external_id: [...matches][0] ?? [...aliases].sort()[0] ?? null };
+  });
+}
+
 function sameRoster(
   current: readonly ActiveParticipantRow[],
   snapshot: LegacyGameImportSnapshot,
@@ -1400,6 +1509,7 @@ async function synchronizeOne(
          left join integration.external_entity_map player
            on player.tenant_id = p.tenant_id and player.external_system = $3
           and player.entity_type = 'game_player' and player.internal_id = p.user_id
+          and player.sync_status = 'synced' and player.sync_error_code is null
         where p.tenant_id = $1 and p.game_id = $2 and p.state = 'ACTIVE'
         order by p.joined_at, p.id
         for update of p`,
@@ -1407,17 +1517,19 @@ async function synchronizeOne(
     );
     const state = await queryOne<RosterSyncStateRow>(
       client,
-      `select source_external_version, last_synced_game_revision, mode
+      `select source_external_version, last_synced_game_revision, mode, conflict_code
          from integration.legacy_game_roster_sync_state
         where tenant_id = $1 and game_id = $2 for update`,
       [input.tenantId, game.id],
     );
+    if (state && state.mode !== 'MIRROR') return { outcome: 'conflict' };
+    const participants = normalizeActiveParticipants(currentParticipants.rows, input.snapshot);
     if (!state) {
       // Never take ownership of an old imported game whose source has already drifted: an
       // operator must reconcile it explicitly. Fresh imports have matching fingerprints.
       if (
         mapping.external_version !== input.snapshot.externalVersion ||
-        !sameRoster(currentParticipants.rows, input.snapshot)
+        !sameRoster(participants, input.snapshot)
       ) {
         await recordRosterConflict(client, {
           tenantId: input.tenantId,
@@ -1438,7 +1550,6 @@ async function synchronizeOne(
       );
       return { outcome: 'bootstrapped' };
     }
-    if (state.mode !== 'MIRROR') return { outcome: 'conflict' };
     if (Number(state.last_synced_game_revision) !== currentRevision) {
       await recordRosterConflict(client, {
         tenantId: input.tenantId,
@@ -1450,8 +1561,34 @@ async function synchronizeOne(
       });
       return { outcome: 'conflict' };
     }
-    if (state.source_external_version === input.snapshot.externalVersion)
+    if (state.source_external_version === input.snapshot.externalVersion) {
+      if (!sameRoster(participants, input.snapshot)) {
+        await recordRosterConflict(client, {
+          tenantId: input.tenantId,
+          gameId: game.id,
+          sourceExternalVersion: input.snapshot.externalVersion,
+          currentRevision,
+          code: 'LEGACY_GAME_ROSTER_BASELINE_MISMATCH',
+          correlationId: input.correlationId,
+        });
+        return { outcome: 'conflict' };
+      }
+      // This is the actual bounded source read/reconciliation time, not a new card revision.
+      await client.query(
+        `update integration.legacy_game_roster_sync_state
+          set last_synced_at = now(), updated_at = now()
+        where tenant_id = $1 and game_id = $2 and mode = 'MIRROR'`,
+        [input.tenantId, game.id],
+      );
+      await client.query(
+        `update integration.external_entity_map
+          set last_synced_at = now(), sync_status = 'synced', sync_error_code = null
+        where tenant_id = $1 and external_system = $2 and entity_type = 'game'
+          and internal_id = $3 and external_version = $4`,
+        [input.tenantId, EXTERNAL_SYSTEM, game.id, input.snapshot.externalVersion],
+      );
       return { outcome: 'unchanged' };
+    }
 
     await applySourceRoster(client, {
       tenantId: input.tenantId,
@@ -1459,7 +1596,7 @@ async function synchronizeOne(
       snapshot: input.snapshot,
       correlationId: input.correlationId,
       now: input.now,
-      currentParticipants: currentParticipants.rows,
+      currentParticipants: participants,
       auditAction: 'GAME_PARTICIPANTS_SYNCED_FROM_LEGACY_SNAPSHOT',
       auditReason: 'MIRROR',
       stateWrite: 'mirror-only',
@@ -1485,6 +1622,8 @@ async function applySourceRoster(
     readonly auditAction: string;
     readonly auditReason: string;
     readonly stateWrite: 'mirror-only' | 'upsert';
+    readonly verifiedParticipantUsers?: ReadonlyMap<string, string>;
+    readonly playerMappingsSha256?: string;
   },
 ): Promise<{ readonly nextRevision: number; readonly activeParticipantCount: number }> {
   const sourceUsers = new Map<
@@ -1492,16 +1631,30 @@ async function applySourceRoster(
     { userId: string; participant: LegacyGameImportParticipant }
   >();
   for (const participant of input.snapshot.participants) {
+    const verifiedUser = input.verifiedParticipantUsers?.get(participant.externalId);
+    if (input.verifiedParticipantUsers && !verifiedUser)
+      throw new Error('LEGACY_GAME_EXACT_REPAIR_IDENTITY');
     sourceUsers.set(participant.externalId, {
-      userId: await resolvePlayer(
-        client,
-        input.tenantId,
-        participant,
-        input.snapshot.externalVersion,
-      ),
+      userId:
+        verifiedUser ??
+        (await resolvePlayer(
+          client,
+          input.tenantId,
+          participant,
+          input.snapshot.externalVersion,
+          undefined,
+          undefined,
+          undefined,
+          input.stateWrite === 'upsert',
+        )),
       participant,
     });
   }
+  if (
+    sourceUsers.size !== input.snapshot.participants.length ||
+    new Set([...sourceUsers.values()].map((item) => item.userId)).size !== sourceUsers.size
+  )
+    throw new Error('LEGACY_GAME_PARTICIPANT_ALIAS_CONFLICT');
   const organizer = sourceUsers.get(input.snapshot.organizerExternalId);
   if (!organizer) throw new Error('LEGACY_GAME_ORGANIZER_MAPPING_MISSING');
   const sourceByUserId = new Map(
@@ -1645,7 +1798,11 @@ async function applySourceRoster(
       input.auditReason,
       input.correlationId,
       JSON.stringify({ activeParticipantCount: input.currentParticipants.length }),
-      JSON.stringify({ activeParticipantCount: sourceUsers.size, revision: nextRevision }),
+      JSON.stringify({
+        activeParticipantCount: sourceUsers.size,
+        revision: nextRevision,
+        ...(input.playerMappingsSha256 ? { playerMappingsSha256: input.playerMappingsSha256 } : {}),
+      }),
     ],
   );
   return { nextRevision, activeParticipantCount: sourceUsers.size };
@@ -1664,6 +1821,7 @@ async function rebaselineOne(
     readonly correlationId: string;
     readonly now: Date;
     readonly allowLocalRemovals: boolean;
+    readonly expected?: LegacyGameExactRepairFence;
   },
 ): Promise<
   | { readonly outcome: 'rebaselined'; readonly gameId: string }
@@ -1697,39 +1855,84 @@ async function rebaselineOne(
     if (!game || game.lifecycle_state !== 'SCHEDULED') return { outcome: 'skipped' as const };
     const state = await queryOne<RosterSyncStateRow>(
       client,
-      `select source_external_version, last_synced_game_revision, mode
+      `select source_external_version, last_synced_game_revision, mode, conflict_code
          from integration.legacy_game_roster_sync_state
         where tenant_id = $1 and game_id = $2 for update`,
       [input.tenantId, game.id],
     );
+    if (
+      input.expected &&
+      (input.expected.gameId !== game.id ||
+        input.expected.revision !== Number(game.revision) ||
+        input.expected.sourceVersion !== input.snapshot.externalVersion ||
+        input.expected.syncSourceVersion !== state?.source_external_version)
+    )
+      throw new Error('LEGACY_GAME_EXACT_REPAIR_DRIFT');
     // Only a quarantined game is repaired here; mirror-owned and never-seen games keep their own path.
-    if (!state || state.mode === 'MIRROR') return { outcome: 'skipped' as const };
+    if (
+      state?.mode !== 'CONFLICT' ||
+      (state.conflict_code !== 'LEGACY_GAME_ROSTER_BASELINE_MISMATCH' &&
+        !(
+          input.allowLocalRemovals &&
+          state.conflict_code === 'LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL'
+        )) ||
+      Number(state.last_synced_game_revision) !== Number(game.revision) ||
+      input.snapshot.cancelled
+    )
+      return { outcome: 'skipped' as const };
+    let verifiedParticipantUsers: ReadonlyMap<string, string> | undefined;
+    if (input.expected) {
+      const aliasIds = [
+        ...new Set(
+          input.snapshot.participants.flatMap((p) =>
+            canonicalAndAliases(p.externalId, p.externalAliases),
+          ),
+        ),
+      ].sort();
+      const mappingRows = await client.query<LegacyGameExactPlayerMapping & QueryResultRow>(
+        `select external_id,internal_id,sync_status,sync_error_code from integration.external_entity_map
+          where tenant_id=$1 and external_system='LK_LEGACY_SNAPSHOT' and entity_type='game_player'
+            and external_id=any($2::text[]) order by external_id for update`,
+        [input.tenantId, aliasIds],
+      );
+      const identity = attestExactRosterPlayerMappings(input.snapshot, mappingRows.rows);
+      if (identity.sha256 !== input.expected.playerMappingsSha256)
+        throw new Error('LEGACY_GAME_EXACT_REPAIR_DRIFT');
+      const bindings = await client.query<
+        { source_player_association_id: string; user_id: string } & QueryResultRow
+      >(
+        `select source_player_association_id,user_id from integration.legacy_game_player_bindings
+          where tenant_id=$1 and source_player_association_id=any($2::text[]) for update`,
+        [input.tenantId, aliasIds],
+      );
+      const ownerByAlias = new Map(
+        mappingRows.rows.map((row) => [row.external_id, row.internal_id]),
+      );
+      if (
+        bindings.rows.some(
+          (row) => ownerByAlias.get(row.source_player_association_id) !== row.user_id,
+        )
+      )
+        throw new Error('LEGACY_GAME_EXACT_REPAIR_DRIFT');
+      verifiedParticipantUsers = identity.users;
+    }
     const currentParticipants = await client.query<ActiveParticipantRow>(
       `select p.id, p.user_id, p.role, p.payment_state, player.external_id
          from games.participations p
          left join integration.external_entity_map player
            on player.tenant_id = p.tenant_id and player.external_system = $3
           and player.entity_type = 'game_player' and player.internal_id = p.user_id
+          and player.sync_status = 'synced' and player.sync_error_code is null
         where p.tenant_id = $1 and p.game_id = $2 and p.state = 'ACTIVE'
         order by p.joined_at, p.id
         for update of p`,
       [input.tenantId, game.id, EXTERNAL_SYSTEM],
     );
+    const participants = normalizeActiveParticipants(currentParticipants.rows, input.snapshot);
     const sourceExternalIds = new Set(input.snapshot.participants.map((item) => item.externalId));
-    const sourcePlayerByUserId = new Map<string, string>();
-    for (const participant of input.snapshot.participants) {
-      const userId = await resolvePlayer(
-        client,
-        input.tenantId,
-        participant,
-        input.snapshot.externalVersion,
-      );
-      sourcePlayerByUserId.set(userId, participant.externalId);
-    }
-    const removable = currentParticipants.rows.filter(
-      (participant) =>
-        !sourcePlayerByUserId.has(participant.user_id) &&
-        (!participant.external_id || !sourceExternalIds.has(participant.external_id)),
+    // No identity/profile/mapping writes are allowed before the no-removal decision.
+    const removable = participants.filter(
+      (participant) => !participant.external_id || !sourceExternalIds.has(participant.external_id),
     );
     if (removable.length > 0 && !input.allowLocalRemovals) {
       await recordRosterConflict(client, {
@@ -1753,12 +1956,15 @@ async function rebaselineOne(
       snapshot: input.snapshot,
       correlationId: input.correlationId,
       now: input.now,
-      currentParticipants: currentParticipants.rows,
+      currentParticipants: participants,
       auditAction: 'GAME_PARTICIPANTS_REBASELINED_FROM_LEGACY_SNAPSHOT',
       auditReason: input.allowLocalRemovals
         ? 'OPERATOR_REPAIR_WITH_LOCAL_REMOVALS'
         : 'OPERATOR_REPAIR_ADDITIVE',
       stateWrite: 'upsert',
+      ...(verifiedParticipantUsers
+        ? { verifiedParticipantUsers, playerMappingsSha256: input.expected!.playerMappingsSha256 }
+        : {}),
     });
     return { outcome: 'rebaselined' as const, gameId: game.id };
   });
@@ -2017,6 +2223,9 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
     },
 
     async rebaselineParticipants(input) {
+      if (input.expected && (input.snapshots.length !== 1 || input.allowLocalRemovals === true))
+        throw new Error('LEGACY_GAME_EXACT_REPAIR_SCOPE');
+
       const tenant = (
         await pool.query<TenantRow>(
           `select id from identity.tenants where tenant_key = $1 and active = true`,
@@ -2042,6 +2251,7 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
           correlationId: input.correlationId,
           now: input.now ?? new Date(),
           allowLocalRemovals: input.allowLocalRemovals === true,
+          ...(input.expected ? { expected: input.expected } : {}),
         });
         if (result.outcome === 'rebaselined') {
           rebaselined.push({ gameId: result.gameId, externalId: snapshot.externalId });

@@ -786,6 +786,43 @@ export class LegacyGamesMongoAdapter {
     return snapshots.map(normalizeMongoSnapshot);
   }
 
+  /** Full current roster for an exact operator repair. Reminder reads intentionally omit
+   * participants and must never be used to restore a roster. Source aliases stay server-side.
+   */
+  public async readRosterByExternalIds(input: {
+    readonly externalIds: readonly string[];
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const ids = input.externalIds;
+    if (
+      !Number.isInteger(input.limit) ||
+      input.limit < 1 ||
+      input.limit > 10 ||
+      ids.length === 0 ||
+      ids.length > 30 ||
+      new Set(ids).size !== ids.length ||
+      ids.some((id) => !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(id))
+    )
+      throw new Error('LEGACY_GAMES_EXACT_ROSTER_INPUT_INVALID');
+    const primary = new LegacyGamesMongoAdapter({
+      ...this.options,
+      consistency: 'reminder-primary',
+      maxAttempts: 1,
+    });
+    const snapshots = await primary.readMatching({
+      filter: {
+        id: { $in: [...ids] },
+        archived: { $ne: true },
+        status: { $in: ['PAID', 'CANCELLED'] },
+      },
+      limit: input.limit + 1,
+      sort: { _id: 1 },
+      strict: true,
+    });
+    if (snapshots.length > input.limit) throw new Error('LEGACY_GAMES_SOURCE_LIMIT_EXCEEDED');
+    return snapshots.map(normalizeMongoSnapshot);
+  }
+
   /**
    * Finds the newest valid source photo for each explicitly requested legacy participant.
    * Raw participant aliases remain server-side and the returned primary key is pseudonymous.

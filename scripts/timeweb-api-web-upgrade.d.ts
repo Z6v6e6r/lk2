@@ -25,3 +25,9 @@ export function buildApiWebInstalledDescriptor(
   releaseId: string,
   journalPath: string,
 ): Buffer;
+
+export function overlayBytes(plan: unknown, name: string): string;
+export function runManualApiWebUpgrade(
+  mode: 'deploy' | 'recover' | 'reconcile',
+  requestPath: string,
+): Promise<{ status: string; candidate: string; receipt: string }>;

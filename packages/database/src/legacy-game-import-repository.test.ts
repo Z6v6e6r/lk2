@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createLegacyGameImportRepository,
+  attestExactRosterPlayerMappings,
   type LegacyGameImportSnapshot,
 } from './legacy-game-import-repository.js';
 
@@ -654,7 +655,10 @@ describe('legacy game import repository', () => {
         return {
           rows: [
             {
-              internal_id: values[3] === 'legacy-player-organizer' ? organizerUserId : playerUserId,
+              internal_id:
+                Array.isArray(values[3]) && values[3].includes('legacy-player-organizer')
+                  ? organizerUserId
+                  : playerUserId,
             },
           ],
         };
@@ -741,5 +745,350 @@ describe('legacy game import repository', () => {
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into games.participations')),
     ).toBe(false);
+  });
+  describe('roster comparison across integration aliases', () => {
+    const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
+    const users = ['e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11', 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea12'];
+    const aliased = {
+      ...snapshot,
+      participants: snapshot.participants.map((p, i) => ({
+        ...p,
+        externalAliases: ['raw-player-' + i],
+      })),
+    };
+    const canonicalRows = () =>
+      aliased.participants.map((p, i) => ({
+        id: 'participation-' + i,
+        user_id: users[i],
+        role: p.role,
+        payment_state: p.paymentState,
+        external_id: p.externalId,
+      }));
+    const aliasedRows = () =>
+      canonicalRows().flatMap((row, i) => [row, { ...row, external_id: 'raw-player-' + i }]);
+    function setup(rows: ReturnType<typeof canonicalRows>) {
+      return fakePool((text, values) => {
+        if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
+        if (text.includes('from integration.external_entity_map') && values[2] === 'game')
+          return { rows: [{ internal_id: gameId, external_version: snapshot.externalVersion }] };
+        if (text.includes('from games.games') && text.includes('for update'))
+          return {
+            rows: [
+              {
+                id: gameId,
+                revision: '1',
+                organizer_user_id: users[0],
+                lifecycle_state: 'SCHEDULED',
+              },
+            ],
+          };
+        if (text.includes('from games.participations p')) return { rows };
+        return { rows: [] };
+      });
+    }
+    const sync = (pool: never) =>
+      createLegacyGameImportRepository(pool).synchronizeParticipants({
+        tenantKey: 'local-padel',
+        snapshots: [aliased],
+        correlationId: 'alias-regression-test',
+      });
+    it.each(['canonical', 'raw-only', 'both', 'reversed'] as const)(
+      'bootstraps the same two participants with %s aliases',
+      async (mode) => {
+        const rows =
+          mode === 'canonical'
+            ? canonicalRows()
+            : mode === 'raw-only'
+              ? canonicalRows().map((r, i) => ({ ...r, external_id: 'raw-player-' + i }))
+              : mode === 'reversed'
+                ? aliasedRows().reverse()
+                : aliasedRows();
+        const { pool, clientQuery } = setup(rows);
+        const result = await sync(pool);
+        expect(result).toMatchObject({ bootstrapped: 1, conflicts: 0 });
+        expect(
+          clientQuery.mock.calls.some(([text]) =>
+            /(?:insert into|update) (?:identity.users|games.participations|games.games)/u.test(
+              text,
+            ),
+          ),
+        ).toBe(false);
+        expect(
+          clientQuery.mock.calls.some(([text]) => text.includes('insert into audit.outbox_events')),
+        ).toBe(false);
+      },
+    );
+    it('keeps a genuinely different player quarantined', async () => {
+      const rows = aliasedRows().map((r) =>
+        r.id === 'participation-1' ? { ...r, external_id: 'unrelated-player' } : r,
+      );
+      const { pool } = setup(rows);
+      expect(await sync(pool)).toMatchObject({ bootstrapped: 0, conflicts: 1 });
+    });
+    it('rejects aliases that point from one participation to two source players', async () => {
+      const rows = aliasedRows();
+      rows[1]!.external_id = aliased.participants[1]!.externalId;
+      const { pool, clientQuery } = setup(rows);
+      await expect(sync(pool)).rejects.toThrow('LEGACY_GAME_PARTICIPANT_ALIAS_CONFLICT');
+      expect(
+        clientQuery.mock.calls.some(([text]) =>
+          text.includes('insert into integration.legacy_game_roster_sync_state'),
+        ),
+      ).toBe(false);
+      expect(clientQuery.mock.calls.some(([text]) => text === 'rollback')).toBe(true);
+    });
+    it('rejects inconsistent participant metadata on duplicated alias rows', async () => {
+      const rows = aliasedRows();
+      rows[1]!.user_id = users[1]!;
+      const { pool } = setup(rows);
+      await expect(sync(pool)).rejects.toThrow('LEGACY_GAME_PARTICIPANT_ALIAS_CONFLICT');
+    });
+  });
+  describe('no-loss quarantined roster recovery', () => {
+    const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
+    const users = ['e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11', 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea12'];
+    const rows = () =>
+      snapshot.participants.map((p, i) => ({
+        id: 'participation-' + i,
+        user_id: users[i],
+        role: p.role,
+        payment_state: p.paymentState,
+        external_id: p.externalId,
+      }));
+    function setup(
+      options: {
+        rows?: ReturnType<typeof rows>;
+        state?: Record<string, unknown>;
+        split?: boolean;
+        identityRows?: {
+          external_id: string;
+          internal_id: string;
+          sync_status: string;
+          sync_error_code: string | null;
+        }[];
+      } = {},
+    ) {
+      return fakePool((text, values) => {
+        if (text.includes('select external_id,internal_id,sync_status,sync_error_code'))
+          return {
+            rows:
+              options.identityRows ??
+              snapshot.participants.map((p, i) => ({
+                external_id: p.externalId,
+                internal_id: users[i],
+                sync_status: 'synced',
+                sync_error_code: null,
+              })),
+          };
+        if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
+        if (text.includes('from integration.external_entity_map') && values[2] === 'game')
+          return { rows: [{ internal_id: gameId, external_version: snapshot.externalVersion }] };
+        if (text.includes('from integration.external_entity_map') && values[2] === 'game_player') {
+          const id =
+            Array.isArray(values[3]) && values[3].includes(snapshot.organizerExternalId)
+              ? users[0]
+              : users[1];
+          return {
+            rows: options.split
+              ? [{ internal_id: id }, { internal_id: 'other-account' }]
+              : [{ internal_id: id }],
+          };
+        }
+        if (text.includes('from games.games') && text.includes('for update'))
+          return {
+            rows: [
+              {
+                id: gameId,
+                revision: '1',
+                organizer_user_id: users[0],
+                lifecycle_state: 'SCHEDULED',
+              },
+            ],
+          };
+        if (text.includes('from integration.legacy_game_roster_sync_state'))
+          return {
+            rows: [
+              {
+                source_external_version: 'b'.repeat(64),
+                last_synced_game_revision: '1',
+                mode: 'CONFLICT',
+                conflict_code: 'LEGACY_GAME_ROSTER_BASELINE_MISMATCH',
+                ...options.state,
+              },
+            ],
+          };
+        if (text.includes('from games.participations p')) return { rows: options.rows ?? rows() };
+        if (text.includes('update games.games') && text.includes('returning revision'))
+          return { rows: [{ revision: '2' }] };
+        return { rows: [] };
+      });
+    }
+    const repair = (pool: never, overrides: Record<string, unknown> = {}) =>
+      createLegacyGameImportRepository(pool).rebaselineParticipants({
+        tenantKey: 'local-padel',
+        snapshots: [snapshot],
+        correlationId: 'repair-regression-test',
+        allowLocalRemovals: false,
+        ...overrides,
+      });
+    it('defers a roster missing a local player before resolving or creating a new source account', async () => {
+      const current = rows();
+      current[1]!.external_id = 'local-only-player';
+      const { pool, clientQuery } = setup({ rows: current });
+      const expanded = {
+        ...snapshot,
+        participants: [
+          ...snapshot.participants,
+          { ...snapshot.participants[1]!, externalId: 'new-source-player' },
+        ],
+      };
+      expect((await repair(pool, { snapshots: [expanded] })).deferred).toHaveLength(1);
+      const writes = clientQuery.mock.calls.map(([sql]) => sql);
+      expect(
+        writes.some((sql) =>
+          /insert into (?:identity.users|profile.user_summaries|integration.external_entity_map|games.participations|audit.outbox_events)/u.test(
+            sql,
+          ),
+        ),
+      ).toBe(false);
+      expect(writes.some((sql) => sql.includes('update games.games'))).toBe(false);
+      expect(
+        writes.some(
+          (sql) =>
+            sql.includes('from integration.external_entity_map') &&
+            sql.includes("entity_type = 'game_player'"),
+        ),
+      ).toBe(false);
+    });
+    it('rejects split aliases across accounts without repointing either mapping', async () => {
+      const { pool, clientQuery } = setup({ split: true });
+      await expect(repair(pool)).rejects.toThrow('LEGACY_GAME_PARTICIPANT_ALIAS_CONFLICT');
+      expect(
+        clientQuery.mock.calls.some(([sql]) =>
+          sql.includes('insert into integration.external_entity_map'),
+        ),
+      ).toBe(false);
+      expect(clientQuery.mock.calls.some(([sql]) => sql === 'rollback')).toBe(true);
+    });
+    it('rejects one source identity claimed by two active accounts', async () => {
+      const current = rows();
+      current[1]!.external_id = snapshot.organizerExternalId;
+      const { pool } = setup({ rows: current });
+      await expect(repair(pool)).rejects.toThrow('LEGACY_GAME_PARTICIPANT_ALIAS_CONFLICT');
+    });
+    it.each([
+      { mode: 'DISABLED' },
+      { mode: 'MIRROR' },
+      { last_synced_game_revision: '2' },
+      { conflict_code: 'LEGACY_GAME_ROSTER_LOCAL_REVISION_CHANGED' },
+    ])('does not override a changed recovery precondition: %j', async (state) => {
+      const { pool, clientQuery } = setup({ state });
+      expect((await repair(pool)).skipped).toBe(1);
+      expect(clientQuery.mock.calls.some(([sql]) => /insert into|update games/u.test(sql))).toBe(
+        false,
+      );
+    });
+    it('preserves existing profile fields during a successful repair', async () => {
+      const { pool, clientQuery } = setup();
+      expect((await repair(pool)).rebaselined).toHaveLength(1);
+      const profiles = clientQuery.mock.calls.filter(([sql]) =>
+        sql.includes('insert into profile.user_summaries'),
+      );
+      expect(profiles).toHaveLength(2);
+      expect(
+        profiles.every(([sql]) => sql.includes('on conflict (tenant_id, user_id) do nothing')),
+      ).toBe(true);
+    });
+    it('checks the reviewed revision/source fence under the canonical game lock', async () => {
+      const { pool, clientQuery } = setup();
+      await expect(
+        repair(pool, {
+          expected: {
+            gameId,
+            revision: 2,
+            sourceVersion: snapshot.externalVersion,
+            syncSourceVersion: 'b'.repeat(64),
+          },
+        }),
+      ).rejects.toThrow('LEGACY_GAME_EXACT_REPAIR_DRIFT');
+      expect(clientQuery.mock.calls.some(([sql]) => /insert into|update games/u.test(sql))).toBe(
+        false,
+      );
+    });
+    it('refreshes source verification after an unchanged roster without issuing a business event', async () => {
+      const { pool, clientQuery } = setup({
+        state: {
+          mode: 'MIRROR',
+          conflict_code: null,
+          source_external_version: snapshot.externalVersion,
+        },
+      });
+      const result = await createLegacyGameImportRepository(pool).synchronizeParticipants({
+        tenantKey: 'local-padel',
+        snapshots: [snapshot],
+        correlationId: 'unchanged-verification-test',
+      });
+      expect(result.unchanged).toBe(1);
+      expect(
+        clientQuery.mock.calls.some(([sql]) => sql.includes('set last_synced_at = now()')),
+      ).toBe(true);
+      expect(clientQuery.mock.calls.some(([sql]) => /insert into|update games/u.test(sql))).toBe(
+        false,
+      );
+    });
+    it('rejects a repointed identity under lock without writing any game or account', async () => {
+      const before = snapshot.participants.map((p, i) => ({
+        external_id: p.externalId,
+        internal_id: users[i]!,
+        sync_status: 'synced',
+        sync_error_code: null,
+      }));
+      const expected = {
+        gameId,
+        revision: 1,
+        sourceVersion: snapshot.externalVersion,
+        syncSourceVersion: 'b'.repeat(64),
+        playerMappingsSha256: attestExactRosterPlayerMappings(snapshot, before).sha256,
+      };
+      const after = before.map((row, i) =>
+        i === 1 ? { ...row, internal_id: 'c68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea19' } : row,
+      );
+      const { pool, clientQuery } = setup({ identityRows: after });
+      await expect(repair(pool, { expected })).rejects.toThrow('LEGACY_GAME_EXACT_REPAIR_DRIFT');
+      expect(
+        clientQuery.mock.calls.some(([sql]) => sql.includes('order by external_id for update')),
+      ).toBe(true);
+      expect(clientQuery.mock.calls.some(([sql]) => /insert into|update games/u.test(sql))).toBe(
+        false,
+      );
+    });
+    it('uses locked existing users for exact repair without creating or updating identity/profile/mapping rows', async () => {
+      const identity = snapshot.participants.map((p, i) => ({
+        external_id: p.externalId,
+        internal_id: users[i]!,
+        sync_status: 'synced',
+        sync_error_code: null,
+      }));
+      const expected = {
+        gameId,
+        revision: 1,
+        sourceVersion: snapshot.externalVersion,
+        syncSourceVersion: 'b'.repeat(64),
+        playerMappingsSha256: attestExactRosterPlayerMappings(snapshot, identity).sha256,
+      };
+      const { pool, clientQuery } = setup({ identityRows: identity });
+      expect((await repair(pool, { expected })).rebaselined).toHaveLength(1);
+      expect(
+        clientQuery.mock.calls.some(([sql]) =>
+          /insert into (?:identity.users|profile.user_summaries|integration.external_entity_map)/u.test(
+            sql,
+          ),
+        ),
+      ).toBe(false);
+      const audit = clientQuery.mock.calls.find(([sql]) =>
+        sql.includes('insert into audit.audit_log'),
+      );
+      expect(JSON.stringify(audit?.[1])).toContain(expected.playerMappingsSha256);
+    });
   });
 });

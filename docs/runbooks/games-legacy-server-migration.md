@@ -103,3 +103,43 @@ canonical revision still matches. If the run is stopped, rerun only the same bou
 correction. A bad new aggregate or quarantined roster must be repaired through an audited Games
 operation and its outbox projection, not by deleting rows or reconnecting the browser to legacy
 data.
+
+## Exact quarantined-roster recovery
+
+For an approval naming individual Games, use the exact mode of the existing Worker repair
+entrypoint, one canonical PadlHub UUID per invocation. A date window or broad `--limit` is not an
+exact-target boundary. Use only a reviewed immutable Worker image through the approved controller;
+this command does not authorize image publication, installation, or a bypass of production
+backup/restore, source identity, monitoring and rollback prerequisites.
+
+1. Keep a protected preimage of the selected Game, all participation states, card, sync state,
+   relevant mappings and existing profiles. Record account/profile counts and hashes. Require a
+   verified production backup and an audited compensating rollback plan; do not plan to restore the
+   entire DB to undo a two-Game repair, since unrelated accounts may change concurrently.
+2. Run the entrypoint with `--tenant-key <tenant> --game-id <canonical UUID>
+--operation-id <stable-operation> --plan`. This is a read-only DB connection. It resolves only
+   that Game's server-side source aliases and reads one complete roster from Mongo primary/majority.
+   Reminder snapshots omit participants and are never accepted for this operation. Public-source
+   fallback, redirects, cancelled/empty/ambiguous/truncated sources and non-baseline conflicts stop.
+3. Review the returned plan SHA-256, canonical Game and count against the approved preimage/source.
+   Apply with the same target/operation and `--plan-sha <reviewed hash>`. Exact mode forbids local
+   removals, checks the plan before writing and fences Game/sync revision and source versions again
+   under the transaction lock. The plan also binds every existing player-alias/account mapping. Exact recovery locks and rechecks
+   those identities before writing; unbound, conflicted or repointed aliases stop. No account or
+   profile is created, merged or rewritten in exact mode. Existing profiles remain unchanged. Split player aliases stop rather
+   than reassign another account. A deferred no-removal result cannot create/repoint identities.
+4. On lost acknowledgement, retain the same operation and plan hash. The exact audit correlation and
+   matching current MIRROR/source/revision/identity digest establish `ALREADY_REPAIRED` with no second write. Any
+   drift stops for readback; do not automatically retry an ambiguous operation. A deferred result
+   requires fresh review rather than a wider removal permission.
+5. Check every old active participation ID remains ACTIVE, unique count and organizer match the
+   approved source, the Game advanced exactly one revision, MIRROR/source/card revisions converge,
+   one repair audit and one projection event exist, and existing profiles/account rows are retained.
+   Confirm a subsequent unchanged source cycle advances verification and that both authenticated Web
+   and Android upcoming reads contain the participants. Keep raw source IDs/names/phones/media URLs
+   out of stdout, Git and CI; the exact report contains only canonical UUID, counts, operation and
+   plan hash. The exact process has a 90-second hard deadline, 5-second DB connection deadline,
+   15-second statement, 3-second lock and 20-second idle-transaction/query limits; timeout requires
+   audited readback with no automatic retry. Redacted source outcome/duration metrics retain the
+   operation ID. Compensating rollback bumps revision and emits an audit/outbox event; never delete
+   accounts, audit/outbox history or decrement a Game revision.
