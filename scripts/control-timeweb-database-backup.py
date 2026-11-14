@@ -161,6 +161,12 @@ NS_PRE_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_NAMESPACE_V2
 NS_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_NAMESPACE_V2'
 WEB8158_SCHEMA = 'PHUB_TIMEWEB_BACKUP_WEB_API8158_V1'
 CUTOVER_BACKUP_SCHEMA = 'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1'
+CUTOVER_DISK_SCHEMA = 'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2'
+CUTOVER_DISK_PLAN = 'PHUB_TIMEWEB_CUTOVER_DISK_RESTORE_PLAN_V1'
+CUTOVER_DISK_RECEIPT = 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V2'
+CUTOVER_DUMP_LIMIT = 13 * 1024**3 // 2
+CUTOVER_IMAGE_BYTES = 18 * 1024**3
+CUTOVER_CONTROL_BYTES = 256 * 1024**2
 NOTIFICATION_PRE105_SCHEMA = 'PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1'
 JOIN_POST105_SCHEMA = 'PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1'
 JOIN_POST105_LEDGER = '7bd0476427e40967f4531972829a86f578d0e9d844ab9e92f16637b868e207fd'
@@ -276,7 +282,7 @@ def is_web8158_operation(op):
 
 
 def backup_baseline(op):
-    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or is_owner_acl_backup(op) or op.get('schema') == CUTOVER_BACKUP_SCHEMA else BASELINE
+    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or is_owner_acl_backup(op) or op.get('schema') in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA) else BASELINE
 
 NS_DAEMON_MEMORY = 2 * 1024 ** 3
 DISK_MEMORY = 2 * 1024 ** 3
@@ -292,10 +298,11 @@ DISK_TOOLS = {'loop': '/usr/sbin/losetup', 'crypt': '/usr/sbin/cryptsetup',
 
 
 def is_disk_operation(op):
-    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA) or is_closed_application_backup(op)
+    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA,CUTOVER_DISK_SCHEMA) or is_closed_application_backup(op)
 
 
 def disk_ledger_sha(op):
+    if op.get('schema')==CUTOVER_DISK_SCHEMA:return op['expectedLedgerSha256']
     if is_closed_application_backup(op):return CLOSED_APPLICATION_BACKUPS[op['schema']]['ledger']
     if op['schema'] in (JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA):return JOIN_POST105_LEDGER
     return API_WORKER_PRE_LEDGER_SHA256 if op['schema'] in (DISK_PRE_SCHEMA, NS_PRE_SCHEMA) else API_WORKER_LEDGER_SHA256
@@ -314,6 +321,17 @@ def disk_sizing(database_bytes, available_memory, free_disk, after_dump=False):
             'memoryBytes': DISK_MEMORY, 'dumpLimitBytes': dump_limit, 'diskReserveBytes': DISK_HEADROOM}
 
 
+def cutover_disk_sizing(database_bytes, available_memory, free_disk, after_dump=False):
+    need(type(database_bytes) is int and 0<database_bytes<=17*1024**3,'CUTOVER_DATABASE_SIZE')
+    need(database_bytes+256*1024**2<CUTOVER_IMAGE_BYTES,'CUTOVER_FILESYSTEM_CAPACITY')
+    need(type(available_memory) is int and available_memory>=DISK_MEMORY+2*1024**3,'CUTOVER_MEMORY_CAPACITY')
+    reserve=DISK_HEADROOM+CUTOVER_CONTROL_BYTES
+    need(type(free_disk) is int and free_disk>=CUTOVER_IMAGE_BYTES+reserve+(0 if after_dump else CUTOVER_DUMP_LIMIT),'CUTOVER_DISK_CAPACITY')
+    return {'databaseBytes':database_bytes,'restoreDataBytes':database_bytes+256*1024**2,
+            'imageBytes':CUTOVER_IMAGE_BYTES,'memoryBytes':DISK_MEMORY,
+            'dumpLimitBytes':CUTOVER_DUMP_LIMIT,'diskReserveBytes':reserve}
+
+
 def disk_plan(op, request_bytes, sizing):
     import uuid
     sha = digest(request_bytes)
@@ -321,7 +339,7 @@ def disk_plan(op, request_bytes, sizing):
     work = ROOT / 'backups' / ('.disk-restore-' + sha)
     mapper = 'phub-restore-' + sha[:24]
     match = RELEASE.fullmatch(release)
-    return {**({'migratorPrefetch':op['migratorPrefetch']} if 'migratorPrefetch' in op else {}), 'schema': 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V1', 'operationSha256': sha,
+    return {**({'migratorPrefetch':op['migratorPrefetch']} if 'migratorPrefetch' in op else {}), 'schema': CUTOVER_DISK_PLAN if op.get('schema')==CUTOVER_DISK_SCHEMA else 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V1', 'operationSha256': sha,
             'work': str(work), 'canonical': str(ROOT / 'backups' / (release + '-' + mode)),
             'pendingLock': str(ROOT / 'standard' / ('.disk-lock-' + sha)),
             'image': str(work / 'restore.luks'), 'mount': str(work / 'pgdata-mounted'),
@@ -407,10 +425,14 @@ def disk_container_args(plan):
     index = args.index('--tmpfs')
     del args[index:index + 2]
     args[1:1] = ['--log-driver', 'none', '--entrypoint', 'docker-entrypoint.sh']
-    args.append('postgres')
+    args.extend(cutover_restore_command() if plan['schema']==CUTOVER_DISK_PLAN else ['postgres'])
     index = args.index('--tmpfs')
     args[index:index] = ['--mount', 'type=bind,src=' + plan['mount'] + ',dst=/var/lib/postgresql/data,bind-propagation=rprivate']
     return args
+
+
+def cutover_restore_command():
+    return ['postgres','-c','wal_level=minimal','-c','max_wal_senders=0','-c','max_replication_slots=0','-c','archive_mode=off']
 
 
 def disk_container_projection(row):
@@ -440,7 +462,7 @@ def validate_disk_container(row, plan):
     need(HASH.fullmatch(row['Id'] or '') and c['Image'] == PG_IMAGE and c['User'] == 'postgres'
          and c['Labels'] == {'phub.backup-operation': plan['operationSha256']}
          and isinstance(c['Env'], list) and sorted(c['Env']) == sorted(disk_expected_environment())
-         and c['Cmd'] == ['postgres'] and c['Entrypoint'] == ['docker-entrypoint.sh']
+         and c['Cmd'] == (cutover_restore_command() if plan['schema']==CUTOVER_DISK_PLAN else ['postgres']) and c['Entrypoint'] == ['docker-entrypoint.sh']
          and row['State']['Status'] in ['created', 'running', 'exited']
          and h['LogConfig'] == {'Type': 'none', 'Config': {}}
          and h['NetworkMode'] == 'none' and h['ReadonlyRootfs'] is True
@@ -1994,7 +2016,7 @@ def now_iso():
 
 
 def operation_mode(value):
-    if value.get('schema') == CUTOVER_BACKUP_SCHEMA:
+    if value.get('schema') in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA):
         return 'api-web', value['releaseId']
     if is_closed_application_backup(value):return closed_application_backup_mode(value), value['releaseId']
     if value['schema'] == JOIN_POST105_SCHEMA:
@@ -2069,7 +2091,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if isinstance(value, dict) and 'controllerPromotion' in value:
         need(schema != 'PHUB_TIMEWEB_BACKUP_OPERATION_V1', 'CONTROLLER_PROMOTION_SCHEMA')
         common += ['controllerPromotion']
-    if schema == CUTOVER_BACKUP_SCHEMA:
+    if schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA):
         exact(value, common + ['profile','candidateSha','publicationRunId','releaseId','expectedLedgerSha256','expectedDatabaseTarget','predecessorAttestationSha256'])
         mode,release_id = 'api-web',value['releaseId']
         need(profile == 'production' and 'controllerPromotion' not in value
@@ -2183,7 +2205,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and type(row['restarts']) is int and (row['restarts'] == 0 or profile == 'beta')
              and isinstance(row['startedAt'], str), 'BASELINE')
     api, pg = value['expectedApi'], value['expectedPostgres']
-    if schema == CUTOVER_BACKUP_SCHEMA:
+    if schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA):
         need(re.fullmatch(r'ghcr\.io/z6v6e6r/phub-api@sha256:[a-f0-9]{64}',api['image'] or '')
              and api['imageId'] == api['image'].split('@')[1]
              and api['releaseId'] == 'lk2-beta-759083e37b40' and api['revision'] is None,
@@ -2242,8 +2264,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if schema == LOCATION_PHOTO_PRE0102_SCHEMA:
         confirmation = 'BACKUP_RESTORE_LOCATION_PHOTO_PRE0102_PRIVATE_NAMESPACE_KEEP_RUNTIME'
     if is_closed_application_backup(value):confirmation='BACKUP_RESTORE_'+CLOSED_APPLICATION_BACKUPS[schema]['kind'].upper()+'_PRIVATE_NAMESPACE_KEEP_RUNTIME'
-    if schema == CUTOVER_BACKUP_SCHEMA:
-        confirmation='BACKUP_RESTORE_ATTESTED_BETA122_'+value['candidateSha'][:12].upper()+'_FROM_LK2_BETA_759083E37B40'
+    if schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA):
+        confirmation=('BACKUP_RESTORE_BOUNDED_DISK_BETA122_' if schema==CUTOVER_DISK_SCHEMA else 'BACKUP_RESTORE_ATTESTED_BETA122_')+value['candidateSha'][:12].upper()+'_FROM_LK2_BETA_759083E37B40'
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
 
@@ -3165,6 +3187,172 @@ def cutover_dump_stopped(op, operation_sha):
     need(result.strip() == b'0', 'CUTOVER_DUMP_STILL_ACTIVE')
 
 
+def cutover_disk_source_names(operation_sha):
+    need(HASH.fullmatch(operation_sha or ''),'CUTOVER_DUMP_ID')
+    return ['phub_cutover_dump_'+operation_sha[:32], 'phub_cutover_snapshot_'+operation_sha[:32]]
+
+
+def cutover_disk_source_stopped(op, operation_sha):
+    names=cutover_disk_source_names(operation_sha)
+    sql="select count(*) from pg_stat_activity where application_name in ("+','.join("'"+n+"'" for n in names)+')'
+    shell=READ_ONLY+'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" -qAt --set=ON_ERROR_STOP=1 --command='+shlex.quote(sql)
+    need(docker(['exec',op['expectedPostgres']['id'],'/bin/sh','-eu','-c',shell],'CUTOVER_SOURCE_ACTIVITY').strip()==b'0','CUTOVER_SOURCE_STILL_ACTIVE')
+
+
+def cutover_disk_reserve():
+    need(disk_free()>=DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'CUTOVER_DISK_RESERVE')
+
+
+@contextmanager
+def cutover_source_snapshot(op, operation_sha):
+    import selectors
+    cutover_disk_source_stopped(op,operation_sha)
+    names=cutover_disk_source_names(operation_sha)
+    options='-c default_transaction_read_only=on -c statement_timeout=30000 -c lock_timeout=3000 -c idle_in_transaction_session_timeout=1400000'
+    shell='export PGOPTIONS='+shlex.quote(options)+' PGAPPNAME='+names[1]+';exec /usr/bin/timeout -s TERM -k 10 1500 psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" -qAt --set=ON_ERROR_STOP=1'
+    parent=os.getpid()
+    process=subprocess.Popen(['/usr/bin/docker','exec','-i',op['expectedPostgres']['id'],'/bin/sh','-eu','-c',shell],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=ENV,bufsize=0,
+                             preexec_fn=(lambda:namespace_client_death(parent)) if sys.platform=='linux' else None)
+    selector=selectors.DefaultSelector();selector.register(process.stdout,selectors.EVENT_READ)
+    pending=bytearray()
+    def query(sql):
+        cutover_disk_reserve()
+        process.stdin.write((sql+'\n').encode());process.stdin.flush()
+        deadline=time.monotonic()+35
+        while b'\n' not in pending:
+            need(process.poll() is None and time.monotonic()<deadline,'CUTOVER_SNAPSHOT_UNCERTAIN')
+            if selector.select(.2):
+                chunk=os.read(process.stdout.fileno(),65536)
+                need(bool(chunk),'CUTOVER_SNAPSHOT_EOF');pending.extend(chunk)
+                need(len(pending)<=1024**2,'CUTOVER_SNAPSHOT_OUTPUT')
+            cutover_disk_reserve()
+        line,_,rest=pending.partition(b'\n');pending[:]=rest
+        return bytes(line)
+    try:
+        token=query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SELECT pg_export_snapshot();').decode()
+        captured_at=now_iso()
+        need(re.fullmatch(r'[0-9A-F]{8}-[0-9A-F]{8}-[1-9][0-9]*',token) is not None,'CUTOVER_SNAPSHOT_TOKEN')
+        target=strict(query(CUTOVER_TARGET_SQL+';'))
+        need(target=={**op['expectedDatabaseTarget'],'inRecovery':False},'CUTOVER_DATABASE_TARGET')
+        ledger=ledger_bytes(query(LEDGER_SQL+';'))
+        need(len(strict(ledger))==122 and digest(ledger)==op['expectedLedgerSha256'],'CUTOVER_LEDGER')
+        accounts=digest(encoded(strict(query(CUTOVER_ACCOUNTS_SQL+';'))))
+        witness={'schema':'PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1','operationSha256':operation_sha,
+                 'sourcePostgres':op['expectedPostgres'],'capturedAt':captured_at,'snapshotIdSha256':digest(token.encode()),
+                 'databaseTarget':op['expectedDatabaseTarget'],'ledgerSha256':digest(ledger),'accountsSha256':accounts}
+        yield {'token':token,'ledger':ledger,'accountsSha256':accounts,'witness':witness}
+    finally:
+        completed=sys.exc_info()[0] is None
+        try:
+            if process.poll() is None:
+                process.stdin.write(b'ROLLBACK;\n\\q\n');process.stdin.flush();process.stdin.close()
+                process.wait(timeout=10)
+            if completed:need(process.returncode==0,'CUTOVER_SNAPSHOT_EXIT')
+        except (OSError,subprocess.TimeoutExpired):
+            process.terminate()
+            try:process.wait(timeout=2)
+            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=2)
+        finally:
+            selector.close();process.stdout.close()
+            if not process.stdin.closed:process.stdin.close()
+            cutover_disk_source_stopped(op,operation_sha)
+
+
+def cutover_snapshot_dump_shell(operation_sha, token):
+    need(re.fullmatch(r'[0-9A-F]{8}-[0-9A-F]{8}-[1-9][0-9]*',token or '') is not None,'CUTOVER_SNAPSHOT_TOKEN')
+    name=cutover_disk_source_names(operation_sha)[0]
+    dump=SOURCE_DUMP.removeprefix(READ_ONLY).removeprefix('exec ').replace(' --serializable-deferrable','')
+    return READ_ONLY+'export PGAPPNAME='+name+';exec /usr/bin/timeout -s TERM -k 10 1200 '+dump+' --compress=zstd:level=3 --snapshot='+shlex.quote(token)
+
+
+def cutover_blocking_docker(args, code, *, stdin=None, stdout=subprocess.DEVNULL, timeout=600, file_limit=None):
+    need(file_limit is None or type(file_limit) is int and 0<file_limit<=CUTOVER_DUMP_LIMIT,'CUTOVER_FILE_LIMIT')
+    parent=os.getpid()
+    def prepare():
+        if sys.platform=='linux':namespace_client_death(parent)
+        if file_limit is not None:resource.setrlimit(resource.RLIMIT_FSIZE,(file_limit,file_limit))
+    process=subprocess.Popen(['/usr/bin/docker',*args],stdin=stdin,stdout=stdout,stderr=subprocess.DEVNULL,env=ENV,preexec_fn=prepare)
+    try:
+        deadline=time.monotonic()+timeout
+        while process.poll() is None:
+            cutover_disk_reserve();need(time.monotonic()<deadline,code+'_UNCERTAIN');time.sleep(.2)
+        need(process.returncode==0,code)
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            try:process.wait(timeout=2)
+            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=2)
+        # The in-container deadline bounds remaining work. Only explicit journaled
+        # reconciliation may stop/remove the owned restore container.
+        raise
+
+
+def cutover_allocate(fd, size):
+    # Allocation may block in the kernel. Poll only this owned child; never inject
+    # asynchronous exceptions into journal/custody writes in the parent.
+    program='import os,sys;os.posix_fallocate(int(sys.argv[1]),0,int(sys.argv[2]))'
+    parent=os.getpid()
+    process=subprocess.Popen(['/usr/bin/python3','-I','-S','-B','-c',program,str(fd),str(size)],
+                             pass_fds=(fd,),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=ENV,
+                             preexec_fn=(lambda:namespace_client_death(parent)) if sys.platform=='linux' else None)
+    try:
+        deadline=time.monotonic()+180
+        while process.poll() is None:
+            cutover_disk_reserve();need(time.monotonic()<deadline,'CUTOVER_ALLOCATE_UNCERTAIN');time.sleep(.2)
+        need(process.returncode==0,'CUTOVER_ALLOCATE')
+        cutover_disk_reserve()
+    finally:
+        if process.poll() is None:
+            process.kill();process.wait(timeout=10)
+
+
+def validate_cutover_disk_receipt(op, receipt, plan, directory):
+    fields=['schema','baselineReleaseId','completedAt','backupFile','backupSha256','restoreVerified','restoreImage','restoredLedgerSha256','sourceLedgerSha256','operationSha256','predecessorAttestationSha256','databaseTarget','sourceAccountsSha256','restoredAccountsSha256','snapshotWitnessSha256','dumpBytes','dumpLimitBytes','dumpCompression']
+    exact(receipt,fields)
+    need(receipt['schema']==CUTOVER_DISK_RECEIPT and receipt['baselineReleaseId']==op['expectedApi']['releaseId']
+         and receipt['operationSha256']==digest(read_secure(Path(plan['work'])/'backup-operation.json'))
+         and receipt['predecessorAttestationSha256']==op['predecessorAttestationSha256']
+         and receipt['databaseTarget']==op['expectedDatabaseTarget'] and receipt['restoreVerified'] is True
+         and receipt['restoreImage']==PG_IMAGE and receipt['sourceLedgerSha256']==receipt['restoredLedgerSha256']==op['expectedLedgerSha256']
+         and receipt['backupFile']==str(Path(plan['canonical'])/'database.pgcustom')
+         and receipt['sourceAccountsSha256']==receipt['restoredAccountsSha256'] and HASH.fullmatch(receipt['sourceAccountsSha256'] or '')
+         and type(receipt['dumpBytes']) is int and 0<receipt['dumpBytes']<=CUTOVER_DUMP_LIMIT
+         and receipt['dumpLimitBytes']==CUTOVER_DUMP_LIMIT and receipt['dumpCompression']=='zstd:3','CUTOVER_RECEIPT')
+    witness=read_secure(Path(directory)/'snapshot-witness.json')
+    need(witness==read_secure(Path(plan['work'])/'snapshot-witness.json'),'CUTOVER_SNAPSHOT_WITNESS')
+    w=strict(witness)
+    exact(w,['schema','operationSha256','sourcePostgres','capturedAt','snapshotIdSha256','databaseTarget','ledgerSha256','accountsSha256'])
+    need(w['schema']=='PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1' and HASH.fullmatch(w['snapshotIdSha256'] or '')
+         and w['operationSha256']==plan['operationSha256'] and w['sourcePostgres']==op['expectedPostgres']
+         and utc(w['capturedAt'])<=utc(receipt['completedAt']),'CUTOVER_SNAPSHOT_WITNESS')
+    need(digest(witness)==receipt['snapshotWitnessSha256'] and w['accountsSha256']==receipt['sourceAccountsSha256']
+         and w['ledgerSha256']==op['expectedLedgerSha256'] and w['databaseTarget']==op['expectedDatabaseTarget'],'CUTOVER_SNAPSHOT_WITNESS')
+    path=Path(directory)/'database.pgcustom'
+    need(secure(path,mode=0o600).st_size==receipt['dumpBytes'] and file_digest(path)==receipt['backupSha256'],'CUTOVER_DUMP_CHANGED')
+    utc(receipt['completedAt'])
+
+
+def validate_cutover_disk_terminal(op, raw):
+    """Read-only historical proof; no Docker/database commands or cleanup transitions."""
+    work=ROOT/'backups'/('.disk-restore-'+digest(raw))
+    need(read_secure(work/'backup-operation.json')==raw,'CUTOVER_CAPSULE_DRIFT')
+    plan=strict(read_secure(work/'disk-plan.json'))
+    need(plan==disk_plan(op,raw,cutover_disk_sizing(plan['databaseBytes'],2**50,2**50)),'CUTOVER_PLAN_DRIFT')
+    journal=DiskJournal(work,plan['operationSha256'])
+    need(all(journal.find(phase) is not None for phase in ['RESTORE_VERIFIED','STORAGE_CLEANUP_VERIFIED','PUBLISHED','RECONCILED']),'CUTOVER_CLEANUP_UNPROVEN')
+    canonical=Path(plan['canonical'])
+    need(sorted(p.name for p in canonical.iterdir())==sorted(['database.pgcustom','database-backup-receipt.json','backup-operation.json','snapshot-witness.json','SUCCESS_CLEANUP_VERIFIED.json']),'CUTOVER_PUBLICATION_INVENTORY')
+    need(read_secure(canonical/'backup-operation.json')==raw,'CUTOVER_CAPSULE_DRIFT')
+    receipt=read_secure(canonical/'database-backup-receipt.json')
+    validate_cutover_disk_receipt(op,strict(receipt),plan,canonical)
+    need(journal.find('PUBLISH_READY')=={'dumpSha256':strict(receipt)['backupSha256'],'receiptSha256':digest(receipt)}
+         and journal.find('PUBLISHED')=={'receiptSha256':digest(receipt)}
+         and journal.find('SNAPSHOT_WITNESS')=={'sha256':strict(receipt)['snapshotWitnessSha256']},'CUTOVER_JOURNAL_BINDING')
+    terminal={'phase':'SUCCESS_CLEANUP_VERIFIED','operationSha256':plan['operationSha256'],
+              'observedAt':next(e['observedAt'] for e in journal.events if e['phase']=='STORAGE_CLEANUP_VERIFIED'),'receiptSha256':digest(receipt)}
+    need(strict(read_secure(canonical/'SUCCESS_CLEANUP_VERIFIED.json'))==terminal,'CUTOVER_TERMINAL_DRIFT')
+
+
 def execute_tmpfs(op, request_bytes, file_sha, reconcile=False):
     mode, release_id = operation_mode(op)
     cutover = op.get('schema') == CUTOVER_BACKUP_SCHEMA
@@ -3485,6 +3673,9 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
                  and read_secure(LOCK / 'backup-restore.json') == encoded(marker['marker']), 'DISK_LOCK_DRIFT')
         return True
     def guard(restore=None, cleanup=False, optional_lock=False):
+        if op.get('schema')==CUTOVER_DISK_SCHEMA:
+            disk_daemon_guard(journal)
+            if not cleanup:cutover_disk_reserve()
         if is_namespace_operation(op):namespace_frozen_source(plan)
         if not allow_expired:
             need(time.time() < utc(op['expiresAt']), 'EXPIRED_OPERATION')
@@ -3523,7 +3714,7 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
             initial = journal.find('MIGRATION_ATTESTATION')
             if initial is not None:
                 need(initial['proof'] == attestation, 'MIGRATION_ATTESTATION_DRIFT')
-        need(digest(ledger_bytes(source_query(SOURCE_LEDGER))) == plan['expectedLedgerSha256'], 'SOURCE_LEDGER_DRIFT')
+        need(digest(ledger_bytes(source_query(SOURCE_LEDGER,op['expectedPostgres']['id'] if op.get('schema')==CUTOVER_DISK_SCHEMA else PG_ID))) == plan['expectedLedgerSha256'], 'SOURCE_LEDGER_DRIFT')
     return guard, owned_lock
 
 
@@ -3547,11 +3738,15 @@ def disk_initialize(op, request_bytes, file_sha):
         need(row['Id'] == container, 'CONTAINER_ID')
         boundary.append(row)
     need(digest(encoded(boundary)) == op['expectedBoundarySha256'], 'BASELINE_BOUNDARY')
-    ledger = ledger_bytes(source_query(SOURCE_LEDGER))
+    source_pg=op['expectedPostgres']['id'] if op.get('schema')==CUTOVER_DISK_SCHEMA else PG_ID
+    ledger = ledger_bytes(source_query(SOURCE_LEDGER,source_pg))
     need(digest(ledger) == disk_ledger_sha(op), 'DISK_LEDGER')
-    raw_size = source_query(SOURCE_SIZE).decode().strip()
+    if op.get('schema')==CUTOVER_DISK_SCHEMA:
+        need(len(strict(ledger))==122,'CUTOVER_LEDGER')
+        need(strict(source_query(SOURCE_CUTOVER_TARGET,source_pg))=={**op['expectedDatabaseTarget'],'inRecovery':False},'CUTOVER_DATABASE_TARGET')
+    raw_size = source_query(SOURCE_SIZE,source_pg).decode().strip()
     need(re.fullmatch(r'[1-9][0-9]*', raw_size), 'DATABASE_SIZE')
-    sizing = disk_sizing(int(raw_size), disk_memory_available(), disk_free())
+    sizing = (cutover_disk_sizing if op.get('schema')==CUTOVER_DISK_SCHEMA else disk_sizing)(int(raw_size), disk_memory_available(), disk_free())
     plan = disk_plan(op, request_bytes, sizing)
     disk_private_parent(plan)
     daemon = disk_daemon_namespace()
@@ -3583,7 +3778,14 @@ def disk_initialize(op, request_bytes, file_sha):
 
 def disk_create_storage(plan, journal, guard):
     work = Path(plan['work'])
-    if plan['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2':
+    def checked_tool(*args,**kwargs):
+        if plan['schema']==CUTOVER_DISK_PLAN:cutover_disk_reserve()
+        result=disk_tool(*args,**kwargs)
+        if plan['schema']==CUTOVER_DISK_PLAN:cutover_disk_reserve()
+        return result
+    if plan['schema']==CUTOVER_DISK_PLAN:
+        need(plan==disk_plan(strict(read_secure(work/'backup-operation.json')),read_secure(work/'backup-operation.json'),cutover_disk_sizing(plan['databaseBytes'],disk_memory_available(),disk_free(),after_dump=True)),'CUTOVER_PLAN_DRIFT')
+    elif plan['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2':
         namespace_sizing(plan['databaseBytes'], disk_memory_available(), disk_free(), plan['isolation']['image'], after_dump=True)
     else:
         disk_sizing(plan['databaseBytes'], disk_memory_available(), disk_free(), after_dump=True)
@@ -3594,7 +3796,8 @@ def disk_create_storage(plan, journal, guard):
         os.fsync(fd); sync_directory(work)
         journal.add('IMAGE_CREATED', identity=storage_identity(os.fstat(fd)))
         journal.add('IMAGE_ALLOCATE_INTENT')
-        os.posix_fallocate(fd, 0, plan['imageBytes'])
+        if plan['schema']==CUTOVER_DISK_PLAN:cutover_allocate(fd,plan['imageBytes'])
+        else:os.posix_fallocate(fd, 0, plan['imageBytes'])
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -3602,19 +3805,19 @@ def disk_create_storage(plan, journal, guard):
     journal.add('IMAGE_ALLOCATED')
     guard(); need(disk_free() >= DISK_HEADROOM, 'DISK_RESERVE')
     journal.add('LOOP_ATTACH_INTENT')
-    loop = disk_tool('loop', ['--find', '--show', '--nooverlap', '--offset', '0', '--sizelimit', str(plan['imageBytes']), plan['image']], 'DISK_LOOP_ATTACH').decode().strip()
+    loop = checked_tool('loop', ['--find', '--show', '--nooverlap', '--offset', '0', '--sizelimit', str(plan['imageBytes']), plan['image']], 'DISK_LOOP_ATTACH').decode().strip()
     need(disk_loop(plan, disk_image(plan, journal)) == loop, 'DISK_LOOP_CUSTODY')
     journal.add('LOOP_ATTACHED', loop=loop)
     key = os.urandom(64)
     try:
         journal.add('LUKS_FORMAT_INTENT')
-        disk_tool('crypt', ['luksFormat', '--type', 'luks2', '--batch-mode', '--uuid', plan['luksUuid'],
+        checked_tool('crypt', ['luksFormat', '--type', 'luks2', '--batch-mode', '--uuid', plan['luksUuid'],
                           '--cipher', 'aes-xts-plain64', '--key-size', '512', '--pbkdf', 'pbkdf2',
                           '--pbkdf-force-iterations', '1000', '--key-file', '-', loop], 'DISK_LUKS_FORMAT', input_data=key)
-        need(disk_tool('crypt', ['luksUUID', loop], 'DISK_LUKS_UUID').decode().strip() == plan['luksUuid'], 'DISK_LUKS_UUID')
+        need(checked_tool('crypt', ['luksUUID', loop], 'DISK_LUKS_UUID').decode().strip() == plan['luksUuid'], 'DISK_LUKS_UUID')
         journal.add('LUKS_FORMATTED')
         journal.add('MAPPER_OPEN_INTENT')
-        disk_tool('crypt', ['open', '--type', 'luks2', '--key-file', '-', loop, plan['mapperName']], 'DISK_MAPPER_OPEN', input_data=key)
+        checked_tool('crypt', ['open', '--type', 'luks2', '--key-file', '-', loop, plan['mapperName']], 'DISK_MAPPER_OPEN', input_data=key)
     finally:
         # No claim of Python memory zeroization; process memory/stdin are the only key custody.
         del key
@@ -3622,16 +3825,16 @@ def disk_create_storage(plan, journal, guard):
     journal.add('MAPPER_OPENED', identity=mapper)
     journal.add('FS_FORMAT_INTENT')
     env = {**ENV, 'MKE2FS_CONFIG': '/dev/null'}
-    disk_tool('mkfs', ['-t', 'ext4', '-F', '-q', '-b', '4096', '-m', '0', '-U', plan['filesystemUuid'],
+    checked_tool('mkfs', ['-t', 'ext4', '-F', '-q', '-b', '4096', '-m', '0', '-U', plan['filesystemUuid'],
                        '-E', 'lazy_itable_init=0,lazy_journal_init=0', plan['mapperPath']], 'DISK_FS_FORMAT', environment=env)
-    need(disk_tool('blkid', ['--probe', '--match-tag', 'UUID', '--output', 'value', plan['mapperPath']], 'DISK_FILESYSTEM_UUID').decode().strip() == plan['filesystemUuid'], 'DISK_FILESYSTEM_UUID')
+    need(checked_tool('blkid', ['--probe', '--match-tag', 'UUID', '--output', 'value', plan['mapperPath']], 'DISK_FILESYSTEM_UUID').decode().strip() == plan['filesystemUuid'], 'DISK_FILESYSTEM_UUID')
     journal.add('FS_FORMATTED')
     journal.add('MOUNTPOINT_CREATE_INTENT')
     Path(plan['mount']).mkdir(mode=0o700); sync_directory(work)
     journal.add('MOUNTPOINT_CREATED', identity=storage_identity(secure(plan['mount'], 'dir', 0o700)))
     guard(); disk_private_parent(plan)
     journal.add('MOUNT_INTENT')
-    disk_tool('mount', ['--no-mtab', '--types', 'ext4', '--options', plan['mountOptions'], plan['mapperPath'], plan['mount']], 'DISK_MOUNT')
+    checked_tool('mount', ['--no-mtab', '--types', 'ext4', '--options', plan['mountOptions'], plan['mapperPath'], plan['mount']], 'DISK_MOUNT')
     os.chmod(plan['mount'], 0o700 if plan['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2' else 0o1777)
     mount = disk_mount(plan, mapper)
     journal.add('MOUNTED', identity=mount)
@@ -3751,18 +3954,31 @@ def disk_publication(plan, journal):
         directory = publication
     secure(directory, 'dir', 0o700)
     operation = read_secure(Path(plan['work']) / 'backup-operation.json')
+    cutover = strict(operation).get('schema') == CUTOVER_DISK_SCHEMA
     current_web = is_web8158_operation(strict(operation)) or is_owner_acl_backup(strict(operation))
     inventory = ['database-backup-receipt.json', 'database.pgcustom']
     if is_owner_acl_backup(strict(operation)):
         inventory.append('preimage-proof.json')
         need(digest(read_secure(directory / 'preimage-proof.json')) == strict(read_secure(directory / 'database-backup-receipt.json'))['preimageSha256'], 'NOTIFICATION_PREIMAGE_PROOF')
-    if current_web:
+    if current_web or cutover:
         inventory.append('backup-operation.json')
         need(read_secure(directory / 'backup-operation.json') == operation, 'DISK_PUBLICATION_OPERATION')
+    if cutover:inventory.append('snapshot-witness.json')
+    if cutover and (directory / 'SUCCESS_CLEANUP_VERIFIED.json').exists():
+        inventory.append('SUCCESS_CLEANUP_VERIFIED.json')
     need(sorted(p.name for p in directory.iterdir()) == sorted(inventory), 'DISK_PUBLICATION_INVENTORY')
     receipt = read_secure(directory / 'database-backup-receipt.json')
     need(digest(receipt) == ready['receiptSha256'] and file_digest(directory / 'database.pgcustom') == ready['dumpSha256'], 'DISK_PUBLICATION_DRIFT')
     value = strict(receipt)
+    if cutover:
+        validate_cutover_disk_receipt(strict(operation), value, plan, directory)
+        terminal = {'phase':'SUCCESS_CLEANUP_VERIFIED','operationSha256':plan['operationSha256'],
+                    'observedAt':next(e['observedAt'] for e in journal.events if e['phase']=='STORAGE_CLEANUP_VERIFIED'), 'receiptSha256':digest(receipt)}
+        terminal_path = directory / 'SUCCESS_CLEANUP_VERIFIED.json'
+        if terminal_path.exists():
+            need(strict(read_secure(terminal_path)) == terminal,'CUTOVER_TERMINAL_DRIFT')
+        else:
+            atomic_exclusive(terminal_path,encoded(terminal))
     need(value['backupFile'] == str(canonical / 'database.pgcustom')
          and value['sourceLedgerSha256'] == value['restoredLedgerSha256'] == plan['expectedLedgerSha256'], 'DISK_PUBLICATION_LEDGER')
     journal.once('PUBLISH_INTENT')
@@ -3789,12 +4005,21 @@ def execute_disk(op, request_bytes, file_sha):
     plan, journal, guard = disk_initialize(op, request_bytes, file_sha)
     work = Path(plan['work'])
     incoming = work / 'database.pgcustom.incoming'
+    cutover = op.get('schema') == CUTOVER_DISK_SCHEMA
     journal.add('DUMP_INTENT')
     fd = os.open(incoming, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(os.dup(fd), 'wb') as stream:
-            docker(['exec', op['expectedPostgres']['id'] if is_owner_acl_backup(op) else PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP.replace(' --no-owner --no-acl','') if is_owner_acl_backup(op) else SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
-                   file_limit=plan['dumpLimitBytes'])
+            if cutover:
+                journal.add('SNAPSHOT_INTENT')
+                with cutover_source_snapshot(op,plan['operationSha256']) as snapshot:
+                    atomic_exclusive(work/'snapshot-witness.json',encoded(snapshot['witness']))
+                    journal.add('SNAPSHOT_WITNESS',sha256=digest(encoded(snapshot['witness'])))
+                    cutover_blocking_docker(['exec',op['expectedPostgres']['id'],'/bin/sh','-eu','-c',cutover_snapshot_dump_shell(plan['operationSha256'],snapshot['token'])],
+                                            'DUMP',stdout=stream,timeout=1230,file_limit=plan['dumpLimitBytes'])
+            else:
+                docker(['exec', op['expectedPostgres']['id'] if is_owner_acl_backup(op) else PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP.replace(' --no-owner --no-acl','') if is_owner_acl_backup(op) else SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
+                       file_limit=plan['dumpLimitBytes'])
             stream.flush()
         os.fsync(fd)
     finally:
@@ -3816,6 +4041,7 @@ def execute_disk(op, request_bytes, file_sha):
     docker(['start', container], 'DISK_RESTORE_START')
     ready = False
     for _ in range(45):
+        if cutover:cutover_disk_reserve()
         row = disk_container_lookup(plan)
         need(row is not None and row['Id'] == container and row['State']['Status'] == 'running', 'DISK_RESTORE_START_UNPROVEN')
         try:
@@ -3831,14 +4057,26 @@ def execute_disk(op, request_bytes, file_sha):
     atomic_exclusive(work / 'restore-storage-proof.json', encoded(proof))
     guard(container)
     with dump_stream(incoming, dump_sha) as stream:
-        docker(['exec', '-i', container, 'pg_restore', '--list'], 'DUMP_TOC', stdin=stream, stdout=subprocess.DEVNULL, timeout=120)
+        (cutover_blocking_docker if cutover else docker)(['exec', '-i', container, 'pg_restore', '--list'], 'DUMP_TOC', stdin=stream, stdout=subprocess.DEVNULL, timeout=120)
     journal.add('RESTORE_INTENT', containerId=container)
+    if cutover:
+        settings_sql="select json_build_array(current_setting('wal_level'),current_setting('max_wal_senders'),current_setting('max_replication_slots'),current_setting('archive_mode'),current_setting('fsync'),current_setting('full_page_writes'),current_setting('synchronous_commit'))::text"
+        settings=strict(docker(['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','-qAt','--set=ON_ERROR_STOP=1','--command='+settings_sql],'CUTOVER_RESTORE_SETTINGS'))
+        need(settings==['minimal','0','0','off','on','on','on'],'CUTOVER_RESTORE_SETTINGS')
     with dump_stream(incoming, dump_sha) as stream:
-        docker(['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
-                *(['--no-owner','--no-acl'] if not is_owner_acl_backup(op) else ['--single-transaction']), '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
+        if cutover:
+            cutover_blocking_docker(['exec','-i',container,'/usr/bin/timeout','-s','TERM','-k','10','3500','pg_restore','--username=phub_restore','--dbname=phub_restore','--no-owner','--no-acl','--single-transaction','--exit-on-error'],
+                                    'RESTORE',stdin=stream,timeout=3600)
+        else:
+            docker(['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
+                    *(['--no-owner','--no-acl'] if not is_owner_acl_backup(op) else ['--single-transaction']), '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
     restored = ledger_bytes(docker(['exec', container, 'psql', '-X', '--username=phub_restore', '--dbname=phub_restore',
                                   '--no-psqlrc', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1', '--command=' + LEDGER_SQL], 'RESTORED_LEDGER'))
     need(digest(restored) == plan['expectedLedgerSha256'] and file_digest(incoming) == dump_sha, 'LEDGER_MISMATCH')
+    if cutover:
+        restored_accounts=digest(encoded(strict(docker(['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','-qAt','--set=ON_ERROR_STOP=1','--command='+CUTOVER_ACCOUNTS_SQL],'CUTOVER_RESTORED_ACCOUNTS'))))
+        need(restored_accounts==snapshot['accountsSha256'],'CUTOVER_ACCOUNTS_MISMATCH')
+        cutover_disk_source_stopped(op,plan['operationSha256'])
     guard(container)
     journal.add('RESTORE_VERIFIED', containerId=container, ledgerSha256=digest(restored), dumpSha256=dump_sha)
     Path(plan['publication']).mkdir(mode=0o700); sync_directory(work)
@@ -3847,6 +4085,15 @@ def execute_disk(op, request_bytes, file_sha):
                'completedAt': now_iso(), 'backupFile': str(Path(plan['canonical']) / 'database.pgcustom'),
                'backupSha256': dump_sha, 'restoreVerified': True, 'restoreImage': PG_IMAGE,
                'restoredLedgerSha256': digest(restored), 'sourceLedgerSha256': digest(restored)}
+    if cutover:
+        receipt.update(schema=CUTOVER_DISK_RECEIPT,operationSha256=plan['operationSha256'],
+                       predecessorAttestationSha256=op['predecessorAttestationSha256'],databaseTarget=op['expectedDatabaseTarget'],
+                       sourceAccountsSha256=snapshot['accountsSha256'],restoredAccountsSha256=restored_accounts,
+                       snapshotWitnessSha256=digest(read_secure(work/'snapshot-witness.json')),
+                       dumpBytes=secure(Path(plan['publication'])/'database.pgcustom',mode=0o600).st_size,
+                       dumpLimitBytes=CUTOVER_DUMP_LIMIT,dumpCompression='zstd:3')
+        atomic_exclusive(Path(plan['publication'])/'backup-operation.json',request_bytes)
+        atomic_exclusive(Path(plan['publication'])/'snapshot-witness.json',read_secure(work/'snapshot-witness.json'))
     atomic_exclusive(Path(plan['publication']) / 'database-backup-receipt.json', encoded(receipt))
     journal.add('PUBLISH_READY', dumpSha256=dump_sha, receiptSha256=digest(encoded(receipt)))
     disk_cleanup(plan, journal, guard)
@@ -3864,6 +4111,9 @@ def reconcile_disk(op, request_bytes, file_sha):
     need(read_secure(work / 'backup-operation.json') == request_bytes, 'DISK_CAPSULE_DRIFT')
     plan = strict(read_secure(work / 'disk-plan.json'))
     sizing = {key: plan[key] for key in ['databaseBytes', 'restoreDataBytes', 'imageBytes', 'memoryBytes', 'dumpLimitBytes', 'diskReserveBytes']}
+    if op.get('schema') == CUTOVER_DISK_SCHEMA:
+        need(sizing==cutover_disk_sizing(plan['databaseBytes'],2**50,2**50),'CUTOVER_PLAN_DRIFT')
+        cutover_disk_source_stopped(op,digest(request_bytes))
     need(plan == disk_plan(op, request_bytes, sizing), 'DISK_PLAN_DRIFT')
     journal = DiskJournal(work, plan['operationSha256'])
     need(journal.find('LOCK_PREPARED') is not None, 'DISK_LOCK_UNPROVEN')

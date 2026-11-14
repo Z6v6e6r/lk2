@@ -1203,7 +1203,7 @@ def disk_operation(post=False):
 
 def disk_restore_row(plan, container='e'*64, state='running'):
     row = restore_row(container, plan['operationSha256'], 512*1024**2, state)
-    row['Config'].update(Env=['PGDATA=/var/lib/postgresql/data/phub-restore','POSTGRES_USER=phub_restore','POSTGRES_DB=phub_restore','POSTGRES_HOST_AUTH_METHOD=trust'], Cmd=['postgres'], Entrypoint=['docker-entrypoint.sh'])
+    row['Config'].update(Env=['PGDATA=/var/lib/postgresql/data/phub-restore','POSTGRES_USER=phub_restore','POSTGRES_DB=phub_restore','POSTGRES_HOST_AUTH_METHOD=trust'], Cmd=m.cutover_restore_command() if plan['schema']==m.CUTOVER_DISK_PLAN else ['postgres'], Entrypoint=['docker-entrypoint.sh'])
     row['HostConfig']['LogConfig'] = {'Type':'none','Config':{}}
     row['HostConfig']['Tmpfs'] = m.DISK_COMMON_TMPFS.copy()
     row['HostConfig']['Memory'] = row['HostConfig']['MemorySwap'] = m.DISK_MEMORY
@@ -1540,6 +1540,200 @@ class DiskScenario(Scenario):
             original_lexists=m.os.path.lexists
             stack.enter_context(patch.object(m.os.path,'lexists',side_effect=lambda p:bool(self.mapper)if str(p)==self.plan['mapperPath'] else original_lexists(p)))
             return m.reconcile_disk(copy.deepcopy(self.op),m.encoded(self.op),'2'*64)if reconcile else m.execute(copy.deepcopy(self.op),m.encoded(self.op),'2'*64)
+
+
+class CutoverDiskScenario(DiskScenario):
+    def __init__(self,directory,fault=None):
+        op=cutover_backup_operation()
+        op.update(schema=m.CUTOVER_DISK_SCHEMA,confirmation='BACKUP_RESTORE_BOUNDED_DISK_BETA122_'+op['candidateSha'][:12].upper()+'_FROM_LK2_BETA_759083E37B40')
+        Scenario.__init__(self,directory,None,op,CUTOVER_LEDGER)
+        self.fault=fault;self.loop=None;self.mapper=None;self.mounted=False;self.stopped=False
+        with patch.object(m,'ROOT',self.root):
+            self.plan=m.disk_plan(self.op,m.encoded(self.op),m.cutover_disk_sizing(1024,10**12,50*1024**3))
+        self.secret=b'!'*64
+
+    def docker(self,args,code='DOCKER_READ',**kwargs):
+        if code=='CUTOVER_SOURCE_ACTIVITY':
+            self.calls.append(['/usr/bin/docker']+args)
+            return b'1' if self.fault=='source-active' else b'0'
+        if code=='CUTOVER_RESTORE_SETTINGS':return m.encoded(['minimal','0','0','off','on','on','on'])
+        if code=='CUTOVER_RESTORED_ACCOUNTS' and self.fault=='restore-accounts-mismatch':return m.encoded(['c'*32,'d'*32])
+        return super().docker(args,code,**kwargs)
+
+    def invoke(self,reconcile=False):
+        from contextlib import contextmanager
+        @contextmanager
+        def snapshot(op,sha):
+            accounts=m.digest(m.encoded(['a'*32,'b'*32]))
+            yield {'token':'00000001-00000002-1','ledger':m.encoded(CUTOVER_LEDGER),'accountsSha256':accounts,
+                   'witness':{'schema':'PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1','operationSha256':sha,
+                              'sourcePostgres':op['expectedPostgres'],'capturedAt':m.now_iso(),
+                              'snapshotIdSha256':'a'*64,'databaseTarget':op['expectedDatabaseTarget'],
+                              'ledgerSha256':op['expectedLedgerSha256'],'accountsSha256':accounts}}
+        def blocking(args,code,**kwargs):
+            self.trip(code)
+            if code=='DUMP':
+                self.calls.append(['/usr/bin/docker']+args)
+                assert '--compress=zstd:level=3' in args[-1] and '--snapshot=' in args[-1]
+                assert '--serializable-deferrable' not in args[-1]
+                kwargs['stdout'].write(b'PGDMP synthetic bounded fixture')
+            else:self.docker(args,code,**kwargs)
+            self.trip(code,True)
+        with patch.object(m,'cutover_source_snapshot',side_effect=snapshot),patch.object(m,'cutover_blocking_docker',side_effect=blocking),patch.object(m,'cutover_allocate',side_effect=lambda fd,size:os.ftruncate(fd,size)):
+            return super().invoke(reconcile)
+
+
+class CutoverProcessTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform=='linux','posix_fallocate is a Linux producer prerequisite')
+    def test_allocation_real_child_preserves_fd_and_allocates_only_owned_file(self):
+        with tempfile.TemporaryFile() as stream,patch.object(m,'cutover_disk_reserve'):
+            m.cutover_allocate(stream.fileno(),1024**2)
+            self.assertEqual(os.fstat(stream.fileno()).st_size,1024**2)
+
+    @unittest.skipUnless(sys.platform=='linux','Linux PDEATHSIG custody')
+    def test_allocation_parent_death_binding_kills_owned_child(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile=Path(directory)/'child.pid'
+            program="import importlib.util,os,subprocess,sys,time;spec=importlib.util.spec_from_file_location('m',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);parent=os.getpid();child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],preexec_fn=lambda:m.namespace_client_death(parent));open(sys.argv[2],'w').write(str(child.pid));time.sleep(60)"
+            parent=subprocess.Popen([sys.executable,'-I','-S','-B','-c',program,str(Path(m.__file__).resolve()),str(pidfile)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            child=None
+            try:
+                deadline=time.monotonic()+5
+                while not pidfile.exists() and time.monotonic()<deadline:time.sleep(.02)
+                self.assertTrue(pidfile.exists());child=int(pidfile.read_text())
+                parent.kill();parent.wait(timeout=5)
+                deadline=time.monotonic()+5
+                while time.monotonic()<deadline:
+                    status=Path('/proc')/str(child)/'stat'
+                    if not status.exists() or status.read_text().split()[2]=='Z':break
+                    time.sleep(.02)
+                else:self.fail('owned child survived controller death')
+            finally:
+                if parent.poll() is None:parent.kill();parent.wait(timeout=5)
+                if child is not None:
+                    try:os.kill(child,9)
+                    except ProcessLookupError:pass
+
+    def test_reserve_drop_kills_and_reaps_only_allocation_child(self):
+        import subprocess
+        real=subprocess.Popen;children=[]
+        def child(args,**kwargs):
+            process=real([sys.executable,'-I','-S','-B','-c','import time;time.sleep(60)'],**kwargs);children.append(process);return process
+        with tempfile.TemporaryFile() as stream,patch.object(m.subprocess,'Popen',side_effect=child),patch.object(m,'cutover_disk_reserve',side_effect=m.Stop('CUTOVER_DISK_RESERVE')):
+            with self.assertRaisesRegex(m.Stop,'CUTOVER_DISK_RESERVE'):m.cutover_allocate(stream.fileno(),1024**2)
+        self.assertIsNotNone(children[0].poll())
+
+    def test_reserve_drop_reaps_docker_client_without_unjournaled_container_stop(self):
+        import subprocess
+        real=subprocess.Popen;children=[]
+        def child(args,**kwargs):
+            self.assertEqual(kwargs['stderr'],subprocess.DEVNULL)
+            process=real([sys.executable,'-I','-S','-B','-c','import time;time.sleep(60)'],**kwargs);children.append(process);return process
+        with patch.object(m.subprocess,'Popen',side_effect=child),patch.object(m,'cutover_disk_reserve',side_effect=m.Stop('CUTOVER_DISK_RESERVE')),patch.object(m,'docker') as docker:
+            with self.assertRaisesRegex(m.Stop,'CUTOVER_DISK_RESERVE'):m.cutover_blocking_docker(['exec','owned','pg_restore'],'RESTORE')
+            docker.assert_not_called()
+        self.assertIsNotNone(children[0].poll())
+        for limit in (True,0,-1,m.CUTOVER_DUMP_LIMIT+1):
+            with self.assertRaisesRegex(m.Stop,'CUTOVER_FILE_LIMIT'):m.cutover_blocking_docker([], 'DUMP',file_limit=limit)
+
+    def test_exporter_normal_rollback_and_nonzero_exit_are_distinguished(self):
+        import subprocess
+        real=subprocess.Popen;op=cutover_backup_operation()
+        responses=['00000001-00000002-1',json.dumps({**op['expectedDatabaseTarget'],'inRecovery':False}),json.dumps(CUTOVER_LEDGER),json.dumps(['fixture-hash'])]
+        for exit_code in (0,3):
+            children=[]
+            program="import sys,json;responses=json.loads(sys.argv[1]);\nfor reply in responses:\n sys.stdin.readline();print(reply,flush=True)\nfor line in sys.stdin:\n if line.startswith('ROLLBACK'):break\nsys.exit(int(sys.argv[2]))"
+            def child(args,**kwargs):
+                self.assertIn('idle_in_transaction_session_timeout=1400000',args[-1])
+                self.assertIn('-k 10 1500 psql',args[-1])
+                process=real([sys.executable,'-I','-S','-B','-c',program,json.dumps(responses),str(exit_code)],**kwargs);children.append(process);return process
+            with patch.object(m.subprocess,'Popen',side_effect=child),patch.object(m,'cutover_disk_reserve'),patch.object(m,'cutover_disk_source_stopped') as stopped:
+                if exit_code:
+                    with self.assertRaisesRegex(m.Stop,'CUTOVER_SNAPSHOT_EXIT'):
+                        with m.cutover_source_snapshot(op,'a'*64):pass
+                else:
+                    with m.cutover_source_snapshot(op,'a'*64) as snapshot:
+                        self.assertEqual(snapshot['token'],responses[0])
+                        self.assertNotIn(snapshot['token'],m.encoded(snapshot['witness']).decode())
+                self.assertEqual(stopped.call_count,2)
+            self.assertIsNotNone(children[0].poll())
+
+
+class CutoverDiskTests(unittest.TestCase):
+    def scenario(self,fault=None):
+        tmp=tempfile.TemporaryDirectory(prefix='phub-cutover-disk-');self.addCleanup(tmp.cleanup)
+        return CutoverDiskScenario(tmp.name,fault)
+
+    def test_closed_caps_and_combined_capacity(self):
+        op=self.scenario().op
+        self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+        self.assertTrue(m.is_disk_operation(op));self.assertFalse(m.is_namespace_operation(op))
+        required=m.CUTOVER_DUMP_LIMIT+m.CUTOVER_IMAGE_BYTES+m.DISK_HEADROOM+m.CUTOVER_CONTROL_BYTES
+        sizing=m.cutover_disk_sizing(17*1024**3,4*1024**3,required)
+        self.assertEqual(sizing['dumpLimitBytes'],13*1024**3//2)
+        for db,mem,free in [(17*1024**3+1,10**12,10**12),(1024,4*1024**3-1,10**12),(1024,10**12,required-1)]:
+            with self.assertRaises(m.Stop):m.cutover_disk_sizing(db,mem,free)
+        self.assertEqual(m.disk_container_args(m.disk_plan(op,m.encoded(op),sizing))[-9:],m.cutover_restore_command())
+
+    def test_snapshot_command_is_serial_read_only_and_compressed(self):
+        shell=m.cutover_snapshot_dump_shell('a'*64,'00000001-00000002-1')
+        self.assertIn('default_transaction_read_only=on',shell)
+        self.assertIn('/usr/bin/timeout -s TERM -k 10 1200',shell)
+        self.assertIn('--compress=zstd:level=3',shell)
+        self.assertNotIn('--serializable-deferrable',shell)
+        self.assertNotIn('--jobs',shell)
+        with self.assertRaises(m.Stop):m.cutover_snapshot_dump_shell('a'*64,"';touch /tmp/x")
+
+    def test_full_pipeline_snapshot_accounts_cleanup_and_terminal(self):
+        s=self.scenario();result=s.invoke();canonical=Path(s.plan['canonical'])
+        receipt=json.loads((canonical/'database-backup-receipt.json').read_bytes())
+        self.assertEqual(receipt['schema'],m.CUTOVER_DISK_RECEIPT)
+        self.assertEqual(receipt['dumpCompression'],'zstd:3')
+        self.assertEqual(receipt['sourceAccountsSha256'],receipt['restoredAccountsSha256'])
+        self.assertTrue((canonical/'SUCCESS_CLEANUP_VERIFIED.json').exists())
+        self.assertFalse((s.root/'standard/active').exists())
+        self.assertFalse(s.created or s.loop or s.mapper or s.mounted)
+        self.assertFalse(result['authorizesDeploy'])
+        s.invoke(True)
+        with patch.object(m,'ROOT',s.root),patch.object(m,'read_secure',side_effect=s.read),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()):
+            m.validate_cutover_disk_terminal(s.op,m.encoded(s.op))
+            terminal=canonical/'SUCCESS_CLEANUP_VERIFIED.json';value=json.loads(terminal.read_bytes());value['observedAt']='2026-10-01T00:00:00.000Z';terminal.write_bytes(m.encoded(value))
+            with self.assertRaisesRegex(m.Stop,'CUTOVER_TERMINAL_DRIFT'):m.validate_cutover_disk_terminal(s.op,m.encoded(s.op))
+
+    def test_failure_reconciles_without_dump_or_restore_replay(self):
+        for fault in ['before:DUMP','after:DUMP','before:RESTORE','after:RESTORE','after:PHASE_PUBLISH_READY','after:PHASE_STORAGE_CLEANUP_VERIFIED','after:PHASE_PUBLISH_INTENT','after:PHASE_PUBLISHED','after:PHASE_UNLOCK_INTENT']:
+            with self.subTest(fault=fault):
+                s=self.scenario(fault)
+                with self.assertRaises(m.Stop):s.invoke()
+                old=len(s.calls);s.fault=None;s.invoke(True)
+                self.assertFalse((s.root/'standard/active').exists())
+                self.assertFalse(any('pg_restore' in a or 'pg_dump' in ' '.join(a) or (len(a)>1 and a[1] in ('create','start')) for a in s.calls[old:]))
+
+    def test_account_mismatch_never_publishes(self):
+        s=self.scenario('restore-accounts-mismatch')
+        with self.assertRaisesRegex(m.Stop,'CUTOVER_ACCOUNTS_MISMATCH'):s.invoke()
+        self.assertFalse(Path(s.plan['canonical']).exists())
+        s.fault=None;s.invoke(True)
+        self.assertIsNotNone(s.journal().find('ABORTED'))
+
+    def test_source_backend_prevents_reconcile_unlock(self):
+        s=self.scenario('before:DUMP')
+        with self.assertRaises(m.Stop):s.invoke()
+        s.fault='source-active'
+        with self.assertRaisesRegex(m.Stop,'CUTOVER_SOURCE_STILL_ACTIVE'):s.invoke(True)
+        self.assertTrue((s.root/'standard/active').exists())
+
+    def test_closed_receipt_and_witness_reject_edits(self):
+        s=self.scenario();s.invoke();canonical=Path(s.plan['canonical'])
+        receipt_path=canonical/'database-backup-receipt.json';raw=receipt_path.read_bytes();receipt=json.loads(raw)
+        for key,value in [('dumpCompression','gzip:9'),('dumpBytes',receipt['dumpBytes']+1),('sourceAccountsSha256','0'*64),('dumpLimitBytes',m.CUTOVER_DUMP_LIMIT+1)]:
+            changed={**receipt,key:value};receipt_path.write_bytes(m.encoded(changed))
+            with self.assertRaises(m.Stop):s.invoke(True)
+        receipt_path.write_bytes(raw)
+        witness=Path(s.plan['work'])/'snapshot-witness.json';w=json.loads(witness.read_bytes());w['unexpected']='raw-identity'
+        witness.write_bytes(m.encoded(w))
+        with self.assertRaises(m.Stop):s.invoke(True)
 
 
 class DiskPipelineTests(unittest.TestCase):

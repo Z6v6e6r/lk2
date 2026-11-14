@@ -979,6 +979,7 @@ function validateBackupProof(directory, previous, profile = 'beta', cutover = un
     };
   }
   const v = JSON.parse(bytes);
+  const diskCutover = cutover && v.schema === 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V2';
   exact(v, [
     'schema',
     'baselineReleaseId',
@@ -996,13 +997,18 @@ function validateBackupProof(directory, previous, profile = 'beta', cutover = un
           'databaseTarget',
           'sourceAccountsSha256',
           'restoredAccountsSha256',
+          ...(diskCutover
+            ? ['snapshotWitnessSha256', 'dumpBytes', 'dumpLimitBytes', 'dumpCompression']
+            : []),
         ]
       : []),
   ]);
   if (
     v.schema !==
       (cutover
-        ? 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V1'
+        ? diskCutover
+          ? 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V2'
+          : 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V1'
         : 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1') ||
     v.baselineReleaseId !== previous.releaseId ||
     v.restoreVerified !== true ||
@@ -1031,19 +1037,34 @@ function validateBackupProof(directory, previous, profile = 'beta', cutover = un
     const operationBytes = read(operationPath);
     const operationSha256 = hash(operationBytes);
     if (v.operationSha256 !== operationSha256) fail('cutover_backup_operation');
-    validateCutoverBackupOperation(cutover, operationBytes, {
+    const producer = validateCutoverBackupOperation(cutover, operationBytes, {
       directory,
       postgres: inspect('postgres', 'phub-timeweb-beta-dependencies'),
       toolFileSha256: hash(read(`${SOURCE}/scripts/control-timeweb-database-backup.py`, 0o644)),
       configSha256: hash(read(CONFIG)),
     });
+    if (
+      diskCutover !== (producer.schema === 'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2') ||
+      (diskCutover &&
+        (!HASH.test(v.snapshotWitnessSha256 ?? '') ||
+          !Number.isSafeInteger(v.dumpBytes) ||
+          v.dumpBytes <= 0 ||
+          v.dumpBytes > (13 * 1024 ** 3) / 2 ||
+          v.dumpLimitBytes !== (13 * 1024 ** 3) / 2 ||
+          v.dumpCompression !== 'zstd:3' ||
+          lstatSync(v.backupFile).size !== v.dumpBytes))
+    )
+      fail('cutover_backup_profile');
     // Pure request validation and local installation/Git-object custody checks. This entry calls
     // neither execute() nor any Docker/database operation in the producer.
     const program = `import importlib.util,json,sys,time
 spec=importlib.util.spec_from_file_location('backup','${SOURCE}/scripts/control-timeweb-database-backup.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
-op=m.strict(sys.stdin.buffer.read());m.validate_operation(op,time.time(),op['toolFileSha256'],allow_expired=True)
-m.tool_custody(op);sys.stdout.write('CUTOVER_BACKUP_CUSTODY_VERIFIED')`;
+raw=sys.stdin.buffer.read();op=m.strict(raw);m.validate_operation(op,time.time(),op['toolFileSha256'],allow_expired=True)
+m.tool_custody(op)
+if op['schema']==m.CUTOVER_DISK_SCHEMA:
+ m.validate_cutover_disk_terminal(op,raw)
+sys.stdout.write('CUTOVER_BACKUP_CUSTODY_VERIFIED')`;
     if (
       command('/usr/bin/python3', ['-I', '-S', '-B', '-c', program], {
         input: operationBytes,

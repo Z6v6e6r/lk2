@@ -223,6 +223,26 @@ describe('Timeweb backup/isolated restore preparation', () => {
     },
   );
 
+  it.skipIf(process.platform !== 'linux' || process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')(
+    'restores the PG16 zstd archive from the exact exported snapshot despite a concurrent source change',
+    () => {
+      const result = spawnSync(
+        'python3',
+        ['-I', '-S', '-B', 'scripts/rehearse-timeweb-cutover-snapshot.py'],
+        {
+          encoding: 'utf8',
+          timeout: 240_000,
+          env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+        },
+      );
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+      expect(parseStrictJson(result.stdout)).toMatchObject({
+        status: 'CUTOVER_SNAPSHOT_PG16_PASS',
+        fullFixtureRestore: true,
+      });
+    },
+    245_000,
+  );
   it('runs mock-only custody, isolation, recovery and receipt regression scenarios', () => {
     // This child runs the whole Python suite alongside CI's other integration tests.
     const result = spawnSync(

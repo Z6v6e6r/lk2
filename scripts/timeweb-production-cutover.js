@@ -391,7 +391,10 @@ export function validateCutoverBackupOperation(operation, bytes, facts) {
       (key) => actual[key] === expected?.[key],
     );
   if (
-    producer.schema !== 'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1' ||
+    ![
+      'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1',
+      'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2',
+    ].includes(producer.schema) ||
     producer.profile !== 'production' ||
     producer.candidateSha !== operation.candidateSha ||
     producer.controllerSha !== operation.controllerSha ||

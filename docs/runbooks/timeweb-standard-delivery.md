@@ -1676,13 +1676,17 @@ Before activation:
 2. Read the target and runtime afresh. Stage only the five authenticated legacy build archives at
    `legacy-baselines/<legacy-source-sha>/build-<component>.tar.gz`, root-owned `0600` under `0700`
    directories. Capture the private predecessor snapshot from the actual trusted inspect helpers.
-3. Use the existing backup producer's tmpfs-only
-   `PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1` profile. Its candidate release ID uses the new
+3. Select the existing backup producer's tmpfs
+   `PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1` profile, or explicitly choose the bounded Disk V1
+   `PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2` profile described in
+   [prerequisite producers](timeweb-prerequisite-producers.md#bounded-disk-profile-for-the-legacy-cutover).
+   A failed capacity gate never chooses another profile automatically. Its candidate release ID uses the new
    canonical publication run; `baselineReleaseId` stays the actual legacy label. Independently
    restore the complete dump with `pg_restore --exit-on-error` and verify the unchanged 122-row
    ledger plus aggregate account/profile/session/delegation identity witnesses. No raw identity,
-   phone, token or ciphertext is printed. A legitimate account/session change during the separate
-   source/dump snapshots can cause a safe abort; retain the journal and reconcile, never replay.
+   phone, token or ciphertext is printed. The bounded disk profile binds witnesses and dump to one
+   exported snapshot; the older tmpfs profile can safely abort on concurrent identity/session changes.
+   On failure retain the journal and use the exact profile's reconciler, never replay.
 4. Bind the retained `backup-operation.json` SHA-256 into `backupOperationSha256` of the cutover
    request. Admission verifies the exact producer profile, tool Git-object/installation custody,
    current API/PostgreSQL identities, candidate release, target, ledger, attestation, fresh receipt,
