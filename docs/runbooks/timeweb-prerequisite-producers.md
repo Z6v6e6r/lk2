@@ -156,3 +156,98 @@ Before this format can support delivery, establish actual nonce/template feasibi
 Run focused Vitest tests and `python3 -I -S -B scripts/test-timeweb-database-backup.py`; all Docker/Git/server interfaces in pipeline scenarios are mocked and temporary files are task-owned. For this CRITICAL operational-code preparation also run the existing `npm run check`, configured secret/PII checks and independent security/release review. Use CI evidence for the exact task head; a missing local scanner is reported rather than silently claimed.
 
 Remaining before live execution: current source decision/eligibility, exact installation plan/approval, physical pinned-image and phase-recovery rehearsal, real private captures and native nonce/template feasibility, independently reviewed original-record assertions or fixed native adapters, canonical collector/writer and explicit new-policy adoption, fresh bounded proofs and exact live approval. Neither preparation nor a green Draft PR authorizes a deploy.
+
+## Account-preserving cutover backup
+
+`PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1` is a closed production, tmpfs-only profile of the
+existing producer. Candidate, controller and tool commit are identical. It binds the actual API
+preimage (`lk2-beta-759083e37b40`, revision null), actual pinned PostgreSQL preimage, cluster
+`phub_beta` / `7679125609183186977`, exact 122-row ledger hash and predecessor-attestation SHA-256.
+The output directory is `backups/<candidate-sha>-<publication-run>-1-api-web`.
+
+Existing source read-only sessions, container-boundary checks, immutable PostgreSQL restore image,
+network-none/read-only-root tmpfs isolation, capacity gate, phase journal and no-replay behavior
+remain unchanged. All source queries/dump use the request's verified
+PostgreSQL container, not a stale global ID. A failed capacity check has no disk/namespace fallback.
+
+Only this cutover profile uses a unique `PGAPPNAME` plus an in-container 580-second BusyBox-compatible timeout
+(`-s TERM -k 10 580`: TERM, then KILL after 10 seconds), with a 620-second outer client timeout. A zero matching-backend
+readback is mandatory before dump success or cleanup. An active/unknown backend blocks cleanup;
+never terminate an unrelated session or replay the dump. The canonical PostgreSQL image must
+provide `/usr/bin/timeout` with those short options before live use. The dump is serial
+without parallel jobs; this bounds the direct `pg_dump`, not arbitrary child process groups.
+
+Failed cutover attempts use `--reconcile-cutover-tmpfs` with the same exact installed tool and
+root-owned request. The reconciler reattests source/runtime/controller/boundary and marker custody,
+stops/removes only the operation-labeled and fully inspected isolated restore container, proves its
+absence, retains the partial dump/journals, and emits `CUTOVER_RECONCILED` without authorizing deploy
+or replay. Foreign containers/locks, changed source custody, active dump backends and uncertain
+stop/remove acknowledgements remain STOP. Acquisition publishes a complete pending marker with
+atomic no-replace rename; retirement preserves the complete lock directory under the transaction,
+so a crash cannot expose an unowned empty global lock. The new execute/reconcile entries share the
+existing host-local mutation flock. Ordinary tmpfs/disk profiles retain their existing behavior.
+
+The complete dump is restored independently. Aggregate witnesses cover users, external identities,
+profile identity keys, refresh-session chains/status and Viva delegation identity/key version/status;
+only counts and hashes leave PostgreSQL. They are additional continuity evidence, not a substitute
+for the full restore. Normal identity/session updates between source and dump snapshots may safely
+abort this witness; reconcile retained state rather than retrying automatically.
+
+`PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V1` extends the previous receipt only for this profile with the
+producer operation hash, predecessor-attestation hash, database target and matching source/restored
+account witness hashes. The consuming cutover checks the retained producer capsule, installed helper
+custody, cleanup phase and dump bytes. Ordinary V1 receipts remain unchanged and cannot substitute
+for this proof. This profile does not activate an application, change a live row, or authorize a
+live database restore.
+
+### Bounded disk profile for the legacy cutover
+
+`PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2` is an explicitly selected alternative, never an
+automatic fallback from failed tmpfs admission. It uses the existing Disk V1 LUKS/ext4 engine and
+host Docker daemon. The exact target, legacy API, PostgreSQL preimage, controller, candidate,
+122-row ledger and predecessor bindings are identical to the tmpfs cutover profile. Confirmation:
+`BACKUP_RESTORE_BOUNDED_DISK_BETA122_<CANDIDATE12>_FROM_LK2_BETA_759083E37B40`.
+
+The producer admits a source database of at most 17 GiB, a complete serial custom-format zstd
+level-3 dump of at most 6.5 GiB, a fully allocated 18 GiB encrypted restore image and 5 GiB plus
+256 MiB host free-space reserve. Before dumping, all three budgets must fit together
+(31,943,819,264 bytes). After dumping, image plus reserve must still fit. Available memory must
+include the fixed 2 GiB restore limit and 2 GiB headroom. These are admission budgets, not a claim
+that a full restore will fit: mounted ext4 free space must exceed source size plus 256 MiB, and
+WAL, indexes or database growth can still cause a safe ENOSPC abort. No dump filtering, truncation,
+parallel restore, source-setting changes or reduction of fsync/full-page-writes is allowed.
+Allocation runs in an owned child and is polled, as are long Docker dump/TOC/restore calls; phase
+and readiness checks preserve the reserve. A breach retains the transaction and blocks publication.
+
+A bounded read-only REPEATABLE READ exporter supplies the same snapshot to the complete dump and
+the five account witnesses. `pg_dump --snapshot` uses `--compress=zstd:level=3` without
+`--serializable-deferrable`; the in-container BusyBox deadline is 1200 seconds, outer client 1230.
+The exporter has a 1400-second idle-transaction limit and 1500-second absolute deadline. Both
+operation-specific PostgreSQL application names must be absent before success/reconciliation.
+Legitimate later session rotation is not compared to the old snapshot. The isolated restore alone
+uses `wal_level=minimal`, zero WAL senders/replication slots and `archive_mode=off`; fsync,
+full-page-writes and synchronous-commit remain on. Full serial restore uses one transaction and
+`--exit-on-error`, with an in-container 3500-second deadline and outer 3600-second deadline.
+
+The closed V2 receipt binds actual dump size/hash/compression, exact caps, matching snapshot/restored
+account hashes, database/ledger identity, operation and predecessor. Canonical root-only publication
+contains dump, operation, receipt, hash-only snapshot witness and cleanup terminal. Publication and
+reconciliation validate both canonical and retained witness bytes. Raw tokens and identity rows are
+never written to metadata. The host root/Docker daemon are trusted: decrypted PGDATA is temporarily
+visible at the owned host mount, and the retained dump is plaintext under root-only permissions.
+LUKS protects scratch PGDATA, not Docker metadata or the dump.
+
+Use only `--reconcile-disk` with the retained exact request/tool after any uncertain result. It never
+replays dump/restore, and it retains partial dumps privately. It checks the owned source backends,
+container, mapper/loop/mount/image, frozen container boundary and original Docker daemon PID/start
+identity before cleanup and unlock. Daemon identity drift is STOP requiring a separately reviewed
+exact-kernel recovery; automatic cleanup after a daemon restart is not promised. Do not delete an
+existing backup or retry under a new operation merely to regain space. The full actual restore and
+account/ledger proof are prerequisites to activation; the producer never authorizes deployment.
+
+On Linux, allocation and Docker clients use a parent-death signal plus a parent-PID check.
+This kills the owned allocation child on controller death. It does not prove in-container dump or
+restore work stopped: inner deadlines bound those processes, the retained shared lock prevents
+activation, and exact reconciliation is required promptly. Reserve polling is not continuous after
+the producer dies. Crypt/mkfs tools are checked immediately before and after; only long allocation,
+dump, TOC and restore subprocesses are continuously polled while the producer remains alive.

@@ -1643,3 +1643,77 @@ Re-running verifies the recorded request/receipt/descriptor and returns the same
 container or GitHub reads; if only the receipt was lost after the descriptor write, the same verified
 evidence completes it. Any drift, partial write or conflict fails closed for manual reconciliation:
 do not delete custody artifacts or hand-edit the descriptor. Production never uses this route.
+
+## Production cutover from the retired beta lane
+
+The November 13 owner request authorizes repairing the production baseline and deploying LK2 while
+preserving all data and accounts. The observed predecessor is `lk2-beta-759083e37b40`, built by Test
+stand run `43202079490` from main `759083e37b4026f9690a3775a391f59f68f716a5` after successful first-attempt
+main CI `43199615483`. This predecessor has no OCI revision labels. It is not a canonical production
+publication and must never be relabeled or passed to the ordinary baseline reader.
+
+Use the existing `--critical-api-web` entry with operation schema
+`PHUB_TIMEWEB_API_WEB_PRODUCTION_CUTOVER_V1`, `profile: production`, and identical current-main
+candidate/controller SHA. The new candidate still needs the canonical five-image publication and
+first-attempt source CI. The cutover admits only the named historical predecessor. It never runs
+migrations, restores the live database, normalizes ACLs, changes keys, restarts Worker/Realtime,
+or changes ingress/provider configuration.
+
+`legacyBaseline` is a private `LEGACY_TEST_STAND_RUNTIME_V1` snapshot: exact four container IDs,
+immutable image refs/image IDs, real labels, null revisions, start times and zero restarts; source
+SHA/tree and successful CI/Test-stand runs; all five build records with artifact ID/name/archive
+SHA-256 and result digest; exact lane current/history/env hashes; fixed runtime paths; secret-set
+identity and hashes of all five existing secret files; database target/ledger hash; and the excluded
+container boundary. The actual Actions build records for this run are gzip OCI archives despite the
+`/zip` endpoint. Validate their GitHub archive digest, OCI blob hashes, exact builder/source/Dockerfile
+and result digest without extracting files. Mutable tags are not evidence.
+
+Before activation:
+
+1. Install/enroll the reviewed clean controller through the existing root-owned source process.
+   Keep the old source/configuration as recovery evidence. This is control-plane installation;
+   no application or runtime-secret change follows from it.
+2. Read the target and runtime afresh. Stage only the five authenticated legacy build archives at
+   `legacy-baselines/<legacy-source-sha>/build-<component>.tar.gz`, root-owned `0600` under `0700`
+   directories. Capture the private predecessor snapshot from the actual trusted inspect helpers.
+3. Select the existing backup producer's tmpfs
+   `PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1` profile, or explicitly choose the bounded Disk V1
+   `PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2` profile described in
+   [prerequisite producers](timeweb-prerequisite-producers.md#bounded-disk-profile-for-the-legacy-cutover).
+   A failed capacity gate never chooses another profile automatically. Its candidate release ID uses the new
+   canonical publication run; `baselineReleaseId` stays the actual legacy label. Independently
+   restore the complete dump with `pg_restore --exit-on-error` and verify the unchanged 122-row
+   ledger plus aggregate account/profile/session/delegation identity witnesses. No raw identity,
+   phone, token or ciphertext is printed. The bounded disk profile binds witnesses and dump to one
+   exported snapshot; the older tmpfs profile can safely abort on concurrent identity/session changes.
+   On failure retain the journal and use the exact profile's reconciler, never replay.
+4. Bind the retained `backup-operation.json` SHA-256 into `backupOperationSha256` of the cutover
+   request. Admission verifies the exact producer profile, tool Git-object/installation custody,
+   current API/PostgreSQL identities, candidate release, target, ledger, attestation, fresh receipt,
+   terminal cleanup and securely streamed dump hash.
+5. Refresh production monitoring and alert-delivery evidence. The snapshot must be current at
+   admission, with the existing required healthy rounds, Email/Telegram delivery, owner observation
+   and recovery. Notification drills need explicit owner authority. Do not retimestamp old evidence
+   or use a beta/direct-observation override. Seal these readbacks for the transaction; direct
+   private/public probes and unchanged-state checks continue for all 61 rounds over 900 seconds.
+6. Set a fresh expiry and exact confirmation
+   `CUTOVER_PRODUCTION_<CANDIDATE12>_FROM_<ATTESTATION12>_KEEP_DATA_AND_ACCOUNTS`.
+   The controller atomically journals the operation, predecessor attestation, overlays and plan.
+   It pulls canonical digests and activates API first, then Web, using `--no-deps`.
+
+On failure, restore Web then API using the sealed predecessor digests, original beta label, null
+revision and exact image IDs. Container IDs/start times necessarily change after recreation; the
+new runtime must still match the recorded image/label/revision/health and zero-restart expectation.
+Binary rollback never restores the database. Preserve failed-operation evidence and use the existing
+recovery/reconciliation entry; never delete a foreign lock or repeat an uncertain command.
+Loss of the dump or rotation of monitoring readbacks blocks forward admission and success, but
+does not block verification/reconciliation of `ABORTED` or `ROLLED_BACK`. Predecessor/configuration,
+secret and excluded-container custody still apply during recovery. A retained predecessor
+attestation from interrupted preparation is reused only when its bytes match exactly; it is
+checked before acquiring the rollout lock.
+
+Success emits an ordinary canonical `API_WEB` installed descriptor and a distinct
+`PHUB_TIMEWEB_API_WEB_CUTOVER_RECEIPT_V1`. `PHUB_LEGACY_PREDECESSOR_*` binds the retained noncanonical
+attestation; rollback mode is `attested-previous-runtime`, not a fabricated canonical previous
+release. The installed reader verifies this lineage before a subsequent ordinary release. A later
+successful release removes those one-shot predecessor fields and uses its own canonical predecessor.

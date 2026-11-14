@@ -1,10 +1,13 @@
 # LK2 disposable beta lane (lk2.padlhub.su)
 
-Status: implemented source, **CRITICAL deploy-mechanism change**; not yet executed on the host.
-Valid only while `lk2.padlhub.su` holds synthetic data (AGENTS.md first-version mode, ADR-0026
-`beta` lane). When real users or real personal data arrive, delete this lane
-(`deploy/timeweb/lk2-beta-lane.sh`, `apps/migrator/src/lk2-beta-lane.ts`) together with the AGENTS.md
-bullet, and lk2 returns to the strict production route.
+Status: **retired for lk2.padlhub.su as of 2026-11-13**. Live readback confirmed personal data,
+Viva identities/delegations and sessions. Do not run this lane's `plan`, `promote`, `rollback`, reset
+or migrator on the current target. Keep historical state, images and backups intact; they are evidence,
+not production authority. The operational description below is historical.
+
+The replacement is the explicit [production cutover in the existing strict API/Web controller](timeweb-standard-delivery.md#production-cutover-from-the-retired-beta-lane).
+It keeps the real predecessor labels and digests as rollback evidence without claiming canonical
+publication or changing the database, runtime secrets, Worker, Realtime or ingress.
 
 ## What it replaces and what it keeps
 

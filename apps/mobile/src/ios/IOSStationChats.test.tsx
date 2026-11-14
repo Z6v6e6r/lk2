@@ -173,7 +173,7 @@ it('confirmed ACK wins an older pending history read without losing original rec
     await Promise.resolve();
   });
   expect(screen.getByText('new text')).toBeVisible();
-  expect(Object.values(localStorage).join()).toBe('[]');
+  await waitFor(() => expect(Object.values(localStorage).join()).toBe('[]'));
 });
 it('actual iOS entry adopts v3 only from fresh summary, shows owner unread and never loads legacy', async () => {
   const position = {
