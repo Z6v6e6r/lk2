@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   reviewedNativeFixture,
+  reviewedNativeBatchFixture,
   encodedNativeFixture as bytes,
   nativeFixtureHash as hash,
   NATIVE_ADAPTER_SHA256,
@@ -23,8 +24,8 @@ import {
   ownerWaiverScopeSha256,
 } from './timeweb-roster-alert-waiver.js';
 
-function fixture() {
-  const reviewed = reviewedNativeFixture();
+function fixture(batch = false) {
+  const reviewed = batch ? reviewedNativeBatchFixture() : reviewedNativeFixture();
   const ownerValue = {
     schema: 'PHUB_TIMEWEB_OWNER_MESSAGE_RECEIPT_V1',
     authority: 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
@@ -95,22 +96,25 @@ function admit(f: ReturnType<typeof fixture>, at = NOW) {
   return createNativeWaiverAdmission(f.op, f.inputs, f.source, at, f.operationHash);
 }
 describe('one-operation owner waiver preserves truthful native health and historical custody', () => {
-  it('requires native facts and records NOT_TESTED instead of a fabricated alert result', () => {
-    const f = fixture();
-    validateRosterAlertWaiver(f.op, f.baselineHash, true, Date.parse(NOW));
-    const result = admit(f),
-      receipt = nativeAdmissionReceipt(result.admission);
-    expect(receipt.alertTestStatus).toBe('NOT_TESTED_OWNER_DECLINED');
-    expect(receipt).not.toHaveProperty('alertReadbackSha256');
-    expect(receipt).not.toHaveProperty('providerReadbackSha256');
-    expect(Object.keys(result.evidence).sort()).toEqual(
-      [...NATIVE_INPUTS, NATIVE_DERIVED, NATIVE_ENVELOPE].sort(),
-    );
-    validateSealedNativeAdmission(f.op, result.admission, f.operationHash, result.evidence);
-    expect(
-      validateRetainedNativeAdmission(f.op, result.admission, f.operationHash, result.evidence),
-    ).toEqual({ historicalAdmission: true, authorizesDeploy: false });
-  });
+  it.each([false, true])(
+    'requires native facts and retains admission/receipt for batch=%s',
+    (batch) => {
+      const f = fixture(batch);
+      validateRosterAlertWaiver(f.op, f.baselineHash, true, Date.parse(NOW));
+      const result = admit(f),
+        receipt = nativeAdmissionReceipt(result.admission);
+      expect(receipt.alertTestStatus).toBe('NOT_TESTED_OWNER_DECLINED');
+      expect(receipt).not.toHaveProperty('alertReadbackSha256');
+      expect(receipt).not.toHaveProperty('providerReadbackSha256');
+      expect(Object.keys(result.evidence).sort()).toEqual(
+        [...NATIVE_INPUTS, NATIVE_DERIVED, NATIVE_ENVELOPE].sort(),
+      );
+      validateSealedNativeAdmission(f.op, result.admission, f.operationHash, result.evidence);
+      expect(
+        validateRetainedNativeAdmission(f.op, result.admission, f.operationHash, result.evidence),
+      ).toEqual({ historicalAdmission: true, authorizesDeploy: false });
+    },
+  );
   it.each([
     'schema',
     'authority',

@@ -31,3 +31,7 @@ export function verifyNativeMonitorReadback(
   observedAt: string,
   expectedSourceSha: string,
 ): NativeMonitorReadback['monitors'];
+
+export const NATIVE_MONITOR_BATCH_BUNDLE: 'PHUB_TIMEWEB_NATIVE_MONITOR_CAPTURE_BATCH_V2';
+export const NATIVE_CUA_BATCH_RESULT: 'PHUB_TIMEWEB_NATIVE_CUA_BATCH_RESULT_V1';
+export function nativeBatchCuaArguments(): { code: string; title: string; timeout_ms: number };

@@ -201,15 +201,18 @@ describe('three-service roster cutover inside the existing canonical controller'
 // Unrelated monitoring parser semantics have their own suites; this fixture tests custody,
 // evidence hash binding, all three runtime identities and the actual lock-release path.
 it.each([
-  ['SUCCESS', false],
-  ['ROLLED_BACK', false],
-  ['ABORTED', false],
-  ['SUCCESS', true],
-  ['ROLLED_BACK', true],
-  ['ABORTED', true],
+  ['SUCCESS', false, false],
+  ['ROLLED_BACK', false, false],
+  ['ABORTED', false, false],
+  ['SUCCESS', true, false],
+  ['ROLLED_BACK', true, false],
+  ['ABORTED', true, false],
+  ['SUCCESS', true, true],
+  ['ROLLED_BACK', true, true],
+  ['ABORTED', true, true],
 ] as const)(
-  'reconciles terminal %s with waiver=%s before releasing the retained lock',
-  async (terminal, waived) => {
+  'reconciles terminal %s with waiver=%s batch=%s before releasing the retained lock',
+  async (terminal, waived, batch) => {
     const { createHash } = await import('node:crypto');
     const profile = await import('./timeweb-production-cutover.js');
     const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -426,7 +429,7 @@ it.each([
       op.confirmation = `CUTOVER_PRODUCTION_API_WORKER_WEB_WITHOUT_INDUCED_ALERT_KEEP_OTHER_GATES_${op.candidateSha.slice(0, 12).toUpperCase()}_FROM_${profile.legacyBaselineHash(b).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
       plan.schema = waiverProfile.WAIVER_PLAN;
       plan.operationSha256 = hash(json(op));
-      const reviewed = native.reviewedNativeFixture();
+      const reviewed = batch ? native.reviewedNativeBatchFixture() : native.reviewedNativeFixture();
       reviewed.f.bundle.producerSourceSha = op.candidateSha;
       reviewed.review.producerSourceSha = op.candidateSha;
       reviewed.review.adapterSourceSha256 = hash(adapterBytes);
