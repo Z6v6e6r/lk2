@@ -175,3 +175,20 @@ fewer than five complete images cannot enter reconciliation or satisfy canonical
 Publication evidence never authorizes deployment. Transfer of runtime secrets, database bootstrap,
 migration, routing changes, application activation and Jetson retirement remain separate approvals
 with their own backup, rollback and post-deploy checks.
+
+## November 15 registry redirect incident
+
+Publication `43697184813` from `92b3d7c222cdc644f7f1b184cb05fe81305262a1` stopped before Web GHCR
+login at `registry_redirect`. It is incomplete and non-authorizing; retain its sibling image outputs
+as incident evidence. Never rerun, reconcile, combine or deploy this run. A new reviewed source,
+first-attempt current-main CI and separate explicit publication approval are required.
+
+The failed host was not retained. Current independent reads from the workstation and VPS returned
+the documented CloudFront endpoint, so the fix does not add a guessed CDN host. Config redirects
+must be HTTPS/default port, contain no userinfo/fragment, and bind their path to the requested digest.
+Only 302/307 and final exact-URL 200 are accepted. A structurally valid unapproved-host response can
+make at most three total GETs to the same fixed Docker Hub blob URL (initial plus two retries),
+with at most two 250 ms delays; each request retains its existing 20-second timeout. The
+unapproved host is never requested. Exhaustion logs only a validated hostname and fixed reason,
+never the signed URL/query or token. The CDN request still carries no registry auth, refuses a second
+hop, and retains the existing timeout, byte cap and locked SHA-256/content proof.

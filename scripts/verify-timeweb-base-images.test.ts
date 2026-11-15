@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { setTimeout as retryDelay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   baseImageEvidence,
@@ -12,7 +13,11 @@ import {
   validateBaseImageLock,
   validateDockerfiles,
   validateRegistryProof,
+  validateConfigRedirect,
+  verifyRegistry,
 } from './verify-timeweb-base-images.js';
+
+vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(() => Promise.resolve()) }));
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const lockPath = join(repositoryRoot, 'deploy/timeweb/base-images.lock.json');
@@ -403,5 +408,223 @@ describe('mutable tag is diagnostic-only', () => {
     proof.image.tag = 'unavailable';
     proof.indexBytes = Buffer.from('{}');
     expect(() => validateRegistryProof(proof.image, proof)).toThrowError(/index_hash/u);
+  });
+});
+
+describe('Docker Hub config redirects preserve the closed CDN boundary', () => {
+  const digest = 'a'.repeat(64),
+    reference = 'sha256:' + digest;
+  const path = `/registry-v2/docker/registry/v2/blobs/sha256/aa/${digest}/data`;
+  const approved =
+    'https://production.cloudfront.docker.com' + path + '?signature=SYNTHETIC_SIGNED_QUERY';
+  it('accepts the exact HTTPS CDN and digest path with opaque signed query', () => {
+    expect(validateConfigRedirect(approved, reference).href).toBe(approved);
+  });
+  it.each([
+    null,
+    '',
+    '/relative',
+    'not a URL',
+    approved.replace('https:', 'http:'),
+    approved.replace('https://', 'https://user:password@'),
+    approved.replace('.com', '.com:8443'),
+    approved + '#fragment',
+    approved + '#',
+    approved.replace('production.cloudfront.docker.com', '127.0.0.1'),
+    approved.replace('production.cloudfront.docker.com', '[::1]'),
+    approved.replace('production.cloudfront.docker.com', 'production.cloudfront.docker.com.'),
+    approved.replace('/aa/', '/bb/'),
+    approved.replace(digest, 'b'.repeat(64)),
+    approved.replace(
+      'production.cloudfront.docker.com',
+      'production.cloudfront.docker.com.attacker.invalid',
+    ),
+    approved.replace('production.cloudfront.docker.com', 'child.production.cloudfront.docker.com'),
+    approved.replace('production.cloudfront.docker.com', 'production.cloudflare.docker.com'),
+    approved.replace(
+      'production.cloudfront.docker.com',
+      'docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com',
+    ),
+    ' ' + approved,
+    approved.replace('https://', 'https:\\\\'),
+  ])('rejects an unsafe or unapproved redirect (%#)', (location) => {
+    expect(() => validateConfigRedirect(location, reference)).toThrow();
+  });
+  function response(
+    url: string,
+    body: Buffer | string | null,
+    status = 200,
+    headers: Record<string, string> = {},
+  ) {
+    const result = new Response(body === null ? null : new Uint8Array(Buffer.from(body)), {
+      status,
+      headers,
+    });
+    Object.defineProperty(result, 'url', { value: url });
+    return result;
+  }
+  async function exercise(
+    options: {
+      rejects?: number;
+      redirectStatus?: number;
+      cdnStatus?: number;
+      wrongUrl?: boolean;
+      badDigest?: boolean;
+      location?: string | null;
+      alternate?: boolean;
+    } = {},
+    onTrace?: (trace: {
+      calls: { url: string; options: RequestInit | undefined }[];
+      registryBlobs: number;
+      delayCount: number;
+    }) => void,
+  ) {
+    const f = fixture(),
+      calls: { url: string; options: RequestInit | undefined }[] = [];
+    const configPath = `/registry-v2/docker/registry/v2/blobs/sha256/${f.child.config.digest.slice(7, 9)}/${f.child.config.digest.slice(7)}/data`;
+    let registryBlobs = 0;
+    vi.mocked(retryDelay).mockClear();
+    const mock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      calls.push({ url, options: init });
+      if (url.startsWith('https://auth.docker.io/token?'))
+        return Promise.resolve(
+          response(url, JSON.stringify({ token: 'SYNTHETIC_REGISTRY_TOKEN_ONLY' })),
+        );
+      if (url.endsWith('/manifests/' + f.image.indexDigest))
+        return Promise.resolve(response(url, f.indexBytes));
+      if (url.endsWith('/manifests/' + f.image.platform.manifestDigest))
+        return Promise.resolve(response(url, f.childBytes));
+      if (url.startsWith('https://registry-1.docker.io/') && url.includes('/blobs/')) {
+        registryBlobs++;
+        const host =
+          registryBlobs <= (options.rejects ?? 0)
+            ? options.alternate && registryBlobs % 2 === 0
+              ? 'other.invalid'
+              : 'unapproved.invalid'
+            : 'production.cloudfront.docker.com';
+        return Promise.resolve(
+          response(url, null, options.redirectStatus ?? 307, {
+            ...(options.location === null
+              ? {}
+              : {
+                  location:
+                    options.location ??
+                    'https://' + host + configPath + '?signature=SYNTHETIC_SIGNED_QUERY',
+                }),
+          }),
+        );
+      }
+      if (url.startsWith('https://production.cloudfront.docker.com/'))
+        return Promise.resolve(
+          response(
+            options.wrongUrl ? url + '/changed' : url,
+            options.badDigest ? Buffer.from('{}') : f.configBytes,
+            options.cdnStatus ?? 200,
+          ),
+        );
+      throw Error('unexpected endpoint');
+    });
+    try {
+      await verifyRegistry({ ...productionLock, images: [f.image] });
+      return { calls, registryBlobs };
+    } finally {
+      onTrace?.({ calls, registryBlobs, delayCount: vi.mocked(retryDelay).mock.calls.length });
+      expect(vi.mocked(retryDelay).mock.calls.every((call) => call[0] === 250)).toBe(true);
+      mock.mockRestore();
+    }
+  }
+  it('refreshes only the same registry request, then visits the approved CDN without auth', async () => {
+    const { calls, registryBlobs } = await exercise({ rejects: 1 });
+    expect(registryBlobs).toBe(2);
+    expect(calls.some((c) => c.url.startsWith('https://unapproved.invalid/'))).toBe(false);
+    const cdn = required(
+      calls.find((c) => c.url.startsWith('https://production.cloudfront.docker.com/')),
+    );
+    expect(cdn.options?.headers).toBeUndefined();
+    expect(cdn.options?.redirect).toBe('error');
+    const blobCalls = calls.filter(
+      (c) => c.url.includes('registry-1.docker.io/') && c.url.includes('/blobs/'),
+    );
+    expect(blobCalls[0]?.url).toBe(blobCalls[1]?.url);
+  });
+  it.each([0, 1, 2])(
+    'uses at most three total registry requests (unknown rounds %s)',
+    async (rejects) => {
+      let seen:
+        | {
+            calls: { url: string; options: RequestInit | undefined }[];
+            registryBlobs: number;
+            delayCount: number;
+          }
+        | undefined;
+      await exercise({ rejects }, (trace) => {
+        seen = trace;
+      });
+      expect(seen?.registryBlobs).toBe(rejects + 1);
+      expect(seen?.delayCount).toBe(rejects);
+    },
+  );
+  it.each([false, true])(
+    'stops after three registry resolutions and exposes only a safe hostname (alternating %s)',
+    async (alternate) => {
+      let seen:
+        | {
+            calls: { url: string; options: RequestInit | undefined }[];
+            registryBlobs: number;
+            delayCount: number;
+          }
+        | undefined;
+      const error = (await exercise({ rejects: 10, alternate }, (trace) => {
+        seen = trace;
+      }).catch((e: unknown) => e)) as { reason: string; redirectHostname: string };
+      expect(error.reason).toBe('registry_redirect_host');
+      expect(error.redirectHostname).toBe('unapproved.invalid');
+      expect(JSON.stringify(error)).not.toMatch(/SYNTHETIC_(?:SIGNED_QUERY|REGISTRY_TOKEN)/);
+      expect(seen?.registryBlobs).toBe(3);
+      expect(seen?.delayCount).toBe(2);
+      expect(seen?.calls.some((c) => /https:\/\/(?:unapproved|other)\.invalid/.test(c.url))).toBe(
+        false,
+      );
+      const blobs = seen!.calls.filter(
+        (c) => c.url.includes('registry-1.docker.io/') && c.url.includes('/blobs/'),
+      );
+      expect(new Set(blobs.map((c) => c.url)).size).toBe(1);
+      expect(new Set(blobs.map((c) => JSON.stringify(c.options?.headers))).size).toBe(1);
+    },
+  );
+  it.each([
+    null,
+    'bad',
+    'http://unapproved.invalid',
+    'https://user:password@unapproved.invalid',
+    'https://unapproved.invalid:8443',
+    'https://unapproved.invalid/wrong-path',
+  ])('fails malformed redirect immediately (%#)', async (location) => {
+    let seen: { registryBlobs: number; delayCount: number } | undefined;
+    await expect(
+      exercise({ location }, (trace) => {
+        seen = trace;
+      }),
+    ).rejects.toThrow('registry_redirect');
+    expect(seen?.registryBlobs).toBe(1);
+    expect(seen?.delayCount).toBe(0);
+  });
+  it('accepts a legacy 302 only through the same strict CDN contract', async () => {
+    const result = await exercise({ redirectStatus: 302 });
+    expect(result.registryBlobs).toBe(1);
+  });
+  it.each([301, 303, 308])(
+    'refuses status %s rather than following a different redirect contract',
+    async (status) => {
+      await expect(exercise({ redirectStatus: status })).rejects.toThrow('registry_read');
+    },
+  );
+  it.each([204, 206, 302])('requires final CDN status 200 (%s)', async (status) => {
+    await expect(exercise({ cdnStatus: status })).rejects.toThrow('registry_read');
+  });
+  it('rejects a changed final URL and digest', async () => {
+    await expect(exercise({ wrongUrl: true })).rejects.toThrow('registry_read');
+    await expect(exercise({ badDigest: true })).rejects.toThrow('config_hash');
   });
 });
