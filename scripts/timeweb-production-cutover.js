@@ -2,6 +2,15 @@
 // Only the explicit production-cutover operation may consume this evidence.
 import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
+import {
+  WAIVER_OPERATION,
+  WAIVER_PLAN,
+  WAIVER_RECEIPT,
+  WAIVER_KIND,
+  isWaivedRosterCutover,
+  validateRosterAlertWaiver,
+  validateNativeAdmissionBinding,
+} from './timeweb-roster-alert-waiver.js';
 
 export const CUTOVER_OPERATION = 'PHUB_TIMEWEB_API_WEB_PRODUCTION_CUTOVER_V1';
 export const CUTOVER_PLAN = 'PHUB_TIMEWEB_API_WEB_CUTOVER_PLAN_V1';
@@ -47,13 +56,28 @@ function timestamp(value) {
     new Date(value).toISOString().slice(0, 19) === value.slice(0, 19)
   );
 }
-export const isRosterCutover = (value) => value?.schema === ROSTER_CUTOVER_OPERATION;
+export const isRosterCutover = (value) =>
+  value?.schema === ROSTER_CUTOVER_OPERATION || isWaivedRosterCutover(value);
 export const isProductionCutover = (value) =>
   value?.schema === CUTOVER_OPERATION || isRosterCutover(value);
 export const cutoverPlanSchema = (value) =>
-  isRosterCutover(value) ? ROSTER_CUTOVER_PLAN : CUTOVER_PLAN;
+  isWaivedRosterCutover(value)
+    ? WAIVER_PLAN
+    : isRosterCutover(value)
+      ? ROSTER_CUTOVER_PLAN
+      : CUTOVER_PLAN;
 export const cutoverReceiptSchema = (value) =>
-  isRosterCutover(value) ? ROSTER_CUTOVER_RECEIPT : CUTOVER_RECEIPT;
+  isWaivedRosterCutover(value)
+    ? WAIVER_RECEIPT
+    : isRosterCutover(value)
+      ? ROSTER_CUTOVER_RECEIPT
+      : CUTOVER_RECEIPT;
+export const cutoverInstalledKind = (value) =>
+  [WAIVER_OPERATION, WAIVER_PLAN].includes(value?.schema)
+    ? WAIVER_KIND
+    : [ROSTER_CUTOVER_OPERATION, ROSTER_CUTOVER_PLAN].includes(value?.schema)
+      ? ROSTER_CUTOVER_KIND
+      : 'API_WEB';
 export const legacyBaselineHash = (baseline) => hash(JSON.stringify(baseline));
 export function validateLegacyBaseline(value) {
   exact(value, [
@@ -157,6 +181,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
     'expectedApi',
     'expectedWeb',
     ...(isRosterCutover(value) ? ['expectedWorker'] : []),
+    ...(isWaivedRosterCutover(value) ? ['alertWaiver'] : []),
     'legacyBaseline',
     'expiresAt',
     'confirmation',
@@ -179,6 +204,8 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
   )
     fail('operation');
   const baseline = validateLegacyBaseline(value.legacyBaseline);
+  if (isWaivedRosterCutover(value))
+    validateRosterAlertWaiver(value, legacyBaselineHash(baseline), fresh, now);
   for (const [key, service] of [
     ['expectedApi', 'api'],
     ['expectedWeb', 'web'],
@@ -192,7 +219,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
     )
       fail('previous_identity');
   }
-  const expected = `CUTOVER_PRODUCTION_${isRosterCutover(value) ? 'API_WORKER_WEB_' : ''}${value.candidateSha.slice(0, 12).toUpperCase()}_FROM_${legacyBaselineHash(baseline).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+  const expected = `CUTOVER_PRODUCTION_${isRosterCutover(value) ? 'API_WORKER_WEB_' : ''}${isWaivedRosterCutover(value) ? 'WITHOUT_INDUCED_ALERT_KEEP_OTHER_GATES_' : ''}${value.candidateSha.slice(0, 12).toUpperCase()}_FROM_${legacyBaselineHash(baseline).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
   if (value.confirmation !== expected) fail('confirmation');
   if (
     fresh &&
@@ -359,15 +386,18 @@ export function validateCutoverPlanProofs(operation, plan, transaction) {
     'receiptSha256',
     'dumpSha256',
   ]);
-  exact(plan.monitoring, ['providerSha256', 'alertSha256']);
+  if (isWaivedRosterCutover(operation))
+    validateNativeAdmissionBinding(operation, plan.monitoring, plan.operationSha256);
+  else exact(plan.monitoring, ['providerSha256', 'alertSha256']);
   if (
     ![
       plan.backup.sha256,
       plan.backup.operationSha256,
       plan.backup.receiptSha256,
       plan.backup.dumpSha256,
-      plan.monitoring.providerSha256,
-      plan.monitoring.alertSha256,
+      ...(isWaivedRosterCutover(operation)
+        ? []
+        : [plan.monitoring.providerSha256, plan.monitoring.alertSha256]),
     ].every((v) => HASH.test(v ?? '')) ||
     plan.backup.path !== `${transaction}/database-backup-receipt.json` ||
     plan.backup.receiptPath !== plan.backup.path ||

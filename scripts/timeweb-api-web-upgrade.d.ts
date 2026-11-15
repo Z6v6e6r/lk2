@@ -31,3 +31,10 @@ export function runManualApiWebUpgrade(
   mode: 'deploy' | 'recover' | 'reconcile',
   requestPath: string,
 ): Promise<{ status: string; candidate: string; receipt: string }>;
+
+export function readNativeOperatorSnapshot(path: string): Buffer;
+export function admitNativeWaiverMonitoring(
+  op: Record<string, unknown>,
+  transaction: string,
+  operationSha256: string,
+): Promise<Record<string, string>>;

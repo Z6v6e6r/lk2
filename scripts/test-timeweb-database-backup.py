@@ -1672,10 +1672,10 @@ class CutoverDiskTests(unittest.TestCase):
         required=m.CUTOVER_DUMP_LIMIT+m.CUTOVER_IMAGE_BYTES+m.DISK_HEADROOM+m.CUTOVER_CONTROL_BYTES
         sizing=m.cutover_disk_sizing(m.CUTOVER_DATABASE_LIMIT,4*1024**3,required)
         self.assertEqual(sizing['dumpLimitBytes'],13*1024**3//2)
-        self.assertEqual(m.CUTOVER_DATABASE_LIMIT,18_522_046_464)
-        self.assertEqual(sizing['imageBytes'],18*1024**3)
+        self.assertEqual(m.CUTOVER_DATABASE_LIMIT,19_327_352_832)
+        self.assertEqual(sizing['imageBytes'],19*1024**3)
         self.assertEqual(sizing['diskReserveBytes'],5*1024**3+256*1024**2)
-        self.assertEqual(required,31_943_819_264)
+        self.assertEqual(required,33_017_561_088)
         current=m.cutover_disk_sizing(18_317_433_879,4*1024**3,required)
         self.assertEqual(current['restoreDataBytes'],18_317_433_879+256*1024**2)
         self.assertEqual(m.cutover_disk_sizing(m.CUTOVER_DATABASE_LIMIT,4*1024**3,required-m.CUTOVER_DUMP_LIMIT,True),sizing)

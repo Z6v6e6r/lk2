@@ -208,10 +208,10 @@ host Docker daemon. The exact target, legacy API, PostgreSQL preimage, controlle
 122-row ledger and predecessor bindings are identical to the tmpfs cutover profile. Confirmation:
 `BACKUP_RESTORE_BOUNDED_DISK_BETA122_<CANDIDATE12>_FROM_LK2_BETA_759083E37B40`.
 
-The producer admits a source database of at most 17.25 GiB (18,522,046,464 bytes), a complete serial custom-format zstd
-level-3 dump of at most 6.5 GiB, a fully allocated 18 GiB encrypted restore image and 5 GiB plus
+The producer admits a source database of at most 18 GiB (19,327,352,832 bytes), a complete serial custom-format zstd
+level-3 dump of at most 6.5 GiB, a fully allocated 19 GiB encrypted restore image and 5 GiB plus
 256 MiB host free-space reserve. Before dumping, all three budgets must fit together
-(31,943,819,264 bytes). After dumping, image plus reserve must still fit. Available memory must
+(33,017,561,088 bytes). After dumping, image plus reserve must still fit. Available memory must
 include the fixed 2 GiB restore limit and 2 GiB headroom. These are admission budgets, not a claim
 that a full restore will fit: mounted ext4 free space must exceed source size plus 256 MiB, and
 WAL, indexes or database growth can still cause a safe ENOSPC abort. The source-size allowance does
