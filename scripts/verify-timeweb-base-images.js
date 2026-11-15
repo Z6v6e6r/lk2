@@ -43,6 +43,10 @@ const NORMAL_LAYER_MEDIA_TYPES = new Set([
   'application/vnd.docker.image.rootfs.diff.tar',
   'application/vnd.docker.image.rootfs.diff.tar.gzip',
 ]);
+const CONFIG_REDIRECT_HOSTS = new Set([
+  'production.cloudfront.docker.com',
+  'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com',
+]);
 const REGISTRY_TIMEOUT_MS = 20_000;
 const TOKEN_MAX_BYTES = 1024 * 1024;
 const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
@@ -378,7 +382,7 @@ export function validateConfigRedirect(location, reference) {
   )
     reject('registry_redirect');
   if (!safeDnsHostname(url.hostname)) reject('registry_redirect');
-  if (url.hostname !== 'production.cloudfront.docker.com')
+  if (!CONFIG_REDIRECT_HOSTS.has(url.hostname))
     throw new BaseImageContractError('registry_redirect_host', url.hostname);
   return url;
 }

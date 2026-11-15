@@ -415,10 +415,15 @@ describe('Docker Hub config redirects preserve the closed CDN boundary', () => {
   const digest = 'a'.repeat(64),
     reference = 'sha256:' + digest;
   const path = `/registry-v2/docker/registry/v2/blobs/sha256/aa/${digest}/data`;
+  const cdnHosts = [
+    'production.cloudfront.docker.com',
+    'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com',
+  ] as const;
   const approved =
     'https://production.cloudfront.docker.com' + path + '?signature=SYNTHETIC_SIGNED_QUERY';
-  it('accepts the exact HTTPS CDN and digest path with opaque signed query', () => {
-    expect(validateConfigRedirect(approved, reference).href).toBe(approved);
+  it.each(cdnHosts)('accepts only the exact HTTPS CDN and digest path (%s)', (host) => {
+    const url = approved.replace(cdnHosts[0], host);
+    expect(validateConfigRedirect(url, reference).href).toBe(url);
   });
   it.each([
     null,
@@ -450,6 +455,26 @@ describe('Docker Hub config redirects preserve the closed CDN boundary', () => {
   ])('rejects an unsafe or unapproved redirect (%#)', (location) => {
     expect(() => validateConfigRedirect(location, reference)).toThrow();
   });
+  const s3 = approved.replace(cdnHosts[0], cdnHosts[1]);
+  it.each([
+    s3.replace('https:', 'http:'),
+    s3.replace('https://', 'https://user:password@'),
+    s3.replace('.com/', '.com:8443/'),
+    s3 + '#fragment',
+    s3 + '#',
+    s3.replace(cdnHosts[1], cdnHosts[1] + '.'),
+    s3.replace(cdnHosts[1], 'child.' + cdnHosts[1]),
+    s3.replace(cdnHosts[1], cdnHosts[1] + '.attacker.invalid'),
+    s3.replace('docker-images-prod.', 'other-bucket.'),
+    s3.replace('.dualstack.', '.'),
+    s3.replace('us-east-1', 'us-west-2'),
+    s3.replace(cdnHosts[1], 's3.dualstack.us-east-1.amazonaws.com'),
+    s3.replace('/aa/', '/bb/'),
+    s3.replace(digest, 'b'.repeat(64)),
+    s3.replace('/data', '/other'),
+  ])('rejects S3 host, transport or digest-path drift (%#)', (location) => {
+    expect(() => validateConfigRedirect(location, reference)).toThrow();
+  });
   function response(
     url: string,
     body: Buffer | string | null,
@@ -472,6 +497,9 @@ describe('Docker Hub config redirects preserve the closed CDN boundary', () => {
       badDigest?: boolean;
       location?: string | null;
       alternate?: boolean;
+      cdnHost?: string;
+      cdnThrows?: boolean;
+      cdnLength?: string;
     } = {},
     onTrace?: (trace: {
       calls: { url: string; options: RequestInit | undefined }[];
@@ -502,7 +530,7 @@ describe('Docker Hub config redirects preserve the closed CDN boundary', () => {
             ? options.alternate && registryBlobs % 2 === 0
               ? 'other.invalid'
               : 'unapproved.invalid'
-            : 'production.cloudfront.docker.com';
+            : (options.cdnHost ?? cdnHosts[0]);
         return Promise.resolve(
           response(url, null, options.redirectStatus ?? 307, {
             ...(options.location === null
@@ -515,14 +543,22 @@ describe('Docker Hub config redirects preserve the closed CDN boundary', () => {
           }),
         );
       }
-      if (url.startsWith('https://production.cloudfront.docker.com/'))
+      if (cdnHosts.some((host) => url.startsWith('https://' + host + '/'))) {
+        if (options.cdnThrows)
+          return Promise.reject(new DOMException('synthetic timeout', 'TimeoutError'));
         return Promise.resolve(
           response(
             options.wrongUrl ? url + '/changed' : url,
-            options.badDigest ? Buffer.from('{}') : f.configBytes,
+            options.cdnStatus === 204
+              ? null
+              : options.badDigest
+                ? Buffer.from('{}')
+                : f.configBytes,
             options.cdnStatus ?? 200,
+            options.cdnLength === undefined ? {} : { 'Content-Length': options.cdnLength },
           ),
         );
+      }
       throw Error('unexpected endpoint');
     });
     try {
@@ -534,23 +570,25 @@ describe('Docker Hub config redirects preserve the closed CDN boundary', () => {
       mock.mockRestore();
     }
   }
-  it('refreshes only the same registry request, then visits the approved CDN without auth', async () => {
-    const { calls, registryBlobs } = await exercise({ rejects: 1 });
-    expect(registryBlobs).toBe(2);
-    expect(calls.some((c) => c.url.startsWith('https://unapproved.invalid/'))).toBe(false);
-    const cdn = required(
-      calls.find((c) => c.url.startsWith('https://production.cloudfront.docker.com/')),
-    );
-    expect(cdn.options?.headers).toBeUndefined();
-    expect(cdn.options?.redirect).toBe('error');
-    const blobCalls = calls.filter(
-      (c) => c.url.includes('registry-1.docker.io/') && c.url.includes('/blobs/'),
-    );
-    expect(blobCalls[0]?.url).toBe(blobCalls[1]?.url);
-  });
-  it.each([0, 1, 2])(
-    'uses at most three total registry requests (unknown rounds %s)',
-    async (rejects) => {
+  it.each(cdnHosts)(
+    'refreshes only the same registry request, then reads %s without auth',
+    async (cdnHost) => {
+      const { calls, registryBlobs } = await exercise({ rejects: 1, cdnHost });
+      expect(registryBlobs).toBe(2);
+      expect(calls.some((c) => c.url.startsWith('https://unapproved.invalid/'))).toBe(false);
+      const cdn = required(calls.find((c) => c.url.startsWith('https://' + cdnHost + '/')));
+      expect(cdn.options?.headers).toBeUndefined();
+      expect(cdn.options?.credentials).toBeUndefined();
+      expect(cdn.options?.redirect).toBe('error');
+      const blobCalls = calls.filter(
+        (c) => c.url.includes('registry-1.docker.io/') && c.url.includes('/blobs/'),
+      );
+      expect(blobCalls[0]?.url).toBe(blobCalls[1]?.url);
+    },
+  );
+  it.each(cdnHosts.flatMap((cdnHost) => [0, 1, 2].map((rejects) => ({ cdnHost, rejects }))))(
+    'uses at most three total registry requests ($cdnHost, unknown rounds $rejects)',
+    async ({ cdnHost, rejects }) => {
       let seen:
         | {
             calls: { url: string; options: RequestInit | undefined }[];
@@ -558,7 +596,7 @@ describe('Docker Hub config redirects preserve the closed CDN boundary', () => {
             delayCount: number;
           }
         | undefined;
-      await exercise({ rejects }, (trace) => {
+      await exercise({ rejects, cdnHost }, (trace) => {
         seen = trace;
       });
       expect(seen?.registryBlobs).toBe(rejects + 1);
@@ -610,21 +648,59 @@ describe('Docker Hub config redirects preserve the closed CDN boundary', () => {
     expect(seen?.registryBlobs).toBe(1);
     expect(seen?.delayCount).toBe(0);
   });
-  it('accepts a legacy 302 only through the same strict CDN contract', async () => {
-    const result = await exercise({ redirectStatus: 302 });
+  it.each(cdnHosts)('accepts legacy 302 only through the strict %s contract', async (cdnHost) => {
+    const result = await exercise({ redirectStatus: 302, cdnHost });
     expect(result.registryBlobs).toBe(1);
   });
-  it.each([301, 303, 308])(
-    'refuses status %s rather than following a different redirect contract',
-    async (status) => {
-      await expect(exercise({ redirectStatus: status })).rejects.toThrow('registry_read');
+  it.each(cdnHosts.flatMap((cdnHost) => [301, 303, 308].map((status) => ({ cdnHost, status }))))(
+    'refuses status $status for $cdnHost',
+    async ({ cdnHost, status }) => {
+      await expect(exercise({ redirectStatus: status, cdnHost })).rejects.toThrow('registry_read');
     },
   );
-  it.each([204, 206, 302])('requires final CDN status 200 (%s)', async (status) => {
-    await expect(exercise({ cdnStatus: status })).rejects.toThrow('registry_read');
+  it.each(cdnHosts.flatMap((cdnHost) => [204, 206, 302].map((status) => ({ cdnHost, status }))))(
+    'requires final status 200 ($cdnHost, $status)',
+    async ({ cdnHost, status }) => {
+      await expect(exercise({ cdnStatus: status, cdnHost })).rejects.toThrow('registry_read');
+    },
+  );
+  it.each(cdnHosts)('rejects final URL and digest drift at %s', async (cdnHost) => {
+    await expect(exercise({ wrongUrl: true, cdnHost })).rejects.toThrow('registry_read');
+    await expect(exercise({ badDigest: true, cdnHost })).rejects.toThrow('config_hash');
   });
-  it('rejects a changed final URL and digest', async () => {
-    await expect(exercise({ wrongUrl: true })).rejects.toThrow('registry_read');
-    await expect(exercise({ badDigest: true })).rejects.toThrow('config_hash');
+  it.each(cdnHosts)('bounds time and config size at %s', async (cdnHost) => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      await exercise({ cdnHost });
+      expect(timeout.mock.calls.length).toBeGreaterThan(0);
+      expect(timeout.mock.calls.every(([ms]) => ms === 20000)).toBe(true);
+      await expect(exercise({ cdnHost, cdnThrows: true })).rejects.toThrow('registry_read');
+      await expect(exercise({ cdnHost, cdnLength: String(16 * 1024 * 1024 + 1) })).rejects.toThrow(
+        'registry_size',
+      );
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+  it.each([
+    'other-bucket.s3.dualstack.us-east-1.amazonaws.com',
+    'docker-images-prod.s3.dualstack.us-west-2.amazonaws.com',
+    'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com.attacker.invalid',
+  ])('never requests an unapproved S3 variant %s', async (cdnHost) => {
+    let seen:
+      | {
+          calls: { url: string; options: RequestInit | undefined }[];
+          registryBlobs: number;
+          delayCount: number;
+        }
+      | undefined;
+    await expect(
+      exercise({ cdnHost }, (trace) => {
+        seen = trace;
+      }),
+    ).rejects.toMatchObject({ reason: 'registry_redirect_host' });
+    expect(seen?.registryBlobs).toBe(3);
+    expect(seen?.delayCount).toBe(2);
+    expect(seen?.calls.some((c) => c.url.startsWith('https://' + cdnHost + '/'))).toBe(false);
   });
 });
