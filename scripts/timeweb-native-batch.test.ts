@@ -327,14 +327,14 @@ describe('source-defined browser batch execution', () => {
     });
     expect(requests).toHaveLength(5);
     const origin = 'https://timeweb.cloud/api/v1/probes';
-    const api = '26ed404e-98e5-45c5-98e3-31b9dfd6f0f2';
-    const web = 'b25e28a0-02d8-49e4-a0a1-f49f62abc02c';
+    const readyProbe = '26ed404e-98e5-45c5-98e3-31b9dfd6f0f2';
+    const rootProbe = 'b25e28a0-02d8-49e4-a0a1-f49f62abc02c';
     expect(requests.map(([url]) => url)).toEqual([
       origin + '?limit=10000&offset=0',
-      origin + '/' + api + '/statistics?time_from=' + encodeURIComponent(NOW) + '&period=6',
-      origin + '/' + web + '/statistics?time_from=' + encodeURIComponent(NOW) + '&period=6',
-      origin + '/' + api + '/incidents?limit=10000&offset=0',
-      origin + '/' + web + '/incidents?limit=10000&offset=0',
+      origin + '/' + readyProbe + '/statistics?time_from=' + encodeURIComponent(NOW) + '&period=6',
+      origin + '/' + rootProbe + '/statistics?time_from=' + encodeURIComponent(NOW) + '&period=6',
+      origin + '/' + readyProbe + '/incidents?limit=10000&offset=0',
+      origin + '/' + rootProbe + '/incidents?limit=10000&offset=0',
     ]);
     expect(requests.map(([, options]) => options)).toEqual(
       Array.from({ length: 5 }, () => ({ timeout: 8000 })),
