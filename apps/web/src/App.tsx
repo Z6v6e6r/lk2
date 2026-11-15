@@ -1,3 +1,4 @@
+import { HomePushPrompt } from './HomePushPrompt.js';
 import { MonthlyPurchasePanel } from './MonthlyPurchasePanel.js';
 import { cancelGameAndRead } from './game-cancel-readback.js';
 import type { NativeJoinRequest } from './native-game-join-attempt.js';
@@ -3575,45 +3576,53 @@ export function App({
       );
     }
     return (
-      <HomeDashboardPage
-        dashboard={homeBase}
-        viewerFallback={context.user}
-        viewer={homeViewer}
-        upcoming={homeUpcoming}
-        tenantName={context.tenant.name}
-        layoutVariant={
-          protectedRoute.kind === 'home-v2'
-            ? 'v2'
-            : protectedRoute.kind === 'home-v3'
-              ? 'v3'
-              : 'default'
-        }
-        recommendationDisplay={bookingPreferences?.recommendationDisplay ?? 'CARDS'}
-        notificationUnreadCount={(notifications?.unreadCount ?? 0) + friendRequests.length}
-        loadCommunityPage={gateway.listMyCommunities}
-        communityPageSize={10}
-        loadBookingRecommendations={(input) =>
-          gateway.listHomeBookingRecommendations
-            ? gateway.listHomeBookingRecommendations(input)
-            : gateway.listBookingRecommendations(input)
-        }
-        recordPromotionEngagement={(promotionId, kind) =>
-          gateway.recordPromotionEngagement(promotionId, kind)
-        }
-        loadActivityHistory={gateway.getActivityHistory}
-        logoutBusy={state.busy === 'logout'}
-        error={state.error}
-        onRetryViewer={() => {
-          setHomeViewer(null);
-          setHomeViewerReloadToken((token) => token + 1);
-        }}
-        onActivateUpcoming={() => setHomeUpcomingRequested(true)}
-        onRetryUpcoming={() => {
-          setHomeUpcoming(null);
-          setHomeUpcomingReloadToken((token) => token + 1);
-        }}
-        onLogout={handleLogout}
-      />
+      <>
+        <HomePushPrompt
+          key={`${context.tenant.id}:${context.user.id}`}
+          gateway={gateway}
+          clientPlatform={clientPlatform}
+          {...(devicePush ? { devicePush } : {})}
+        />
+        <HomeDashboardPage
+          dashboard={homeBase}
+          viewerFallback={context.user}
+          viewer={homeViewer}
+          upcoming={homeUpcoming}
+          tenantName={context.tenant.name}
+          layoutVariant={
+            protectedRoute.kind === 'home-v2'
+              ? 'v2'
+              : protectedRoute.kind === 'home-v3'
+                ? 'v3'
+                : 'default'
+          }
+          recommendationDisplay={bookingPreferences?.recommendationDisplay ?? 'CARDS'}
+          notificationUnreadCount={(notifications?.unreadCount ?? 0) + friendRequests.length}
+          loadCommunityPage={gateway.listMyCommunities}
+          communityPageSize={10}
+          loadBookingRecommendations={(input) =>
+            gateway.listHomeBookingRecommendations
+              ? gateway.listHomeBookingRecommendations(input)
+              : gateway.listBookingRecommendations(input)
+          }
+          recordPromotionEngagement={(promotionId, kind) =>
+            gateway.recordPromotionEngagement(promotionId, kind)
+          }
+          loadActivityHistory={gateway.getActivityHistory}
+          logoutBusy={state.busy === 'logout'}
+          error={state.error}
+          onRetryViewer={() => {
+            setHomeViewer(null);
+            setHomeViewerReloadToken((token) => token + 1);
+          }}
+          onActivateUpcoming={() => setHomeUpcomingRequested(true)}
+          onRetryUpcoming={() => {
+            setHomeUpcoming(null);
+            setHomeUpcomingReloadToken((token) => token + 1);
+          }}
+          onLogout={handleLogout}
+        />
+      </>
     );
   }
 
