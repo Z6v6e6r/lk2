@@ -36,6 +36,8 @@ interface Row extends QueryResultRow {
   readonly rendered_title: string | null;
   readonly title_template: string | null;
   readonly category: string | null;
+  readonly result_deadline_at: string | null;
+  readonly result_event_type: string | null;
 }
 
 export function buildFcmData(input: {
@@ -53,7 +55,7 @@ export function buildFcmData(input: {
     ...(input.deepLink
       ? {
           deepLink:
-            /^\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+            /^\/(?:chats|games)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
               input.deepLink,
             )
               ? input.deepLink
@@ -115,7 +117,9 @@ export async function runFcmDeliveryBatch(options: {
               ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at) is not null' : 'false'} scenario_delivery,
               e.status endpoint_status, e.address_ciphertext, e.encryption_key_id,
               coalesce(inbox.id, i.id) notification_id, i.rendered_deep_link deep_link,
-              i.rendered_title rendered_title, t.title_template title_template, t.category category
+              i.rendered_title rendered_title, t.title_template title_template, t.category category,
+              i.render_data->>'resultDeadlineAt' result_deadline_at,
+              i.render_data->>'gameResultNotificationType' result_event_type
          from notifications.deliveries d join notifications.intents i on i.tenant_id=d.tenant_id and i.id=d.intent_id
          left join notifications.templates t on t.tenant_id=i.tenant_id and t.id=i.template_id
          join integration.notification_endpoints e on e.tenant_id=d.tenant_id and e.id=d.endpoint_id
@@ -211,7 +215,10 @@ export async function runFcmDeliveryBatch(options: {
       titleTemplate: row.title_template,
       renderedTitle: row.rendered_title,
     });
-    const typeText = lockScreenTypeText(row.category);
+    const typeText = lockScreenTypeText(row.category, {
+      deadlineAt: row.result_deadline_at,
+      eventType: row.result_event_type,
+    });
     let result: PushDeliveryResult;
     try {
       result =

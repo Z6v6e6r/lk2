@@ -40,6 +40,7 @@ describe('lock-screen copy', () => {
   it.each([
     ['BOOKING', 'Не пропусти занятие'],
     ['GAME', 'Не пропусти игру'],
+    ['GAME_RESULT', 'Внесение и согласование счёта игры'],
     ['MESSAGING', 'Новое сообщение в чате'],
     ['FRIENDSHIP', 'Новая заявка в друзья'],
     ['ADMIN_MESSAGE', 'Оповещение ПадлХАБ'],
@@ -59,5 +60,35 @@ describe('lock-screen copy', () => {
       expect(text.length).toBeGreaterThan(0);
       expect(text.length).toBeLessThanOrEqual(80);
     }
+  });
+});
+
+describe('score lock-screen deadline copy', () => {
+  it.each([
+    ['game.finished.v1', 'Внесите счёт до 16.11, 06:00 МСК'],
+    ['game.result.submitted.v1', 'Согласуйте или оспорьте до 16.11, 06:00 МСК'],
+  ])('shows only safe deadline information for %s', (eventType, expected) => {
+    const text = lockScreenTypeText('GAME_RESULT', {
+      eventType,
+      deadlineAt: '2026-11-16T03:00:00.000Z',
+    });
+    expect(text).toBe(expected);
+    expect(text.length).toBeLessThanOrEqual(80);
+  });
+  it.each(['Игрок Имя, счёт 6:4', '2026-99-99T03:00:00.000Z', '2026-11-16'])(
+    'does not display malformed or arbitrary deadline data: %s',
+    (deadlineAt) => {
+      expect(
+        lockScreenTypeText('GAME_RESULT', { eventType: 'game.result.submitted.v1', deadlineAt }),
+      ).toBe('Внесение и согласование счёта игры');
+    },
+  );
+  it('does not format arbitrary event types into the banner', () => {
+    expect(
+      lockScreenTypeText('GAME_RESULT', {
+        eventType: 'Имя игрока',
+        deadlineAt: '2026-11-16T03:00:00.000Z',
+      }),
+    ).toBe('Внесение и согласование счёта игры');
   });
 });

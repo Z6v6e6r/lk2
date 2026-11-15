@@ -45,7 +45,9 @@ export const initialAndroidPushState: AndroidPushSnapshot = {
 };
 
 export function safeNotificationRoute(value: string): string {
-  return /^\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value)
+  return /^\/(?:chats|games)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+    value,
+  )
     ? value
     : '/notifications';
 }

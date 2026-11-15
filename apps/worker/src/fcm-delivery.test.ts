@@ -14,7 +14,13 @@ function result(rows: readonly unknown[] = [], rowCount = rows.length): QueryRes
 function row(
   status: 'ACTIVE' | 'REVOKED' = 'ACTIVE',
   attempts = 0,
-  copy: { titleTemplate?: string; renderedTitle?: string; category?: string } = {},
+  copy: {
+    titleTemplate?: string;
+    renderedTitle?: string;
+    category?: string;
+    deadlineAt?: string;
+    eventType?: string;
+  } = {},
 ) {
   return {
     id: deliveryId,
@@ -29,6 +35,8 @@ function row(
     rendered_title: copy.renderedTitle ?? 'Напоминание о записи',
     title_template: copy.titleTemplate ?? 'Напоминание о записи',
     category: copy.category ?? 'BOOKING',
+    result_deadline_at: copy.deadlineAt ?? null,
+    result_event_type: copy.eventType ?? null,
     attempt_count: attempts,
   };
 }
@@ -40,7 +48,13 @@ function fakePool(
     capture.push({ text, values });
     if (text.includes('live_lease'))
       return Promise.resolve(
-        result([ordinaryPolicyRow('FCM', { endpoint_status: input.endpoint_status })]),
+        result([
+          ordinaryPolicyRow('FCM', {
+            endpoint_status: input.endpoint_status,
+            category: input.category,
+            game_result_eligible: true,
+          }),
+        ]),
       );
     if (text.includes('pg_try_advisory_xact_lock'))
       return Promise.resolve(result([{ acquired: true }]));
@@ -304,4 +318,50 @@ describe('FCM delivery state machine', () => {
     expect(defer?.values).toEqual([tenantId, deliveryId, 5, 12_000, 'FCM_CIRCUIT_OPEN']);
     expect(queries.some((entry) => entry.text.includes('delivery_attempts'))).toBe(false);
   });
+});
+
+it.each(['game.finished.v1', 'game.result.submitted.v1'])(
+  'delivers the original score deadline on the Android lock screen for %s',
+  async (eventType) => {
+    const send = vi
+      .fn()
+      .mockResolvedValue({ outcome: 'accepted', externalMessageId: 'synthetic-score-push' });
+    await runFcmDeliveryBatch(
+      options(
+        fakePool(
+          row('ACTIVE', 0, {
+            category: 'GAME_RESULT',
+            titleTemplate: 'Счёт игры внесён',
+            renderedTitle: 'Счёт игры внесён',
+            eventType,
+            deadlineAt: '2026-11-16T03:00:00.000Z',
+          }),
+          [],
+        ),
+        {
+          decrypt: vi.fn().mockReturnValue('synthetic-token'),
+        } as unknown as NotificationEndpointCipher,
+        { platform: 'ANDROID', send } as unknown as NotificationPushDeliveryPort,
+      ),
+    );
+    const request = send.mock.calls[0]?.[0] as {
+      notification: { preview: string };
+      data: Record<string, string>;
+    };
+    expect(request.notification.preview).toContain('16.11, 06:00 МСК');
+    expect(request.data.typeText).toContain('16.11, 06:00 МСК');
+  },
+);
+
+it('keeps exact game deep links while rejecting queries, nested commands and external URLs', () => {
+  const input = { endpointId: tenantId, deliveryId, notificationId: deliveryId };
+  const game = '/games/77777777-7777-4777-8777-777777777777';
+  expect(buildFcmData({ ...input, deepLink: game }).deepLink).toBe(game);
+  for (const route of [
+    game + '?next=outside',
+    game + '/cancel',
+    '/games/../profile',
+    'https://evil.invalid' + game,
+  ])
+    expect(buildFcmData({ ...input, deepLink: route }).deepLink).toBe('/notifications');
 });

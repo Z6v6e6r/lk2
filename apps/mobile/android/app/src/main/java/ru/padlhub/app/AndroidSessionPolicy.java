@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 /** The native bundle owns the destination. JavaScript cannot choose a host or tenant. */
 final class AndroidSessionPolicy {
@@ -99,6 +100,7 @@ final class AndroidSessionPolicy {
         String gameUuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
         boolean monthly = relativePath.startsWith("/subscription-purchase-operations");
         boolean quarter = relativePath.startsWith("/game-create-operations");
+        boolean gameResult = "POST".equals(method) && relativePath.matches("/games/" + TRAINING_UUID + "/result-submissions(?:/" + TRAINING_UUID + "/(?:confirm|dispute))?");
         boolean gameCancel = "POST".equals(method) && relativePath.matches("/games/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/cancel");
         boolean trainingRegistration = "POST".equals(method) && relativePath.matches("/trainings/" + TRAINING_UUID + "/registrations");
         boolean trainingRecovery = "GET".equals(method) && relativePath.matches("/trainings/" + TRAINING_UUID + "/registration-operation");
@@ -122,7 +124,7 @@ final class AndroidSessionPolicy {
             boolean notificationWrite = "PUT".equals(method) && (cleanPath.equals(userRoot + "/notifications/read-cursor")
                 || cleanPath.equals(userRoot + "/notifications/preferences"));
             if (!("GET".equals(method) && allowedRead(relativePath))
-                && !station && !tournamentChat && !gameCancel && !quarter && !monthly && !notificationWrite && !gameJoin && !gameReconcile && !trainingRegistration && !allowedMessagingWrite(relativePath, method)) throw rejected();
+                && !station && !tournamentChat && !gameResult && !gameCancel && !quarter && !monthly && !notificationWrite && !gameJoin && !gameReconcile && !trainingRegistration && !allowedMessagingWrite(relativePath, method)) throw rejected();
             operation = Operation.API;
         }
         boolean auth = operation != Operation.API && operation != Operation.PUBLIC;
@@ -146,6 +148,11 @@ final class AndroidSessionPolicy {
             || !textBody.matches("\\s*\\{\\s*\"reasonCode\"\\s*:\\s*\"ORGANIZER_REQUEST\"\\s*\\}\\s*")
             || (headers.containsKey("content-type") && !"application/json".equals(headers.get("content-type")))
             || !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}"))) throw rejected();
+        if (gameResult) {
+            if (binaryBody != null || (headers.containsKey("content-type") && !"application/json".equals(headers.get("content-type")))
+                || !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}")) throw rejected();
+            validateGameResultBody(relativePath, textBody);
+        }
         if (tournamentChat) AndroidTournamentChatRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
         if (stationStream) AndroidStationStreamRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
         else if (station) AndroidStationMessageRequest.validate(relativePath, uri.getRawQuery(), method, headers, textBody, binaryBody);
@@ -300,6 +307,51 @@ final class AndroidSessionPolicy {
         }
         if (values.containsKey("cursor")) return values.size() == (values.containsKey("limit") ? 2 : 1);
         return values.containsKey("localDates") && values.containsKey("kinds") && values.containsKey("availability");
+    }
+
+    private void validateGameResultBody(String path, String body) throws Failure {
+        if (body != null && body.getBytes(StandardCharsets.UTF_8).length > 16_384) throw rejected();
+        if (path.endsWith("/confirm") && body == null) return;
+        if (body == null) throw rejected();
+        try {
+            JSONObject parsed = new JSONObject(body);
+            if (path.endsWith("/confirm")) {
+                if (parsed.length() != 0) throw rejected();
+            } else if (path.endsWith("/dispute")) {
+                if (!parsed.has("reasonCode") || parsed.length() != (parsed.has("note") ? 2 : 1)
+                    || !(parsed.get("reasonCode") instanceof String)
+                    || !Arrays.asList("SCORE_INCORRECT", "ROSTER_INCORRECT", "GAME_NOT_PLAYED", "OTHER").contains(parsed.getString("reasonCode"))) throw rejected();
+                if (parsed.has("note") && (!(parsed.get("note") instanceof String)
+                    || parsed.getString("note").trim().isEmpty() || parsed.getString("note").length() > 500)) throw rejected();
+            } else {
+                if (parsed.length() != 1 || !(parsed.opt("sets") instanceof JSONArray)) throw rejected();
+                JSONArray sets = parsed.getJSONArray("sets");
+                if (sets.length() < 1 || sets.length() > 9) throw rejected();
+                for (int index = 0; index < sets.length(); index++) {
+                    JSONObject set = sets.getJSONObject(index);
+                    if (set.length() != 5 || !scoreInteger(set.opt("setNumber"), 1, 9)
+                        || set.getInt("setNumber") != index + 1 || !scoreInteger(set.opt("teamA"), 0, 99)
+                        || !scoreInteger(set.opt("teamB"), 0, 99) || set.getInt("teamA") == set.getInt("teamB")) throw rejected();
+                    Set<String> players = new HashSet<>();
+                    for (String team : new String[]{"teamAUserIds", "teamBUserIds"}) {
+                        JSONArray pair = set.getJSONArray(team);
+                        if (pair.length() != 2) throw rejected();
+                        for (int slot = 0; slot < 2; slot++) {
+                            Object player = pair.get(slot);
+                            if (!(player instanceof String) || !((String)player).matches(TRAINING_UUID)
+                                || !players.add(((String)player).toLowerCase(Locale.ROOT))) throw rejected();
+                        }
+                    }
+                }
+            }
+        } catch (Failure error) { throw error; }
+        catch (Exception ignored) { throw rejected(); }
+    }
+
+    private boolean scoreInteger(Object value, int minimum, int maximum) {
+        if (!(value instanceof Number)) return false;
+        double number = ((Number)value).doubleValue();
+        return Double.isFinite(number) && number >= minimum && number <= maximum && number == Math.floor(number);
     }
 
     private void validateTrainingBody(String body) throws Failure {

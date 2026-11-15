@@ -121,3 +121,20 @@ opening its link and natural deadline transitions remain separate live acceptanc
 Rollback must preserve canonical results and idempotency/audit/outbox rows; it cannot undo a delivered
 push or rating event. Do not restore a submission-relative worker alongside the new API. Freeze new
 score commands during an approved full-contour rollback and never reopen the legacy result writer.
+
+### Android acceptance package
+
+The installed 1.17/code18 client permits chat-only push routes and does not relay result commands.
+Full Android acceptance requires a newly bundled 1.18/code19 APK with the existing reviewed Firebase
+client configuration and the same release signing identity; backend deployment alone is insufficient.
+The task's config-free debug APK proves compilation/JVM behavior only and must not replace a real
+installation. Signing/publication/installation and real device acceptance remain separate operations.
+
+The Android request policy allows only the existing submit/confirm/dispute POST routes with the
+original bearer/key and bounded strict JSON. Result requests keep the original account/token across
+any same-key network retry; local logout retires both dispatch and late response/error handling before
+push cleanup. A different login cannot replay a previous participant's score body or key.
+FCM data, native open custody and the bundled router preserve only exact local game/chat UUID links.
+Android and iOS score banners contain static event copy plus the original deadline, without scores,
+participant names, locations or dispute text. APNs checks current score eligibility after endpoint
+lock waits and preserves its durable non-retryable dispatch fence.

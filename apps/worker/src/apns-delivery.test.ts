@@ -43,6 +43,13 @@ const dispatchRow = {
   quiet_until: null as string | null,
   timezone: 'UTC',
   database_now: new Date('2026-10-31T12:00:00Z'),
+  category: 'BOOKING',
+  game_result_eligible: true,
+  result_deadline_at: null as string | null,
+  result_event_type: null as string | null,
+  rendered_title: null as string | null,
+  title_template: null as string | null,
+  deep_link: null as string | null,
 };
 
 /** Query/transition model, not a physical PostgreSQL concurrency test. */
@@ -92,6 +99,7 @@ function harness(initial: Partial<typeof dispatchRow> = {}) {
       onClaim?.();
       return result([], 1);
     }
+    if (text.includes('as eligible')) return result([{ eligible: endpoint.game_result_eligible }]);
     if (text.includes('clock_timestamp() database_now')) {
       expect(text).toContain('for update of d,e');
       expect(text).toContain('d.attempt_count=$3');
@@ -374,5 +382,41 @@ describe('ordinary APNs delivery', () => {
     await runApnsDeliveryBatch(h.options);
     expect(h.send).not.toHaveBeenCalled();
     expect(h.state.delivery).toBe('DEAD');
+  });
+});
+
+describe('APNs score notifications', () => {
+  it('preserves the durable fence and delivers safe title, original deadline and game link', async () => {
+    const h = harness({
+      category: 'GAME_RESULT',
+      game_result_eligible: true,
+      result_deadline_at: '2026-11-16T03:00:00.000Z',
+      result_event_type: 'game.result.submitted.v1',
+      title_template: 'Счёт игры внесён',
+      rendered_title: 'Счёт игры внесён',
+      deep_link: '/games/77777777-7777-4777-8777-777777777777',
+    });
+    await runApnsDeliveryBatch(h.options);
+    expect(h.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notification: {
+          id: claimRow.intent_id,
+          title: 'Счёт игры внесён',
+          preview: 'Согласуйте или оспорьте до 16.11, 06:00 МСК',
+          deepLink: '/games/77777777-7777-4777-8777-777777777777',
+        },
+      }),
+    );
+    const lock = h.queries.findIndex((q) => q.text.includes('for update of d,e'));
+    expect(h.queries.findIndex((q) => q.text.includes('as eligible'))).toBeGreaterThan(lock);
+  });
+  it('suppresses an expired or superseded queued score notice without calling APNs', async () => {
+    const h = harness({ category: 'GAME_RESULT', game_result_eligible: false });
+    await runApnsDeliveryBatch(h.options);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(h.state.delivery).toBe('SUPPRESSED');
+    expect(
+      h.queries.some((q) => q.text.includes("g.ends_at + interval '12 hours' > clock_timestamp()")),
+    ).toBe(true);
   });
 });
