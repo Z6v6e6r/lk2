@@ -253,3 +253,44 @@ restore work stopped: inner deadlines bound those processes, the retained shared
 activation, and exact reconciliation is required promptly. Reserve polling is not continuous after
 the producer dies. Crypt/mkfs tools are checked immediately before and after; only long allocation,
 dump, TOC and restore subprocesses are continuously polled while the producer remains alive.
+
+## Fresh dump with the exact prior full restore
+
+Only the explicitly owner-directed V4 legacy roster cutover accepts
+`PHUB_TIMEWEB_BACKUP_BETA122_PRIOR_RESTORE_V3`. The original full-restore schemas and their disk
+capacity requirements remain unchanged. This mode produces a new full, unfiltered, serial
+PG16 custom dump from one exported REPEATABLE READ snapshot, with zstd level 3 and the existing
+6.5 GiB cap. It verifies the archive TOC using `pg_restore --list` inside the exact existing source
+PG16 container. It creates no restore container, encrypted image, loop device, mount or scratch
+filesystem. Required free capacity is the dump cap plus the 5 GiB reserve and 256 MiB control
+margin; no paid disk or deletion of old backups is required.
+
+The producer operation binds the exact historical release 857 / operation `06e07622…` / receipt
+`dd8db103…`, original dump/witness/terminal/helper hashes, and later preparation-abort marker.
+`ownerRestoreDecision` binds the entire new operation excluding only that receipt itself, including
+its prior reference, source/tree, target, database/system identity, ledger, runtime boundary and
+expiry. The new outer V4 operation also binds the producer operation hash. Owner receipt references
+and original message/timestamp must match in producer and outer operation.
+
+The old installed helper is verified before isolated import. Its operation, local tool custody,
+plan, full-restore journal and receipt validation primitives validate the original bytes. An explicit
+read-only compatibility adapter admits the original five files plus only the later authenticated
+`preparation-aborted.json`, whose operation is the independently retained aborted cutover and whose
+`runtimeMutated` is false. Unknown files or any changed original hash fail closed. The original
+operation, receipt, dates, dump, witness, journal, terminal and helper are never rewritten/copied.
+
+The fresh receipt schema is `PHUB_TIMEWEB_FRESH_DUMP_PRIOR_RESTORE_V3`, with
+`freshDumpRestored:false`, `freshDumpIntegrityStatus:PG16_TOC_PARSE_VERIFIED`, exact prior-reference
+and owner-receipt hashes, fresh source ledger/accounts/snapshot witnesses and dump size/SHA-256.
+It contains no fresh `restored*` or `restoreVerified:true` claims. Its terminal file is
+`FRESH_DUMP_INTEGRITY_VERIFIED.json`; the result is `FRESH_DUMP_INTEGRITY_VERIFIED`, never
+`BACKUP_RESTORE_VERIFIED`. The historical restore proves the old dump/toolchain; TOC plus fresh
+snapshot/integrity checks do not prove full restorability of the new bytes. This residual risk is
+the precise scope of the owner's instruction to skip repetition.
+
+Use the enrolled helper's existing fixed request path and `--execute`, `--attest-disk` or
+`--reconcile-disk` entry. Attestation is read-only. Execute is single-use and takes the existing
+process/shared lease; reconciliation retains partial artifacts, proves both operation-specific
+source backends are absent, publishes only completely verified data, and atomically retires only
+its own lock. It never repeats the dump or TOC. Keep the original full-restore backup and the new
+fresh backup. Service activation and live restoration remain separate operations.

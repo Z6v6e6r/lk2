@@ -63,6 +63,18 @@ import {
 } from './produce-timeweb-api-web-observability-evidence.js';
 import { validateTimewebMonitoringEvidence } from './verify-timeweb-api-web-observability.js';
 import {
+  OWNER_PLAN,
+  OWNER_RECEIPT,
+  OWNER_KIND,
+  OWNER_POLICY,
+  PROVIDER_SKIPPED,
+  FRESH_BACKUP_OPERATION,
+  FRESH_BACKUP_RECEIPT,
+  PRIOR_RESTORE_POLICY,
+  isOwnerDirectedCutover,
+  createOwnerDirectedBinding,
+  validateOwnerDirectedBinding,
+  ownerDirectedReceipt,
   WAIVER_PLAN,
   WAIVER_RECEIPT,
   WAIVER_KIND,
@@ -1086,6 +1098,8 @@ function validateBackupProof(directory, previous, profile = 'beta', cutover = un
     };
   }
   const v = JSON.parse(bytes);
+  if (cutover && isOwnerDirectedCutover(cutover))
+    return validateFreshDumpProof(directory, previous, cutover, bytes, v);
   const diskCutover = cutover && v.schema === 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V2';
   exact(v, [
     'schema',
@@ -1201,6 +1215,104 @@ sys.stdout.write('CUTOVER_BACKUP_CUSTODY_VERIFIED')`;
     };
   }
   return { path, sha256: hash(bytes) };
+}
+
+function validateFreshDumpProof(directory, previous, cutover, bytes, receipt) {
+  exact(receipt, [
+    'schema',
+    'baselineReleaseId',
+    'completedAt',
+    'backupFile',
+    'backupSha256',
+    'operationSha256',
+    'predecessorAttestationSha256',
+    'databaseTarget',
+    'sourceLedgerSha256',
+    'sourceAccountsSha256',
+    'snapshotWitnessSha256',
+    'dumpBytes',
+    'dumpLimitBytes',
+    'dumpCompression',
+    'postgresImage',
+    'freshDumpRestored',
+    'freshDumpIntegrityStatus',
+    'restoreAdmissionPolicy',
+    'priorReferenceSha256',
+    'ownerReceiptSha256',
+  ]);
+  const operationPath = `${directory}/backup-operation.json`,
+    operationBytes = read(operationPath);
+  const producer = validateCutoverBackupOperation(cutover, operationBytes, {
+    directory,
+    postgres: inspect('postgres', 'phub-timeweb-beta-dependencies'),
+    toolFileSha256: hash(read(`${SOURCE}/scripts/control-timeweb-database-backup.py`, 0o644)),
+    configSha256: hash(read(CONFIG)),
+  });
+  const decision = cutover.ownerDecisions.repeatedRestore;
+  if (
+    producer.schema !== FRESH_BACKUP_OPERATION ||
+    receipt.schema !== FRESH_BACKUP_RECEIPT ||
+    receipt.baselineReleaseId !== previous.releaseId ||
+    receipt.operationSha256 !== hash(operationBytes) ||
+    receipt.predecessorAttestationSha256 !== legacyBaselineHash(cutover.legacyBaseline) ||
+    !equal(receipt.databaseTarget, cutover.legacyBaseline.databaseTarget) ||
+    receipt.sourceLedgerSha256 !== cutover.legacyBaseline.ledgerSha256 ||
+    receipt.backupFile !== `${directory}/database.pgcustom` ||
+    receipt.freshDumpRestored !== false ||
+    receipt.freshDumpIntegrityStatus !== 'PG16_TOC_PARSE_VERIFIED' ||
+    receipt.restoreAdmissionPolicy !== PRIOR_RESTORE_POLICY ||
+    ![
+      'backupSha256',
+      'sourceAccountsSha256',
+      'snapshotWitnessSha256',
+      'priorReferenceSha256',
+      'ownerReceiptSha256',
+    ].every((k) => HASH.test(receipt[k] ?? '')) ||
+    !Number.isSafeInteger(receipt.dumpBytes) ||
+    receipt.dumpBytes <= 0 ||
+    receipt.dumpBytes > (13 * 1024 ** 3) / 2 ||
+    receipt.dumpLimitBytes !== (13 * 1024 ** 3) / 2 ||
+    receipt.dumpCompression !== 'zstd:3' ||
+    lstatSync(receipt.backupFile).size !== receipt.dumpBytes ||
+    hashBackupFile(receipt.backupFile) !== receipt.backupSha256 ||
+    hash(read(`${directory}/prior-full-restore-reference.json`)) !== receipt.priorReferenceSha256 ||
+    hash(read(`${directory}/owner-restore-decision.json`)) !== receipt.ownerReceiptSha256 ||
+    !Number.isFinite(Date.parse(receipt.completedAt)) ||
+    Date.now() < Date.parse(receipt.completedAt) ||
+    Date.now() - Date.parse(receipt.completedAt) > 3600000 ||
+    ['messageSha256', 'reference', 'receivedAt'].some(
+      (k) => producer.ownerRestoreDecision?.[k] !== decision[k],
+    ) ||
+    Date.parse(cutover.expiresAt) > Date.parse(producer.expiresAt)
+  )
+    fail('fresh_backup_proof');
+  const program = `import importlib.util,sys,time
+spec=importlib.util.spec_from_file_location('backup','${SOURCE}/scripts/control-timeweb-database-backup.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+raw=sys.stdin.buffer.read();op=m.strict(raw);m.validate_operation(op,time.time(),op['toolFileSha256'],allow_expired=True)
+m.tool_custody(op);m.validate_fresh_terminal(op,raw)
+sys.stdout.write('FRESH_DUMP_CUSTODY_VERIFIED')`;
+  if (
+    command('/usr/bin/python3', ['-I', '-S', '-B', '-c', program], {
+      input: operationBytes,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 60000,
+    }) !== 'FRESH_DUMP_CUSTODY_VERIFIED'
+  )
+    fail('fresh_backup_custody');
+  const path = `${directory}/database-backup-receipt.json`;
+  return {
+    path,
+    sha256: hash(bytes),
+    operationPath,
+    operationSha256: hash(operationBytes),
+    receiptPath: path,
+    receiptSha256: hash(bytes),
+    dumpSha256: receipt.backupSha256,
+    admissionPolicy: PRIOR_RESTORE_POLICY,
+    priorReferenceSha256: receipt.priorReferenceSha256,
+    ownerReceiptSha256: receipt.ownerReceiptSha256,
+  };
 }
 
 // Read only the authenticated original POST105 bundle. The installed producer's terminal
@@ -1561,11 +1673,12 @@ export function validateUpgradeReceipt(
     return validateJoinReceipt(receipt, planSha256, op, plan, planBytes);
   const keys = ['schema', 'status', 'planSha256', 'observedAt'];
   const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
-  const cutover = [CUTOVER_RECEIPT, ROSTER_CUTOVER_RECEIPT, WAIVER_RECEIPT].includes(
+  const cutover = [CUTOVER_RECEIPT, ROSTER_CUTOVER_RECEIPT, WAIVER_RECEIPT, OWNER_RECEIPT].includes(
     receipt.schema,
   );
+  const ownerDirected = receipt.schema === OWNER_RECEIPT;
   const waived = receipt.schema === WAIVER_RECEIPT;
-  const roster = [ROSTER_CUTOVER_RECEIPT, WAIVER_RECEIPT].includes(receipt.schema);
+  const roster = [ROSTER_CUTOVER_RECEIPT, WAIVER_RECEIPT, OWNER_RECEIPT].includes(receipt.schema);
   if (cutover) keys.push('legacyBaselineSha256');
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
   if (
@@ -1575,17 +1688,26 @@ export function validateUpgradeReceipt(
     keys.push(
       'installedBaselineSha256',
       'observationSha256',
-      ...(waived
+      ...(ownerDirected
         ? [
-            'monitoringPolicy',
+            'ownerDecisionPolicy',
+            'providerMonitoringStatus',
             'alertTestStatus',
-            'nativeMonitoringAdmissionSha256',
-            'ownerAlertWaiverSha256',
-            'nativeMonitorReadbackSha256',
+            'restoreAdmissionPolicy',
+            'repeatRestoreStatus',
+            'ownerDecisionsSha256',
           ]
-        : direct
-          ? ['ownerObservationSha256', 'evidencePolicySha256']
-          : ['providerReadbackSha256', 'alertReadbackSha256']),
+        : waived
+          ? [
+              'monitoringPolicy',
+              'alertTestStatus',
+              'nativeMonitoringAdmissionSha256',
+              'ownerAlertWaiverSha256',
+              'nativeMonitorReadbackSha256',
+            ]
+          : direct
+            ? ['ownerObservationSha256', 'evidencePolicySha256']
+            : ['providerReadbackSha256', 'alertReadbackSha256']),
     );
   if (receipt.status === 'RECONCILED') keys.push('reconciledStatus');
   exact(receipt, keys);
@@ -1596,6 +1718,7 @@ export function validateUpgradeReceipt(
       CUTOVER_RECEIPT,
       ROSTER_CUTOVER_RECEIPT,
       WAIVER_RECEIPT,
+      OWNER_RECEIPT,
     ].includes(receipt.schema) ||
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
@@ -1626,6 +1749,13 @@ export function validateUpgradeReceipt(
     ].includes(receipt.status) ||
     (receipt.status === 'RECONCILED' &&
       !['SUCCESS', 'ROLLED_BACK', 'ABORTED'].includes(receipt.reconciledStatus)) ||
+    (ownerDirected &&
+      keys.includes('installedBaselineSha256') &&
+      (receipt.ownerDecisionPolicy !== OWNER_POLICY ||
+        receipt.restoreAdmissionPolicy !== PRIOR_RESTORE_POLICY ||
+        receipt.repeatRestoreStatus !== 'NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED' ||
+        receipt.providerMonitoringStatus !== PROVIDER_SKIPPED ||
+        receipt.alertTestStatus !== WAIVER_STATUS)) ||
     (waived &&
       keys.includes('installedBaselineSha256') &&
       (receipt.monitoringPolicy !== WAIVER_POLICY || receipt.alertTestStatus !== WAIVER_STATUS)) ||
@@ -1636,15 +1766,17 @@ export function validateUpgradeReceipt(
       [
         'installedBaselineSha256',
         'observationSha256',
-        ...(waived
-          ? [
-              'nativeMonitoringAdmissionSha256',
-              'ownerAlertWaiverSha256',
-              'nativeMonitorReadbackSha256',
-            ]
-          : direct
-            ? ['ownerObservationSha256', 'evidencePolicySha256']
-            : ['providerReadbackSha256', 'alertReadbackSha256']),
+        ...(ownerDirected
+          ? ['ownerDecisionsSha256']
+          : waived
+            ? [
+                'nativeMonitoringAdmissionSha256',
+                'ownerAlertWaiverSha256',
+                'nativeMonitorReadbackSha256',
+              ]
+            : direct
+              ? ['ownerObservationSha256', 'evidencePolicySha256']
+              : ['providerReadbackSha256', 'alertReadbackSha256']),
       ].some((key) => !HASH.test(receipt[key] ?? '')))
   )
     fail('invalid_receipt');
@@ -1656,6 +1788,7 @@ export function validateUpgradeReceipt(
       isProductionCutover(op) !== cutover ||
       isRosterCutover(op) !== roster ||
       isWaivedRosterCutover(op) !== waived ||
+      isOwnerDirectedCutover(op) !== ownerDirected ||
       !Buffer.isBuffer(planBytes) ||
       hash(planBytes) !== planSha256 ||
       !equal(JSON.parse(planBytes), plan) ||
@@ -1671,6 +1804,14 @@ export function validateUpgradeReceipt(
           receipt.legacyBaselineSha256 !== plan.legacyBaselineSha256))
     )
       fail('receipt_context');
+    if (ownerDirected) {
+      validateOwnerDirectedBinding(op, plan.monitoring, plan.operationSha256);
+      if (
+        keys.includes('installedBaselineSha256') &&
+        Object.entries(ownerDirectedReceipt(plan.monitoring)).some(([k, v]) => receipt[k] !== v)
+      )
+        fail('receipt_owner_decision');
+    }
     if (
       waived &&
       keys.includes('installedBaselineSha256') &&
@@ -1814,11 +1955,13 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
     ...values,
     PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
     PHUB_COMPONENT_ROLLOUT_KIND:
-      plan.schema === WAIVER_PLAN
-        ? WAIVER_KIND
-        : plan.candidate.worker
-          ? ROSTER_CUTOVER_KIND
-          : 'API_WEB',
+      plan.schema === OWNER_PLAN
+        ? OWNER_KIND
+        : plan.schema === WAIVER_PLAN
+          ? WAIVER_KIND
+          : plan.candidate.worker
+            ? ROSTER_CUTOVER_KIND
+            : 'API_WEB',
     PHUB_RELEASE_ID: id,
     PHUB_RUNTIME_SECRET_SET_RELEASE_ID: plan.secretSetReleaseId,
     PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
@@ -1869,6 +2012,10 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
   );
 }
 export function validateInstalledCutoverKind(kind, receiptSchema) {
+  if (kind === OWNER_KIND || receiptSchema === OWNER_RECEIPT) {
+    if (kind !== OWNER_KIND || receiptSchema !== OWNER_RECEIPT) fail('installed_cutover_kind');
+    return;
+  }
   if (kind === WAIVER_KIND || receiptSchema === WAIVER_RECEIPT) {
     if (kind !== WAIVER_KIND || receiptSchema !== WAIVER_RECEIPT) fail('installed_cutover_kind');
     return;
@@ -2124,7 +2271,9 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
     } else {
       if (
         values.PHUB_COMPONENT_ROLLOUT_KIND !== undefined &&
-        !['API_WEB', ROSTER_CUTOVER_KIND, WAIVER_KIND].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
+        !['API_WEB', ROSTER_CUTOVER_KIND, WAIVER_KIND, OWNER_KIND].includes(
+          values.PHUB_COMPONENT_ROLLOUT_KIND,
+        )
       )
         fail('installed_baseline_kind');
       if (
@@ -2140,7 +2289,11 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
       validateUpgradeReceipt(receipt, hash(planBytes));
       const transaction = `${ROOT}/backups/${releaseId}-api-web`;
       const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
-      if ([CUTOVER_RECEIPT, ROSTER_CUTOVER_RECEIPT, WAIVER_RECEIPT].includes(receipt.schema)) {
+      if (
+        [CUTOVER_RECEIPT, ROSTER_CUTOVER_RECEIPT, WAIVER_RECEIPT, OWNER_RECEIPT].includes(
+          receipt.schema,
+        )
+      ) {
         const operationBytes = read(`${transaction}/operation.json`);
         const operation = validateProductionCutover(parseStrictJson(operationBytes));
         validateUpgradeReceipt(receipt, hash(planBytes), operation, plan, planBytes);
@@ -2168,6 +2321,8 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
             fail('installed_cutover_worker_runtime');
         }
         validateCutoverPlanProofs(operation, plan, transaction);
+        if (isOwnerDirectedCutover(operation))
+          assertCutoverBackupFiles(operation, plan, transaction, read, hashBackupFile);
         if (isWaivedRosterCutover(operation)) {
           if (!(
             receipt.status === 'SUCCESS' ||
@@ -2198,7 +2353,7 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
         )
           fail('installed_legacy_attestation_drift');
       }
-      for (const [file, key] of receipt.schema === WAIVER_RECEIPT
+      for (const [file, key] of [WAIVER_RECEIPT, OWNER_RECEIPT].includes(receipt.schema)
         ? [['observation.json', 'observationSha256']]
         : direct
           ? [
@@ -2231,6 +2386,7 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           CUTOVER_RECEIPT,
           ROSTER_CUTOVER_RECEIPT,
           WAIVER_RECEIPT,
+          OWNER_RECEIPT,
         ].includes(receipt.schema) ||
         !(
           receipt.status === 'SUCCESS' ||
@@ -2511,7 +2667,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     )
       fail('recovery_identity');
   } else {
-    if (isWaivedRosterCutover(op) && existsSync(`${transaction}/preparation-aborted.json`))
+    if (
+      (isWaivedRosterCutover(op) || isOwnerDirectedCutover(op)) &&
+      existsSync(`${transaction}/preparation-aborted.json`)
+    )
       fail('native_aborted_operation_not_replayable');
     if (existsSync(LOCK) || existsSync(planPath) || existsSync(journalPath))
       fail('unreconciled_transaction');
@@ -2598,9 +2757,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     const direct = isDirectOperation(op);
     let ownerBytes;
     const monitoring = !direct
-      ? isWaivedRosterCutover(op)
-        ? null
-        : validateMonitoring(transaction, profile, { fresh: cutover })
+      ? isOwnerDirectedCutover(op)
+        ? createOwnerDirectedBinding(op, hash(opBytes))
+        : isWaivedRosterCutover(op)
+          ? null
+          : validateMonitoring(transaction, profile, { fresh: cutover })
       : null;
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
@@ -2646,12 +2807,13 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       createdAt: new Date().toISOString(),
       ...(cutover
         ? {
-            monitoring: isWaivedRosterCutover(op)
-              ? monitoring
-              : {
-                  providerSha256: monitoring.providerSha256,
-                  alertSha256: monitoring.alertSha256,
-                },
+            monitoring:
+              isWaivedRosterCutover(op) || isOwnerDirectedCutover(op)
+                ? monitoring
+                : {
+                    providerSha256: monitoring.providerSha256,
+                    alertSha256: monitoring.alertSha256,
+                  },
           }
         : {}),
       ...(join
@@ -2882,7 +3044,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       // recovery still restores the predecessor if these inputs disappear or rotate.
       if (!recovering) {
         assertCutoverBackupFiles(op, plan, transaction, read, hashBackupFile);
-        if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
+        if (isOwnerDirectedCutover(op))
+          validateOwnerDirectedBinding(op, plan.monitoring, hash(opBytes));
+        else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
         else {
           const monitoring = validateMonitoring(transaction, profile);
           if (
@@ -2943,19 +3107,21 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           ? {
               installedBaselineSha256,
               observationSha256: hash(read(`${transaction}/observation.json`)),
-              ...(isWaivedRosterCutover(op)
-                ? nativeAdmissionReceipt(plan.monitoring)
-                : isDirectOperation(op)
-                  ? {
-                      ownerObservationSha256: plan.ownerObservationSha256,
-                      evidencePolicySha256: plan.evidencePolicySha256,
-                    }
-                  : {
-                      providerReadbackSha256: hash(
-                        read(`${transaction}/timeweb-monitor-readback.json`),
-                      ),
-                      alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)),
-                    }),
+              ...(isOwnerDirectedCutover(op)
+                ? ownerDirectedReceipt(plan.monitoring)
+                : isWaivedRosterCutover(op)
+                  ? nativeAdmissionReceipt(plan.monitoring)
+                  : isDirectOperation(op)
+                    ? {
+                        ownerObservationSha256: plan.ownerObservationSha256,
+                        evidencePolicySha256: plan.evidencePolicySha256,
+                      }
+                    : {
+                        providerReadbackSha256: hash(
+                          read(`${transaction}/timeweb-monitor-readback.json`),
+                        ),
+                        alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)),
+                      }),
             }
           : {}),
         observedAt: new Date().toISOString(),
@@ -2987,7 +3153,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       ? {
           workerMode: 'legacy-roster-cutover',
           containWorker: async (recovering = true) => {
-            if (!recovering && isWaivedRosterCutover(op)) validateProductionCutover(op, true);
+            if (!recovering && (isWaivedRosterCutover(op) || isOwnerDirectedCutover(op)))
+              validateProductionCutover(op, true);
             attest(recovering);
             stoppedWorkerId = containRosterCutoverWorker(plan);
             delete active.worker;
@@ -3183,7 +3350,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         if (join) validateJoinOperation(op, true);
         attest();
         attestJoinRunningEnv();
-        if (!isWaivedRosterCutover(op)) validateMonitoring(transaction, profile);
+        if (!isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
+          validateMonitoring(transaction, profile);
         if (round < 60) await delay(15000);
       }
       for (const s of ['api', 'web']) {
@@ -3192,7 +3360,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           limit = s === 'api' ? 1500 : 1000;
         if (join ? p95 >= limit : p95 > limit) fail('latency_threshold');
       }
-      if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
+      if (isOwnerDirectedCutover(op))
+        validateOwnerDirectedBinding(op, plan.monitoring, hash(opBytes));
+      else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
       else {
         const finalMonitoring = validateMonitoring(transaction, profile);
         durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);

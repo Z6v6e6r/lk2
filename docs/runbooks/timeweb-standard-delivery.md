@@ -1861,3 +1861,41 @@ without making its predecessor unreadable. It grants no freshness or authority t
 new forward admission still needs its own fresh source-bound native capture. Runtime secret,
 Worker identity, observation, backup and rollback checks remain separate. Recovery and non-success
 reconciliation do not depend on fresh monitoring inputs or an unexpired waiver.
+
+### Owner-directed legacy roster cutover V4 (November 15)
+
+For the explicitly authorized LK2 legacy cutover, the owner removed the Timeweb provider
+monitoring check from the mandatory pre-switch procedure and declined another induced alert
+exercise. The owner separately instructed that the already successful full trial restore must
+not be repeated. Use `PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4` for these decisions.
+V1/V2/V3 retain their existing contracts; do not manufacture their missing evidence.
+
+The V4 operation contains three closed `ownerDecisions` receipts: `alertDrill`,
+`providerMonitoring`, and `repeatedRestore`. Each is root-operator attested, identifies the exact
+original human message and timestamp, and binds the current target/server/project, source/tree,
+source CI, publication/artifact/manifest, backup operation, legacy baseline and expiry through
+`ownerDirectedScopeSha256`. This is operator-attested owner authority, not provider evidence.
+The monitoring choice cites the exact answer “Проверку мониторинга перед переключением”; the
+restore choice cites the complete original instruction including its trailing newline.
+
+No Timeweb monitor capture, native input envelope, provider readback, alert exercise or monitoring
+inbox wait is required or performed by V4. SUCCESS/installed/reconcile receipts state
+`providerMonitoringStatus=NOT_CHECKED_OWNER_SKIPPED` and
+`alertTestStatus=NOT_TESTED_OWNER_DECLINED`; neither means PASS. They separately record
+`restoreAdmissionPolicy=EXACT_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1` and
+`repeatRestoreStatus=NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED`.
+
+V4 still requires the same successful exact-main CI, one canonical first-attempt immutable
+five-image publication, verified predecessor/rollback images, fresh complete dump and integrity
+receipt, 122-row schema ledger, account/session/delegation witnesses, unchanged secrets/settings,
+Worker containment, API/Worker/Web private readiness and API/Web public exact-200 checks. The
+61-round observation must last at least 900 seconds and retain latency/restart/error thresholds.
+No migration, account reset, result replay, LK1 bridge change or provider write is authorized by
+these procedural choices. Whole-five notification provisioning follows SUCCESS plus terminal
+reconciliation and its own existing authority.
+
+The fresh dump policy is described in [prerequisite producers](timeweb-prerequisite-producers.md#fresh-dump-with-the-exact-prior-full-restore).
+Freeze one source containing this procedure, Docker Hub redirect correction and CI finalization
+budget; publish and enroll that same source. Never mix the failed partial 758 publication with
+new images, replay the aborted 857 transaction, retimestamp its backup receipt, or relabel the
+fresh dump as restored. A failed or uncertain new transaction uses its own reconciliation entry.
