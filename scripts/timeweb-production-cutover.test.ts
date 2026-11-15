@@ -200,9 +200,16 @@ describe('three-service roster cutover inside the existing canonical controller'
 // The real retained-terminal controller runs against an entirely in-memory root/host fixture.
 // Unrelated monitoring parser semantics have their own suites; this fixture tests custody,
 // evidence hash binding, all three runtime identities and the actual lock-release path.
-it.each(['SUCCESS', 'ROLLED_BACK', 'ABORTED'] as const)(
-  'reconciles a real V2 %s controller transaction before releasing its retained lock',
-  async (terminal) => {
+it.each([
+  ['SUCCESS', false],
+  ['ROLLED_BACK', false],
+  ['ABORTED', false],
+  ['SUCCESS', true],
+  ['ROLLED_BACK', true],
+  ['ABORTED', true],
+] as const)(
+  'reconciles terminal %s with waiver=%s before releasing the retained lock',
+  async (terminal, waived) => {
     const { createHash } = await import('node:crypto');
     const profile = await import('./timeweb-production-cutover.js');
     const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -217,6 +224,7 @@ it.each(['SUCCESS', 'ROLLED_BACK', 'ABORTED'] as const)(
     const files = new Map<string, Buffer>();
     const put = (path: string, value: string | Buffer) => files.set(path, Buffer.from(value));
     const b = structuredClone(baseline);
+    if (waived) b.capturedAt = '2026-11-14T11:59:00.000Z';
     for (const name of Object.keys(b.secretHashes)) {
       const value =
         name === '.release-identity.json'
@@ -305,7 +313,10 @@ it.each(['SUCCESS', 'ROLLED_BACK', 'ABORTED'] as const)(
         operationSha256: hash(producer),
         dumpSha256: hash(dump),
       },
-      monitoring: { providerSha256: hash(provider), alertSha256: hash(alerts) },
+      monitoring: { providerSha256: hash(provider), alertSha256: hash(alerts) } as Record<
+        string,
+        string
+      >,
       createdAt: '2026-11-13T17:00:00.000Z',
     };
     const values = profile.legacyEnvironment(b, legacyEnv, {
@@ -362,13 +373,87 @@ it.each(['SUCCESS', 'ROLLED_BACK', 'ABORTED'] as const)(
         health: 'healthy',
       },
     ];
+    const waiverProfile = await import('./timeweb-roster-alert-waiver.js');
+    let nativeEvidence: Record<string, Buffer> | undefined;
+    if (waived) {
+      const native = await import('./timeweb-native-observability-fixtures.js');
+      const fs = await import('node:fs');
+      const adapterBytes = fs.readFileSync(
+        new URL('./timeweb-native-observability.js', import.meta.url),
+      );
+      const reviewBytes = fs.readFileSync(
+        new URL('./timeweb-native-capture-review.js', import.meta.url),
+      );
+      put(`${source}/scripts/timeweb-native-observability.js`, adapterBytes);
+      put(`${source}/scripts/timeweb-native-capture-review.js`, reviewBytes);
+      op.schema = waiverProfile.WAIVER_OPERATION;
+      op.expiresAt = '2026-11-14T13:00:00.000Z';
+      const owner = native.encodedNativeFixture({
+        schema: 'PHUB_TIMEWEB_OWNER_MESSAGE_RECEIPT_V1',
+        authority: 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
+        decisionSha256: waiverProfile.OWNER_DECISION_SHA256,
+        scopeSha256: waiverProfile.ownerWaiverScopeSha256(op),
+        reference:
+          'codex-thread:00000000-0000-4000-8000-000000000000/message:msg_00000000-0000-4000-8000-000000000001',
+        receivedAt: '2026-11-14T11:00:00.000Z',
+      });
+      Reflect.set(op, 'alertWaiver', {
+        schema: 'PHUB_TIMEWEB_ROSTER_ALERT_WAIVER_V1',
+        authority: 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
+        scope: 'INDUCED_ALERT_DRILL_ONLY',
+        status: waiverProfile.WAIVER_STATUS,
+        ownerMessageSha256: waiverProfile.OWNER_DECISION_SHA256,
+        ownerReceiptSha256: hash(owner),
+        serverId: 8886471,
+        projectId: 262717,
+        legacyBaselineSha256: profile.legacyBaselineHash(b),
+        ...Object.fromEntries(
+          [
+            'target',
+            'controllerSha',
+            'candidateSha',
+            'candidateTree',
+            'sourceCiRunId',
+            'publicationRunId',
+            'artifactId',
+            'artifactDigest',
+            'manifestSha256',
+            'backupOperationSha256',
+            'expiresAt',
+          ].map((k) => [k, Reflect.get(op, k)]),
+        ),
+      });
+      op.confirmation = `CUTOVER_PRODUCTION_API_WORKER_WEB_WITHOUT_INDUCED_ALERT_KEEP_OTHER_GATES_${op.candidateSha.slice(0, 12).toUpperCase()}_FROM_${profile.legacyBaselineHash(b).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+      plan.schema = waiverProfile.WAIVER_PLAN;
+      plan.operationSha256 = hash(json(op));
+      const reviewed = native.reviewedNativeFixture();
+      reviewed.f.bundle.producerSourceSha = op.candidateSha;
+      reviewed.review.producerSourceSha = op.candidateSha;
+      reviewed.review.adapterSourceSha256 = hash(adapterBytes);
+      reviewed.review.captureBundleSha256 = hash(native.encodedNativeFixture(reviewed.f.bundle));
+      const initial = waiverProfile.createNativeWaiverAdmission(
+        op,
+        {
+          'native-monitor-capture.json': native.encodedNativeFixture(reviewed.f.bundle),
+          'native-monitor-review.json': native.encodedNativeFixture(reviewed.review),
+          'native-monitor-public-trace.json': native.encodedNativeFixture(reviewed.trace),
+          'owner-alert-waiver.json': owner,
+        },
+        { adapterSourceSha256: hash(adapterBytes), reviewValidatorSha256: hash(reviewBytes) },
+        native.NOW,
+        plan.operationSha256,
+      );
+      plan.monitoring = initial.admission;
+      nativeEvidence = initial.evidence;
+      for (const [name, value] of Object.entries(nativeEvidence)) put(`${tx}/${name}`, value);
+    }
     const observation = json({
       windowSeconds: 900,
       samplesPerService: 61,
       latencyMs: { api: Array(61).fill(1), worker: Array(61).fill(1), web: Array(61).fill(1) },
       serverErrors: 0,
-      startedAt: '2026-11-13T17:00:00.000Z',
-      completedAt: '2026-11-13T17:15:00.000Z',
+      startedAt: waived ? '2026-11-14T12:01:00.000Z' : '2026-11-13T17:00:00.000Z',
+      completedAt: waived ? '2026-11-14T12:16:00.000Z' : '2026-11-13T17:15:00.000Z',
       elapsedSeconds: 900,
     });
     for (const [path, value] of [
@@ -396,19 +481,33 @@ it.each(['SUCCESS', 'ROLLED_BACK', 'ABORTED'] as const)(
     put(`${source}/deploy/timeweb/api-web-observability.v1.json`, json({ synthetic: 'contract' }));
     const descriptors = new Map<number, string>();
     let nextFd = 100;
+    const inputPath = `${root}/operator/native-monitor-inputs.json`;
+    let inputFault = '',
+      inputOpened = false,
+      sealFault = 0,
+      sealedCount = 0;
+    let lastLinked = '';
     const stat = (path: string) => ({
-      uid: 0,
+      uid: path === inputPath && inputFault === 'owner' ? 1 : 0,
       gid: 0,
-      mode: files.has(path)
-        ? path === composePath || path.endsWith('api-web-observability.v1.json')
+      mode:
+        path === inputPath && inputFault === 'mode'
           ? 0o644
-          : 0o600
-        : 0o700,
-      nlink: 1,
-      ino: 1,
+          : files.has(path)
+            ? path === composePath ||
+              path.endsWith('api-web-observability.v1.json') ||
+              path.startsWith(source + '/scripts/')
+              ? 0o644
+              : 0o600
+            : 0o700,
+      nlink: path === inputPath && inputFault === 'hardlink' ? 2 : 1,
+      ino: path === inputPath && inputOpened && inputFault === 'open-race' ? 2 : 1,
       dev: 1,
-      size: files.get(path)?.length ?? 0,
-      isSymbolicLink: () => false,
+      size:
+        path === inputPath && inputFault === 'oversize'
+          ? 16 * 1024 * 1024 + 1
+          : (files.get(path)?.length ?? 0),
+      isSymbolicLink: () => path === inputPath && inputFault === 'symlink',
       isDirectory: () => !files.has(path),
       isFile: () => files.has(path),
     });
@@ -424,6 +523,7 @@ it.each(['SUCCESS', 'ROLLED_BACK', 'ABORTED'] as const)(
           if (typeof flags === 'number' && flags & actual.constants.O_CREAT) put(path, '');
           const fd = nextFd++;
           descriptors.set(fd, path);
+          if (path === inputPath) inputOpened = true;
           return fd;
         },
         fstatSync: (fd: number) => stat(descriptors.get(fd)!),
@@ -435,22 +535,36 @@ it.each(['SUCCESS', 'ROLLED_BACK', 'ABORTED'] as const)(
           )
             return actual.readFileSync(path, options);
           const name = typeof path === 'number' ? descriptors.get(path)! : path;
+          if (
+            waived &&
+            (name.endsWith('/timeweb-monitor-readback.json') ||
+              name.endsWith('/alert-test-readback.json'))
+          )
+            throw Error('V1 monitoring forbidden in waiver profile');
           const value = files.get(name);
           if (!value) throw Error('unexpected fixture read:' + name);
+          if (name === inputPath && inputFault === 'read-race')
+            put(name, Buffer.concat([value, Buffer.from(' ')]));
           return value;
         },
         readSync: (fd: number, buffer: Buffer, offset: number, length: number, position: number) =>
           files.get(descriptors.get(fd)!)!.copy(buffer, offset, position, position + length),
         closeSync: (fd: number) => descriptors.delete(fd),
-        fsyncSync: () => {},
+        fsyncSync: (fd: number) => {
+          if (descriptors.get(fd) === tx && lastLinked && sealFault && ++sealedCount === sealFault)
+            throw Error('synthetic seal lost acknowledgment');
+        },
         writeFileSync: (fd: number, value: string | Buffer) => put(descriptors.get(fd)!, value),
         renameSync: (from: string, to: string) => {
           put(to, files.get(from)!);
           files.delete(from);
         },
-        linkSync: (from: string, to: string) => put(to, files.get(from)!),
+        linkSync: (from: string, to: string) => {
+          put(to, files.get(from)!);
+          lastLinked = to;
+        },
         unlinkSync: (path: string) => {
-          if (path === lockPath)
+          if (path === lockPath && !files.has(`${tx}/preparation-aborted.json`))
             expect(
               (JSON.parse(files.get(receiptPath)!.toString()) as { status: string }).status,
             ).toBe('RECONCILED');
@@ -506,27 +620,165 @@ it.each(['SUCCESS', 'ROLLED_BACK', 'ABORTED'] as const)(
     try {
       vi.resetModules();
       const controller = await import('./timeweb-api-web-upgrade.js');
+      if (terminal === 'SUCCESS' && waived) {
+        const snapshot = new Map(files);
+        const resetAdmission = () => {
+          files.clear();
+          for (const [name, value] of snapshot) files.set(name, Buffer.from(value));
+          files.delete(`${tx}/plan.json`);
+          for (const name of Object.keys(nativeEvidence!)) files.delete(`${tx}/${name}`);
+          put(inputPath, nativeEvidence!['native-monitor-inputs.json']!);
+          inputFault = '';
+          inputOpened = false;
+          sealFault = 0;
+          sealedCount = 0;
+          lastLinked = '';
+        };
+        vi.useFakeTimers();
+        vi.setSystemTime('2026-11-14T12:00:30.000Z');
+        try {
+          resetAdmission();
+          expect(await controller.admitNativeWaiverMonitoring(op, tx, hash(json(op)))).toEqual(
+            plan.monitoring,
+          );
+          expect(files.has(`${tx}/plan.json`)).toBe(false);
+          for (const [name, value] of Object.entries(nativeEvidence!))
+            expect(files.get(`${tx}/${name}`)).toEqual(value);
+          for (const fault of [
+            'symlink',
+            'hardlink',
+            'mode',
+            'owner',
+            'oversize',
+            'open-race',
+            'read-race',
+          ]) {
+            resetAdmission();
+            inputFault = fault;
+            await expect(
+              controller.admitNativeWaiverMonitoring(op, tx, hash(json(op))),
+              fault,
+            ).rejects.toThrow();
+            expect(files.has(`${tx}/native-monitor-capture.json`)).toBe(false);
+            expect(files.has(lockPath)).toBe(true);
+          }
+          for (const lock of ['', 'foreign/plan.json\n']) {
+            resetAdmission();
+            put(lockPath, lock);
+            await expect(
+              controller.admitNativeWaiverMonitoring(op, tx, hash(json(op))),
+            ).rejects.toThrow('native_admission_lease');
+          }
+          resetAdmission();
+          put(`${tx}/plan.json`, '{}');
+          await expect(
+            controller.admitNativeWaiverMonitoring(op, tx, hash(json(op))),
+          ).rejects.toThrow('native_admission_lease');
+          for (let phase = 1; phase <= Object.keys(nativeEvidence!).length; phase++) {
+            resetAdmission();
+            sealFault = phase;
+            await expect(
+              controller.admitNativeWaiverMonitoring(op, tx, hash(json(op))),
+            ).rejects.toThrow('synthetic seal');
+            expect(files.has(`${tx}/plan.json`)).toBe(false);
+            expect(files.has(lockPath)).toBe(true);
+          }
+          // Recover the actual pre-plan crash layout through the public controller entry.
+          resetAdmission();
+          sealFault = 3;
+          await expect(
+            controller.admitNativeWaiverMonitoring(op, tx, hash(json(op))),
+          ).rejects.toThrow('synthetic seal');
+          sealFault = 0;
+          files.delete(receiptPath);
+          files.delete(`${tx}/backup.complete`);
+          const savedRows = structuredClone(rows);
+          for (const service of ['api', 'worker', 'web']) {
+            const legacy = b.containers[service]!,
+              row = rows[service]!;
+            row.Id = legacy.id;
+            row.Image = legacy.imageId;
+            row.Config.Image = legacy.image;
+            row.Config.Labels['phub.release-id'] = legacy.releaseId;
+            row.Config.Labels['org.opencontainers.image.revision'] = legacy.revision;
+            row.State.StartedAt = legacy.startedAt;
+          }
+          try {
+            const partial = files.get(`${tx}/native-monitor-capture.json`)!;
+            const recovered = await controller.runManualApiWebUpgrade(
+              'recover',
+              `${root}/operator/api-web-upgrade.json`,
+            );
+            expect(recovered.status).toBe('ABORTED');
+            expect(files.has(lockPath)).toBe(false);
+            expect(
+              JSON.parse(files.get(`${tx}/preparation-aborted.json`)!.toString()),
+            ).toMatchObject({ runtimeMutated: false, operationSha256: hash(json(op)) });
+            expect(files.get(`${tx}/native-monitor-capture.json`)).toEqual(partial);
+            await expect(
+              controller.runManualApiWebUpgrade('deploy', `${root}/operator/api-web-upgrade.json`),
+            ).rejects.toThrow('native_aborted_operation_not_replayable');
+            expect(mutations).toEqual([]);
+          } finally {
+            Object.assign(rows, savedRows);
+          }
+          expect(mutations).toEqual([]);
+        } finally {
+          vi.useRealTimers();
+          files.clear();
+          for (const [name, value] of snapshot) files.set(name, value);
+          inputFault = '';
+          inputOpened = false;
+          sealFault = 0;
+        }
+      }
       for (const name of ['candidate', 'previous-api', 'previous-worker', 'previous-web'])
         put(`${tx}/${name}.env`, controller.overlayBytes(plan, name));
       const descriptor = controller.buildApiWebInstalledDescriptor(values, plan, id, receiptPath);
       if (terminal === 'SUCCESS')
         put(`${root}/releases/${id}/installed-components.env`, descriptor);
       const receipt = {
-        schema: profile.ROSTER_CUTOVER_RECEIPT,
+        schema: waived ? waiverProfile.WAIVER_RECEIPT : profile.ROSTER_CUTOVER_RECEIPT,
         status: terminal,
         planSha256: hash(json(plan)),
         legacyBaselineSha256: profile.legacyBaselineHash(b),
-        observedAt: '2026-11-13T17:16:00.000Z',
+        observedAt: waived ? '2026-11-14T12:17:00.000Z' : '2026-11-13T17:16:00.000Z',
         ...(terminal === 'SUCCESS'
           ? {
               installedBaselineSha256: hash(descriptor),
               observationSha256: hash(observation),
-              providerReadbackSha256: hash(provider),
-              alertReadbackSha256: hash(alerts),
+              ...(waived
+                ? waiverProfile.nativeAdmissionReceipt(plan.monitoring)
+                : { providerReadbackSha256: hash(provider), alertReadbackSha256: hash(alerts) }),
             }
           : {}),
       };
       put(receiptPath, json(receipt));
+      if (terminal === 'SUCCESS' && waived) {
+        const path = `${source}/scripts/timeweb-native-observability.js`,
+          old = files.get(path)!;
+        put(path, 'a later enrolled controller source');
+        expect(controller.readInstalledApiBaseline(id).values.PHUB_COMPONENT_ROLLOUT_KIND).toBe(
+          waiverProfile.WAIVER_KIND,
+        );
+        put(path, old);
+        for (const name of Object.keys(nativeEvidence!)) {
+          const file = `${tx}/${name}`,
+            saved = files.get(file)!;
+          put(file, Buffer.from('{}\n'));
+          expect(() => controller.readInstalledApiBaseline(id)).toThrow();
+          put(file, saved);
+        }
+        for (const delta of [
+          { alertReadbackSha256: 'f'.repeat(64) },
+          { alertTestStatus: 'PASS' },
+          { monitoringPolicy: 'OTHER' },
+        ]) {
+          put(receiptPath, json({ ...receipt, ...delta }));
+          expect(() => controller.readInstalledApiBaseline(id)).toThrow();
+          put(receiptPath, json(receipt));
+        }
+      }
       if (terminal === 'SUCCESS') {
         // Direct reader negatives avoid readiness retry delays and prove terminal identity gates.
         for (const mutate of [

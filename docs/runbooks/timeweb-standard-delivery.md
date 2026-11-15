@@ -1768,3 +1768,76 @@ only that plan hash. Seal operator identity/approval, protected roster preimage 
 rollback before apply. No blanket conflict clearing, alias reassignment, user creation or direct SQL
 is part of this route. Verify canonical participants, projection and the authenticated Web/Android
 view separately before claiming recovery.
+
+### Owner-authorized cutover without an induced alert drill (November 15)
+
+The owner explicitly requested completing this LK2 deployment without the declined alert test,
+while preserving all data and accounts. This authorizes no monitor setting, recipient, provider,
+notification, secret, ACL, migration, reset or database-restore change on the live database.
+
+Select only `PHUB_TIMEWEB_API_WORKER_WEB_PRODUCTION_CUTOVER_ALERT_WAIVER_V3` through the existing
+`--critical-api-web` entry. Ordinary V1/V2, JOIN, beta and direct-observation routes retain their
+existing checks. V3 has distinct plan/receipt schemas and installed kind. It can consume only the
+already attested legacy predecessor; a successful canonical transition prevents its reuse as a
+standing waiver for later releases.
+
+The exact nested `alertWaiver` binds the target/server/project, controller/candidate/tree, source CI,
+publication/artifact/manifest, legacy baseline, full backup operation and outer expiry. Its scope is
+`INDUCED_ALERT_DRILL_ONLY`; status is `NOT_TESTED_OWNER_DECLINED`. It binds a canonical root-only
+`PHUB_TIMEWEB_OWNER_MESSAGE_RECEIPT_V1` carrying the original message digest, original received time
+and actual chat/message reference. Its `scopeSha256` binds the exact operation authorization fields
+(excluding the receipt hash to avoid a cycle); the same retained receipt cannot authorize a later source,
+publication, backup or expiry. This is honestly root-operator-attested owner authority, not a
+cryptographic claim of chat origin. Private references and original message bytes stay outside Git.
+Use the distinct confirmation:
+
+`CUTOVER_PRODUCTION_API_WORKER_WEB_WITHOUT_INDUCED_ALERT_KEEP_OTHER_GATES_<CANDIDATE12>_FROM_<LEGACY12>_KEEP_DATA_AND_ACCOUNTS`.
+
+Fresh first-attempt main CI, immutable five-image publication, complete dump/unfiltered isolated
+restore, ledger/account/session/delegation witnesses, unchanged secrets and Realtime, exact legacy
+rollback images, no migrator, Worker containment, 61 rounds over at least 900 seconds and retained
+terminal reconciliation remain mandatory. The restore image is 19 GiB with an 18 GiB database
+admission cap; dump cap, memory and 5 GiB plus 256 MiB host reserve are unchanged. Recheck actual
+capacity immediately before the backup. Do not reduce the full restore or witnesses to fit a disk.
+
+V3 consumes real native Timeweb configuration, complete statistics and complete incident inventories
+for both existing monitors through the versioned pure native adapter/review validators. Provider
+success is truthfully `HTTP_2XX`; application private/public probes continue to require exact 200.
+It never synthesizes V1 `expectedStatus: 200`, an alert readback or a delivered/PASS result.
+
+After final source freeze/enrollment, prepare the exact operation and all expensive prerequisites.
+The existing controller acquires its own lease, emits `PHUB_NATIVE_INPUT_REQUIRED` and waits up to
+120 seconds for one root-owned `0600` canonical `operator/native-monitor-inputs.json` under `0700`
+parents. This bounded wait does not widen the initial 30-second capture freshness requirement.
+Stage one complete `PHUB_TIMEWEB_NATIVE_INPUT_ENVELOPE_V1` atomically, never file-by-file inputs:
+
+- `operationSha256` is the hash of the exact operation bytes;
+- `files` contains the exact canonical UTF-8 strings for `native-monitor-capture.json`,
+  `native-monitor-review.json`, `native-monitor-public-trace.json`, and `owner-alert-waiver.json`;
+- envelope maximum is 16 MiB; each embedded canonical file is at most 4 MiB;
+- the capture has the exact final producer SHA, source-pinned redactor and five actual GET calls;
+- the independent review binds the complete actual public I/O projection and exact source hashes.
+  Redact configured Authorization inside the collector before emitting or persisting it. No value
+  or digest of the credential is retained. Internal framework metadata is intentionally excluded;
+  this is approved collector/root-input custody, not provider-origin authentication.
+
+One FD snapshot verifies ownership, mode, single link, no symlink and unchanged inode/content.
+The controller validates those exact Buffers under its existing lease and durably retains the four
+inputs, envelope and derived readback before sealing its plan and issuing any activation intent.
+After sealing it never rereads operator inputs. A missing, stale, substituted, unreviewed or
+credential-contaminated input stops before activation. Incomplete preparation is retained for exact
+recovery; a preparation-aborted V3 transaction cannot be replayed under the same release identity.
+
+The plan binds the admission version/policy, actual admission/readAt times, operation/source/tree/CI,
+adapter/review-validator hashes, all retained-byte hashes and waiver hash. Forward rechecks use the
+sealed admission time without retimestamping; direct readiness continues throughout observation.
+SUCCESS and RECONCILED/SUCCESS receipts retain explicit native admission hashes and
+`NOT_TESTED_OWNER_DECLINED`, never V1 provider/alert hashes.
+
+Installed V3 readback verifies the successful receipt, operation/plan lineage and every retained
+byte hash as historical admission. It does not call the current redactor, current clock or current
+Git/config to reconstruct an old admission. This permits a later approved controller enrollment
+without making its predecessor unreadable. It grants no freshness or authority to another rollout;
+new forward admission still needs its own fresh source-bound native capture. Runtime secret,
+Worker identity, observation, backup and rollback checks remain separate. Recovery and non-success
+reconciliation do not depend on fresh monitoring inputs or an unexpired waiver.
