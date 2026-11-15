@@ -4,6 +4,8 @@ import { parseStrictJson } from './strict-json.js';
 
 export const NATIVE_MONITOR_SCHEMA = 'PHUB_TIMEWEB_MONITOR_READBACK_V2';
 export const NATIVE_MONITOR_BUNDLE = 'PHUB_TIMEWEB_NATIVE_MONITOR_CAPTURE_V1';
+export const NATIVE_MONITOR_BATCH_BUNDLE = 'PHUB_TIMEWEB_NATIVE_MONITOR_CAPTURE_BATCH_V2';
+export const NATIVE_CUA_BATCH_RESULT = 'PHUB_TIMEWEB_NATIVE_CUA_BATCH_RESULT_V1';
 export const APPROVED_NATIVE_READER = 'codex-lk2-desktop-readonly-20261114';
 export const REDACTED_PRESENT = '__PHUB_CONFIGURED_VALUE_REDACTED__';
 export const NATIVE_MONITORS = Object.freeze([
@@ -143,6 +145,44 @@ export function redactNativeProbeResponse(input) {
   }
   noCredential(output);
   return output;
+}
+
+// Fixed public CUA invocation: five bounded GETs run in the browser realm. The opaque
+// authenticated client and CDP session must already exist under these exact bindings.
+// No provider credential or unredacted configuration leaves the browser realm.
+export function nativeBatchCuaArguments() {
+  const declaration = `async function() {
+const CONFIG_KEYS = ${JSON.stringify(CONFIG_KEYS)};
+const REDACTED_PRESENT = ${JSON.stringify(REDACTED_PRESENT)};
+const UUID = ${UUID.toString()};
+${[fail, need, same, exact, uuid, nativeEnvelope, noCredential, redactNativeProbeResponse].map((fn) => fn.toString()).join('\n')}
+const definitions = ${JSON.stringify(NATIVE_MONITORS)};
+const origin = 'https://timeweb.cloud/api/v1/probes';
+const requestedAt = new Date().toISOString();
+const reads = [
+  ['configuration', origin + '?limit=10000&offset=0'],
+  ...definitions.map((row) => ['statistics-' + row.service, origin + '/' + row.id + '/statistics?time_from=' + encodeURIComponent(requestedAt) + '&period=6']),
+  ...definitions.map((row) => ['incidents-' + row.service, origin + '/' + row.id + '/incidents?limit=10000&offset=0']),
+];
+try {
+  const captures = await Promise.all(reads.map(async ([role, url]) => {
+    const response = await this.client.get(url, {timeout: 8000});
+    if (response.status !== 200) throw Error('NATIVE_HTTP_STATUS');
+    const capturedAt = new Date().toISOString();
+    const nativeResponse = role === 'configuration' ? redactNativeProbeResponse(response.data) : response.data;
+    noCredential(nativeResponse);
+    return {role, projection: role === 'configuration' ? 'native-authorization-redacted-v1' : 'native-complete-v1', capturedAt, url, nativeResponse};
+  }));
+  const result = JSON.stringify({schema: ${JSON.stringify(NATIVE_CUA_BATCH_RESULT)}, captures});
+  if (new TextEncoder().encode(result).byteLength > 2 * 1024 * 1024) throw Error('NATIVE_CAPTURE_SIZE');
+  return result;
+} catch { throw Error('NATIVE_BATCH_READ_FAILED'); }
+}`;
+  return {
+    code: `var phubNativeBatchResult = await phubNativeMonitorCdp.send('Runtime.callFunctionOn', {objectId: phubNativeTimewebClient.result.objectId, functionDeclaration: ${JSON.stringify(declaration)}, awaitPromise: true, returnByValue: true}, {timeoutMs: 10000}); if (phubNativeBatchResult.exceptionDetails || typeof phubNativeBatchResult.result?.value !== 'string') throw Error('NATIVE_BATCH_CAPTURE_FAILED'); nodeRepl.write(phubNativeBatchResult.result.value);`,
+    title: 'Читаю пять проверок мониторинга',
+    timeout_ms: 12000,
+  };
 }
 
 function captureUrl(capture, role, definition) {
@@ -337,7 +377,7 @@ export function deriveNativeMonitorReadback(bytes, observedAtInput, expectedSour
   const bundle = parseStrictJson(bytes);
   exact(bundle, ['schema', 'target', 'producerSourceSha', 'readerAuditId', 'captures']);
   need(
-    bundle.schema === NATIVE_MONITOR_BUNDLE &&
+    [NATIVE_MONITOR_BUNDLE, NATIVE_MONITOR_BATCH_BUNDLE].includes(bundle.schema) &&
       same(bundle.target, TARGET) &&
       SHA.test(bundle.producerSourceSha ?? '') &&
       bundle.producerSourceSha === expectedSourceSha &&
@@ -358,11 +398,20 @@ export function deriveNativeMonitorReadback(bytes, observedAtInput, expectedSour
     captures.set(role, validateCapture(matches[0], role, observedAt, definition));
   }
   need(
-    new Set(bundle.captures.map((capture) => capture.toolCallId)).size === roles.length &&
+    new Set(bundle.captures.map((capture) => capture.toolCallId)).size ===
+      (bundle.schema === NATIVE_MONITOR_BATCH_BUNDLE ? 1 : roles.length) &&
       new Set(bundle.captures.map((capture) => capture.nativeResponse.response_id)).size ===
         roles.length,
     'duplicate_capture',
   );
+  if (bundle.schema === NATIVE_MONITOR_BATCH_BUNDLE)
+    need(
+      same(
+        bundle.captures.map((capture) => capture.role),
+        roles,
+      ),
+      'capture_order',
+    );
   const config = captures.get('configuration').nativeResponse;
   nativeEnvelope(config, 'probes');
   need(

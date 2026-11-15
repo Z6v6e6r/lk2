@@ -5,10 +5,16 @@ import { parseStrictJson } from './strict-json.js';
 import {
   redactNativeProbeResponse,
   APPROVED_NATIVE_READER,
+  NATIVE_MONITOR_BUNDLE,
+  NATIVE_MONITOR_BATCH_BUNDLE,
+  NATIVE_CUA_BATCH_RESULT,
+  nativeBatchCuaArguments,
 } from './timeweb-native-observability.js';
 
 export const NATIVE_REVIEW_SCHEMA = 'PHUB_TIMEWEB_NATIVE_CAPTURE_REVIEW_V1';
 export const NATIVE_TRACE_SCHEMA = 'PHUB_TIMEWEB_NATIVE_CUA_PUBLIC_TRACE_V1';
+export const NATIVE_BATCH_REVIEW_SCHEMA = 'PHUB_TIMEWEB_NATIVE_CAPTURE_BATCH_REVIEW_V2';
+export const NATIVE_BATCH_TRACE_SCHEMA = 'PHUB_TIMEWEB_NATIVE_CUA_BATCH_PUBLIC_TRACE_V2';
 const HASH = /^[a-f0-9]{64}$/u;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
 const ROLES = [
@@ -73,6 +79,8 @@ export function verifyNativeCaptureReview(
   const review = parseStrictJson(reviewBytes),
     bundle = parseStrictJson(bundleBytes),
     trace = parseStrictJson(traceBytes);
+  const batch = bundle.schema === NATIVE_MONITOR_BATCH_BUNDLE;
+  need(batch || bundle.schema === NATIVE_MONITOR_BUNDLE, 'bundle_schema');
   exact(review, [
     'schema',
     'target',
@@ -90,7 +98,7 @@ export function verifyNativeCaptureReview(
   ]);
   exact(review.reviewer, ['kind', 'rootThreadId', 'taskPath']);
   need(
-    review.schema === NATIVE_REVIEW_SCHEMA &&
+    review.schema === (batch ? NATIVE_BATCH_REVIEW_SCHEMA : NATIVE_REVIEW_SCHEMA) &&
       review.tracePolicy === 'PUBLIC_IO_INTERNAL_METADATA_EXCLUDED_NOT_ORIGIN_AUTHENTICATION_V1' &&
       review.conclusion === 'APPROVED_COLLECTOR_ROOT_INPUT_REVIEWED_V1' &&
       review.readerAuditId === APPROVED_NATIVE_READER &&
@@ -124,9 +132,9 @@ export function verifyNativeCaptureReview(
   );
   exact(trace, ['schema', 'calls']);
   need(
-    trace.schema === NATIVE_TRACE_SCHEMA &&
+    trace.schema === (batch ? NATIVE_BATCH_TRACE_SCHEMA : NATIVE_TRACE_SCHEMA) &&
       Array.isArray(trace.calls) &&
-      trace.calls.length === ROLES.length &&
+      trace.calls.length === (batch ? 1 : ROLES.length) &&
       Array.isArray(review.captures) &&
       review.captures.length === ROLES.length,
     'trace',
@@ -136,7 +144,7 @@ export function verifyNativeCaptureReview(
     const role = ROLES[index],
       capture = bundle.captures.find((c) => c.role === role),
       approved = review.captures[index],
-      call = trace.calls[index];
+      call = trace.calls[batch ? 0 : index];
     need(capture, 'capture');
     exact(approved, [
       'role',
@@ -172,7 +180,8 @@ export function verifyNativeCaptureReview(
         args.title.length <= 160,
       'request',
     );
-    if (role === 'configuration')
+    if (batch) need(same(args, nativeBatchCuaArguments()), 'batch_request_source');
+    if (!batch && role === 'configuration')
       need(args.code.includes(redactNativeProbeResponse.toString()), 'redactor_source');
     const output = call.response.output;
     need(Array.isArray(output) && output.length === 2, 'actual_output');
@@ -181,7 +190,17 @@ export function verifyNativeCaptureReview(
       need(block.type === 'input_text' && typeof block.text === 'string', 'actual_output');
     }
     need(/^Wall time: [0-9.]+ seconds\nOutput:$/u.test(output[0].text), 'actual_output');
-    const returned = parseStrictJson(output[1].text);
+    let returned = parseStrictJson(output[1].text);
+    if (batch) {
+      exact(returned, ['schema', 'captures']);
+      need(
+        returned.schema === NATIVE_CUA_BATCH_RESULT &&
+          Array.isArray(returned.captures) &&
+          returned.captures.length === ROLES.length,
+        'batch_output',
+      );
+      returned = returned.captures[index];
+    }
     exact(returned, ['role', 'projection', 'capturedAt', 'url', 'nativeResponse']);
     const expected = {
       role: capture.role,
@@ -205,7 +224,10 @@ export function verifyNativeCaptureReview(
       'capture_mapping',
     );
   }
-  need(new Set(trace.calls.map((c) => c.request.call_id)).size === ROLES.length, 'duplicate_call');
+  need(
+    new Set(trace.calls.map((c) => c.request.call_id)).size === (batch ? 1 : ROLES.length),
+    'duplicate_call',
+  );
   return {
     reviewSha256: hash(reviewBytes),
     actualTraceSha256: hash(traceBytes),

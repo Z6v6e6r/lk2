@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import {
   NATIVE_MONITORS,
   NATIVE_MONITOR_BUNDLE,
+  NATIVE_MONITOR_BATCH_BUNDLE,
+  NATIVE_CUA_BATCH_RESULT,
+  nativeBatchCuaArguments,
   REDACTED_PRESENT,
   APPROVED_NATIVE_READER,
   redactNativeProbeResponse,
@@ -9,6 +12,8 @@ import {
 import {
   NATIVE_REVIEW_SCHEMA,
   NATIVE_TRACE_SCHEMA,
+  NATIVE_BATCH_TRACE_SCHEMA,
+  NATIVE_BATCH_REVIEW_SCHEMA,
   nativeRedactorSha256,
 } from './timeweb-native-capture-review.js';
 
@@ -187,4 +192,36 @@ export function reviewedNativeFixture() {
     }),
   };
   return { f, trace, review };
+}
+
+export function reviewedNativeBatchFixture() {
+  const value = reviewedNativeFixture();
+  value.f.bundle.schema = NATIVE_MONITOR_BATCH_BUNDLE;
+  const call = value.trace.calls[0]!;
+  for (const capture of value.f.bundle.captures) capture.toolCallId = call.request.call_id;
+  call.request.arguments = JSON.stringify(nativeBatchCuaArguments());
+  call.response.output[1]!.text = JSON.stringify({
+    schema: NATIVE_CUA_BATCH_RESULT,
+    captures: value.f.bundle.captures.map(
+      ({ role, projection, capturedAt, url, nativeResponse }) => ({
+        role,
+        projection,
+        capturedAt,
+        url,
+        nativeResponse,
+      }),
+    ),
+  });
+  value.trace.schema = NATIVE_BATCH_TRACE_SCHEMA;
+  value.trace.calls = [call];
+  value.review.schema = NATIVE_BATCH_REVIEW_SCHEMA;
+  const args = nativeBatchCuaArguments();
+  for (const capture of value.review.captures) {
+    capture.toolCallId = call.request.call_id;
+    capture.requestCodeSha256 = nativeFixtureHash(args.code);
+    capture.requestArgumentsSha256 = nativeFixtureHash(call.request.arguments);
+  }
+  value.review.captureBundleSha256 = nativeFixtureHash(encodedNativeFixture(value.f.bundle));
+  value.review.actualTraceSha256 = nativeFixtureHash(encodedNativeFixture(value.trace));
+  return value;
 }

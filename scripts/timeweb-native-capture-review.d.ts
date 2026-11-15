@@ -14,3 +14,6 @@ export function verifyNativeCaptureReview(
   captureBundleSha256: string;
   reviewedAt: string;
 };
+
+export const NATIVE_BATCH_REVIEW_SCHEMA: string;
+export const NATIVE_BATCH_TRACE_SCHEMA: string;

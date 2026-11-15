@@ -1815,11 +1815,31 @@ Stage one complete `PHUB_TIMEWEB_NATIVE_INPUT_ENVELOPE_V1` atomically, never fil
 - `files` contains the exact canonical UTF-8 strings for `native-monitor-capture.json`,
   `native-monitor-review.json`, `native-monitor-public-trace.json`, and `owner-alert-waiver.json`;
 - envelope maximum is 16 MiB; each embedded canonical file is at most 4 MiB;
-- the capture has the exact final producer SHA, source-pinned redactor and five actual GET calls;
+- the capture has the exact final producer SHA, source-pinned redactor and five actual GET requests;
 - the independent review binds the complete actual public I/O projection and exact source hashes.
   Redact configured Authorization inside the collector before emitting or persisting it. No value
   or digest of the credential is retained. Internal framework metadata is intentionally excluded;
   this is approved collector/root-input custody, not provider-origin authentication.
+
+The original `PHUB_TIMEWEB_NATIVE_MONITOR_CAPTURE_V1` keeps five distinct actual CUA call IDs.
+For one bounded call use `PHUB_TIMEWEB_NATIVE_MONITOR_CAPTURE_BATCH_V2`,
+`PHUB_TIMEWEB_NATIVE_CAPTURE_BATCH_REVIEW_V2` and
+`PHUB_TIMEWEB_NATIVE_CUA_BATCH_PUBLIC_TRACE_V2`. The pure source function
+`nativeBatchCuaArguments()` returns the exact approved CUA code, title and timeout. Prepare the
+existing authenticated opaque client as `phubNativeTimewebClient` and CDP session as
+`phubNativeMonitorCdp` before starting capture; never extract credentials. The function performs
+only the five fixed GETs concurrently with an 8-second timeout each. It redacts configuration
+inside the browser realm and emits one `PHUB_TIMEWEB_NATIVE_CUA_BATCH_RESULT_V1` only after all
+requests succeed. Any error emits no partial evidence and exposes only a fixed failure code.
+
+Retain exactly one actual public request/response pair, with its original arguments string and
+output. All five ordered captures truthfully share that one actual call ID and retain five
+unique native response IDs. The independent reviewer must compare the actual request against
+`nativeBatchCuaArguments()` and map every output field; copying one call into five invented
+trace entries is forbidden. The batch changes no 30-second capture/query freshness, 120-second
+controller wait, provider health, credential, independent review or aborted-operation gate.
+The original V1 path and schema checks remain supported. A source change needs a new candidate
+and canonical publication; it cannot replay a previously preparation-aborted release identity.
 
 One FD snapshot verifies ownership, mode, single link, no symlink and unchanged inode/content.
 The controller validates those exact Buffers under its existing lease and durably retains the four
