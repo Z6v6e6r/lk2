@@ -108,7 +108,8 @@ export function fixture() {
     };
   }
   const bundle = {
-    schema: NATIVE_MONITOR_BUNDLE,
+    schema: NATIVE_MONITOR_BUNDLE as
+      typeof NATIVE_MONITOR_BUNDLE | typeof NATIVE_MONITOR_BATCH_BUNDLE,
     target: { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 },
     producerSourceSha: SOURCE,
     readerAuditId: APPROVED_NATIVE_READER,

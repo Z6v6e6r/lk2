@@ -69,6 +69,12 @@ describe('one actual CUA call, five native GET responses', () => {
   });
   const negatives: Array<[string, (f: Fixture) => void]> = [
     [
+      'trace credential contamination',
+      (f) => {
+        f.trace.calls[0]!.response.output[1]!.text = 'Basic synthetic-forbidden-value';
+      },
+    ],
+    [
       'missing capture',
       (f) => {
         f.f.bundle.captures.pop();
@@ -363,10 +369,10 @@ describe('source-defined browser batch execution', () => {
         executeBrowserBatch(() => {
           const current = index++;
           if (current === 1 && failure === 'timeout') throw Error('private error config');
-          return {
+          return Promise.resolve({
             status: current === 1 && /^\d/u.test(failure) ? Number(failure) : 200,
             data: responses[current],
-          };
+          });
         }),
       ).rejects.toThrow('NATIVE_BATCH_CAPTURE_FAILED');
     },
