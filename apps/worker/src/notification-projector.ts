@@ -278,12 +278,20 @@ async function applyGameNotificationFence(options: {
   await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
     `${event.tenantId}:${event.aggregateId}`,
   ]);
-  const recipientUserIds =
-    event.type === 'game.cancelled.v1' ? event.payload.participantUserIds : [event.payload.userId];
+  const recipientUserIds = resolveNotificationRecipients(event, {
+    type: 'EVENT_USERS',
+    field: 'participantUserIds',
+  });
+  const recipients =
+    recipientUserIds.length > 0
+      ? recipientUserIds
+      : 'userId' in event.payload
+        ? [event.payload.userId]
+        : [];
   const acceptedRecipientUserIds: string[] = [];
   let sawStale = false;
 
-  for (const recipientUserId of [...recipientUserIds].sort()) {
+  for (const recipientUserId of [...recipients].sort()) {
     const existing = await client.query<GameNotificationFenceRow>(
       `select game_revision::text as game_revision, game_event_type, game_fingerprint
          from notifications.game_notification_projection_fences
@@ -438,7 +446,13 @@ async function applyNotificationSourceEventInTransaction(options: {
       }
     }
 
-    if (isGameNotificationEvent(event)) {
+    // Score events use inbox deduplication and current canonical result checks below.
+    // The legacy roster fence intentionally accepts only its original three event types.
+    if (
+      isGameNotificationEvent(event) &&
+      event.type !== 'game.finished.v1' &&
+      event.type !== 'game.result.submitted.v1'
+    ) {
       const fenceResult = await applyGameNotificationFence({ client, event });
       if (fenceResult.outcome !== 'accepted') {
         if (fenceResult.outcome === 'revision_conflict') {
@@ -455,6 +469,57 @@ async function applyNotificationSourceEventInTransaction(options: {
         return { outcome: fenceResult.outcome };
       }
       gameFenceRecipientUserIds = new Set(fenceResult.recipientUserIds);
+    }
+
+    let resultRenderData: Record<string, string> = {};
+    if (event.type === 'game.finished.v1' || event.type === 'game.result.submitted.v1') {
+      const game = await queryOne<{
+        ends_at: string | Date;
+        result_state: string;
+        lifecycle_state: string;
+        database_now: string | Date;
+        current_submission: boolean;
+      }>(
+        client,
+        `select g.ends_at, g.result_state, g.lifecycle_state, now() as database_now,
+           exists(select 1 from games.result_submissions s where s.tenant_id=g.tenant_id
+             and s.game_id=g.id and s.id::text=$3 and s.state='PENDING_CONFIRMATION') as current_submission
+         from games.games g where g.tenant_id = $1 and g.id = $2`,
+        [
+          event.tenantId,
+          event.aggregateId,
+          event.type === 'game.result.submitted.v1' ? event.payload.submissionId : null,
+        ],
+      );
+      if (!game) throw new Error('GAME_RESULT_NOTIFICATION_SOURCE_MISSING');
+      const deadline = new Date(new Date(game.ends_at).getTime() + 12 * 60 * 60_000);
+      if (
+        (event.type === 'game.result.submitted.v1' && !game.current_submission) ||
+        new Date(game.database_now) >= deadline ||
+        game.lifecycle_state !== 'FINISHED' ||
+        game.result_state !==
+          (event.type === 'game.finished.v1' ? 'AWAITING_SUBMISSION' : 'PENDING_CONFIRMATION')
+      ) {
+        await client.query(
+          `update audit.inbox_events set processed_at = now()
+          where consumer_name = $1 and event_id = $2`,
+          [CONSUMER_NAME, event.id],
+        );
+        await client.query('commit');
+        return { outcome: 'suppressed' };
+      }
+      resultRenderData = {
+        resultDeadlineAt: deadline.toISOString(),
+        resultDeadline:
+          new Intl.DateTimeFormat('ru-RU', {
+            timeZone: 'Europe/Moscow',
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          }).format(deadline) + ' МСК',
+        gameResultNotificationType: event.type,
+      };
     }
 
     const runtime = await client.query<RuntimeRow>(
@@ -509,6 +574,7 @@ async function applyNotificationSourceEventInTransaction(options: {
     const deliveryClock = options.now ?? new Date();
     const renderData = {
       ...event.payload,
+      ...resultRenderData,
       aggregateId: event.aggregateId,
       occurredAt: event.occurredAt,
     };

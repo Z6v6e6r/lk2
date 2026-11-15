@@ -615,23 +615,37 @@ const legacyViewerAssociationProof =
 const readAllLocalGameHistory = gameReadRepository
   ? async (input: { readonly tenantId: string; readonly userId: string }) => {
       const items: Awaited<ReturnType<typeof listViewerGameCards>>['items'][number][] = [];
-      let cursor: string | undefined;
-      for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
-        const page = await listViewerGameCards({
-          repository: gameReadRepository,
-          photoRepository: profileSummaryRepository,
-          tenantId: input.tenantId,
-          viewerUserId: input.userId,
-          scope: 'HISTORY',
-          now: new Date().toISOString(),
-          limit: 100,
-          ...(cursor ? { cursor } : {}),
-        });
-        items.push(...page.items);
-        if (!page.nextCursor) return items;
-        cursor = page.nextCursor;
+      for (const scope of ['HISTORY', 'UPCOMING'] as const) {
+        let cursor: string | undefined;
+        for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+          const page = await listViewerGameCards({
+            repository: gameReadRepository,
+            photoRepository: profileSummaryRepository,
+            tenantId: input.tenantId,
+            viewerUserId: input.userId,
+            scope,
+            now: new Date().toISOString(),
+            limit: 100,
+            ...(cursor ? { cursor } : {}),
+          });
+          items.push(
+            ...page.items.filter(
+              (card) =>
+                scope === 'HISTORY' ||
+                ['RESULT_REQUIRED', 'RESULT_PENDING', 'RESULT_DISPUTED'].includes(
+                  card.displayState,
+                ),
+            ),
+          );
+          if (!page.nextCursor) {
+            cursor = undefined;
+            break;
+          }
+          cursor = page.nextCursor;
+        }
+        if (cursor) throw new Error('ACTIVITY_HISTORY_LOCAL_GAMES_LIMIT_EXCEEDED');
       }
-      throw new Error('ACTIVITY_HISTORY_LOCAL_GAMES_LIMIT_EXCEEDED');
+      return items;
     }
   : undefined;
 /**

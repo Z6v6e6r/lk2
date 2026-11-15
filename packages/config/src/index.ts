@@ -50,7 +50,7 @@ const environmentSchema = z.object({
     .max(3_600_000)
     .default(300_000),
   GAME_RESULT_AUTO_CONFIRM_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
-  GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS: z.coerce.number().int().min(1).max(168).default(12),
+  GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS: z.coerce.number().pipe(z.literal(12)).default(12),
   BOOKING_REMINDER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   BOOKING_REMINDER_CLAIM_TTL_MS: z.coerce.number().int().min(10_000).max(300_000).default(60_000),
   BOOKING_REMINDER_DATABASE_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),

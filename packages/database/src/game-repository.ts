@@ -434,6 +434,7 @@ export interface GameRepository {
     readonly tenantId: string;
     readonly viewerUserId: string;
     readonly scope: 'UPCOMING' | 'HISTORY';
+    readonly retainedResultsOnly?: boolean;
     readonly limit: number;
     readonly after?: { readonly startsAt: string; readonly gameId: string };
   }): Promise<StoredGameCardProjectionPage>;
@@ -1574,9 +1575,15 @@ export function createGameRepository(
     listViewerCardProjections(input) {
       const limit = Math.max(1, Math.min(input.limit, 100));
       const history = input.scope === 'HISTORY';
+      const retained = `exists (select 1 from games.games canonical
+        where canonical.tenant_id = games.card_projections.tenant_id
+          and canonical.id = games.card_projections.game_id
+          and canonical.lifecycle_state = 'FINISHED'
+          and canonical.result_state in ('AWAITING_SUBMISSION', 'PENDING_CONFIRMATION', 'DISPUTED')
+          and canonical.ends_at + interval '12 hours' > now())`;
       const lifecyclePredicate = history
-        ? "lifecycle_state in ('FINISHED', 'CANCELLED')"
-        : "lifecycle_state in ('SCHEDULED', 'IN_PROGRESS')";
+        ? `(lifecycle_state in ('FINISHED', 'CANCELLED') and not ${retained})`
+        : `(lifecycle_state in ('SCHEDULED', 'IN_PROGRESS') or ${retained})`;
       const cursorPredicate = history
         ? 'or (starts_at, game_id) < ($3::timestamptz, $4::uuid)'
         : 'or (starts_at, game_id) > ($3::timestamptz, $4::uuid)';
@@ -1598,6 +1605,7 @@ export function createGameRepository(
                    and redirect.source_game_id = games.card_projections.game_id
               )
               and ${lifecyclePredicate}
+              ${input.retainedResultsOnly ? `and ${retained}` : ''}
               and (${GAME_TEST_COURT_PUBLIC_FILTER} or $6::boolean)
               and (
                 base_payload ->> 'organizerUserId' = $2

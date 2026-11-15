@@ -1,6 +1,26 @@
 import { PROFILE_PHOTO_DELIVERY_PATH_PATTERN } from '@phub/domain';
 import { z } from 'zod';
 
+export const GAME_RESULT_WINDOW_HOURS = 12;
+
+/** One deadline for score entry, review and automatic confirmation. */
+export function gameResultWindowOpen(endsAt: string, now: string): boolean {
+  return Date.parse(now) < Date.parse(endsAt) + GAME_RESULT_WINDOW_HOURS * 60 * 60_000;
+}
+
+export function retainFinishedGame(input: {
+  readonly lifecycleState: string;
+  readonly resultState: string;
+  readonly endsAt: string;
+  readonly now: string;
+}): boolean {
+  return (
+    input.lifecycleState === 'FINISHED' &&
+    ['AWAITING_SUBMISSION', 'PENDING_CONFIRMATION', 'DISPUTED'].includes(input.resultState) &&
+    gameResultWindowOpen(input.endsAt, input.now)
+  );
+}
+
 export const GAME_LIFECYCLE_STATES = [
   'DRAFT',
   'PROVISIONING',
@@ -854,16 +874,20 @@ function deriveAllowedActions(input: {
   ) {
     actions.add('SUBMIT_RESULT');
   }
-  // A dispute reopens entry of a corrected score. The result command accepts a resubmission in
-  // DISPUTED without the AWAITING_SUBMISSION window, so the card offers it the same way.
+  // Corrected submissions share the original game deadline.
   if (
     game.lifecycleState === 'FINISHED' &&
     resultState === 'DISPUTED' &&
+    gameResultWindowOpen(game.endsAt, input.now) &&
     (viewerRelation === 'ORGANIZER' || viewerRelation === 'PARTICIPANT')
   ) {
     actions.add('SUBMIT_RESULT');
   }
-  if (game.lifecycleState === 'FINISHED' && resultState === 'PENDING_CONFIRMATION') {
+  if (
+    game.lifecycleState === 'FINISHED' &&
+    resultState === 'PENDING_CONFIRMATION' &&
+    gameResultWindowOpen(game.endsAt, input.now)
+  ) {
     const viewerUserId = input.viewerUserId;
     if (
       viewerUserId &&
@@ -902,7 +926,8 @@ export function projectGameCard(
   const input = parseProjectionInput(rawInput);
   const nowMs = parseInstant(context.now, 'now');
   const startingSoonMinutes = context.startingSoonMinutes ?? 180;
-  const resultSubmissionWindowHours = context.resultSubmissionWindowHours ?? 48;
+  const resultSubmissionWindowHours =
+    context.resultSubmissionWindowHours ?? GAME_RESULT_WINDOW_HOURS;
   if (
     !Number.isInteger(startingSoonMinutes) ||
     startingSoonMinutes < 0 ||
@@ -915,12 +940,11 @@ export function projectGameCard(
   }
   if (
     !Number.isInteger(resultSubmissionWindowHours) ||
-    resultSubmissionWindowHours < 1 ||
-    resultSubmissionWindowHours > 168
+    resultSubmissionWindowHours !== GAME_RESULT_WINDOW_HOURS
   ) {
     throw new GameDomainError(
       'GAME_SNAPSHOT_INVALID',
-      'resultSubmissionWindowHours must be an integer between 1 and 168',
+      'resultSubmissionWindowHours must be 12 hours from game end',
     );
   }
 

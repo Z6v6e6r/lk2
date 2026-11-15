@@ -2556,3 +2556,41 @@ describe('GamesPage managed SELF leave recovery', () => {
     );
   });
 });
+
+it('refreshes My Games on return to the window so confirmed or expired cards disappear', async () => {
+  const viewerGame: ViewerGameCard = {
+    ...game,
+    surface: 'MY_UPCOMING',
+    displayState: 'RESULT_REQUIRED',
+    levelRange: game.levelRange ?? null,
+    capacity: { ...game.capacity, total: 4 },
+    priceSummary: game.priceSummary ?? null,
+    participants: game.participants.map((p, index) => ({
+      ...p,
+      userId: `00000000-0000-4000-8000-00000000000${index}`,
+    })),
+    viewerRelation: 'PARTICIPANT',
+    viewerPaymentState: 'PAID',
+    resultSummary: null,
+    allowedActions: ['OPEN_DETAILS', 'SUBMIT_RESULT'],
+    conversation: null,
+  };
+  const api: AuthGateway = {
+    ...gateway(),
+    listMyGames: vi
+      .fn()
+      .mockResolvedValueOnce({ items: [viewerGame], nextCursor: null })
+      .mockResolvedValue({ items: [], nextCursor: null }),
+  };
+  render(<GamesPage gateway={api} />);
+  const tabs = await screen.findByRole('navigation', { name: 'Разделы игр' });
+  await userEvent.click(within(tabs).getByRole('button', { name: 'Для меня' }));
+  await screen.findByRole('button', { name: 'Внести результат' });
+  act(() => {
+    window.dispatchEvent(new Event('focus'));
+  });
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: 'Внести результат' })).not.toBeInTheDocument(),
+  );
+  expect(api.listMyGames).toHaveBeenCalledTimes(2);
+});

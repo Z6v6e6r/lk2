@@ -151,6 +151,10 @@ describe('Activity history repository', () => {
     );
     expect(listCall?.[1]).toEqual([tenantId, userId, 'TRAINING', 'COMPLETED', null, null, 2]);
     expect(String(listCall?.[0])).toContain('(occurred_at, id) <');
+    expect(String(listCall?.[0])).toContain(
+      'canonical.tenant_id = booking.activity_history_projection.tenant_id',
+    );
+    expect(String(listCall?.[0])).toContain("canonical.ends_at + interval '12 hours' > now()");
     expect(query).toHaveBeenCalledWith("select set_config('app.tenant_id', $1, true)", [tenantId]);
   });
 

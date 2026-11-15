@@ -92,8 +92,8 @@ const DUE_SQL = `
    where s.tenant_id = $1
      and s.state = 'PENDING_CONFIRMATION'
      and g.result_state = 'PENDING_CONFIRMATION'
-     and s.submitted_at <= now() - make_interval(hours => $2::integer)
-   order by s.submitted_at, s.id
+     and g.ends_at <= now() - make_interval(hours => $2::integer)
+   order by g.ends_at, s.id
    limit $3
 `;
 

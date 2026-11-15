@@ -84,3 +84,40 @@ Before client cutover, return to `disabled` and keep legacy as the sole writer. 
 result has been accepted, do not switch legacy writes back on: freeze new result entry, drain and
 repair the canonical outbox/consumer path, then resume. Never copy a CUP rating state back into
 Games or overwrite a confirmed result directly.
+
+## Score window and notification acceptance (2026-11-15)
+
+The single deadline is game end plus 12 hours, including a corrected score. A late submission does
+not extend review. The existing `GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS` setting accepts only `12`;
+keep `GAME_RESULT_AUTO_CONFIRM_ENABLED=true` in an explicitly activated contour. The schema and
+public event payloads are unchanged. API and worker must run the same release before acceptance.
+
+After separately approved deployment, the notification administrator must dry-run and explicitly
+apply `scripts/provision-game-notifications.ts` from that release with a new idempotency key for
+`game.ru-ru.v2` and the existing `APPLY_GAME_NOTIFICATION_RULESET` confirmation. This provisions the
+`GAME_RESULT` category and the two `IN_APP`/`PUSH` rules; it leaves runtime gates and other category
+preferences untouched. Read back both active rules and the dedicated durable
+`phub.game-result-notification-intent-projector.v1` queue bindings before the test game ends.
+Provisioning and real push delivery require their own live-target authority. Do not replay old game
+outbox events or alter real game times to manufacture acceptance.
+
+Use one LK1-created game with four reconciled active participants and native/browser push opt-in:
+
+1. Before finish, all four see the canonical card and can open its participants and details in LK2.
+2. At finish, all four receive the score-entry notification with the game link and absolute deadline.
+   My Games and Home retain the card, and history excludes it.
+3. One participant submits once. All four (including the author) receive the score-submitted notice
+   naming the original deadline. Another participant can confirm or dispute; the author cannot
+   review their own proposal. Category opt-out suppresses push independently of the in-app notice.
+4. Early confirmation removes the card from My Games and makes it available in history. A dispute
+   keeps it in My Games only until the same deadline and blocks automatic confirmation.
+5. At game end +12h, entry/review are closed and the card is in history. A pending undisputed score
+   is auto-confirmed by the worker; absent or disputed results never produce a rating event.
+6. Broker/command replay must not duplicate notifications, canonical results or rating facts. A queued
+   push is revalidated before provider dispatch and suppressed after expiry or supersession.
+
+Source/fixture checks are LOCAL or CI evidence. Receipt of the native notification on a real device,
+opening its link and natural deadline transitions remain separate live acceptance evidence.
+Rollback must preserve canonical results and idempotency/audit/outbox rows; it cannot undo a delivered
+push or rating event. Do not restore a submission-relative worker alongside the new API. Freeze new
+score commands during an approved full-contour rollback and never reopen the legacy result writer.

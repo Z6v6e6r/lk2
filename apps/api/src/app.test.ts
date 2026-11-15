@@ -1535,6 +1535,89 @@ describe('health endpoints', () => {
     expect(get).toHaveBeenCalledWith(tenantId, userId);
   });
 
+  it.each(['missing', 'stale'] as const)(
+    'keeps pending result visible when provider upcoming is %s',
+    async (state) => {
+      const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+      const gameId = '11111111-1111-4111-8111-111111111111';
+      const now = new Date().toISOString();
+      const value = {
+        gameId,
+        aggregateRevision: 1,
+        projectionRevision: 1,
+        lifecycleState: 'FINISHED' as const,
+        visibility: 'PUBLIC' as const,
+        startsAt: new Date(Date.now() - 7200000).toISOString(),
+        endsAt: new Date(Date.now() - 3600000).toISOString(),
+        projectedAt: now,
+        rosterVerifiedAt: now,
+        basePayload: {
+          id: gameId,
+          tenantId,
+          revision: 1,
+          organizerUserId: userId,
+          title: 'Счёт ожидается',
+          kind: 'FRIENDLY',
+          visibility: 'PUBLIC',
+          lifecycleState: 'FINISHED',
+          timezone: 'Europe/Moscow',
+          startsAt: new Date(Date.now() - 7200000).toISOString(),
+          endsAt: new Date(Date.now() - 3600000).toISOString(),
+          station: { id: gameId, name: 'Тестовый клуб' },
+          capacity: 4,
+          participants: [
+            { userId, displayName: 'Игрок', role: 'ORGANIZER', paymentState: 'NOT_REQUIRED' },
+          ],
+          seatReservations: [],
+          waitlist: [],
+          waitlistEnabled: false,
+          result: {
+            state: 'AWAITING_SUBMISSION',
+            requiredConfirmationUserIds: [],
+            confirmedByUserIds: [],
+          },
+        },
+      };
+      const app = await buildApp({
+        config: { ...config, HOME_READ_MODE: 'projection' },
+        logger: createLogger('api-test', 'silent'),
+        pool: fakePool(),
+        upcomingBookingsRepository: {
+          get: vi.fn().mockResolvedValue(
+            state === 'missing'
+              ? undefined
+              : {
+                  tenantId,
+                  userId,
+                  version: 'old',
+                  generatedAt: now,
+                  staleAt: '2020-01-01T00:00:00Z',
+                  updatedAt: now,
+                  items: [],
+                },
+          ),
+          replace: vi.fn(),
+        },
+        gameReadRepository: {
+          getCardProjection: vi.fn(),
+          listPublicCardProjections: vi.fn(),
+          listViewerCardProjections: vi.fn().mockResolvedValue({ items: [value] }),
+          getCardProjections: vi.fn().mockResolvedValue(new Map([[gameId, value]])),
+        },
+      });
+      apps.push(app);
+      const response = await app.inject({
+        method: 'GET',
+        url: '/user/api/v1/local-padel/bookings/upcoming',
+        headers: { authorization: `Bearer ${await accessToken()}` },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json<{ items: { gameId: string }[] }>().items).toEqual([
+        expect.objectContaining({ gameId }),
+      ]);
+    },
+  );
+
   it('keeps bookings available without roster identities when the roster read fails', async () => {
     const generatedAt = new Date().toISOString();
     const item = {
@@ -1566,7 +1649,7 @@ describe('health endpoints', () => {
       gameReadRepository: {
         getCardProjection: vi.fn(),
         listPublicCardProjections: vi.fn(),
-        listViewerCardProjections: vi.fn(),
+        listViewerCardProjections: vi.fn().mockResolvedValue({ items: [] }),
         getCardProjections: vi.fn().mockRejectedValue(new Error('read unavailable')),
       },
     });

@@ -59,6 +59,11 @@ const CATEGORY_SETTINGS: Readonly<Record<string, NotificationCategorySettings>> 
     description: 'Подходящие публичные игры друзей',
     icon: 'game',
   },
+  GAME_RESULT: {
+    title: 'Внести счёт игры',
+    description: 'Внесение счёта, согласование и оспаривание результата',
+    icon: 'game',
+  },
   GAME: {
     title: 'Игры',
     description: 'Участие, отмена игры, изменения состава',
