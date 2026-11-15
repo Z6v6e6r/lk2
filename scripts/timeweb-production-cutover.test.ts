@@ -7,6 +7,7 @@ import { OWNER_OPERATION, FRESH_BACKUP_OPERATION } from './timeweb-roster-alert-
 import {
   validateProductionCutover,
   legacyBaselineHash,
+  legacyRuntimeHash,
   validateCutoverBackupOperation,
 } from './timeweb-production-cutover.js';
 
@@ -205,6 +206,42 @@ describe('three-service roster cutover inside the existing canonical controller'
       assert.throws(()=>profile.validateRosterCutoverObservation(value,'2026-11-13T17:14:00.000Z'));`);
   });
 });
+it('prior restore compatibility ignores only capture time with identical cross-language bytes', () => {
+  const original = legacyRuntimeHash(baseline);
+  expect(legacyRuntimeHash({ ...baseline, capturedAt: '2026-11-15T18:31:14.979Z' })).toBe(original);
+  const result = spawnSync(
+    'python3',
+    [
+      '-I',
+      '-S',
+      '-B',
+      '-c',
+      "import importlib.util,json,sys;spec=importlib.util.spec_from_file_location('backup','scripts/control-timeweb-database-backup.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);print(m.legacy_runtime_hash(json.load(sys.stdin)))",
+    ],
+    { input: JSON.stringify(baseline), encoding: 'utf8' },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe(original);
+  const leaves = (v: unknown, path: string[] = []): string[][] =>
+    v && typeof v === 'object'
+      ? Object.entries(v).flatMap(([k, value]) => leaves(value, [...path, k]))
+      : [path];
+  for (const path of leaves(baseline).filter((p) => p.join('.') !== 'capturedAt')) {
+    const changed = structuredClone(baseline);
+    let parent: Record<string, unknown> = changed;
+    for (const key of path.slice(0, -1)) parent = parent[key] as Record<string, unknown>;
+    const key = path.at(-1)!,
+      old = parent[key];
+    parent[key] = typeof old === 'number' ? old + 1 : String(old) + 'changed';
+    let candidate;
+    try {
+      candidate = legacyRuntimeHash(changed);
+    } catch {
+      candidate = 'REJECTED';
+    }
+    expect(candidate, path.join('.')).not.toBe(original);
+  }
+});
 it('V4 binds both owner-authorized skips and rejects every older producer schema', () => {
   const pg = { ...baseline.containers.api!, id: '7'.repeat(64) };
   const op = {
@@ -220,6 +257,7 @@ it('V4 binds both owner-authorized skips and rejects every older producer schema
   };
   const producer = {
     schema: FRESH_BACKUP_OPERATION,
+    predecessorRuntimeSha256: legacyRuntimeHash(baseline),
     profile: 'production',
     candidateSha: op.candidateSha,
     controllerSha: op.controllerSha,

@@ -2097,7 +2097,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if isinstance(value, dict) and 'controllerPromotion' in value:
         need(schema != 'PHUB_TIMEWEB_BACKUP_OPERATION_V1', 'CONTROLLER_PROMOTION_SCHEMA')
         common += ['controllerPromotion']
-    if schema == FRESH_SCHEMA:common += ['priorRestore','ownerRestoreDecision']
+    if schema == FRESH_SCHEMA:common += ['priorRestore','ownerRestoreDecision','predecessorRuntimeSha256']
     if schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA):
         exact(value, common + ['profile','candidateSha','publicationRunId','releaseId','expectedLedgerSha256','expectedDatabaseTarget','predecessorAttestationSha256'])
         mode,release_id = 'api-web',value['releaseId']
@@ -3368,6 +3368,7 @@ def fresh_owner_scope(op):
 
 
 def validate_fresh_owner(op):
+    need(HASH.fullmatch(op['predecessorRuntimeSha256'] or ''),'FRESH_PREDECESSOR_RUNTIME')
     r=op['ownerRestoreDecision']
     exact(r,['schema','authority','scope','status','messageSha256','scopeSha256','reference','receivedAt'])
     need(r['schema']=='PHUB_TIMEWEB_OWNER_PROCEDURE_DECISION_V1'
@@ -3379,7 +3380,7 @@ def validate_fresh_owner(op):
          and re.fullmatch(r'codex-thread:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/message:(?:msg_)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}',r['reference'] or '')
          and utc(r['receivedAt'])<utc(op['expiresAt']), 'FRESH_OWNER')
     ref=op['priorRestore']
-    exact(ref,['releaseId','operationSha256','receiptSha256','terminalSha256','dumpSha256','witnessSha256','toolFileSha256','abortOperationSha256','abortMarkerSha256'])
+    exact(ref,['releaseId','operationSha256','receiptSha256','terminalSha256','dumpSha256','witnessSha256','toolFileSha256','abortOperationSha256','abortMarkerSha256','legacyReleaseEnvSha256','legacyAttestationSha256'])
     need(ref['releaseId']=='857b6bd5af828319caa557f0304ec06f3580c4ed-43708464531-1'
          and ref['operationSha256']=='06e07622c3e1a819a279c19311fedaa50c0bee7dad15600e53f4ced28f29a310'
          and ref['receiptSha256']=='dd8db10375e2883e27390a676b69ec4a5c5893bdd7de689a029870ae4d929a3a'
@@ -3388,11 +3389,18 @@ def validate_fresh_owner(op):
          and all(HASH.fullmatch(v or '') for k,v in ref.items() if k!='releaseId'), 'FRESH_PRIOR_REFERENCE')
 
 
+def legacy_runtime_hash(baseline):
+    # Same sorted UTF-8 JSON, no newline, as legacyRuntimeHash in the JS owner.
+    return digest(json.dumps({k:v for k,v in baseline.items() if k!='capturedAt'},
+                             sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())
+
+
 def validate_prior_restore(op):
-    """Original helper primitives; explicitly admit only its later preparation-abort marker.
+    """Original helper primitives; explicitly bind the later aborted controller evidence.
 
     No synthetic directory view, rewritten receipt, or new restore claim. The inventory
-    predicate alone differs from the old five-file terminal validator.
+    predicate alone differs from the old five-file terminal validator. The four
+    controller files are retained audit evidence, never part of the old restore result.
     """
     import importlib.util
     validate_fresh_owner(op)
@@ -3400,7 +3408,9 @@ def validate_prior_restore(op):
     secure(directory,'dir',0o700)
     files={'database.pgcustom':'dumpSha256','database-backup-receipt.json':'receiptSha256',
            'backup-operation.json':'operationSha256','snapshot-witness.json':'witnessSha256',
-           'SUCCESS_CLEANUP_VERIFIED.json':'terminalSha256','preparation-aborted.json':'abortMarkerSha256'}
+           'SUCCESS_CLEANUP_VERIFIED.json':'terminalSha256','preparation-aborted.json':'abortMarkerSha256',
+           'operation.json':'abortOperationSha256','legacy-release.env':'legacyReleaseEnvSha256',
+           'legacy-predecessor-attestation.json':'legacyAttestationSha256'}
     need(sorted(p.name for p in directory.iterdir())==sorted(files),'FRESH_PRIOR_INVENTORY')
     for name,key in files.items():
         secure(directory/name,mode=0o600)
@@ -3413,7 +3423,8 @@ def validate_prior_restore(op):
     old.validate_operation(prior,time.time(),ref['toolFileSha256'],allow_expired=True)
     old._tool_custody_local(prior)
     need(prior['schema']==old.CUTOVER_DISK_SCHEMA
-         and prior['predecessorAttestationSha256']==op['predecessorAttestationSha256']
+         and prior['expectedBoundarySha256']==op['expectedBoundarySha256']
+         and prior['expectedApi']==op['expectedApi']
          and prior['expectedLedgerSha256']==op['expectedLedgerSha256']
          and prior['expectedDatabaseTarget']==op['expectedDatabaseTarget']
          and prior['expectedPostgres']==op['expectedPostgres'],'FRESH_PRIOR_COMPATIBILITY')
@@ -3433,6 +3444,14 @@ def validate_prior_restore(op):
               'receiptSha256':ref['receiptSha256']}
     need(strict(read_secure(directory/'SUCCESS_CLEANUP_VERIFIED.json'))==terminal,'FRESH_PRIOR_TERMINAL')
     abort=strict(read_secure(directory/'preparation-aborted.json'))
+    outer=strict(read_secure(directory/'operation.json'))
+    need(outer.get('schema')=='PHUB_TIMEWEB_API_WORKER_WEB_PRODUCTION_CUTOVER_ALERT_WAIVER_V3'
+         and outer.get('backupOperationSha256')==ref['operationSha256']
+         and outer.get('candidateSha')==prior['candidateSha'] and outer.get('publicationRunId')==prior['publicationRunId']
+         and ref['legacyReleaseEnvSha256']==outer.get('legacyBaseline',{}).get('releaseEnvSha256')
+         and ref['legacyAttestationSha256']==prior['predecessorAttestationSha256']
+         and legacy_runtime_hash(outer['legacyBaseline'])==op['predecessorRuntimeSha256']
+         and strict(read_secure(directory/'legacy-predecessor-attestation.json'))==outer['legacyBaseline'], 'FRESH_PRIOR_CONTROLLER_EVIDENCE')
     exact(abort,['schema','operationSha256','observedAt','runtimeMutated'])
     need(abort['schema']=='PHUB_TIMEWEB_API_WEB_PREPARATION_ABORT_V1'
          and abort['operationSha256']==ref['abortOperationSha256'] and abort['runtimeMutated'] is False
@@ -3440,7 +3459,9 @@ def validate_prior_restore(op):
     return {**ref,'schema':'PHUB_TIMEWEB_EXACT_PRIOR_RESTORE_REFERENCE_V1',
             'completedAt':receipt['completedAt'],'terminalAt':terminal['observedAt'],'laterPreparationAbortAt':abort['observedAt'],
             'databaseTarget':op['expectedDatabaseTarget'],'ledgerSha256':op['expectedLedgerSha256'],
-            'postgresImage':PG_IMAGE,'predecessorAttestationSha256':op['predecessorAttestationSha256']}
+            'postgresImage':PG_IMAGE,'predecessorAttestationSha256':op['predecessorAttestationSha256'],
+            'priorPredecessorAttestationSha256':prior['predecessorAttestationSha256'],
+            'predecessorRuntimeSha256':op['predecessorRuntimeSha256']}
 
 
 def fresh_plan(op, raw, database_bytes):

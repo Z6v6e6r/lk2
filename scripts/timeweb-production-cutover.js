@@ -97,6 +97,22 @@ export const cutoverInstalledKind = (value) =>
         ? ROSTER_CUTOVER_KIND
         : 'API_WEB';
 export const legacyBaselineHash = (baseline) => hash(JSON.stringify(baseline));
+// Compatibility only. Full lineage/confirmation/freshness keep the complete baseline hash.
+export function legacyRuntimeHash(baseline) {
+  validateLegacyBaseline(baseline);
+  const sorted = (v) =>
+    Array.isArray(v)
+      ? v.map(sorted)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v)
+              .sort()
+              .map((k) => [k, sorted(v[k])]),
+          )
+        : v;
+  const { capturedAt: _capturedAt, ...runtime } = baseline;
+  return hash(JSON.stringify(sorted(runtime)));
+}
 export function validateLegacyBaseline(value) {
   exact(value, [
     'schema',
@@ -525,6 +541,8 @@ export function validateCutoverBackupOperation(operation, bytes, facts) {
       ...(isOwnerDirectedCutover(operation) ? [FRESH_BACKUP_OPERATION] : []),
     ].includes(producer.schema) ||
     (isOwnerDirectedCutover(operation) && producer.schema !== FRESH_BACKUP_OPERATION) ||
+    (isOwnerDirectedCutover(operation) &&
+      producer.predecessorRuntimeSha256 !== legacyRuntimeHash(operation.legacyBaseline)) ||
     producer.profile !== 'production' ||
     producer.candidateSha !== operation.candidateSha ||
     producer.controllerSha !== operation.controllerSha ||

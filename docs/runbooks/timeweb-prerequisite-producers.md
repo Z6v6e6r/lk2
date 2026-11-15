@@ -274,10 +274,21 @@ and original message/timestamp must match in producer and outer operation.
 
 The old installed helper is verified before isolated import. Its operation, local tool custody,
 plan, full-restore journal and receipt validation primitives validate the original bytes. An explicit
-read-only compatibility adapter admits the original five files plus only the later authenticated
-`preparation-aborted.json`, whose operation is the independently retained aborted cutover and whose
-`runtimeMutated` is false. Unknown files or any changed original hash fail closed. The original
+read-only compatibility adapter admits the original five files plus exactly four retained controller
+audit files: `operation.json`, `legacy-release.env`, `legacy-predecessor-attestation.json`, and
+`preparation-aborted.json`. The operation bytes match the independently retained aborted cutover;
+the legacy environment and attestation hashes match its exact predecessor, and the abort marker
+has `runtimeMutated:false`. Unknown files or any changed original hash fail closed. The original
 operation, receipt, dates, dump, witness, journal, terminal and helper are never rewritten/copied.
+
+A refreshed legacy runtime observation has its own `capturedAt` and full predecessor hash. The
+old restore retains its original full predecessor hash and timestamp. Only prior-restore
+compatibility uses `predecessorRuntimeSha256`: recursively key-sorted UTF-8 JSON without a newline,
+with only top-level `capturedAt` removed. JS verifies it against the fresh outer baseline; Python
+verifies it against the old retained baseline, plus the unchanged 14-container boundary, API/PG
+identities, ledger and database target. Every other field remains bound. This projection never
+replaces full confirmation, lineage, installed predecessor hashes or the two-hour freshness gate.
+Both old and current full predecessor hashes remain explicit in the prior reference.
 
 The fresh receipt schema is `PHUB_TIMEWEB_FRESH_DUMP_PRIOR_RESTORE_V3`, with
 `freshDumpRestored:false`, `freshDumpIntegrityStatus:PG16_TOC_PARSE_VERIFIED`, exact prior-reference

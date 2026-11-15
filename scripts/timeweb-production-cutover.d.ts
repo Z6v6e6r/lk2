@@ -13,6 +13,7 @@ export function validateCutoverBackupOperation(
   facts: unknown,
 ): Record<string, unknown>;
 export function legacyBaselineHash(baseline: unknown): string;
+export function legacyRuntimeHash(baseline: unknown): string;
 export function legacyEnvironment(
   baseline: unknown,
   bytes: Buffer,

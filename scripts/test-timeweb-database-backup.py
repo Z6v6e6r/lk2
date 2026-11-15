@@ -1587,14 +1587,14 @@ class FreshDumpScenario(CutoverDiskScenario):
     def __init__(self,directory,fault=None):
         super().__init__(directory,fault)
         self.clockAt='2026-11-15T20:10:00.000Z'
-        self.op.update(schema=m.FRESH_SCHEMA,expiresAt='2026-11-15T21:00:00.000Z',
+        self.op.update(schema=m.FRESH_SCHEMA,predecessorRuntimeSha256='a'*64,expiresAt='2026-11-15T21:00:00.000Z',
                        confirmation='FRESH_DUMP_PRIOR_RESTORE_BETA122_'+self.op['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS',
                        priorRestore={'releaseId':'857b6bd5af828319caa557f0304ec06f3580c4ed-43708464531-1',
                         'operationSha256':'06e07622c3e1a819a279c19311fedaa50c0bee7dad15600e53f4ced28f29a310',
                         'receiptSha256':'dd8db10375e2883e27390a676b69ec4a5c5893bdd7de689a029870ae4d929a3a',
                         'toolFileSha256':'81fc9dd660d6206939b8d8384ba3a032b75691e67b5a73d6670c940ce656e519',
                         'abortOperationSha256':'a72aaf2374907da77f7b3e853b602280be3927681ad92efe0bb85b2c24f49d5f',
-                        **{k:'a'*64 for k in ['terminalSha256','dumpSha256','witnessSha256','abortMarkerSha256']}})
+                        **{k:'a'*64 for k in ['terminalSha256','dumpSha256','witnessSha256','abortMarkerSha256','legacyReleaseEnvSha256','legacyAttestationSha256']}})
         self.op['ownerRestoreDecision']={'schema':'PHUB_TIMEWEB_OWNER_PROCEDURE_DECISION_V1',
            'authority':'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1','scope':'REPEAT_PHYSICAL_RESTORE_ONLY',
            'status':'NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED','messageSha256':m.digest(m.RESTORE_OWNER_MESSAGE.encode()),
