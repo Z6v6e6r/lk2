@@ -910,6 +910,38 @@ describe('PadlHub web authentication', () => {
     expect(getHomeBase).toHaveBeenCalledTimes(7);
   });
 
+  it('offers device push after authenticated Home loads, without enabling it automatically', async () => {
+    Object.defineProperties(HTMLDialogElement.prototype, {
+      showModal: {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.setAttribute('open', '');
+        },
+      },
+      close: {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.removeAttribute('open');
+        },
+      },
+    });
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+    const enable = vi.fn();
+    render(
+      <App
+        gateway={gateway}
+        tenantKey="padlhub"
+        clientPlatform="android"
+        devicePush={{ enabled: true, state: 'ready', busy: false, enable, disable: vi.fn() }}
+      />,
+    );
+    expect(await screen.findByRole('dialog', { name: 'Включите уведомления' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeInTheDocument();
+    expect(enable).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Включить уведомления' }));
+    expect(enable).toHaveBeenCalledOnce();
+  });
+
   it('restores an HttpOnly-cookie-backed session before showing protected home', async () => {
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 
