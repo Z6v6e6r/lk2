@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ownerDirectedTestChoices } from './timeweb-owner-directed-fixture.js';
 import {
   reviewedNativeFixture,
   reviewedNativeBatchFixture,
@@ -10,6 +11,13 @@ import {
 } from './timeweb-native-observability-fixtures.js';
 import {
   WAIVER_OPERATION,
+  OWNER_OPERATION,
+  OWNER_RECEIPT,
+  OWNER_KIND,
+  createOwnerDirectedBinding,
+  validateOwnerDirectedBinding,
+  validateOwnerDirectedDecisions,
+  ownerDirectedReceipt,
   WAIVER_STATUS,
   OWNER_DECISION_SHA256,
   NATIVE_INPUTS,
@@ -23,6 +31,98 @@ import {
   decodeNativeInputEnvelope,
   ownerWaiverScopeSha256,
 } from './timeweb-roster-alert-waiver.js';
+
+describe('explicit owner-directed procedure preserves truthful skipped evidence', () => {
+  function ownerFixture() {
+    const op: Record<string, unknown> = { ...fixture().op, schema: OWNER_OPERATION };
+    delete op.alertWaiver;
+    op.ownerDecisions = ownerDirectedTestChoices(op);
+    return op;
+  }
+  it('binds three independent decisions without native/provider inputs or synthetic PASS', () => {
+    const op = ownerFixture(),
+      sha = hash(bytes(op));
+    validateOwnerDirectedDecisions(op, true, Date.parse(NOW));
+    const binding = createOwnerDirectedBinding(op, sha);
+    validateOwnerDirectedBinding(op, binding, sha);
+    expect(ownerDirectedReceipt(binding)).toMatchObject({
+      ownerDecisionPolicy: 'OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_AND_REPEAT_RESTORE_V1',
+      providerMonitoringStatus: 'NOT_CHECKED_OWNER_SKIPPED',
+      alertTestStatus: 'NOT_TESTED_OWNER_DECLINED',
+      restoreAdmissionPolicy: 'EXACT_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1',
+      repeatRestoreStatus: 'NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED',
+    });
+    expect(JSON.stringify(binding)).not.toMatch(/PASS|readAt|admittedAt|captureSha256/u);
+    expect(() =>
+      createNativeWaiverAdmission(
+        op,
+        {},
+        { adapterSourceSha256: '', reviewValidatorSha256: '' },
+        NOW,
+        sha,
+      ),
+    ).toThrow();
+    expect(OWNER_RECEIPT).not.toBe(WAIVER_OPERATION);
+    expect(OWNER_KIND).toBe('API_WORKER_WEB_OWNER_DIRECTED_CUTOVER');
+  });
+  it.each([
+    'target',
+    'controllerSha',
+    'candidateSha',
+    'candidateTree',
+    'sourceCiRunId',
+    'publicationRunId',
+    'artifactId',
+    'artifactDigest',
+    'manifestSha256',
+    'backupOperationSha256',
+    'expiresAt',
+    'legacyBaseline',
+  ])('rejects decision replay across %s', (key) => {
+    const op = ownerFixture();
+    op[key] = 'foreign';
+    expect(() => validateOwnerDirectedDecisions(op)).toThrow();
+  });
+  it.each(['alertDrill', 'providerMonitoring', 'repeatedRestore'])(
+    'rejects missing, broad or fabricated %s',
+    (key) => {
+      for (const field of [
+        'schema',
+        'authority',
+        'scope',
+        'status',
+        'messageSha256',
+        'scopeSha256',
+        'reference',
+        'receivedAt',
+      ]) {
+        const op = ownerFixture();
+        const decisions = op.ownerDecisions as Record<string, Record<string, string>>;
+        decisions[key]![field] = field === 'status' ? 'PASS' : 'foreign';
+        expect(() => validateOwnerDirectedDecisions(op), `${key}.${field}`).toThrow();
+        delete decisions[key]![field];
+        expect(() => validateOwnerDirectedDecisions(op)).toThrow();
+      }
+    },
+  );
+  it('rejects extra native fields, wrong operation binding, expiry and cross-schema admission', () => {
+    const op = ownerFixture(),
+      sha = hash(bytes(op));
+    const binding = createOwnerDirectedBinding(op, sha);
+    for (const delta of [
+      { providerSha256: 'a'.repeat(64) },
+      { readAt: NOW },
+      { providerMonitoringStatus: 'PASS' },
+      { operationSha256: 'b'.repeat(64) },
+    ])
+      expect(() => validateOwnerDirectedBinding(op, { ...binding, ...delta }, sha)).toThrow();
+    expect(() =>
+      validateOwnerDirectedDecisions(op, true, Date.parse(String(op.expiresAt))),
+    ).toThrow();
+    for (const schema of [WAIVER_OPERATION, 'PHUB_TIMEWEB_API_WORKER_WEB_PRODUCTION_CUTOVER_V2'])
+      expect(() => validateOwnerDirectedDecisions({ ...op, schema })).toThrow();
+  });
+});
 
 function fixture(batch = false) {
   const reviewed = batch ? reviewedNativeBatchFixture() : reviewedNativeFixture();

@@ -54,3 +54,30 @@ export function nativeAdmissionReceipt(
 ): Record<string, string | undefined>;
 
 export function ownerWaiverScopeSha256(op: Record<string, unknown>): string;
+
+export const OWNER_OPERATION: string;
+export const OWNER_PLAN: string;
+export const OWNER_RECEIPT: string;
+export const OWNER_KIND: string;
+export const OWNER_POLICY: string;
+export const PROVIDER_SKIPPED: string;
+export const PRIOR_RESTORE_POLICY: string;
+export const FRESH_BACKUP_OPERATION: string;
+export const FRESH_BACKUP_RECEIPT: string;
+export function isOwnerDirectedCutover(op: unknown): boolean;
+export function ownerDirectedScopeSha256(op: Record<string, unknown>): string;
+export function validateOwnerDirectedDecisions(
+  op: Record<string, unknown>,
+  fresh?: boolean,
+  now?: number,
+): Record<string, unknown>;
+export function createOwnerDirectedBinding(
+  op: Record<string, unknown>,
+  operationSha256: string,
+): Record<string, string>;
+export function validateOwnerDirectedBinding(
+  op: Record<string, unknown>,
+  binding: Record<string, string>,
+  operationSha256: string,
+): Record<string, string>;
+export function ownerDirectedReceipt(binding: Record<string, string>): Record<string, string>;

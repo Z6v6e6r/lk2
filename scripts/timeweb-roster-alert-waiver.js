@@ -10,6 +10,16 @@ export const WAIVER_RECEIPT = 'PHUB_TIMEWEB_API_WORKER_WEB_CUTOVER_ALERT_WAIVER_
 export const WAIVER_KIND = 'API_WORKER_WEB_PRODUCTION_CUTOVER_ALERT_WAIVER';
 export const WAIVER_POLICY = 'NATIVE_HEALTH_OWNER_WAIVED_INDUCED_ALERT_DRILL_V1';
 export const WAIVER_STATUS = 'NOT_TESTED_OWNER_DECLINED';
+export const OWNER_OPERATION = 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4';
+export const OWNER_PLAN = 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_PLAN_V4';
+export const OWNER_RECEIPT = 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_RECEIPT_V4';
+export const OWNER_KIND = 'API_WORKER_WEB_OWNER_DIRECTED_CUTOVER';
+export const OWNER_POLICY = 'OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_AND_REPEAT_RESTORE_V1';
+export const PROVIDER_SKIPPED = 'NOT_CHECKED_OWNER_SKIPPED';
+export const PRIOR_RESTORE_POLICY = 'EXACT_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1';
+export const FRESH_BACKUP_OPERATION = 'PHUB_TIMEWEB_BACKUP_BETA122_PRIOR_RESTORE_V3';
+export const FRESH_BACKUP_RECEIPT = 'PHUB_TIMEWEB_FRESH_DUMP_PRIOR_RESTORE_V3';
+export const isOwnerDirectedCutover = (op) => op?.schema === OWNER_OPERATION;
 export const ADMISSION_SCHEMA = 'PHUB_TIMEWEB_NATIVE_MONITOR_ADMISSION_V1';
 // Digest of the original owner instruction, including its original trailing newline.
 export const OWNER_DECISION_SHA256 =
@@ -91,6 +101,102 @@ const WAIVER_BINDINGS = [
   'backupOperationSha256',
   'expiresAt',
 ];
+const OWNER_CHOICES = {
+  alertDrill: ['INDUCED_ALERT_DRILL_ONLY', WAIVER_STATUS, OWNER_DECISION_SHA256],
+  providerMonitoring: [
+    'PRE_SWITCH_TIMEWEB_NATIVE_PROVIDER_READBACK_ONLY',
+    PROVIDER_SKIPPED,
+    nativeEvidenceHash(Buffer.from('Проверку мониторинга перед переключением')),
+  ],
+  repeatedRestore: [
+    'REPEAT_PHYSICAL_RESTORE_ONLY',
+    'NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED',
+    nativeEvidenceHash(
+      Buffer.from(
+        'Пропусти повторное пробное восстановление базы — оно уже прошло. Исправь блокер Docker Hub и продолжай выкладку, сохранив данные, учётки, настройки и передачу результатов в ЛК1.\n',
+      ),
+    ),
+  ],
+};
+export function ownerDirectedScopeSha256(op) {
+  return nativeEvidenceHash(
+    nativeEvidenceBytes({
+      schema: op.schema,
+      profile: op.profile,
+      serverId: 8886471,
+      projectId: 262717,
+      policy: OWNER_POLICY,
+      legacyBaselineSha256: nativeEvidenceHash(Buffer.from(JSON.stringify(op.legacyBaseline))),
+      ...Object.fromEntries(WAIVER_BINDINGS.map((key) => [key, op[key]])),
+    }),
+  );
+}
+export function validateOwnerDirectedDecisions(op, fresh = false, now = Date.now()) {
+  need(isOwnerDirectedCutover(op), 'owner_operation');
+  exact(op.ownerDecisions, Object.keys(OWNER_CHOICES));
+  for (const [key, [scope, status, messageHash]] of Object.entries(OWNER_CHOICES)) {
+    const r = op.ownerDecisions[key];
+    exact(r, [
+      'schema',
+      'authority',
+      'scope',
+      'status',
+      'messageSha256',
+      'scopeSha256',
+      'reference',
+      'receivedAt',
+    ]);
+    need(
+      r.schema === 'PHUB_TIMEWEB_OWNER_PROCEDURE_DECISION_V1' &&
+        r.authority === 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1' &&
+        r.scope === scope &&
+        r.status === status &&
+        r.messageSha256 === messageHash &&
+        r.scopeSha256 === ownerDirectedScopeSha256(op) &&
+        /^codex-thread:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/message:(?:msg_)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(
+          r.reference ?? '',
+        ) &&
+        stamp(r.receivedAt) < stamp(op.expiresAt),
+      'owner_decision',
+    );
+    if (fresh)
+      need(
+        stamp(r.receivedAt) <= now &&
+          stamp(op.expiresAt) > now &&
+          stamp(op.expiresAt) - now <= 3600000,
+        'owner_expired',
+      );
+  }
+  return op.ownerDecisions;
+}
+export function createOwnerDirectedBinding(op, operationSha256) {
+  validateOwnerDirectedDecisions(op);
+  need(HASH.test(operationSha256 ?? ''), 'owner_operation_hash');
+  return {
+    schema: 'PHUB_TIMEWEB_OWNER_DIRECTED_POLICY_BINDING_V1',
+    policy: OWNER_POLICY,
+    operationSha256,
+    scopeSha256: ownerDirectedScopeSha256(op),
+    ownerDecisionsSha256: nativeEvidenceHash(nativeEvidenceBytes(op.ownerDecisions)),
+    providerMonitoringStatus: PROVIDER_SKIPPED,
+    alertTestStatus: WAIVER_STATUS,
+    restoreAdmissionPolicy: PRIOR_RESTORE_POLICY,
+  };
+}
+export function validateOwnerDirectedBinding(op, binding, operationSha256) {
+  need(same(binding, createOwnerDirectedBinding(op, operationSha256)), 'owner_binding');
+  return binding;
+}
+export function ownerDirectedReceipt(binding) {
+  return {
+    ownerDecisionPolicy: OWNER_POLICY,
+    providerMonitoringStatus: PROVIDER_SKIPPED,
+    restoreAdmissionPolicy: PRIOR_RESTORE_POLICY,
+    repeatRestoreStatus: 'NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED',
+    alertTestStatus: WAIVER_STATUS,
+    ownerDecisionsSha256: binding.ownerDecisionsSha256,
+  };
+}
 export function validateRosterAlertWaiver(op, baselineHash, fresh = false, now = undefined) {
   need(isWaivedRosterCutover(op), 'operation_schema');
   const w = op.alertWaiver;

@@ -3,6 +3,16 @@
 import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
 import {
+  OWNER_OPERATION,
+  OWNER_PLAN,
+  OWNER_RECEIPT,
+  OWNER_KIND,
+  isOwnerDirectedCutover,
+  validateOwnerDirectedDecisions,
+  validateOwnerDirectedBinding,
+  FRESH_BACKUP_OPERATION,
+  FRESH_BACKUP_RECEIPT,
+  PRIOR_RESTORE_POLICY,
   WAIVER_OPERATION,
   WAIVER_PLAN,
   WAIVER_RECEIPT,
@@ -57,28 +67,52 @@ function timestamp(value) {
   );
 }
 export const isRosterCutover = (value) =>
-  value?.schema === ROSTER_CUTOVER_OPERATION || isWaivedRosterCutover(value);
+  value?.schema === ROSTER_CUTOVER_OPERATION ||
+  isWaivedRosterCutover(value) ||
+  isOwnerDirectedCutover(value);
 export const isProductionCutover = (value) =>
   value?.schema === CUTOVER_OPERATION || isRosterCutover(value);
 export const cutoverPlanSchema = (value) =>
-  isWaivedRosterCutover(value)
-    ? WAIVER_PLAN
-    : isRosterCutover(value)
-      ? ROSTER_CUTOVER_PLAN
-      : CUTOVER_PLAN;
+  isOwnerDirectedCutover(value)
+    ? OWNER_PLAN
+    : isWaivedRosterCutover(value)
+      ? WAIVER_PLAN
+      : isRosterCutover(value)
+        ? ROSTER_CUTOVER_PLAN
+        : CUTOVER_PLAN;
 export const cutoverReceiptSchema = (value) =>
-  isWaivedRosterCutover(value)
-    ? WAIVER_RECEIPT
-    : isRosterCutover(value)
-      ? ROSTER_CUTOVER_RECEIPT
-      : CUTOVER_RECEIPT;
+  isOwnerDirectedCutover(value)
+    ? OWNER_RECEIPT
+    : isWaivedRosterCutover(value)
+      ? WAIVER_RECEIPT
+      : isRosterCutover(value)
+        ? ROSTER_CUTOVER_RECEIPT
+        : CUTOVER_RECEIPT;
 export const cutoverInstalledKind = (value) =>
-  [WAIVER_OPERATION, WAIVER_PLAN].includes(value?.schema)
-    ? WAIVER_KIND
-    : [ROSTER_CUTOVER_OPERATION, ROSTER_CUTOVER_PLAN].includes(value?.schema)
-      ? ROSTER_CUTOVER_KIND
-      : 'API_WEB';
+  [OWNER_OPERATION, OWNER_PLAN].includes(value?.schema)
+    ? OWNER_KIND
+    : [WAIVER_OPERATION, WAIVER_PLAN].includes(value?.schema)
+      ? WAIVER_KIND
+      : [ROSTER_CUTOVER_OPERATION, ROSTER_CUTOVER_PLAN].includes(value?.schema)
+        ? ROSTER_CUTOVER_KIND
+        : 'API_WEB';
 export const legacyBaselineHash = (baseline) => hash(JSON.stringify(baseline));
+// Compatibility only. Full lineage/confirmation/freshness keep the complete baseline hash.
+export function legacyRuntimeHash(baseline) {
+  validateLegacyBaseline(baseline);
+  const sorted = (v) =>
+    Array.isArray(v)
+      ? v.map(sorted)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v)
+              .sort()
+              .map((k) => [k, sorted(v[k])]),
+          )
+        : v;
+  const { capturedAt: _capturedAt, ...runtime } = baseline;
+  return hash(JSON.stringify(sorted(runtime)));
+}
 export function validateLegacyBaseline(value) {
   exact(value, [
     'schema',
@@ -182,6 +216,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
     'expectedWeb',
     ...(isRosterCutover(value) ? ['expectedWorker'] : []),
     ...(isWaivedRosterCutover(value) ? ['alertWaiver'] : []),
+    ...(isOwnerDirectedCutover(value) ? ['ownerDecisions'] : []),
     'legacyBaseline',
     'expiresAt',
     'confirmation',
@@ -206,6 +241,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
   const baseline = validateLegacyBaseline(value.legacyBaseline);
   if (isWaivedRosterCutover(value))
     validateRosterAlertWaiver(value, legacyBaselineHash(baseline), fresh, now);
+  if (isOwnerDirectedCutover(value)) validateOwnerDirectedDecisions(value, fresh, now);
   for (const [key, service] of [
     ['expectedApi', 'api'],
     ['expectedWeb', 'web'],
@@ -219,7 +255,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
     )
       fail('previous_identity');
   }
-  const expected = `CUTOVER_PRODUCTION_${isRosterCutover(value) ? 'API_WORKER_WEB_' : ''}${isWaivedRosterCutover(value) ? 'WITHOUT_INDUCED_ALERT_KEEP_OTHER_GATES_' : ''}${value.candidateSha.slice(0, 12).toUpperCase()}_FROM_${legacyBaselineHash(baseline).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+  const expected = `CUTOVER_PRODUCTION_${isRosterCutover(value) ? 'API_WORKER_WEB_' : ''}${isOwnerDirectedCutover(value) ? 'OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_REPEAT_RESTORE_' : isWaivedRosterCutover(value) ? 'WITHOUT_INDUCED_ALERT_KEEP_OTHER_GATES_' : ''}${value.candidateSha.slice(0, 12).toUpperCase()}_FROM_${legacyBaselineHash(baseline).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
   if (value.confirmation !== expected) fail('confirmation');
   if (
     fresh &&
@@ -385,8 +421,20 @@ export function validateCutoverPlanProofs(operation, plan, transaction) {
     'receiptPath',
     'receiptSha256',
     'dumpSha256',
+    ...(isOwnerDirectedCutover(operation)
+      ? ['admissionPolicy', 'priorReferenceSha256', 'ownerReceiptSha256']
+      : []),
   ]);
-  if (isWaivedRosterCutover(operation))
+  if (isOwnerDirectedCutover(operation)) {
+    validateOwnerDirectedBinding(operation, plan.monitoring, plan.operationSha256);
+    if (
+      plan.backup.admissionPolicy !== PRIOR_RESTORE_POLICY ||
+      ![plan.backup.priorReferenceSha256, plan.backup.ownerReceiptSha256].every((v) =>
+        HASH.test(v ?? ''),
+      )
+    )
+      fail('backup_policy');
+  } else if (isWaivedRosterCutover(operation))
     validateNativeAdmissionBinding(operation, plan.monitoring, plan.operationSha256);
   else exact(plan.monitoring, ['providerSha256', 'alertSha256']);
   if (
@@ -395,7 +443,7 @@ export function validateCutoverPlanProofs(operation, plan, transaction) {
       plan.backup.operationSha256,
       plan.backup.receiptSha256,
       plan.backup.dumpSha256,
-      ...(isWaivedRosterCutover(operation)
+      ...(isWaivedRosterCutover(operation) || isOwnerDirectedCutover(operation)
         ? []
         : [plan.monitoring.providerSha256, plan.monitoring.alertSha256]),
     ].every((v) => HASH.test(v ?? '')) ||
@@ -417,6 +465,20 @@ export function assertCutoverBackupFiles(operation, plan, transaction, read, has
     hashFile(`${transaction}/database.pgcustom`) !== plan.backup.dumpSha256
   )
     fail('backup_drift');
+  if (isOwnerDirectedCutover(operation)) {
+    const r = parseStrictJson(read(plan.backup.receiptPath));
+    if (
+      r.schema !== FRESH_BACKUP_RECEIPT ||
+      r.freshDumpRestored !== false ||
+      r.freshDumpIntegrityStatus !== 'PG16_TOC_PARSE_VERIFIED' ||
+      r.restoreAdmissionPolicy !== plan.backup.admissionPolicy ||
+      r.priorReferenceSha256 !== plan.backup.priorReferenceSha256 ||
+      r.ownerReceiptSha256 !== plan.backup.ownerReceiptSha256 ||
+      hash(read(`${transaction}/prior-full-restore-reference.json`)) !== r.priorReferenceSha256 ||
+      hash(read(`${transaction}/owner-restore-decision.json`)) !== r.ownerReceiptSha256
+    )
+      fail('backup_policy');
+  }
 }
 
 export function assertCutoverReadbackFreshness(readAt, now = Date.now()) {
@@ -476,7 +538,11 @@ export function validateCutoverBackupOperation(operation, bytes, facts) {
     ![
       'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1',
       'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2',
+      ...(isOwnerDirectedCutover(operation) ? [FRESH_BACKUP_OPERATION] : []),
     ].includes(producer.schema) ||
+    (isOwnerDirectedCutover(operation) && producer.schema !== FRESH_BACKUP_OPERATION) ||
+    (isOwnerDirectedCutover(operation) &&
+      producer.predecessorRuntimeSha256 !== legacyRuntimeHash(operation.legacyBaseline)) ||
     producer.profile !== 'production' ||
     producer.candidateSha !== operation.candidateSha ||
     producer.controllerSha !== operation.controllerSha ||

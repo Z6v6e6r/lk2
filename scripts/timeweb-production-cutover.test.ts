@@ -1,6 +1,15 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import type * as NativeFs from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
+import { ownerDirectedTestChoices } from './timeweb-owner-directed-fixture.js';
+import { OWNER_OPERATION, FRESH_BACKUP_OPERATION } from './timeweb-roster-alert-waiver.js';
+import {
+  validateProductionCutover,
+  legacyBaselineHash,
+  legacyRuntimeHash,
+  validateCutoverBackupOperation,
+} from './timeweb-production-cutover.js';
 
 const legacySha = '759083e37b4026f9690a3775a391f59f68f716a5';
 const components = ['api', 'web', 'worker', 'realtime', 'migrator'];
@@ -197,22 +206,125 @@ describe('three-service roster cutover inside the existing canonical controller'
       assert.throws(()=>profile.validateRosterCutoverObservation(value,'2026-11-13T17:14:00.000Z'));`);
   });
 });
+it('prior restore compatibility ignores only capture time with identical cross-language bytes', () => {
+  const original = legacyRuntimeHash(baseline);
+  expect(legacyRuntimeHash({ ...baseline, capturedAt: '2026-11-15T18:31:14.979Z' })).toBe(original);
+  const result = spawnSync(
+    'python3',
+    [
+      '-I',
+      '-S',
+      '-B',
+      '-c',
+      "import importlib.util,json,sys;spec=importlib.util.spec_from_file_location('backup','scripts/control-timeweb-database-backup.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);print(m.legacy_runtime_hash(json.load(sys.stdin)))",
+    ],
+    { input: JSON.stringify(baseline), encoding: 'utf8' },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe(original);
+  const leaves = (v: unknown, path: string[] = []): string[][] =>
+    v && typeof v === 'object'
+      ? Object.entries(v).flatMap(([k, value]) => leaves(value, [...path, k]))
+      : [path];
+  for (const path of leaves(baseline).filter((p) => p.join('.') !== 'capturedAt')) {
+    const changed = structuredClone(baseline);
+    let parent: Record<string, unknown> = changed;
+    for (const key of path.slice(0, -1)) parent = parent[key] as Record<string, unknown>;
+    const key = path.at(-1)!,
+      old = parent[key];
+    parent[key] = typeof old === 'number' ? old + 1 : String(old) + 'changed';
+    let candidate;
+    try {
+      candidate = legacyRuntimeHash(changed);
+    } catch {
+      candidate = 'REJECTED';
+    }
+    expect(candidate, path.join('.')).not.toBe(original);
+  }
+});
+it('V4 binds both owner-authorized skips and rejects every older producer schema', () => {
+  const pg = { ...baseline.containers.api!, id: '7'.repeat(64) };
+  const op = {
+    ...operation,
+    schema: OWNER_OPERATION,
+    expiresAt: '2026-11-14T13:00:00.000Z',
+    expectedWorker: {
+      id: baseline.containers.worker!.id,
+      image: baseline.containers.worker!.image,
+      releaseId: null,
+    },
+    ownerDecisions: {} as Record<string, unknown>,
+  };
+  const producer = {
+    schema: FRESH_BACKUP_OPERATION,
+    predecessorRuntimeSha256: legacyRuntimeHash(baseline),
+    profile: 'production',
+    candidateSha: op.candidateSha,
+    controllerSha: op.controllerSha,
+    controllerTree: op.candidateTree,
+    toolCommit: op.controllerSha,
+    publicationRunId: op.publicationRunId,
+    releaseId: `${op.candidateSha}-${op.publicationRunId}-1`,
+    expectedApi: baseline.containers.api,
+    expectedPostgres: pg,
+    predecessorAttestationSha256: legacyBaselineHash(baseline),
+    expectedDatabaseTarget: baseline.databaseTarget,
+    expectedLedgerSha256: baseline.ledgerSha256,
+    toolFileSha256: 'a'.repeat(64),
+    controllerConfigSha256: 'b'.repeat(64),
+  };
+  const encode = (v: unknown) => Buffer.from(JSON.stringify(v));
+  const hash = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+  const bind = () => {
+    op.confirmation = `CUTOVER_PRODUCTION_API_WORKER_WEB_OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_REPEAT_RESTORE_${op.candidateSha.slice(0, 12).toUpperCase()}_FROM_${legacyBaselineHash(baseline).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+    op.ownerDecisions = ownerDirectedTestChoices(op);
+  };
+  const facts = {
+    directory: `/opt/phub/timeweb-beta/backups/${producer.releaseId}-api-web`,
+    postgres: pg,
+    toolFileSha256: producer.toolFileSha256,
+    configSha256: producer.controllerConfigSha256,
+  };
+  for (const schema of [
+    FRESH_BACKUP_OPERATION,
+    'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2',
+    'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1',
+  ]) {
+    const raw = encode({ ...producer, schema });
+    op.backupOperationSha256 = hash(raw);
+    bind();
+    validateProductionCutover(op);
+    if (schema === FRESH_BACKUP_OPERATION) validateCutoverBackupOperation(op, raw, facts);
+    else expect(() => validateCutoverBackupOperation(op, raw, facts)).toThrow('backup_operation');
+  }
+  for (const key of ['alertWaiver', 'nativeAdmission', 'skipMonitoring'])
+    expect(() => validateProductionCutover({ ...op, [key]: true })).toThrow();
+  for (const schema of [
+    'PHUB_TIMEWEB_API_WEB_PRODUCTION_CUTOVER_V1',
+    'PHUB_TIMEWEB_API_WORKER_WEB_PRODUCTION_CUTOVER_V2',
+    'PHUB_TIMEWEB_API_WORKER_WEB_PRODUCTION_CUTOVER_ALERT_WAIVER_V3',
+  ])
+    expect(() => validateProductionCutover({ ...op, schema })).toThrow();
+});
 // The real retained-terminal controller runs against an entirely in-memory root/host fixture.
 // Unrelated monitoring parser semantics have their own suites; this fixture tests custody,
 // evidence hash binding, all three runtime identities and the actual lock-release path.
 it.each([
-  ['SUCCESS', false, false],
-  ['ROLLED_BACK', false, false],
-  ['ABORTED', false, false],
-  ['SUCCESS', true, false],
-  ['ROLLED_BACK', true, false],
-  ['ABORTED', true, false],
-  ['SUCCESS', true, true],
-  ['ROLLED_BACK', true, true],
-  ['ABORTED', true, true],
+  ['SUCCESS', false, false, false],
+  ['ROLLED_BACK', false, false, false],
+  ['ABORTED', false, false, false],
+  ['SUCCESS', true, false, false],
+  ['ROLLED_BACK', true, false, false],
+  ['ABORTED', true, false, false],
+  ['SUCCESS', true, true, false],
+  ['ROLLED_BACK', true, true, false],
+  ['ABORTED', true, true, false],
+  ['SUCCESS', false, false, true],
+  ['ROLLED_BACK', false, false, true],
+  ['ABORTED', false, false, true],
 ] as const)(
-  'reconciles terminal %s with waiver=%s batch=%s before releasing the retained lock',
-  async (terminal, waived, batch) => {
+  'reconciles terminal %s with waiver=%s batch=%s ownerDirected=%s before releasing the retained lock',
+  async (terminal, waived, batch, ownerDirected) => {
     const { createHash } = await import('node:crypto');
     const profile = await import('./timeweb-production-cutover.js');
     const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -266,8 +378,8 @@ it.each([
       backupOperationSha256: hash(producer),
     };
     op.confirmation = `CUTOVER_PRODUCTION_API_WORKER_WEB_${op.candidateSha.slice(0, 12).toUpperCase()}_FROM_${profile.legacyBaselineHash(b).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
-    const backup = json({ backupSha256: hash(dump) }),
-      provider = json({ readAt: '2026-11-13T17:16:00.000Z', synthetic: 'provider' }),
+    let backup = json({ backupSha256: hash(dump) });
+    const provider = json({ readAt: '2026-11-13T17:16:00.000Z', synthetic: 'provider' }),
       alerts = json({ synthetic: 'alerts' });
     const composePath = `${source}/deploy/timeweb/compose.beta.yaml`;
     put(composePath, 'synthetic compose');
@@ -450,6 +562,35 @@ it.each([
       nativeEvidence = initial.evidence;
       for (const [name, value] of Object.entries(nativeEvidence)) put(`${tx}/${name}`, value);
     }
+    if (ownerDirected) {
+      op.schema = waiverProfile.OWNER_OPERATION;
+      op.expiresAt = '2026-11-14T13:00:00.000Z';
+      Reflect.set(op, 'ownerDecisions', ownerDirectedTestChoices(op));
+      op.confirmation = `CUTOVER_PRODUCTION_API_WORKER_WEB_OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_REPEAT_RESTORE_${op.candidateSha.slice(0, 12).toUpperCase()}_FROM_${profile.legacyBaselineHash(b).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+      plan.schema = waiverProfile.OWNER_PLAN;
+      plan.operationSha256 = hash(json(op));
+      plan.monitoring = waiverProfile.createOwnerDirectedBinding(op, plan.operationSha256);
+      const prior = json({ synthetic: 'exact prior reference' }),
+        owner = json({ synthetic: 'bound owner receipt' });
+      put(`${tx}/prior-full-restore-reference.json`, prior);
+      put(`${tx}/owner-restore-decision.json`, owner);
+      backup = json({
+        schema: waiverProfile.FRESH_BACKUP_RECEIPT,
+        backupSha256: hash(dump),
+        freshDumpRestored: false,
+        freshDumpIntegrityStatus: 'PG16_TOC_PARSE_VERIFIED',
+        restoreAdmissionPolicy: waiverProfile.PRIOR_RESTORE_POLICY,
+        priorReferenceSha256: hash(prior),
+        ownerReceiptSha256: hash(owner),
+      });
+      Object.assign(plan.backup, {
+        sha256: hash(backup),
+        receiptSha256: hash(backup),
+        admissionPolicy: waiverProfile.PRIOR_RESTORE_POLICY,
+        priorReferenceSha256: hash(prior),
+        ownerReceiptSha256: hash(owner),
+      });
+    }
     const observation = json({
       windowSeconds: 900,
       samplesPerService: 61,
@@ -539,9 +680,11 @@ it.each([
             return actual.readFileSync(path, options);
           const name = typeof path === 'number' ? descriptors.get(path)! : path;
           if (
-            waived &&
-            (name.endsWith('/timeweb-monitor-readback.json') ||
-              name.endsWith('/alert-test-readback.json'))
+            ((waived || ownerDirected) &&
+              (name.includes('timeweb-monitor-readback') ||
+                name.includes('alert-test-readback'))) ||
+            (ownerDirected &&
+              (name.includes('native-monitor') || name.endsWith('api-web-observability.v1.json')))
           )
             throw Error('V1 monitoring forbidden in waiver profile');
           const value = files.get(name);
@@ -741,7 +884,11 @@ it.each([
       if (terminal === 'SUCCESS')
         put(`${root}/releases/${id}/installed-components.env`, descriptor);
       const receipt = {
-        schema: waived ? waiverProfile.WAIVER_RECEIPT : profile.ROSTER_CUTOVER_RECEIPT,
+        schema: ownerDirected
+          ? waiverProfile.OWNER_RECEIPT
+          : waived
+            ? waiverProfile.WAIVER_RECEIPT
+            : profile.ROSTER_CUTOVER_RECEIPT,
         status: terminal,
         planSha256: hash(json(plan)),
         legacyBaselineSha256: profile.legacyBaselineHash(b),
@@ -750,9 +897,11 @@ it.each([
           ? {
               installedBaselineSha256: hash(descriptor),
               observationSha256: hash(observation),
-              ...(waived
-                ? waiverProfile.nativeAdmissionReceipt(plan.monitoring)
-                : { providerReadbackSha256: hash(provider), alertReadbackSha256: hash(alerts) }),
+              ...(ownerDirected
+                ? waiverProfile.ownerDirectedReceipt(plan.monitoring)
+                : waived
+                  ? waiverProfile.nativeAdmissionReceipt(plan.monitoring)
+                  : { providerReadbackSha256: hash(provider), alertReadbackSha256: hash(alerts) }),
             }
           : {}),
       };
@@ -776,6 +925,21 @@ it.each([
           { alertReadbackSha256: 'f'.repeat(64) },
           { alertTestStatus: 'PASS' },
           { monitoringPolicy: 'OTHER' },
+        ]) {
+          put(receiptPath, json({ ...receipt, ...delta }));
+          expect(() => controller.readInstalledApiBaseline(id)).toThrow();
+          put(receiptPath, json(receipt));
+        }
+      }
+      if (terminal === 'SUCCESS' && ownerDirected) {
+        expect(controller.readInstalledApiBaseline(id).values.PHUB_COMPONENT_ROLLOUT_KIND).toBe(
+          waiverProfile.OWNER_KIND,
+        );
+        for (const delta of [
+          { providerMonitoringStatus: 'PASS' },
+          { providerReadbackSha256: 'a'.repeat(64) },
+          { nativeMonitoringAdmissionSha256: 'a'.repeat(64) },
+          { ownerDecisionsSha256: 'f'.repeat(64) },
         ]) {
           put(receiptPath, json({ ...receipt, ...delta }));
           expect(() => controller.readInstalledApiBaseline(id)).toThrow();

@@ -1583,6 +1583,189 @@ class CutoverDiskScenario(DiskScenario):
             return super().invoke(reconcile)
 
 
+class FreshDumpScenario(CutoverDiskScenario):
+    def __init__(self,directory,fault=None):
+        super().__init__(directory,fault)
+        self.clockAt='2026-11-15T20:10:00.000Z'
+        self.op.update(schema=m.FRESH_SCHEMA,predecessorRuntimeSha256='a'*64,expiresAt='2026-11-15T21:00:00.000Z',
+                       confirmation='FRESH_DUMP_PRIOR_RESTORE_BETA122_'+self.op['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS',
+                       priorRestore={'releaseId':'857b6bd5af828319caa557f0304ec06f3580c4ed-43708464531-1',
+                        'operationSha256':'06e07622c3e1a819a279c19311fedaa50c0bee7dad15600e53f4ced28f29a310',
+                        'receiptSha256':'dd8db10375e2883e27390a676b69ec4a5c5893bdd7de689a029870ae4d929a3a',
+                        'toolFileSha256':'81fc9dd660d6206939b8d8384ba3a032b75691e67b5a73d6670c940ce656e519',
+                        'abortOperationSha256':'a72aaf2374907da77f7b3e853b602280be3927681ad92efe0bb85b2c24f49d5f',
+                        **{k:'a'*64 for k in ['terminalSha256','dumpSha256','witnessSha256','abortMarkerSha256','legacyReleaseEnvSha256','legacyAttestationSha256']}})
+        self.op['ownerRestoreDecision']={'schema':'PHUB_TIMEWEB_OWNER_PROCEDURE_DECISION_V1',
+           'authority':'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1','scope':'REPEAT_PHYSICAL_RESTORE_ONLY',
+           'status':'NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED','messageSha256':m.digest(m.RESTORE_OWNER_MESSAGE.encode()),
+           'scopeSha256':m.fresh_owner_scope(self.op),
+           'reference':'codex-thread:00000000-0000-4000-8000-000000000000/message:00000000-0000-4000-8000-000000000001',
+           'receivedAt':'2026-11-15T15:00:00.000Z'}
+        self.request.write_bytes(m.encoded(self.op))
+        with patch.object(m,'ROOT',self.root):self.plan=m.fresh_plan(self.op,m.encoded(self.op),1024)
+        self.prior={**self.op['priorRestore'],'schema':'PHUB_TIMEWEB_EXACT_PRIOR_RESTORE_REFERENCE_V1',
+                    'completedAt':'2026-11-15T14:15:58.688Z','terminalAt':'2026-11-15T14:16:03.044Z',
+                    'laterPreparationAbortAt':'2026-11-15T14:37:32.106Z','databaseTarget':self.op['expectedDatabaseTarget'],
+                    'ledgerSha256':self.op['expectedLedgerSha256'],'postgresImage':m.PG_IMAGE,
+                    'predecessorAttestationSha256':self.op['predecessorAttestationSha256']}
+
+    def docker(self,args,code='DOCKER_READ',**kwargs):
+        if code=='CUTOVER_SOURCE_ACTIVITY':
+            self.calls.append(['/usr/bin/docker']+args)
+            return b'1' if self.fault=='source-active' else b'0'
+        return Scenario.docker(self,args,code,**kwargs)
+
+    def invoke(self,reconcile=False,attest=False):
+        from contextlib import contextmanager
+        @contextmanager
+        def snapshot(op,sha):
+            accounts=m.digest(m.encoded(['a'*32,'b'*32]))
+            witness={'schema':'PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1','operationSha256':sha,
+                'sourcePostgres':op['expectedPostgres'],'capturedAt':m.now_iso(),'snapshotIdSha256':'a'*64,
+                'databaseTarget':op['expectedDatabaseTarget'],'ledgerSha256':op['expectedLedgerSha256'],'accountsSha256':accounts}
+            yield {'token':'00000001-00000002-1','witness':witness,'accountsSha256':accounts}
+        def blocking(args,code,**kwargs):
+            self.calls.append(['/usr/bin/docker']+args);self.trip(code)
+            if code=='DUMP':kwargs['stdout'].write(b'PGDMP complete synthetic snapshot')
+            elif code=='FRESH_DUMP_TOC':
+                assert args==['exec','-i',self.op['expectedPostgres']['id'],'pg_restore','--list']
+                assert kwargs['stdin'].read()==b'PGDMP complete synthetic snapshot'
+            else:raise AssertionError('unexpected write '+str(args))
+            self.trip(code,True)
+        def clock():
+            if self.fault=='terminal-expiry' and (Path(self.plan['publication'])/'database-backup-receipt.json').exists():return '2026-11-15T21:01:00.000Z'
+            return self.clockAt
+        original_add=m.DiskJournal.add
+        def phase(journal,phase,**metadata):
+            self.trip('PHASE_'+phase);result=original_add(journal,phase,**metadata);self.trip('PHASE_'+phase,True);return result
+        with ExitStack() as stack:
+            for name,val in [('ROOT',self.root),('REQUEST',self.request),('LOCK',self.root/'standard/active')]:stack.enter_context(patch.object(m,name,val))
+            for name,fn in [('secure',lambda p,*a,**kw:Path(p).lstat()),('read_secure',self.read),('docker',self.docker),('command',self.command),
+                            ('tool_custody',lambda op:b'validated-installation'),('v2_migration_proof',lambda *a:None),
+                            ('disk_daemon_namespace',lambda:{'pid':44,'startTicks':'123','namespace':11}),('disk_daemon_guard',lambda j:None),
+                            ('disk_free',lambda:50*1024**3),('validate_prior_restore',lambda op:self.prior),
+                            ('cutover_source_snapshot',snapshot),('cutover_blocking_docker',blocking),
+                            ('rename_noreplace',lambda src,dst:os.rename(src,dst)),('now_iso',clock)]:
+                stack.enter_context(patch.object(m,name,side_effect=fn))
+            stack.enter_context(patch.object(m.time,'time',return_value=m.utc(self.clockAt)))
+            stack.enter_context(patch.object(m.DiskJournal,'add',new=phase))
+            return m.fresh_dump(copy.deepcopy(self.op),m.encoded(self.op),'2'*64,reconcile=reconcile,attest=attest)
+
+
+class FreshDumpTests(unittest.TestCase):
+    def test_owner_scope_closed_schema_and_no_cross_admission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);op=s.op
+            self.assertEqual(m.validate_operation(op,m.utc('2026-11-15T20:10:00.000Z'),'2'*64),op)
+            for key in ['schema','target','candidateSha','controllerTree','priorRestore','expectedBoundarySha256','expiresAt']:
+                bad=copy.deepcopy(op);bad[key]='foreign'
+                with self.subTest(key=key),self.assertRaises((m.Stop,KeyError,TypeError)):m.validate_operation(bad,NOW,'2'*64)
+            for schema in [m.CUTOVER_DISK_SCHEMA,m.CUTOVER_BACKUP_SCHEMA]:
+                bad=copy.deepcopy(op);bad['schema']=schema
+                with self.assertRaises(m.Stop):m.validate_operation(bad,NOW,'2'*64)
+            for field in op['ownerRestoreDecision']:
+                bad=copy.deepcopy(op);bad['ownerRestoreDecision'][field]='PASS'
+                with self.subTest(field=field),self.assertRaises(m.Stop):m.validate_fresh_owner(bad)
+
+    def test_complete_fresh_dump_is_truthful_and_never_creates_restore_storage_or_replays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);result=s.invoke()
+            self.assertEqual(result['status'],'FRESH_DUMP_INTEGRITY_VERIFIED')
+            canonical=Path(s.plan['canonical']);r=json.loads((canonical/'database-backup-receipt.json').read_bytes())
+            self.assertFalse(r['freshDumpRestored']);self.assertNotIn('restoreVerified',r);self.assertNotIn('restoredAccountsSha256',r)
+            self.assertEqual(r['freshDumpIntegrityStatus'],'PG16_TOC_PARSE_VERIFIED')
+            self.assertEqual(sorted(p.name for p in canonical.iterdir()),sorted(m.FRESH_FILES))
+            self.assertFalse((s.root/'standard/active').exists())
+            self.assertFalse(any(c[:2] in (['/usr/bin/docker','create'],['/usr/bin/docker','start'],['/usr/bin/docker','rm']) for c in s.calls))
+            self.assertFalse(any('luks' in str(c) or 'losetup' in str(c) for c in s.calls))
+            s.invoke(attest=True)
+            with self.assertRaisesRegex(m.Stop,'EXISTING_STATE'):s.invoke()
+            s.invoke(reconcile=True)
+            for field,value in [('freshDumpRestored',True),('schema',m.CUTOVER_DISK_RECEIPT),('sourceAccountsSha256','f'*64),('priorReferenceSha256','f'*64)]:
+                original=(canonical/'database-backup-receipt.json').read_bytes()
+                (canonical/'database-backup-receipt.json').write_bytes(m.encoded({**r,field:value}))
+                with self.subTest(field=field),self.assertRaises(m.Stop):s.invoke(attest=True)
+                (canonical/'database-backup-receipt.json').write_bytes(original)
+
+    def test_crash_reconciles_owned_metadata_without_repeating_dump_or_toc(self):
+        for fault in ['before:DUMP','before:FRESH_DUMP_TOC','after:PHASE_DUMP_VERIFIED','after:PHASE_TOC_VERIFIED','after:PHASE_PUBLISH_READY','after:PHASE_PUBLISHED','after:PHASE_UNLOCK_INTENT','before:PHASE_RECONCILED']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                s=FreshDumpScenario(directory,fault)
+                with self.assertRaises(m.Stop):s.invoke()
+                s.fault=None;before=len(s.calls);s.invoke(reconcile=True)
+                self.assertFalse((s.root/'standard/active').exists())
+                self.assertFalse(any('--snapshot=' in str(c) or 'pg_restore' in c for c in s.calls[before:]))
+                s.invoke(reconcile=True)
+
+    def test_expiry_between_receipt_and_terminal_is_never_published_by_reconciliation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory,'terminal-expiry')
+            with self.assertRaisesRegex(m.Stop,'FRESH_TERMINAL'):s.invoke()
+            self.assertFalse(Path(s.plan['canonical']).exists())
+            s.fault=None;s.clockAt='2026-11-15T21:10:00.000Z'
+            s.invoke(reconcile=True)
+            self.assertFalse(Path(s.plan['canonical']).exists())
+            self.assertFalse((s.root/'standard/active').exists())
+            self.assertTrue((Path(s.plan['publication'])/'database.pgcustom').exists())
+
+    def test_retirement_publication_inventory_dump_and_witness_tamper_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);s.invoke();canonical=Path(s.plan['canonical'])
+            for path in [canonical/'database.pgcustom',canonical/'snapshot-witness.json',
+                         canonical/'prior-full-restore-reference.json',Path(s.plan['work'])/'retired-lock'/'backup-restore.json']:
+                before=path.read_bytes();path.write_bytes(b'foreign')
+                with self.subTest(path=path.name),self.assertRaises((m.Stop,ValueError)):s.invoke(attest=True)
+                path.write_bytes(before)
+            extra=canonical/'unexpected.json';extra.write_text('{}')
+            with self.assertRaisesRegex(m.Stop,'FRESH_PUBLICATION_INVENTORY'):s.invoke(attest=True)
+            extra.unlink();s.invoke(attest=True)
+            retired=Path(s.plan['work'])/'retired-lock';saved=retired.with_name('retired-lock-original');retired.rename(saved)
+            retired.mkdir();(retired/'backup-restore.json').write_bytes((saved/'backup-restore.json').read_bytes())
+            with self.assertRaisesRegex(m.Stop,'FRESH_RETIRED_LOCK'):s.invoke(attest=True)
+
+    def test_earliest_crash_layouts_are_readonly_classified_and_never_replayed(self):
+        for entries in [None,{}, {'.disk-write-'+('a'*32)+'.tmp':b'partial JSON'}, {'backup-operation.json':None}]:
+            with self.subTest(entries=entries),tempfile.TemporaryDirectory() as directory:
+                s=FreshDumpScenario(directory);work=Path(s.plan['work'])
+                if entries is not None:
+                    work.mkdir()
+                    for name,value in entries.items():(work/name).write_bytes(m.encoded(s.op) if value is None else value)
+                before={str(p):p.read_bytes() for p in work.iterdir()} if work.exists() else {}
+                for _ in range(2):
+                    r=s.invoke(reconcile=True);self.assertFalse(r['replayAllowed']);self.assertFalse(r['authorizesDeploy'])
+                after={str(p):p.read_bytes() for p in work.iterdir()} if work.exists() else {}
+                self.assertEqual(before,after);self.assertFalse(any('--snapshot=' in str(c) or 'pg_restore' in c for c in s.calls))
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);work=Path(s.plan['work']);work.mkdir();(work/'foreign').write_text('keep')
+            with self.assertRaisesRegex(m.Stop,'FRESH_EARLY_INVENTORY'):s.invoke(reconcile=True)
+            self.assertEqual((work/'foreign').read_text(),'keep')
+
+    def test_prelock_faults_never_replay_dump_and_foreign_lock_is_retained(self):
+        for fault in ['after:PHASE_PREPARED','after:PHASE_DAEMON_NAMESPACE','after:PHASE_LOCK_PREPARED','after:PHASE_LOCK_PUBLISH_INTENT','after:PHASE_LOCKED']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                s=FreshDumpScenario(directory,fault)
+                with self.assertRaises(m.Stop):s.invoke()
+                s.fault=None;s.invoke(reconcile=True)
+                self.assertFalse(any('--snapshot=' in str(c) for c in s.calls))
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory,'before:DUMP')
+            with self.assertRaises(m.Stop):s.invoke()
+            lock=s.root/'standard/active';marker=lock/'backup-restore.json';marker.write_text('{}')
+            s.fault=None
+            with self.assertRaisesRegex(m.Stop,'DISK_LOCK_DRIFT'):s.invoke(reconcile=True)
+            self.assertEqual(marker.read_text(),'{}')
+
+    def test_foreign_lock_source_activity_and_capacity_stop_without_external_mutation(self):
+        for fault in ['source-active','runtime-drift','migrator','source-ledger-drift']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                s=FreshDumpScenario(directory,fault)
+                with self.assertRaises(m.Stop):s.invoke()
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);lock=s.root/'standard/active';lock.mkdir();(lock/'foreign').write_text('retained')
+            with self.assertRaisesRegex(m.Stop,'EXISTING_STATE'):s.invoke()
+            self.assertEqual((lock/'foreign').read_text(),'retained')
+
+
 class CutoverProcessTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform=='linux','posix_fallocate is a Linux producer prerequisite')
     def test_allocation_real_child_preserves_fd_and_allocates_only_owned_file(self):
