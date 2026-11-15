@@ -216,10 +216,16 @@ describe('Android push controller', () => {
     expect(safeNotificationRoute('/chats/22222222-2222-4222-8222-222222222222')).toBe(
       '/chats/22222222-2222-4222-8222-222222222222',
     );
+    expect(safeNotificationRoute('/games/22222222-2222-4222-8222-222222222222')).toBe(
+      '/games/22222222-2222-4222-8222-222222222222',
+    );
     for (const route of [
       'https://evil.test',
       '//evil.test',
       '/chats/../notifications',
+      '/games/../notifications',
+      '/games/22222222-2222-4222-8222-222222222222?token=synthetic',
+      '/games/22222222-2222-4222-8222-222222222222/cancel',
       '/notifications?next=https://evil.test',
     ]) {
       expect(safeNotificationRoute(route)).toBe('/notifications');
@@ -265,32 +271,35 @@ describe('Android push controller', () => {
     expect(removes.every((remove) => remove.mock.calls.length === 1)).toBe(true);
   });
 
-  it('defers a cold-start tap route until navigation and the restored session are ready', async () => {
-    const auth = gateway();
-    const { transport } = plugin({
-      takeOpened: vi
-        .fn()
-        .mockResolvedValue({ route: '/chats/22222222-2222-4222-8222-222222222222' }),
-    });
-    const controller = createAndroidPushController(auth, vi.fn(), transport);
-    const cleanup = controller.mount();
-    await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
-    expect(windowStub.history.pushState).not.toHaveBeenCalled();
+  it.each(['chats', 'games'])(
+    'defers a cold-start %s tap until navigation and session are ready',
+    async (kind) => {
+      const auth = gateway();
+      const { transport } = plugin({
+        takeOpened: vi
+          .fn()
+          .mockResolvedValue({ route: `/${kind}/22222222-2222-4222-8222-222222222222` }),
+      });
+      const controller = createAndroidPushController(auth, vi.fn(), transport);
+      const cleanup = controller.mount();
+      await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
+      expect(windowStub.history.pushState).not.toHaveBeenCalled();
 
-    controller.navigationReady();
-    expect(windowStub.history.pushState).not.toHaveBeenCalled();
+      controller.navigationReady();
+      expect(windowStub.history.pushState).not.toHaveBeenCalled();
 
-    controller.sessionReady();
-    await vi.waitFor(() =>
-      expect(windowStub.history.pushState).toHaveBeenCalledWith(
-        {},
-        '',
-        '/chats/22222222-2222-4222-8222-222222222222',
-      ),
-    );
-    expect(windowStub.history.pushState).toHaveBeenCalledTimes(1);
-    cleanup();
-  });
+      controller.sessionReady();
+      await vi.waitFor(() =>
+        expect(windowStub.history.pushState).toHaveBeenCalledWith(
+          {},
+          '',
+          `/${kind}/22222222-2222-4222-8222-222222222222`,
+        ),
+      );
+      expect(windowStub.history.pushState).toHaveBeenCalledTimes(1);
+      cleanup();
+    },
+  );
 
   it('applies a warm notification tap route immediately once ready', async () => {
     const auth = gateway();

@@ -944,6 +944,21 @@ function GamesPageContent({
     };
   }, [eventId, gameId, gateway, reloadToken, tab]);
 
+  useEffect(() => {
+    if (gameId || eventId || tab !== 'UPCOMING' || busyGameId) return;
+    const refresh = (): void => {
+      if (document.visibilityState === 'visible') setReloadToken((token) => token + 1);
+    };
+    const interval = window.setInterval(refresh, 30_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [gameId, eventId, tab, busyGameId]);
+
   // Recovery on mount/navigation: custody from a previous tab, reload or lost response is read back
   // by its original key. It never starts a new purchase.
   useEffect(() => {

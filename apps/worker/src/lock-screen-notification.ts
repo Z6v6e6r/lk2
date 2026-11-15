@@ -10,6 +10,7 @@ const MAX_TYPE_TEXT_LENGTH = 80;
 export const LOCK_SCREEN_TYPE_TEXT: Readonly<Record<string, string>> = {
   BOOKING: 'Не пропусти занятие',
   GAME: 'Не пропусти игру',
+  GAME_RESULT: 'Внесение и согласование счёта игры',
   MESSAGING: 'Новое сообщение в чате',
   FRIENDSHIP: 'Новая заявка в друзья',
   ADMIN_MESSAGE: 'Оповещение ПадлХАБ',
@@ -40,7 +41,38 @@ export function lockScreenTitle(input: {
   return clean(input.renderedTitle, MAX_TITLE_LENGTH);
 }
 
-export function lockScreenTypeText(category: string | null | undefined): string {
+export function lockScreenTypeText(
+  category: string | null | undefined,
+  result?: {
+    readonly deadlineAt: string | null | undefined;
+    readonly eventType: string | null | undefined;
+  },
+): string {
+  // Allow only the absolute deadline and two known game facts. Never expose a rendered body,
+  // score, name, location or other event data on a locked device.
+  if (category === 'GAME_RESULT' && result && typeof result.deadlineAt === 'string') {
+    const instant = new Date(result.deadlineAt);
+    if (
+      Number.isFinite(instant.getTime()) &&
+      instant.toISOString() === result.deadlineAt &&
+      (result.eventType === 'game.finished.v1' || result.eventType === 'game.result.submitted.v1')
+    ) {
+      const deadline = new Intl.DateTimeFormat('ru-RU', {
+        timeZone: 'Europe/Moscow',
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(instant);
+      return (
+        (result.eventType === 'game.finished.v1'
+          ? 'Внесите счёт до '
+          : 'Согласуйте или оспорьте до ') +
+        deadline +
+        ' МСК'
+      );
+    }
+  }
   if (typeof category !== 'string') return LOCK_SCREEN_FALLBACK_BODY;
   const text = LOCK_SCREEN_TYPE_TEXT[category];
   return text !== undefined && text.length <= MAX_TYPE_TEXT_LENGTH

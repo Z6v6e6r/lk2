@@ -85,6 +85,69 @@ describe('APNs transport', () => {
     expect(c.session.destroy).toHaveBeenCalled();
   });
   it.each([
+    ['game.finished.v1', 'Внесите счёт игры', 'Внесите счёт до 16.11, 06:00 МСК'],
+    ['game.result.submitted.v1', 'Счёт игры внесён', 'Согласуйте или оспорьте до 16.11, 06:00 МСК'],
+  ])(
+    'sends the safe score deadline and game link for %s in the actual Apple payload',
+    async (eventType, title, body) => {
+      const c = connection(200);
+      const gameLink = '/games/77777777-7777-4777-8777-777777777777';
+      await new ApnsDeliveryAdapter({
+        topic: 'ru.padlhub.app',
+        environment: 'SANDBOX',
+        tokenProvider: { getToken: () => 'synthetic-token', invalidate: vi.fn() },
+        timeoutMs: 1000,
+        connectImplementation: c.factory,
+      }).send({
+        ...request,
+        notification: { ...request.notification, deepLink: gameLink },
+        data: {
+          gameResultNotificationType: eventType,
+          resultDeadlineAt: '2026-11-16T03:00:00.000Z',
+          privateBody: 'Private score, player, court and dispute',
+        },
+      });
+      expect(JSON.parse(c.stream.end.mock.calls[0]![0])).toEqual({
+        aps: { alert: { title, body }, sound: 'default' },
+        notificationId: request.notification.id,
+        deepLink: gameLink,
+      });
+      expect(c.stream.end.mock.calls[0]![0]).not.toContain('Private');
+    },
+  );
+  it.each([
+    ['game.finished.v1', '2026-11-16T03:00:00Z', '/games/77777777-7777-4777-8777-777777777777'],
+    ['game.finished.v1', 'Private deadline', '/games/77777777-7777-4777-8777-777777777777'],
+    ['Private event', '2026-11-16T03:00:00.000Z', '/games/77777777-7777-4777-8777-777777777777'],
+    ['game.finished.v1', '2026-11-16T03:00:00.000Z', 'https://example.com/games/private'],
+    [
+      'game.finished.v1',
+      '2026-11-16T03:00:00.000Z',
+      '/games/77777777-7777-4777-8777-777777777777?private=1',
+    ],
+  ])(
+    'keeps a generic alert for invalid score metadata or routing (%s, %s, %s)',
+    async (eventType, deadlineAt, deepLink) => {
+      const c = connection(200);
+      await new ApnsDeliveryAdapter({
+        topic: 'ru.padlhub.app',
+        environment: 'SANDBOX',
+        tokenProvider: { getToken: () => 'synthetic-token', invalidate: vi.fn() },
+        timeoutMs: 1000,
+        connectImplementation: c.factory,
+      }).send({
+        ...request,
+        notification: { ...request.notification, deepLink: deepLink },
+        data: { gameResultNotificationType: eventType, resultDeadlineAt: deadlineAt },
+      });
+      expect(JSON.parse(c.stream.end.mock.calls[0]![0])).toEqual({
+        aps: { alert: { title: 'ПадлхАБ', body: 'Новое уведомление' }, sound: 'default' },
+        notificationId: request.notification.id,
+        deepLink: '/notifications',
+      });
+    },
+  );
+  it.each([
     {
       status: 410,
       body: { reason: 'Unregistered' },

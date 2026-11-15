@@ -246,11 +246,11 @@ describe('GameCard display policy', () => {
     );
   });
 
-  it('closes result submission exactly 48 hours after the game ends', () => {
+  it('closes result submission exactly 12 hours after the game ends', () => {
     const finished = game({
       lifecycleState: 'FINISHED',
-      startsAt: '2026-07-30T08:30:00+03:00',
-      endsAt: '2026-07-30T10:00:00+03:00',
+      startsAt: '2026-07-31T20:30:00+03:00',
+      endsAt: '2026-07-31T22:00:00+03:00',
       participants: [participant(IDS.organizer, 'ORGANIZER'), participant(IDS.player2)],
       result: {
         state: 'AWAITING_SUBMISSION',
@@ -282,7 +282,7 @@ describe('GameCard display policy', () => {
     expect(atDeadline.allowedActions).not.toContain('SUBMIT_RESULT');
   });
 
-  it('reopens score entry for participants after a dispute, past the submission window', () => {
+  it('closes corrected score entry at the same deadline after a dispute', () => {
     const disputed = game({
       lifecycleState: 'FINISHED',
       startsAt: '2026-07-20T08:30:00+03:00',
@@ -299,7 +299,7 @@ describe('GameCard display policy', () => {
     for (const viewerUserId of [IDS.organizer, IDS.player2]) {
       const card = projectGameCard(disputed, cardContext({ surface: 'HISTORY', viewerUserId }));
       expect(card.displayState).toBe('RESULT_DISPUTED');
-      expect(card.allowedActions).toContain('SUBMIT_RESULT');
+      expect(card.allowedActions).not.toContain('SUBMIT_RESULT');
       expect(card.allowedActions).toContain('OPEN_DISPUTE');
       expect(card.allowedActions).not.toContain('CONFIRM_RESULT');
     }

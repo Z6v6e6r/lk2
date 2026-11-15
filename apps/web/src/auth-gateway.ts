@@ -1071,6 +1071,17 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${options.tenantKey}`.length,
       );
       const selfKey = new Headers(init?.headers).get('idempotency-key') ?? '';
+      const isResult =
+        nativeClient &&
+        (init?.method ?? 'GET') === 'POST' &&
+        /^\/games\/[^/]+\/result-submissions(?:\/[^/]+\/(?:confirm|dispute))?$/.test(selfPath);
+      if (isResult) {
+        const custody = resultPrincipals.get(selfPath);
+        if (!custody) throw new Error('AUTH_PRINCIPAL_CHANGED');
+        requireQuarterPrincipal(custody.principal);
+        if (client.getAccessToken() !== custody.token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+
       const isSelfLeave =
         options.platform === 'android' &&
         /^\/games\/[^/]+\/(?:participants\/me|leave-operation(?:\/reconcile)?)$/.test(selfPath);
@@ -1193,6 +1204,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let currentTenantId: string | undefined;
   const subjectLinkStartKeys = new Map<string, string>();
   const subjectLinkVerifyKeys = new Map<string, string>();
+  const resultPrincipals = new Map<string, { principal: string; token: string }>();
   const cancellationPrincipals = new Map<
     string,
     { principal: string; token: string | undefined }
@@ -1253,6 +1265,33 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         profileSettingsRequests.delete(resource);
     }
   }
+  async function nativeResultCommand(
+    path: string,
+    command: () => Promise<GameCommandResult>,
+  ): Promise<GameCommandResult> {
+    if (!options.nativeSessionTransport) return nativeUnavailable();
+    const original = requireQuarterPrincipal();
+    const token = client.getAccessToken();
+    if (!token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+    if (resultPrincipals.has(path)) throw new Error('GAME_RESULT_IN_PROGRESS');
+    const custody = { principal: original, token };
+    resultPrincipals.set(path, custody);
+    const requireCurrent = (): void => {
+      requireQuarterPrincipal(original);
+      if (client.getAccessToken() !== token) throw new Error('AUTH_PRINCIPAL_CHANGED');
+    };
+    try {
+      const result = await command();
+      requireCurrent();
+      return result;
+    } catch (error) {
+      requireCurrent();
+      throw error;
+    } finally {
+      if (resultPrincipals.get(path) === custody) resultPrincipals.delete(path);
+    }
+  }
+
   function quarterCreatePrincipal(): string | null {
     return !quarterClosed && !tournamentLogoutStarted && currentUserId && currentTenantId
       ? `${currentTenantId}:${currentUserId}:${principalGeneration}:${tournamentSessionEpoch}`
@@ -3032,15 +3071,29 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     submitGameResult(gameId, input) {
-      return client.submitGameResult(gameId, input);
+      return nativeClient
+        ? nativeResultCommand(`/games/${encodeURIComponent(gameId)}/result-submissions`, () =>
+            client.submitGameResult(gameId, input),
+          )
+        : client.submitGameResult(gameId, input);
     },
 
     confirmGameResult(gameId, submissionId) {
-      return client.confirmGameResult(gameId, submissionId);
+      return nativeClient
+        ? nativeResultCommand(
+            `/games/${encodeURIComponent(gameId)}/result-submissions/${encodeURIComponent(submissionId)}/confirm`,
+            () => client.confirmGameResult(gameId, submissionId),
+          )
+        : client.confirmGameResult(gameId, submissionId);
     },
 
     disputeGameResult(gameId, submissionId, input) {
-      return client.disputeGameResult(gameId, submissionId, input);
+      return nativeClient
+        ? nativeResultCommand(
+            `/games/${encodeURIComponent(gameId)}/result-submissions/${encodeURIComponent(submissionId)}/dispute`,
+            () => client.disputeGameResult(gameId, submissionId, input),
+          )
+        : client.disputeGameResult(gameId, submissionId, input);
     },
 
     reconcilePaidJoinOperation(operationId) {

@@ -24,6 +24,13 @@ const validEnvironment = {
 } as const;
 
 describe('loadConfig', () => {
+  it('refuses an auto-confirm duration that diverges from the shared 12-hour deadline', () => {
+    expect(loadConfig(validEnvironment).GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS).toBe(12);
+    expect(() =>
+      loadConfig({ ...validEnvironment, GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS: '24' }),
+    ).toThrow();
+  });
+
   it('keeps the ЦУП delegation off by default and refuses half of it at boot', () => {
     expect(loadConfig(validEnvironment).CUP_ADMIN_DELEGATION_ENABLED).toBe(false);
     const enabled = {

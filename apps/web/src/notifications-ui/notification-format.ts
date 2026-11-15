@@ -18,6 +18,13 @@ export interface NotificationCategoryPresentation {
 }
 
 const CATEGORY_PRESENTATION: Readonly<Record<string, NotificationCategoryPresentation>> = {
+  GAME_RESULT: {
+    filter: 'GAME',
+    filterLabel: 'Игры',
+    categoryLabel: 'Внести счёт игры',
+    marker: 'И',
+    tone: 'accent',
+  },
   GAME: {
     filter: 'GAME',
     filterLabel: 'Игры',

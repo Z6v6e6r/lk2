@@ -369,6 +369,14 @@ export function createActivityHistoryRepository(pool: Pool): ActivityHistoryRepo
              from booking.activity_history_projection
             where tenant_id = $1
               and user_id = $2
+              and not exists (
+                select 1 from games.games canonical
+                where canonical.tenant_id = booking.activity_history_projection.tenant_id
+                  and canonical.id = booking.activity_history_projection.game_id
+                  and canonical.lifecycle_state = 'FINISHED'
+                  and canonical.result_state in ('AWAITING_SUBMISSION', 'PENDING_CONFIRMATION', 'DISPUTED')
+                  and canonical.ends_at + interval '12 hours' > now()
+              )
               and ($3::text is null or kind = $3)
               and ($4::text is null or status = $4)
               and (

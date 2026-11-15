@@ -2227,6 +2227,47 @@ export async function buildApp(options: BuildAppOptions) {
 
       if (options.upcomingBookingsRepository) {
         const projection = await options.upcomingBookingsRepository.get(tenantId, userId);
+        if (
+          options.gameReadRepository &&
+          (!projection ||
+            Date.now() >
+              Date.parse(projection.staleAt) +
+                options.config.HOME_PROJECTION_MAX_STALE_SECONDS * 1_000)
+        ) {
+          // Pending scores belong to canonical Games even when the provider's upcoming list
+          // no longer contains the elapsed game or its projection is unavailable.
+          const now = new Date().toISOString();
+          try {
+            const retained = await attachUpcomingRosters(
+              {
+                tenantId,
+                userId,
+                version: 'canonical-game-results',
+                generatedAt: now,
+                staleAt: now,
+                updatedAt: now,
+                items: [],
+              },
+              {
+                repository: options.gameReadRepository,
+                ...(options.profilePhotoMediaRepository
+                  ? { photoRepository: options.profilePhotoMediaRepository }
+                  : {}),
+                now,
+                maxStaleSeconds: options.config.HOME_PROJECTION_MAX_STALE_SECONDS,
+              },
+            );
+            if (retained.items.length > 0) {
+              reply.header('Cache-Control', 'private, no-store');
+              return retained;
+            }
+          } catch {
+            request.log.warn(
+              { event: 'pending_results_read_failed' },
+              'Pending game results unavailable',
+            );
+          }
+        }
         if (!projection) {
           // No bookings projection exists in this contour. Answer with an
           // explicit unavailable state instead of failing the whole endpoint.

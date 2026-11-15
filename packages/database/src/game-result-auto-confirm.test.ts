@@ -39,12 +39,12 @@ describe('autoConfirmRequestHash', () => {
 
 describe('isAutoConfirmDue', () => {
   it('rejects an in-window pending submission and accepts an elapsed one', () => {
-    const submittedAt = '2026-11-09T08:19:42.638Z';
+    const endsAt = '2026-11-09T08:19:42.638Z';
 
     expect(
       isAutoConfirmDue({
         state: 'PENDING_CONFIRMATION',
-        submittedAt,
+        endsAt,
         now: '2026-11-09T20:19:42.000Z',
         confirmationWindowHours: 12,
       }),
@@ -52,7 +52,7 @@ describe('isAutoConfirmDue', () => {
     expect(
       isAutoConfirmDue({
         state: 'PENDING_CONFIRMATION',
-        submittedAt,
+        endsAt,
         now: '2026-11-09T20:20:00.000Z',
         confirmationWindowHours: 12,
       }),

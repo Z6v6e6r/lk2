@@ -13,7 +13,7 @@ describe('GAME notification provisioning contract', () => {
     ]);
 
     expect(source).toContain("const CONFIRMATION_TOKEN = 'APPLY_GAME_NOTIFICATION_RULESET'");
-    expect(contract).toContain("rulesetVersion: 'game.ru-ru.v1'");
+    expect(contract).toContain("rulesetVersion: 'game.ru-ru.v2'");
     expect(contract).toContain("deepLink: '/games/{{gameId}}'");
     expect(contract).toContain("sourceEventType: 'game.participation.confirmed.v1'");
     expect(contract).toContain("sourceEventType: 'game.participation.left.v1'");

@@ -246,6 +246,11 @@ export function createNativeApiFetch(
     const join = nativeJoinRequest(value, init, config);
     const selfLeave = selfLeaveRequest(value, init, config);
     const cancel = gameCancelRequest(value, init, config);
+    const gameResult =
+      method === 'POST' &&
+      /^games\/[0-9a-f-]{36}\/result-submissions(?:\/[0-9a-f-]{36}\/(?:confirm|dispute))?$/i.test(
+        value.slice(root.length),
+      );
     const stream = stationStreamRequest(value, init, config);
     if (!stream) stationRequest(value, init, config);
     if (url.pathname.startsWith(`/user/api/v1/${config.tenantKey}/game-create-operations`))
@@ -263,7 +268,7 @@ export function createNativeApiFetch(
       generation += 1;
       displayedReads.clear();
     }
-    if ((selfLeave || join || cancel || settings || monthly) && !active)
+    if ((selfLeave || join || cancel || settings || monthly || gameResult) && !active)
       throw new DOMException('Session changed', 'AbortError');
     const requestGeneration = generation;
     const section =
@@ -350,7 +355,7 @@ export function createNativeApiFetch(
       }
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
       if (
-        (selfLeave || join || cancel || settings || monthly) &&
+        (selfLeave || join || cancel || settings || monthly || gameResult) &&
         (!active || requestGeneration !== generation)
       )
         throw new DOMException('Session changed', 'AbortError');
@@ -427,6 +432,8 @@ export function createNativeApiFetch(
       }
       return response;
     } catch (error) {
+      if (gameResult && (!active || requestGeneration !== generation))
+        throw new DOMException('Session changed', 'AbortError');
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
       unavailable();
       const sanitized = sanitizedNativeSessionError(error);

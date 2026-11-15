@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   disputeGameResultInputSchema,
+  gameResultWindowOpen,
   gameDomainEventSchema,
   submitGameResultInputSchema,
   type DisputeGameResultInput,
@@ -67,7 +68,7 @@ export function autoConfirmRequestHash(input: {
   readonly revision: number;
   readonly confirmationWindowHours: number;
 }): string {
-  const seed = `${input.submissionId.replace(/[^0-9a-f]/gu, '')}${input.revision
+  const seed = `e12${input.submissionId.replace(/[^0-9a-f]/gu, '')}${input.revision
     .toString(16)
     .padStart(4, '0')}${input.confirmationWindowHours.toString(16).padStart(4, '0')}`;
   return seed.repeat(Math.ceil(64 / seed.length)).slice(0, 64);
@@ -79,18 +80,18 @@ export function autoConfirmRequestHash(input: {
  */
 export function isAutoConfirmDue(input: {
   readonly state: 'PENDING_CONFIRMATION' | 'CONFIRMED' | 'DISPUTED' | 'SUPERSEDED';
-  readonly submittedAt: string;
+  readonly endsAt: string;
   readonly now: string;
   readonly confirmationWindowHours: number;
 }): boolean {
   if (input.state !== 'PENDING_CONFIRMATION') return false;
-  const submittedAt = Date.parse(input.submittedAt);
+  const endsAt = Date.parse(input.endsAt);
   const now = Date.parse(input.now);
-  if (!Number.isFinite(submittedAt) || !Number.isFinite(now)) return false;
+  if (!Number.isFinite(endsAt) || !Number.isFinite(now)) return false;
   if (!Number.isInteger(input.confirmationWindowHours) || input.confirmationWindowHours < 1) {
     return false;
   }
-  return now >= submittedAt + input.confirmationWindowHours * 60 * 60_000;
+  return now >= endsAt + input.confirmationWindowHours * 60 * 60_000;
 }
 
 export type GameResultCommandResult =
@@ -251,14 +252,22 @@ async function lockGame(
   client: PoolClient,
   input: GameResultCommandInput,
 ): Promise<LockedGameRow | undefined> {
-  return queryOne<LockedGameRow>(
+  const game = await queryOne<LockedGameRow>(
     client,
-    `select revision, lifecycle_state, result_state, ends_at, now()::text as database_now
+    `select revision, lifecycle_state, result_state, ends_at
        from games.games
       where tenant_id = $1 and id = $2
       for update`,
     [input.tenantId, input.gameId],
   );
+  if (!game) return undefined;
+  // Read after the lock wait: transaction-start now() could admit a late review.
+  const clock = await queryOne<{ database_now: string }>(
+    client,
+    'select clock_timestamp()::text as database_now',
+  );
+  if (!clock) throw new Error('GAME_RESULT_CLOCK_UNAVAILABLE');
+  return { ...game, database_now: clock.database_now };
 }
 
 async function participantUserIds(
@@ -503,11 +512,7 @@ export function createGameResultRepository(pool: Pool): GameResultRepository {
             currentRevision,
           );
         }
-        if (
-          game.result_state === 'AWAITING_SUBMISSION' &&
-          Date.parse(timestamp(game.database_now)) >=
-            Date.parse(timestamp(game.ends_at)) + 48 * 60 * 60_000
-        ) {
+        if (!gameResultWindowOpen(timestamp(game.ends_at), timestamp(game.database_now))) {
           return storeRejected(
             client,
             input,
@@ -676,6 +681,17 @@ export function createGameResultRepository(pool: Pool): GameResultRepository {
             currentRevision,
           );
         }
+        if (!gameResultWindowOpen(timestamp(game.ends_at), timestamp(game.database_now))) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_RESULT_NOT_AVAILABLE',
+            true,
+            currentRevision,
+          );
+        }
         await client.query(
           `insert into games.result_submission_reviews (
              tenant_id, game_id, submission_id, reviewer_user_id, decision, decided_at
@@ -767,7 +783,7 @@ export function createGameResultRepository(pool: Pool): GameResultRepository {
           tenantId: input.tenantId,
           actorUserId: preloaded.submitted_by_user_id,
           gameId: input.gameId,
-          idempotencyKey: `auto-confirm:${input.submissionId}:v${preloaded.revision}`,
+          idempotencyKey: `auto-confirm:end-window:${input.submissionId}:v${preloaded.revision}`,
           requestHash: autoConfirmRequestHash({
             submissionId: input.submissionId,
             revision: preloaded.revision,
@@ -819,7 +835,7 @@ export function createGameResultRepository(pool: Pool): GameResultRepository {
         if (
           !isAutoConfirmDue({
             state: submission.state,
-            submittedAt: timestamp(submission.submitted_at),
+            endsAt: timestamp(game.ends_at),
             now: timestamp(game.database_now),
             confirmationWindowHours: input.confirmationWindowHours,
           })
@@ -944,6 +960,17 @@ export function createGameResultRepository(pool: Pool): GameResultRepository {
             commandType,
             commandId,
             'GAME_RESULT_REVIEW_FORBIDDEN',
+            true,
+            currentRevision,
+          );
+        }
+        if (!gameResultWindowOpen(timestamp(game.ends_at), timestamp(game.database_now))) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_RESULT_NOT_AVAILABLE',
             true,
             currentRevision,
           );

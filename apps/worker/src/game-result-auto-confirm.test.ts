@@ -19,14 +19,14 @@ type MockPort = {
 
 const TENANT = 'tenant-1';
 const WINDOW = 12;
-const SUBMITTED = '2026-11-09T10:00:00.000Z';
+const ENDED = '2026-11-09T10:00:00.000Z';
 
 describe('isAutoConfirmDue', () => {
   it('waits for the whole window', () => {
     expect(
       isAutoConfirmDue({
         state: 'PENDING_CONFIRMATION',
-        submittedAt: SUBMITTED,
+        endsAt: ENDED,
         now: '2026-11-09T21:59:59.000Z',
         confirmationWindowHours: WINDOW,
       }),
@@ -37,7 +37,7 @@ describe('isAutoConfirmDue', () => {
     expect(
       isAutoConfirmDue({
         state: 'PENDING_CONFIRMATION',
-        submittedAt: SUBMITTED,
+        endsAt: ENDED,
         now: '2026-11-09T22:00:00.000Z',
         confirmationWindowHours: WINDOW,
       }),
@@ -49,7 +49,7 @@ describe('isAutoConfirmDue', () => {
       expect(
         isAutoConfirmDue({
           state,
-          submittedAt: SUBMITTED,
+          endsAt: ENDED,
           now: '2026-11-20T00:00:00.000Z',
           confirmationWindowHours: WINDOW,
         }),
@@ -62,7 +62,7 @@ describe('isAutoConfirmDue', () => {
       expect(
         isAutoConfirmDue({
           state: 'PENDING_CONFIRMATION',
-          submittedAt: SUBMITTED,
+          endsAt: ENDED,
           now: '2026-11-20T00:00:00.000Z',
           confirmationWindowHours,
         }),

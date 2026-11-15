@@ -796,6 +796,8 @@ describe('game repository', () => {
       text.includes("base_payload ->> 'organizerUserId'"),
     );
     expect(call?.[0]).toContain("lifecycle_state in ('FINISHED', 'CANCELLED')");
+    expect(call?.[0]).toContain('and not exists (select 1 from games.games canonical');
+    expect(call?.[0]).toContain("canonical.ends_at + interval '12 hours' > now()");
     expect(call?.[0]).toContain("reservation ->> 'expiresAt'");
     expect(call?.[0]).toContain('::timestamptz > now()');
     expect(call?.[0]).toContain('(starts_at, game_id) <');
