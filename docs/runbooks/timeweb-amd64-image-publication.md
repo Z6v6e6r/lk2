@@ -209,3 +209,10 @@ The digest-derived path, HTTPS/default port, credential-free single hop, final e
 20-second timeout, byte limits and SHA-256 proof are unchanged. Alternate buckets, regions,
 subdomains and suffix hosts remain rejected. A new publication requires a new reviewed source and
 its own successful current-main CI; the old partial outputs stay isolated.
+
+The first PR #659 CI run (`43739391426`) finished 941 suites (930 passed, 11 skipped), with no failures,
+but its 720-second watchdog fired before the final coverage/reporting completed. The suite ledger
+closed at approximately 741 seconds; the process was terminated after the 30-second grace period.
+The owning CI step now allows 800 seconds inside a 15-minute Actions limit, retaining 70 seconds
+for bounded finalization. Test selection, coverage thresholds and the 30-second kill grace remain
+unchanged. A new exact-head CI run must produce its own complete final result.
