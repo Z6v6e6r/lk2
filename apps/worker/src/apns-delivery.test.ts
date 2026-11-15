@@ -399,6 +399,10 @@ describe('APNs score notifications', () => {
     await runApnsDeliveryBatch(h.options);
     expect(h.send).toHaveBeenCalledWith(
       expect.objectContaining({
+        data: {
+          resultDeadlineAt: '2026-11-16T03:00:00.000Z',
+          gameResultNotificationType: 'game.result.submitted.v1',
+        },
         notification: {
           id: claimRow.intent_id,
           title: 'Счёт игры внесён',

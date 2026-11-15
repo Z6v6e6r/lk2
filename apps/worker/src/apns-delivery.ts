@@ -168,6 +168,7 @@ async function fence(
       address: string;
       endpoint: NonNullable<ClaimedNotificationDelivery['dispatchedEndpoint']>;
       notification: { title: string; preview: string; deepLink: string };
+      data?: Readonly<Record<string, string>>;
     }
   | { result: PushDeliveryResult }
   | undefined
@@ -282,6 +283,14 @@ async function fence(
     return dispatched.rowCount === 1
       ? {
           address,
+          ...(row.category === 'GAME_RESULT' && row.result_deadline_at && row.result_event_type
+            ? {
+                data: {
+                  resultDeadlineAt: row.result_deadline_at,
+                  gameResultNotificationType: row.result_event_type,
+                },
+              }
+            : {}),
           notification:
             row.category === 'GAME_RESULT'
               ? {
@@ -335,6 +344,7 @@ export async function runApnsDeliveryBatch(options: Options): Promise<number> {
           id: job.intent_id,
           ...dispatch.notification,
         },
+        ...(dispatch.data ? { data: dispatch.data } : {}),
         providerIdempotencyKey: `apns:${job.id}`,
       });
     } catch {
