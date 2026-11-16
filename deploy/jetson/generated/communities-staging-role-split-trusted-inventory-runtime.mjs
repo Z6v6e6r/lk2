@@ -26803,7 +26803,7 @@ import { fileURLToPath as fileURLToPath2 } from "url";
 
 // src/communities-staging-role-split-trusted-inventory-authorization-loader.ts
 init_esm_shims();
-import { createHash as createHash44 } from "crypto";
+import { createHash as createHash45 } from "crypto";
 import { isAbsolute as isAbsolute3, resolve as resolve2 } from "path";
 
 // ../../packages/database/src/communities-staging-role-split-trusted-inventory-authorization.ts
@@ -27604,7 +27604,7 @@ async function readRootOwnedEvidence(path2, maximumBytes, io = defaultIo) {
 
 // src/communities-staging-role-split-trusted-inventory-authorization-request.ts
 init_esm_shims();
-import { createHash as createHash43 } from "crypto";
+import { createHash as createHash44 } from "crypto";
 
 // ../../packages/database/src/index.ts
 init_esm_shims();
@@ -29635,7 +29635,12 @@ init_connection();
 init_esm_shims();
 init_src2();
 init_connection();
-import { createHash as createHash15, randomUUID as randomUUID8 } from "crypto";
+import { createHash as createHash16, randomUUID as randomUUID8 } from "crypto";
+
+// ../../packages/database/src/legacy-game-finished-roster-preimage.ts
+init_esm_shims();
+init_src2();
+import { createHash as createHash15 } from "crypto";
 
 // ../../packages/database/src/legacy-viewer-identity-repository.ts
 init_esm_shims();
@@ -29682,12 +29687,12 @@ init_connection();
 // ../../packages/database/src/notification-endpoint-repository.ts
 init_esm_shims();
 init_connection();
-import { createHash as createHash16 } from "crypto";
+import { createHash as createHash17 } from "crypto";
 
 // ../../packages/database/src/admin-notification-repository.ts
 init_esm_shims();
 init_connection();
-import { createHash as createHash17 } from "crypto";
+import { createHash as createHash18 } from "crypto";
 
 // ../../packages/database/src/location-repository.ts
 init_esm_shims();
@@ -29705,11 +29710,11 @@ init_esm_shims();
 
 // ../../packages/database/src/communities-staged-rehearsal-policy.ts
 init_esm_shims();
-import { createHash as createHash19 } from "crypto";
+import { createHash as createHash20 } from "crypto";
 
 // ../../packages/database/src/eligibility-payment-acl-matrix.ts
 init_esm_shims();
-import { createHash as createHash18 } from "crypto";
+import { createHash as createHash19 } from "crypto";
 var ELIGIBILITY_PAYMENT_ACL_RELATIONS = [
   {
     schemaName: "eligibility",
@@ -29893,78 +29898,78 @@ var COMMUNITIES_STAGED_REHEARSAL_34_PENDING_FILENAMES = [
 
 // ../../packages/database/src/communities-staging-role-split-restore-marker.ts
 init_esm_shims();
-import { createHash as createHash20 } from "crypto";
+import { createHash as createHash21 } from "crypto";
 
 // ../../packages/database/src/communities-role-split-acceptance.ts
 init_esm_shims();
 
 // ../../packages/database/src/communities-staging-role-split-inventory.ts
 init_esm_shims();
-import { createHash as createHash21 } from "crypto";
+import { createHash as createHash22 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-marker-ceremony.ts
 init_esm_shims();
-import { createHash as createHash22 } from "crypto";
+import { createHash as createHash23 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-restore-execution-descriptor.ts
 init_esm_shims();
-import { createHash as createHash23 } from "crypto";
+import { createHash as createHash24 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-host-authorization.ts
 init_esm_shims();
-import { createHash as createHash24 } from "crypto";
+import { createHash as createHash25 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-source-write-denial-attestation.ts
 init_esm_shims();
-import { createHash as createHash26 } from "crypto";
+import { createHash as createHash27 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-source-write-denial-observations.ts
 init_esm_shims();
-import { createHash as createHash25 } from "crypto";
+import { createHash as createHash26 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-restore-execution-evidence.ts
 init_esm_shims();
-import { createHash as createHash27 } from "crypto";
+import { createHash as createHash28 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-attested-evidence.ts
 init_esm_shims();
-import { createHash as createHash28 } from "crypto";
+import { createHash as createHash29 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-v3-contract.ts
 init_esm_shims();
-import { createHash as createHash29 } from "crypto";
+import { createHash as createHash30 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-v3-envelope.ts
 init_esm_shims();
-import { createHash as createHash30 } from "crypto";
+import { createHash as createHash31 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-v3-restore-authorization.ts
 init_esm_shims();
-import { createHash as createHash31 } from "crypto";
+import { createHash as createHash32 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-v3-durable-state-envelope.ts
 init_esm_shims();
-import { createHash as createHash32 } from "crypto";
+import { createHash as createHash33 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-v3-durable-continuation-envelope.ts
 init_esm_shims();
-import { createHash as createHash33 } from "crypto";
+import { createHash as createHash34 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-v3-durable-restore-authorization.ts
 init_esm_shims();
-import { createHash as createHash34 } from "crypto";
+import { createHash as createHash35 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-v3-execution-authorization.ts
 init_esm_shims();
-import { createHash as createHash35 } from "crypto";
+import { createHash as createHash36 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-v3-attested-evidence.ts
 init_esm_shims();
-import { createHash as createHash36 } from "crypto";
+import { createHash as createHash37 } from "crypto";
 
 // ../../packages/database/src/communities-staging-role-split-inventory-preparation.ts
 init_esm_shims();
-import { createHash as createHash37 } from "crypto";
+import { createHash as createHash38 } from "crypto";
 var COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_VERSION = "communities-staging-role-split-inventory-preparation-v1";
 var COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INPUT_CODES = [
   "MARKER_REQUEST",
@@ -30041,12 +30046,12 @@ function canonicalCommunitiesStagingRoleSplitInventoryPreparation(input2) {
 `;
 }
 function communitiesStagingRoleSplitInventoryPreparationSha256(input2) {
-  return createHash37("sha256").update(canonicalCommunitiesStagingRoleSplitInventoryPreparation(input2), "utf8").digest("hex");
+  return createHash38("sha256").update(canonicalCommunitiesStagingRoleSplitInventoryPreparation(input2), "utf8").digest("hex");
 }
 
 // ../../packages/database/src/communities-staging-role-split-trusted-inventory.ts
 init_esm_shims();
-import { createHash as createHash38 } from "crypto";
+import { createHash as createHash39 } from "crypto";
 var COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_CONNECTION_VERSION = "communities-staging-role-split-trusted-inventory-connection-v1";
 var COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_AUTHORIZATION_VERSION2 = "communities-staging-role-split-trusted-inventory-authorization-v1";
 var COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_RECEIPT_VERSION = "communities-staging-role-split-trusted-inventory-receipt-v1";
@@ -30080,7 +30085,7 @@ function exactKeys4(value, expected) {
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
 }
 function sha2562(value) {
-  return createHash38("sha256").update(value, "utf8").digest("hex");
+  return createHash39("sha256").update(value, "utf8").digest("hex");
 }
 function canonicalText(value) {
   return `${communitiesRoleSplitCanonicalJson(value)}
@@ -30215,7 +30220,7 @@ function parseCommunitiesStagingRoleSplitTrustedInventoryReceipt(text) {
 // ../../packages/database/src/messaging-media-repository.ts
 init_esm_shims();
 init_connection();
-import { createHash as createHash39, randomUUID as randomUUID10 } from "crypto";
+import { createHash as createHash40, randomUUID as randomUUID10 } from "crypto";
 var MESSAGING_MEDIA_MAX_BYTES = 15 * 1024 * 1024;
 var MESSAGING_MEDIA_MAX_DAILY_BYTES_PER_USER = 150 * 1024 * 1024;
 var MESSAGING_MEDIA_UPLOAD_TTL_MS = 15 * 60 * 1e3;
@@ -30240,7 +30245,7 @@ init_connection();
 init_esm_shims();
 init_src();
 init_connection();
-import { createHash as createHash40 } from "crypto";
+import { createHash as createHash41 } from "crypto";
 
 // ../../packages/database/src/profile-level-history-repository.ts
 init_esm_shims();
@@ -30279,12 +30284,12 @@ init_src();
 
 // src/communities-staging-role-split-trusted-inventory-gate.ts
 init_esm_shims();
-import { createHash as createHash42 } from "crypto";
+import { createHash as createHash43 } from "crypto";
 import { dirname, isAbsolute as isAbsolute2, resolve } from "path";
 
 // ../../packages/database/src/communities-staging-role-split-trusted-inventory-gate.ts
 init_esm_shims();
-import { createHash as createHash41 } from "crypto";
+import { createHash as createHash42 } from "crypto";
 var COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_GATE_VERSION = "communities-staging-role-split-trusted-inventory-gate-v1";
 var SHA2564 = /^[a-f0-9]{64}$/u;
 var COMMIT4 = /^[a-f0-9]{40}$/u;
@@ -30364,7 +30369,7 @@ function canonicalCommunitiesStagingRoleSplitTrustedInventoryGate(value) {
   return canonicalText2(value);
 }
 function communitiesStagingRoleSplitTrustedInventoryGateSha256(value) {
-  return createHash41("sha256").update(canonicalCommunitiesStagingRoleSplitTrustedInventoryGate(value), "utf8").digest("hex");
+  return createHash42("sha256").update(canonicalCommunitiesStagingRoleSplitTrustedInventoryGate(value), "utf8").digest("hex");
 }
 
 // src/communities-staging-role-split-trusted-inventory-gate.ts
@@ -30416,7 +30421,7 @@ function exactKeys6(value, expected) {
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
 }
 function sha2563(value) {
-  return createHash42("sha256").update(value, "utf8").digest("hex");
+  return createHash43("sha256").update(value, "utf8").digest("hex");
 }
 function pathSha256(path2) {
   return sha2563(`${path2}
@@ -30636,7 +30641,7 @@ function exactKeys7(value, expected) {
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
 }
 function sha2564(value) {
-  return createHash43("sha256").update(value, "utf8").digest("hex");
+  return createHash44("sha256").update(value, "utf8").digest("hex");
 }
 function subjectSha256(value) {
   return sha2564(`${communitiesRoleSplitCanonicalJson(value)}
@@ -30831,7 +30836,7 @@ function fail8(code) {
   throw new CommunitiesStagingRoleSplitTrustedInventoryAuthorizationLoaderError(code);
 }
 function digest(bytes) {
-  return createHash44("sha256").update(bytes).digest("hex");
+  return createHash45("sha256").update(bytes).digest("hex");
 }
 function pathSha2562(path2) {
   return digest(`${path2}
@@ -31103,18 +31108,18 @@ async function loadCommunitiesStagingRoleSplitTrustedInventoryAuthorization(inpu
 
 // src/communities-staging-role-split-trusted-inventory-runtime-wiring.ts
 init_esm_shims();
-import { createHash as createHash47 } from "crypto";
+import { createHash as createHash48 } from "crypto";
 import { dirname as dirname3, resolve as resolve5 } from "path";
 
 // src/communities-staging-role-split-trusted-inventory-supervised-producer.ts
 init_esm_shims();
 import { spawn } from "child_process";
-import { createHash as createHash46 } from "crypto";
+import { createHash as createHash47 } from "crypto";
 import { resolve as resolve4 } from "path";
 
 // src/communities-staging-role-split-trusted-inventory-host.ts
 init_esm_shims();
-import { createHash as createHash45, randomBytes } from "crypto";
+import { createHash as createHash46, randomBytes } from "crypto";
 import { constants as constants2 } from "fs";
 import { link, lstat as lstat2, open as open3, readFile, unlink } from "fs/promises";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute4, join, resolve as resolve3 } from "path";
@@ -31189,7 +31194,7 @@ function fail10(code) {
   throw new CommunitiesStagingRoleSplitTrustedInventoryHostError(code);
 }
 function sha2565(value) {
-  return createHash45("sha256").update(value).digest("hex");
+  return createHash46("sha256").update(value).digest("hex");
 }
 function pathSha2563(path2) {
   return sha2565(`${path2}
@@ -31220,7 +31225,7 @@ async function descriptorObservation(handle) {
   }
 }
 async function sha256Handle(handle, maximumBytes) {
-  const hash2 = createHash45("sha256");
+  const hash2 = createHash46("sha256");
   const buffer = Buffer.allocUnsafe(64 * 1024);
   let offset = 0;
   try {
@@ -31630,7 +31635,7 @@ function fail11(code) {
   throw new CommunitiesStagingRoleSplitTrustedInventorySupervisedProducerError(code);
 }
 function sha2566(value) {
-  return createHash46("sha256").update(value, "utf8").digest("hex");
+  return createHash47("sha256").update(value, "utf8").digest("hex");
 }
 function pathSha2564(path2) {
   return sha2566(`${path2}
@@ -31860,7 +31865,7 @@ function fail12(code) {
   throw new CommunitiesStagingRoleSplitTrustedInventoryRuntimeWiringError(code);
 }
 function sha2567(value) {
-  return createHash47("sha256").update(value, "utf8").digest("hex");
+  return createHash48("sha256").update(value, "utf8").digest("hex");
 }
 function pathSha2565(path2) {
   return sha2567(`${path2}
