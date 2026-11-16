@@ -1,13 +1,20 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { consumersForGameEvent } from '@phub/games';
 
 import { createGameRepository } from './game-repository.js';
+import { createGameResultRepository } from './game-result-repository.js';
 import { withTenantTransaction } from './connection.js';
 import {
   createLegacyGameImportRepository,
   attestExactRosterPlayerMappings,
+  exactRosterParticipations,
+  exactRosterValueSha256,
+  readExactRosterUiIdentityPreimage,
+  readFinishedUnscoredUiPreimage,
+  type LegacyGameUiObservationFence,
   type LegacyGameImportSnapshot,
 } from './legacy-game-import-repository.js';
 
@@ -137,8 +144,13 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
     await tolerate(() =>
       withTenantTransaction(pool, tenantId, async (client) => {
         for (const table of [
+          'games.result_submission_reviews',
+          'games.result_submissions',
+          'games.command_idempotency',
           'games.scheduled_commands',
           'games.card_projections',
+          'games.seat_reservations',
+          'games.waitlist_entries',
           'games.participations',
           'integration.legacy_game_roster_sync_state',
           'integration.external_entity_map',
@@ -482,4 +494,786 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
       ),
     ).toBe(usersBefore);
   });
+  it('replaces a fenced 2-player roster with source4 atomically while retaining paid rows and every account', async () => {
+    const original = snapshot({ label: 'exact-replacement-old', players: 2, capacity: 4 });
+    const source = {
+      ...snapshot({ label: 'exact-replacement-source', players: 4, capacity: 4 }),
+      externalId: original.externalId,
+      vivaExerciseExternalId: original.vivaExerciseExternalId,
+      startsAt: original.startsAt,
+      endsAt: original.endsAt,
+      externalVersion: 'c'.repeat(64),
+    };
+    const imported = await repository.importSnapshots({
+      tenantKey,
+      snapshots: [original],
+      correlationId: 'replacement-target-import',
+    });
+    const gameId = imported.imported[0]!.gameId;
+    // Existing accounts are registered through an independent synthetic game. Exact repair must
+    // use these identities; it must never call the account/profile creation path itself.
+    await repository.importSnapshots({
+      tenantKey,
+      snapshots: [
+        {
+          ...source,
+          externalId: 'exact-replacement-registry',
+          vivaExerciseExternalId: randomUUID(),
+        },
+      ],
+      correlationId: 'replacement-registry-import',
+    });
+    await quarantine(gameId, 'b'.repeat(64));
+    const read = () =>
+      withTenantTransaction(pool, tenantId, async (c) => {
+        const roster = (
+          await c.query<{
+            id: string;
+            user_id: string;
+            role: string;
+            state: string;
+            payment_state: string;
+          }>(
+            'select id,user_id,role,state,payment_state from games.participations where tenant_id=$1 and game_id=$2 order by id',
+            [tenantId, gameId],
+          )
+        ).rows;
+        const identities = (
+          await c.query<{
+            external_id: string;
+            internal_id: string;
+            sync_status: string;
+            sync_error_code: string | null;
+          }>(
+            "select external_id,internal_id,sync_status,sync_error_code from integration.external_entity_map where tenant_id=$1 and external_system='LK_LEGACY_SNAPSHOT' and entity_type='game_player' and external_id=any($2::text[]) order by external_id",
+            [tenantId, source.participants.map((p) => p.externalId)],
+          )
+        ).rows;
+        const accounts = (
+          await c.query<Record<string, unknown>>(
+            'select * from identity.users where tenant_id=$1 order by id',
+            [tenantId],
+          )
+        ).rows;
+        const profiles = (
+          await c.query<Record<string, unknown>>(
+            'select * from profile.user_summaries where tenant_id=$1 order by user_id',
+            [tenantId],
+          )
+        ).rows;
+        const game = (
+          await c.query<Record<string, unknown> & { starts_at: Date; ends_at: Date }>(
+            'select * from games.games where tenant_id=$1 and id=$2',
+            [tenantId, gameId],
+          )
+        ).rows[0]!;
+        const sync = (
+          await c.query<Record<string, unknown>>(
+            'select * from integration.legacy_game_roster_sync_state where tenant_id=$1 and game_id=$2',
+            [tenantId, gameId],
+          )
+        ).rows[0]!;
+        const outbox = (
+          await c.query<{ id: string; event_type: string; payload: unknown }>(
+            'select id,event_type,payload from audit.outbox_events where tenant_id=$1 and aggregate_id=$2 order by id',
+            [tenantId, gameId],
+          )
+        ).rows;
+        return { roster, identities, accounts, profiles, game, sync, outbox };
+      });
+    const before = await read();
+    const tuples = exactRosterParticipations(
+      before.roster.map((p) => [p.id, p.user_id, p.role, p.state, p.payment_state]),
+    );
+    const expected = {
+      gameId,
+      revision: 1,
+      sourceVersion: source.externalVersion,
+      syncSourceVersion: 'b'.repeat(64),
+      playerMappingsSha256: attestExactRosterPlayerMappings(source, before.identities).sha256,
+      replacement: {
+        participationsSha256: exactRosterValueSha256(tuples),
+        retainedParticipationIdsSha256: exactRosterValueSha256(
+          before.roster.map((p) => p.id).sort(),
+        ),
+      },
+    };
+    const command = {
+      tenantKey,
+      snapshots: [source],
+      correlationId: 'replacement-reviewed-operation',
+      allowLocalRemovals: true,
+      expected,
+    };
+    await expect(
+      repository.rebaselineParticipants({
+        ...command,
+        expected: {
+          ...expected,
+          replacement: { ...expected.replacement, participationsSha256: 'e'.repeat(64) },
+        },
+      }),
+    ).rejects.toThrow('LEGACY_GAME_EXACT_REPAIR_DRIFT');
+    expect(await read()).toEqual(before);
+    // Even an expired ACTIVE reservation is a pending payment boundary, so stop rather than
+    // letting a later confirmation overfill the restored source4 roster.
+    for (const table of ['games.seat_reservations', 'games.waitlist_entries']) {
+      const id = randomUUID();
+      await withTenantTransaction(pool, tenantId, async (c) => {
+        if (table === 'games.seat_reservations')
+          await c.query(
+            "insert into games.seat_reservations(tenant_id,game_id,id,user_id,created_at,expires_at) values($1,$2,$3,$4,now()-interval '2 hours',now()-interval '1 hour')",
+            [tenantId, gameId, id, before.roster[0]!.user_id],
+          );
+        else
+          await c.query(
+            'insert into games.waitlist_entries(tenant_id,game_id,id,user_id,position) values($1,$2,$3,$4,1)',
+            [tenantId, gameId, id, before.roster[0]!.user_id],
+          );
+      });
+      await expect(repository.rebaselineParticipants(command)).rejects.toThrow(
+        'LEGACY_GAME_EXACT_REPAIR_PENDING_CAPACITY',
+      );
+      expect(await read()).toEqual(before);
+      await withTenantTransaction(pool, tenantId, (c) =>
+        c.query(`delete from ${table} where tenant_id=$1 and id=$2`, [tenantId, id]),
+      );
+    }
+    // Fail after the actual participation/game/sync writes, before committing the outbox.
+    // The real PostgreSQL transaction must roll back all preceding changes.
+    const failingPool = {
+      query: pool.query.bind(pool),
+      connect: async () => {
+        const client = await pool.connect();
+        return {
+          release: () => client.release(),
+          query: (sql: string, values?: unknown[]) => {
+            if (sql.includes('insert into audit.outbox_events'))
+              throw new Error('synthetic-outbox-failure');
+            return client.query(sql, values);
+          },
+        };
+      },
+    };
+    await expect(
+      createLegacyGameImportRepository(failingPool as unknown as Pool).rebaselineParticipants(
+        command,
+      ),
+    ).rejects.toThrow('synthetic-outbox-failure');
+    expect(await read()).toEqual(before);
+    expect(
+      (await repository.rebaselineParticipants(command)).rebaselined.map((r) => r.gameId),
+    ).toEqual([gameId]);
+    const after = await read();
+    expect(after.accounts).toEqual(before.accounts);
+    expect(after.profiles).toEqual(before.profiles);
+    expect(
+      after.roster
+        .filter((p) => p.state === 'ACTIVE')
+        .map((p) => p.user_id)
+        .sort(),
+    ).toEqual(before.identities.map((p) => p.internal_id).sort());
+    expect(after.roster.filter((p) => p.state === 'LEFT')).toEqual(
+      before.roster.map((p) => ({ ...p, state: 'LEFT' })),
+    );
+    expect(after.roster.every((p) => p.payment_state === 'PAID')).toBe(true);
+    expect(after.game).toMatchObject({
+      revision: '2',
+      lifecycle_state: 'SCHEDULED',
+      starts_at: before.game.starts_at,
+      ends_at: before.game.ends_at,
+      capacity: 4,
+    });
+    expect(after.sync).toMatchObject({
+      mode: 'MIRROR',
+      conflict_code: null,
+      last_synced_game_revision: '2',
+    });
+    expect(after.outbox).toHaveLength(before.outbox.length + 1);
+    const emitted = after.outbox.filter(
+      (event) => !before.outbox.some((old) => old.id === event.id),
+    );
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]!.event_type).toBe('game.scheduled.v1');
+    expect(emitted[0]!.payload).toMatchObject({ gameId, aggregateRevision: '2' });
+    // The existing event deliberately retains the normal downstream consumers. An operator must
+    // review notification/chat effects before live execution; recovery is not projection-only.
+    expect(consumersForGameEvent('game.scheduled.v1')).toEqual(
+      expect.arrayContaining(['messaging-membership', 'notifications-rules']),
+    );
+    const audit = await withTenantTransaction(
+      pool,
+      tenantId,
+      async (c) =>
+        (
+          await c.query<{ new_value: { replacement: Record<string, unknown> } }>(
+            "select new_value from audit.audit_log where tenant_id=$1 and resource_id=$2 and action='GAME_PARTICIPANTS_REBASELINED_FROM_LEGACY_SNAPSHOT' and result='SUCCESS'",
+            [tenantId, gameId],
+          )
+        ).rows,
+    );
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.new_value.replacement).toMatchObject({
+      retainedParticipationCount: 2,
+      retainedPaidParticipationCount: 2,
+      participationsBeforeSha256: expected.replacement.participationsSha256,
+      retainedParticipationIdsSha256: expected.replacement.retainedParticipationIdsSha256,
+      participationsAfterSha256: exactRosterValueSha256(
+        exactRosterParticipations(
+          after.roster.map((p) => [p.id, p.user_id, p.role, p.state, p.payment_state]),
+        ),
+      ),
+    });
+    // The repository fence rejects an old revision. Lost-ACK readback belongs to the Worker,
+    // which recognizes the matching success audit without calling this writer again.
+    await expect(repository.rebaselineParticipants(command)).rejects.toThrow(
+      'LEGACY_GAME_EXACT_REPAIR_DRIFT',
+    );
+    expect(await read()).toEqual(after);
+  });
+  it.each(['scheduled', 'finished'] as const)(
+    'preserves paid rows and mapping absence in %s UI recovery',
+    async (phase) => {
+      const old = {
+        ...snapshot({ label: `ui-proof-old-${phase}`, players: 2, capacity: 4 }),
+        vivaExerciseExternalId: createHash('sha256')
+          .update(`ui-proof-exercise-${phase}`)
+          .digest('hex'),
+      };
+      const imported = await repository.importSnapshots({
+        tenantKey,
+        snapshots: [old],
+        correlationId: 'ui-old-import',
+      });
+      const gameId = imported.imported[0]!.gameId,
+        clients = Array.from({ length: 4 }, () => randomUUID());
+      const members = clients.map((id, i) => ({
+        ...old.participants[0]!,
+        externalId: createHash('sha256')
+          .update('phub-local-public-clone-v1:player:' + id)
+          .digest('hex'),
+        externalAliases: [id],
+        role: i === 0 ? ('ORGANIZER' as const) : ('PLAYER' as const),
+      }));
+      const source = {
+        ...old,
+        externalVersion: 'c'.repeat(64),
+        organizerExternalId: members[0]!.externalId,
+        participants: members,
+      };
+      await repository.importSnapshots({
+        tenantKey,
+        snapshots: [
+          {
+            ...source,
+            externalId: `ui-proof-registry-${phase}`,
+            vivaExerciseExternalId: randomUUID(),
+          },
+        ],
+        correlationId: 'ui-registry-import',
+      });
+      await quarantine(gameId, 'b'.repeat(64));
+      if (phase === 'finished') {
+        source.startsAt = new Date(Date.now() - 7200000).toISOString();
+        source.endsAt = new Date(Date.now() - 3600000).toISOString();
+        await withTenantTransaction(pool, tenantId, (c) =>
+          c.query(
+            "update games.games set starts_at=$3,ends_at=$4,created_at=$3::timestamptz-interval '1 hour' where tenant_id=$1 and id=$2",
+            [tenantId, gameId, source.startsAt, source.endsAt],
+          ),
+        );
+        for (const [kind, revision, due] of [
+          ['start', 1, source.startsAt],
+          ['finish', 2, source.endsAt],
+        ] as const) {
+          const id = await withTenantTransaction(
+            pool,
+            tenantId,
+            async (c) =>
+              (
+                await c.query<{ id: string }>(
+                  "update games.scheduled_commands set state='PROCESSING',locked_by='owned-ui-fixture',locked_at=now(),attempts=attempts+1,expected_revision=$4,due_at=$5 where tenant_id=$1 and game_id=$2 and command_type=$3 returning id",
+                  [tenantId, gameId, `game.lifecycle.${kind}.v1`, revision, due],
+                )
+              ).rows[0]!.id,
+          );
+          expect(
+            await createGameRepository(pool).executeLifecycleCommand({
+              tenantId,
+              commandId: id,
+              workerId: 'owned-ui-fixture',
+              correlationId: `ui-native-${kind}-${gameId}`,
+              occurredAt: new Date(due),
+            }),
+          ).toMatchObject({ outcome: 'applied', revision: revision + 1 });
+        }
+      }
+      const pre = await withTenantTransaction(pool, tenantId, async (c) => {
+        const rows = (
+          await c.query<{
+            id: string;
+            user_id: string;
+            role: string;
+            state: string;
+            payment_state: string;
+          }>(
+            'select id,user_id,role,state,payment_state from games.participations where tenant_id=$1 and game_id=$2 order by id',
+            [tenantId, gameId],
+          )
+        ).rows;
+        const mappings = (
+          await c.query<{
+            external_id: string;
+            internal_id: string;
+            sync_status: string;
+            sync_error_code: string | null;
+          }>(
+            "select external_id,internal_id,sync_status,sync_error_code from integration.external_entity_map where tenant_id=$1 and external_system='LK_LEGACY_SNAPSHOT' and entity_type='game_player' and external_id=any($2::text[]) order by external_id",
+            [tenantId, members.flatMap((m) => [m.externalId, ...m.externalAliases])],
+          )
+        ).rows;
+        const identities = await readExactRosterUiIdentityPreimage(c, {
+          tenantId,
+          gameId,
+          source,
+          mappings,
+          lock: false,
+        });
+        const users = (
+          await c.query<Record<string, unknown>>(
+            'select * from identity.users where tenant_id=$1 order by id',
+            [tenantId],
+          )
+        ).rows;
+        const profiles = (
+          await c.query<Record<string, unknown>>(
+            'select * from profile.user_summaries where tenant_id=$1 order by user_id',
+            [tenantId],
+          )
+        ).rows;
+        return { rows, mappings, identities, users, profiles };
+      });
+      const proofNow = Date.now();
+      const ui: LegacyGameUiObservationFence = {
+        policy: 'OPERATOR_REVIEWED_VIVA_UI_SUBSCRIPTION_OBSERVATION_V1',
+        originAuthenticated: false,
+        proofSha256: '1'.repeat(64),
+        reviewSha256: '2'.repeat(64),
+        captureSetSha256: '3'.repeat(64),
+        observationSetSha256: '4'.repeat(64),
+        sourceObservationSha256: '5'.repeat(64),
+        ...pre.identities,
+        capturedAt: new Date(proofNow - 60000).toISOString(),
+        reviewedAt: new Date(proofNow - 30000).toISOString(),
+        expiresAt: new Date(proofNow + 840000).toISOString(),
+      };
+      if (phase === 'finished') {
+        const native = await withTenantTransaction(pool, tenantId, (c) =>
+          readFinishedUnscoredUiPreimage(c, { tenantId, gameId, lock: false }),
+        );
+        Object.assign(ui, {
+          finishedUnscored: {
+            policy: 'EXACT_UI_PROOF_FINISHED_UNSCORED',
+            preimageSha256: native.sha256,
+          },
+        });
+      }
+      const expected = {
+        gameId,
+        revision: phase === 'finished' ? 3 : 1,
+        sourceVersion: source.externalVersion,
+        syncSourceVersion: 'b'.repeat(64),
+        playerMappingsSha256: attestExactRosterPlayerMappings(source, pre.mappings).sha256,
+        replacement: {
+          participationsSha256: exactRosterValueSha256(
+            exactRosterParticipations(
+              pre.rows.map((r) => [r.id, r.user_id, r.role, r.state, r.payment_state]),
+            ),
+          ),
+          retainedParticipationIdsSha256: exactRosterValueSha256(pre.rows.map((r) => r.id).sort()),
+          uiObservation: ui,
+        },
+      };
+      const command = {
+        tenantKey,
+        snapshots: [source],
+        correlationId: 'ui-observation-reviewed-operation',
+        allowLocalRemovals: true,
+        expected,
+        now: new Date('1990-01-01T00:00:00Z'),
+      };
+      // Reserve a quiet table slot during fixture transaction setup, because other CI suites
+      // write different tenants concurrently. Runtime NOWAIT remains exercised reentrantly;
+      // busy/refusal cases below use the unmodified pool and never wait or retry the operation.
+      const isolatedPool = {
+        query: pool.query.bind(pool),
+        connect: async () => {
+          const c = await pool.connect();
+          return {
+            release: () => c.release(),
+            query: async (sql: string, values?: unknown[]) => {
+              const result = await c.query(sql, values);
+              if (sql === 'begin') {
+                await c.query("set local statement_timeout='10000'");
+                await c.query('lock table integration.external_entity_map in exclusive mode');
+              }
+              return result;
+            },
+          };
+        },
+      };
+      const isolated = createLegacyGameImportRepository(isolatedPool as unknown as Pool);
+      const readWriteImage = () =>
+        withTenantTransaction(pool, tenantId, async (c) => {
+          const image: Record<string, unknown> = {};
+          for (const [table, column] of [
+            ['games.games', 'id'],
+            ['games.participations', 'game_id'],
+            ['integration.legacy_game_roster_sync_state', 'game_id'],
+            ['audit.audit_log', 'resource_id'],
+            ['audit.outbox_events', 'aggregate_id'],
+          ] as const)
+            image[table] = (
+              await c.query<Record<string, unknown>>(
+                `select * from ${table} where tenant_id=$1 and ${column}=$2 order by 1,2`,
+                [tenantId, gameId],
+              )
+            ).rows;
+          return image;
+        });
+      const unchanged = await readWriteImage();
+      await expect(
+        isolated.rebaselineParticipants({
+          ...command,
+          expected: {
+            ...expected,
+            replacement: {
+              ...expected.replacement,
+              uiObservation: {
+                ...ui,
+                capturedAt: new Date(Date.now() - 120000).toISOString(),
+                reviewedAt: new Date(Date.now() - 90000).toISOString(),
+                expiresAt: new Date(Date.now() - 60000).toISOString(),
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow('LEGACY_GAME_UI_OBSERVATION_EXPIRED');
+      expect(await activeParticipants(gameId)).toBe(2);
+      // Inject only the final observed DB instant; all rows/locks remain real PostgreSQL.
+      // This proves that expiry while checking the final phase cannot authorize a paid write.
+      let phaseClocks = 0;
+      const finalClockPool = {
+        query: pool.query.bind(pool),
+        connect: async () => {
+          const c = await isolatedPool.connect();
+          return {
+            release: () => c.release(),
+            query: async (sql: string, values?: unknown[]) => {
+              const result = await c.query(sql, values);
+              if (sql === 'select clock_timestamp() as server_now' && ++phaseClocks === 2)
+                return {
+                  ...result,
+                  rows: [{ server_now: new Date(Date.parse(ui.expiresAt) + 1) }],
+                };
+              if (phase === 'scheduled' && sql === 'select clock_timestamp() as checked_at')
+                return { ...result, rows: [{ checked_at: new Date(source.startsAt) }] };
+              return result;
+            },
+          };
+        },
+      };
+      await expect(
+        createLegacyGameImportRepository(finalClockPool as unknown as Pool).rebaselineParticipants(
+          command,
+        ),
+      ).rejects.toThrow(
+        phase === 'finished'
+          ? 'LEGACY_GAME_UI_OBSERVATION_EXPIRED'
+          : 'LEGACY_GAME_EXACT_REPAIR_SCHEDULE',
+      );
+      expect(await activeParticipants(gameId)).toBe(2);
+      if (phase === 'finished') {
+        // A result writer that owns the Game first wins. Recovery waits for that same row,
+        // sees the newly committed submission, and performs no roster mutation.
+        const resultWriter = await pool.connect();
+        let waiting!: () => void;
+        const gameRequested = new Promise<void>((resolve) => {
+          waiting = resolve;
+        });
+        const watched = {
+          query: pool.query.bind(pool),
+          connect: async () => {
+            const c = await isolatedPool.connect();
+            return {
+              release: () => c.release(),
+              query: (sql: string, values?: unknown[]) => {
+                if (sql.includes('from games.games') && sql.includes('for update')) waiting();
+                return c.query(sql, values);
+              },
+            };
+          },
+        };
+        try {
+          await resultWriter.query('begin');
+          await resultWriter.query("select set_config('app.tenant_id',$1,true)", [tenantId]);
+          await resultWriter.query(
+            'select id from games.games where tenant_id=$1 and id=$2 for update',
+            [tenantId, gameId],
+          );
+          const rejected = expect(
+            createLegacyGameImportRepository(watched as unknown as Pool).rebaselineParticipants(
+              command,
+            ),
+          ).rejects.toThrow('LEGACY_GAME_UI_FINISHED_RESULT_EXISTS');
+          await gameRequested;
+          await resultWriter.query(
+            "insert into games.result_submissions(tenant_id,game_id,submitted_by_user_id,score_payload,roster_snapshot) values($1,$2,$3,'{}','{}')",
+            [tenantId, gameId, pre.rows[0]!.user_id],
+          );
+          await resultWriter.query('commit');
+          await rejected;
+          expect(await activeParticipants(gameId)).toBe(2);
+          await withTenantTransaction(pool, tenantId, (c) =>
+            c.query('delete from games.result_submissions where tenant_id=$1 and game_id=$2', [
+              tenantId,
+              gameId,
+            ]),
+          );
+        } finally {
+          await resultWriter.query('rollback');
+          resultWriter.release();
+        }
+      }
+      const blocker = await pool.connect(),
+        ref = [...clients].sort()[0]!;
+      try {
+        await blocker.query('begin');
+        await blocker.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
+          tenantId + '\u001fVIVA\u001f' + ref,
+        ]);
+        await expect(repository.rebaselineParticipants(command)).rejects.toThrow(
+          'LEGACY_GAME_UI_OBSERVATION_WRITER_BUSY',
+        );
+        await blocker.query('rollback');
+        await blocker.query('begin');
+        await blocker.query('lock table integration.external_entity_map in row exclusive mode');
+        await expect(repository.rebaselineParticipants(command)).rejects.toMatchObject({
+          code: '55P03',
+        });
+        expect(await activeParticipants(gameId)).toBe(2);
+      } finally {
+        await blocker.query('rollback');
+        blocker.release();
+      }
+      expect(await readWriteImage()).toEqual(unchanged);
+      expect((await isolated.rebaselineParticipants(command)).rebaselined).toHaveLength(1);
+      const post = await withTenantTransaction(pool, tenantId, async (c) => ({
+        rows: (
+          await c.query<{
+            id: string;
+            user_id: string;
+            role: string;
+            state: string;
+            payment_state: string;
+          }>(
+            'select id,user_id,role,state,payment_state from games.participations where tenant_id=$1 and game_id=$2 order by id',
+            [tenantId, gameId],
+          )
+        ).rows,
+        users: (
+          await c.query<Record<string, unknown>>(
+            'select * from identity.users where tenant_id=$1 order by id',
+            [tenantId],
+          )
+        ).rows,
+        profiles: (
+          await c.query<Record<string, unknown>>(
+            'select * from profile.user_summaries where tenant_id=$1 order by user_id',
+            [tenantId],
+          )
+        ).rows,
+        audit: (
+          await c.query<{
+            new_value: { replacement: { uiObservation: LegacyGameUiObservationFence } };
+          }>(
+            "select new_value from audit.audit_log where tenant_id=$1 and resource_id=$2 and action='GAME_PARTICIPANTS_REBASELINED_FROM_LEGACY_SNAPSHOT'",
+            [tenantId, gameId],
+          )
+        ).rows,
+      }));
+      expect(post.users).toEqual(pre.users);
+      expect(post.profiles).toEqual(pre.profiles);
+      expect(post.rows.filter((r) => r.state === 'LEFT')).toEqual(
+        pre.rows.map((r) => ({ ...r, state: 'LEFT' })),
+      );
+      expect(post.rows.filter((r) => r.state === 'ACTIVE')).toHaveLength(4);
+      expect(post.rows.every((r) => r.payment_state === 'PAID')).toBe(true);
+      expect(post.audit).toHaveLength(1);
+      expect(post.audit[0]!.new_value.replacement.uiObservation).toEqual(ui);
+      expect(JSON.stringify(post.audit)).not.toContain(ref);
+      if (phase === 'finished') {
+        const preserved = await withTenantTransaction(pool, tenantId, async (c) => ({
+          game: (
+            await c.query<Record<string, unknown>>(
+              'select revision,lifecycle_state,result_state,starts_at,ends_at,started_at,finished_at from games.games where tenant_id=$1 and id=$2',
+              [tenantId, gameId],
+            )
+          ).rows[0],
+          phases: (
+            await c.query(
+              "select event_type,count(*)::int as count from audit.outbox_events where tenant_id=$1 and aggregate_id=$2 and event_type in ('game.started.v1','game.finished.v1') group by event_type order by event_type",
+              [tenantId, gameId],
+            )
+          ).rows,
+          commands: (
+            await c.query(
+              'select state,count(*)::int as count from games.scheduled_commands where tenant_id=$1 and game_id=$2 group by state',
+              [tenantId, gameId],
+            )
+          ).rows,
+        }));
+        expect(preserved.game).toMatchObject({
+          revision: '4',
+          lifecycle_state: 'FINISHED',
+          result_state: 'AWAITING_SUBMISSION',
+          starts_at: new Date(source.startsAt),
+          ends_at: new Date(source.endsAt),
+          started_at: new Date(source.startsAt),
+          finished_at: new Date(source.endsAt),
+        });
+        expect(preserved.phases).toEqual([
+          { event_type: 'game.finished.v1', count: 1 },
+          { event_type: 'game.started.v1', count: 1 },
+        ]);
+        expect(preserved.commands).toEqual([{ state: 'COMPLETED', count: 2 }]);
+        const users = post.rows
+          .filter((r) => r.state === 'ACTIVE')
+          .map((r) => r.user_id)
+          .sort();
+        expect(
+          await createGameResultRepository(pool).submit({
+            tenantId,
+            gameId,
+            actorUserId: users[0]!,
+            idempotencyKey: 'owned-ui-post-recovery-result',
+            requestHash: 'd'.repeat(64),
+            correlationId: 'ui-post-recovery-result',
+            result: {
+              sets: [
+                {
+                  teamAUserIds: [users[0]!, users[1]!],
+                  teamBUserIds: [users[2]!, users[3]!],
+                  setNumber: 1,
+                  teamA: 6,
+                  teamB: 4,
+                },
+              ],
+            },
+          }),
+        ).toMatchObject({ outcome: 'applied', resultState: 'PENDING_CONFIRMATION' });
+        const submitted = await withTenantTransaction(
+          pool,
+          tenantId,
+          async (c) =>
+            (
+              await c.query<{ roster_snapshot: unknown }>(
+                'select roster_snapshot from games.result_submissions where tenant_id=$1 and game_id=$2',
+                [tenantId, gameId],
+              )
+            ).rows[0]!.roster_snapshot,
+        );
+        for (const user of users) expect(JSON.stringify(submitted)).toContain(user);
+        await expect(isolated.rebaselineParticipants(command)).rejects.toThrow(
+          'LEGACY_GAME_UI_FINISHED_STATE',
+        );
+        expect(await activeParticipants(gameId)).toBe(4);
+      }
+    },
+  );
+  it.each(['clean', 'quarantined', 'stale'] as const)(
+    'keeps the %s roster verification boundary through native start and finish',
+    async (mode) => {
+      const original = snapshot({ label: `native-carry-${mode}`, players: 4 });
+      const imported = await repository.importSnapshots({
+        tenantKey,
+        snapshots: [original],
+        correlationId: `native-carry-import-${mode}`,
+      });
+      const gameId = imported.imported[0]!.gameId,
+        cards = createGameRepository(pool);
+      await repository.synchronizeParticipants({
+        tenantKey,
+        snapshots: [original],
+        correlationId: `native-carry-bootstrap-${mode}`,
+      });
+      const starts = new Date(Date.now() - 7200000),
+        ends = new Date(Date.now() - 3600000);
+      await withTenantTransaction(pool, tenantId, async (c) => {
+        await c.query(
+          "update games.games set starts_at=$3,ends_at=$4,revision=$5,created_at=$3::timestamptz-interval '1 hour' where tenant_id=$1 and id=$2",
+          [tenantId, gameId, starts, ends, mode === 'stale' ? 2 : 1],
+        );
+        if (mode === 'quarantined')
+          await c.query(
+            "update integration.legacy_game_roster_sync_state set mode='CONFLICT',conflict_code='LEGACY_GAME_ROSTER_BASELINE_MISMATCH' where tenant_id=$1 and game_id=$2",
+            [tenantId, gameId],
+          );
+      });
+      const read = () =>
+        withTenantTransaction(
+          pool,
+          tenantId,
+          async (c) =>
+            (
+              await c.query<{
+                [key: string]: unknown;
+                last_synced_game_revision: string;
+                last_synced_at: Date;
+              }>(
+                'select * from integration.legacy_game_roster_sync_state where tenant_id=$1 and game_id=$2',
+                [tenantId, gameId],
+              )
+            ).rows[0]!,
+        );
+      const before = await read();
+      for (const [kind, offset, due] of [
+        ['start', 0, starts],
+        ['finish', 1, ends],
+      ] as const) {
+        const revision = (mode === 'stale' ? 2 : 1) + offset;
+        const commandId = await withTenantTransaction(
+          pool,
+          tenantId,
+          async (c) =>
+            (
+              await c.query<{ id: string }>(
+                "update games.scheduled_commands set state='PROCESSING',locked_by='owned-carry-fixture',locked_at=now(),attempts=attempts+1,expected_revision=$4,due_at=$5 where tenant_id=$1 and game_id=$2 and command_type=$3 returning id",
+                [tenantId, gameId, `game.lifecycle.${kind}.v1`, revision, due],
+              )
+            ).rows[0]!.id,
+        );
+        const applied = await cards.executeLifecycleCommand({
+          tenantId,
+          commandId,
+          workerId: 'owned-carry-fixture',
+          correlationId: `carry-${kind}-${gameId}`,
+          occurredAt: due,
+        });
+        expect(applied).toMatchObject({ outcome: 'applied', revision: revision + 1 });
+        if (applied.outcome !== 'applied') throw new Error('native fixture failed');
+        await cards.projectCardEvent({ tenantId, gameId, eventId: applied.eventId });
+        const after = await read();
+        expect(after).toEqual({
+          ...before,
+          last_synced_game_revision:
+            mode === 'clean' ? String(revision + 1) : before.last_synced_game_revision,
+        });
+        const card = (await cards.getCardProjections!(tenantId, [gameId])).get(gameId)!;
+        expect(Boolean(card.rosterVerifiedAt)).toBe(mode === 'clean');
+        if (mode === 'clean')
+          expect(card.rosterVerifiedAt).toBe(new Date(before.last_synced_at).toISOString());
+      }
+    },
+  );
 });

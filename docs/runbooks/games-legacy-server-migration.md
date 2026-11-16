@@ -122,7 +122,7 @@ backup/restore, source identity, monitoring and rollback prerequisites.
    Reminder snapshots omit participants and are never accepted for this operation. Public-source
    fallback, redirects, cancelled/empty/ambiguous/truncated sources and non-baseline conflicts stop.
 3. Review the returned plan SHA-256, canonical Game and count against the approved preimage/source.
-   Apply with the same target/operation and `--plan-sha <reviewed hash>`. Exact mode forbids local
+   Apply with the same target/operation and `--plan-sha <reviewed hash>`. Default exact mode forbids local
    removals, checks the plan before writing and fences Game/sync revision and source versions again
    under the transaction lock. The plan also binds every existing player-alias/account mapping. Exact recovery locks and rechecks
    those identities before writing; unbound, conflicted or repointed aliases stop. No account or
@@ -143,3 +143,128 @@ backup/restore, source identity, monitoring and rollback prerequisites.
    audited readback with no automatic retry. Redacted source outcome/duration metrics retain the
    operation ID. Compensating rollback bumps revision and emits an audit/outbox event; never delete
    accounts, audit/outbox history or decrement a Game revision.
+
+### Explicit source-roster replacement
+
+When an operator has reviewed a specific source roster and the default exact repair returns
+`LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL`, a separate exact replacement mode can retain
+old participation rows as `LEFT` and make the source participants `ACTIVE`. This is a live roster
+mutation requiring exact Game/source/preimage approval; choosing which roster is correct does not
+itself approve executing the replacement. Prepare and review the plan before requesting execution.
+
+- Plan with the same exact target arguments plus `--replace-source-roster --plan`.
+- Apply only the reviewed plan with `--replace-source-roster --plan-sha <reviewed hash>
+--confirm REPLACE_SOURCE_ROSTER_KEEP_ACCOUNTS_AND_PAYMENTS`. The confirmation is an operator
+  acknowledgement, not an authorization credential. `--limit`, batch `--allow-local-removals`,
+  duplicate options and confirmation on a read-only plan are rejected.
+- The Game must still be `SCHEDULED` and strictly before its canonical start. Source and canonical
+  start/end/capacity must match. The source must be complete, uncancelled and fit capacity; all source
+  and current active payment states must be `PAID` or `NOT_REQUIRED`. An overlapping participant's
+  payment state must remain identical. The transaction checks server time again after taking locks.
+- Replacement requests opt into strict primary/majority roster reading. The raw game, organizer and
+  every raw participant must explicitly be `PAID`; generic mapper defaults are not payment proof.
+  Missing/unknown/`ACTIVE`/pending/cancelled participant statuses, malformed rows, non-array rosters,
+  conflicting duplicates and over-capacity sources stop the entire read instead of dropping or
+  truncating participants. One identical paid organizer repeated in the array represents the same
+  seat. Verify this raw-status evidence for the selected live source before execution; do not infer
+  it from a generic snapshot whose mapper synthesizes `paymentState: PAID`.
+- Every source alias must already resolve bijectively to an active existing account with an existing
+  profile. No account, profile, player mapping or payment is created, rewritten or merged. Game alias
+  disagreement, changed bindings, missing identities, changed revisions, any participation tuple
+  change, or source/sync version drift stops the operation.
+- Any `ACTIVE` seat reservation (including an expired one) or `ACTIVE` waitlist entry stops the plan
+  and the locked writer. This operation does not confirm, cancel, expire or promote pending seats.
+- The plan binds all existing participation IDs, users, roles, states and payment states. The writer
+  locks and rechecks that preimage. Missing source members become `LEFT` with the same participation
+  ID, user, role and payment state. Existing non-active rows stay unchanged. No rows or accounts are
+  deleted, and there is no refund, payment/provider call or result/rating/lifecycle change.
+- One transaction advances the Game revision once, returns sync ownership to `MIRROR`, and writes
+  the existing projection outbox event and success audit. Audit evidence includes before/after roster
+  digests, retained row-ID digest, retained count and retained paid-row count. A post-write retention
+  mismatch rolls the entire transaction back. These row/audit guarantees do not guarantee a visible
+  personal-history entry for the retired participants; review that product effect separately.
+- The existing `game.scheduled.v1` event also reaches messaging membership and notification consumers.
+  Downstream chat membership, lifecycle scheduling and enabled Game reminder/scenario rules can
+  therefore change for the source roster. This is not a card-only write. Review those configured
+  effects and obtain the necessary external-message authority before live execution; this mode
+  neither suppresses notifications nor bypasses their normal runtime and recipient checks.
+- After a lost acknowledgement, retain the same operation ID and reviewed hash. A single matching
+  success audit, unchanged source/mapping/revision and exact post-roster digest permit readback as
+  `ALREADY_REPAIRED` without a second mutation. A different plan for the same successful replacement
+  operation, changed post-state or a new plan request stops. Do not automatically retry an ambiguous
+  outcome, reuse a new operation ID to evade a fence, or rewind a started/finished Game.
+
+### Reviewed Viva UI settlement observations
+
+Some LK1 create records contain `CONFIRMED` seats and a synthetic game-level paid flag, even when
+Viva has settled each booking with an entitlement. Those fields alone never authorize paid seats.
+The exact replacement CLI additionally accepts `--ui-observation-stdin --reviewed-proof-sha <sha>`.
+Only this mode reads complete membership without inferring payment from LK1. It requires exactly
+four distinct, existing beneficiaries and a closed, canonical JSON observation envelope, delivered
+on bounded stdin. Keep the envelope and original UI excerpts in private operator storage, outside
+Git, logs, command arguments and public DTOs. Never copy OAuth/address history or authentication data.
+
+The trust label is `OPERATOR_REVIEWED_VIVA_UI_SUBSCRIPTION_OBSERVATION_V1`, with
+`originAuthenticated: false`: this is an independently reviewed authenticated-session observation,
+not a provider-signed receipt. Each seat binds the complete actual Viva client UUID through an
+unchanged original UI capture to the exact exercise, venue/court/time, one active paid booking and
+one applied subscription usage. The reviewer verifies beneficiary ownership, acquisition class,
+one-unit debit, no duplicate/family ambiguity, cancellation, reversal or outstanding charge.
+Hidden booking/subscription/usage identifiers stay explicitly unavailable; never invent UUIDs.
+The unique compound observation uses the client/exercise/occurrence and booking/usage creation
+times, entitlement and before/after balance. Cash-purchased and administratively issued zero-price
+entitlements both settle a seat; this does not assert that every participant paid cash.
+
+The proof binds tenant/Game/operation/source versions and snapshot, all existing alias mappings,
+capture and reviewer hashes. Reader and independent reviewer differ. Its maximum lifetime is
+15 minutes, and the locked writer checks database time immediately before mutation. Renew captures
+only after the selected immutable artifact is ready. Existing raw UUID/pseudonym aliases may
+establish the supported legacy identity fallback; no direct Viva profile mapping is created.
+Existing optional Viva mappings must agree. Identity bindings, mapping presence/absence and the
+exercise mapping are rechecked under the writer's exclusion/row locks. Only after all evidence is
+validated are these four seats materialized as `PAID`. No provider, payment, subscription or identity
+mutation is performed. The audit stores hashes and non-sensitive custody metadata, not UI excerpts
+or raw provider identities.
+
+For apply only, the first business lock is `EXCLUSIVE NOWAIT` on the physical external mapping
+table, followed by nonblocking import/client advisory locks. Busy means rollback and manual
+readback, never automatic retry. This also excludes attestation writers and same-user/different-
+client phantoms. Ordinary SELECT remains available, but mapping/login/attestation writers for all
+tenants can briefly wait. Measure the physical successful critical section before live use; require
+low-single-second duration. Statement timeout is per query, not a 15-second total transaction
+bound; the catastrophic outer process deadline remains 90 seconds. Verify the actual runtime role
+has the necessary existing lock privileges. Do not add grants to make recovery pass.
+
+### Finished, unscored exact UI recovery
+
+`--finished-unscored-ui` is an additional explicit flag accepted only with the reviewed UI-proof
+replacement mode. Generic, additive and raw-PAID replacements remain `SCHEDULED` only. A finished
+Game is eligible only while its original 12-hour result window is open according to database time,
+with `AWAITING_SUBMISSION`, original start/finish timestamps, and precisely the quarantined baseline
+followed by its two native completed START/FINISH commands, matching success audits and outbox
+events. The plan binds that entire preimage. A different lifecycle predecessor or any result
+submission, review, result, set, player fact, result audit/event or result-derived history stops.
+
+The transaction locks the exact mapping, lifecycle commands, Game and sync state in compatible
+order, rechecks the preimage and result absence, and serializes with result submission on the same
+Game lock. It changes only roster/organizer, advances revision once and restores `MIRROR`. It never
+rewinds lifecycle/time, changes the result deadline, reconciles or replays scheduled commands, emits
+a second `game.finished.v1`, or backfills a missed notification. Review actual runtime consumers of
+the one existing `game.scheduled.v1` projection event before live execution. Delayed events must
+project the current aggregate; they must not replace the restored roster with an old payload.
+After restoration a normal result submission must use the restored four-member roster.
+
+Lost-ACK recognition requires the unchanged current postimage. If a legitimate later result has
+already advanced the Game, the retry stops for manual audit/readback and never reapplies the repair.
+Do not widen the mode or use another operation ID to evade this stop.
+
+Native START/FINISH transitions carry `last_synced_game_revision` forward only for an exact clean
+`MIRROR` old revision. They do not refresh source timestamps/version, validate stale evidence or
+clear a conflict. This preserves roster visibility in Web/Android across lifecycle transitions
+without claiming a new provider read.
+
+After an approved apply, verify source membership and organizer, every retained row/payment, account
+and profile preimages, one revision/audit/outbox, MIRROR and converged card projection. Verify the
+actual authenticated Web and Android reads separately. This command does not authorize merge,
+publication, deployment, replay of reminders/results, or compensating rollback. Production evidence
+must come from the reviewed immutable Worker artifact, not a locally copied script.

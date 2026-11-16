@@ -7,7 +7,11 @@ import {
 } from '@phub/database';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { Pool, type PoolConfig } from 'pg';
-import { exactLegacyGameRosterRepair } from './exact-legacy-game-roster-repair.js';
+import {
+  exactLegacyGameRosterRepair,
+  EXACT_SOURCE_REPLACEMENT_CONFIRMATION,
+} from './exact-legacy-game-roster-repair.js';
+import { readUiObservationStdin } from './roster-ui-observation-proof.js';
 
 export interface LegacyGameRosterRepairReport {
   readonly tenantKey: string;
@@ -83,15 +87,38 @@ export function parseRepairArguments(argv: readonly string[]): {
   readonly operationId?: string;
   readonly planOnly?: boolean;
   readonly expectedPlanSha256?: string;
+  readonly replaceSourceRoster?: boolean;
+  readonly replacementConfirmed?: boolean;
+  readonly uiObservationStdin?: boolean;
+  readonly reviewedUiObservationSha256?: string;
+  readonly finishedUnscoredUi?: boolean;
 } {
   const values = new Map<string, string>();
   let allowLocalRemovals = false;
   let planOnly = false;
+  let replaceSourceRoster = false;
+  let uiObservationStdin = false;
+  let finishedUnscoredUi = false;
   for (let index = 0; index < argv.length; index += 1) {
     const option = argv[index];
     if (option === '--plan') {
       if (planOnly) throw new LegacyGameRosterRepairArgumentError('usage');
       planOnly = true;
+      continue;
+    }
+    if (option === '--replace-source-roster') {
+      if (replaceSourceRoster) throw new LegacyGameRosterRepairArgumentError('usage');
+      replaceSourceRoster = true;
+      continue;
+    }
+    if (option === '--ui-observation-stdin') {
+      if (uiObservationStdin) throw new LegacyGameRosterRepairArgumentError('usage');
+      uiObservationStdin = true;
+      continue;
+    }
+    if (option === '--finished-unscored-ui') {
+      if (finishedUnscoredUi) throw new LegacyGameRosterRepairArgumentError('usage');
+      finishedUnscoredUi = true;
       continue;
     }
     if (option === '--allow-local-removals') {
@@ -100,7 +127,15 @@ export function parseRepairArguments(argv: readonly string[]): {
     }
     if (
       !option ||
-      !['--tenant-key', '--limit', '--game-id', '--operation-id', '--plan-sha'].includes(option)
+      ![
+        '--tenant-key',
+        '--limit',
+        '--game-id',
+        '--operation-id',
+        '--plan-sha',
+        '--confirm',
+        '--reviewed-proof-sha',
+      ].includes(option)
     ) {
       throw new LegacyGameRosterRepairArgumentError('usage');
     }
@@ -120,7 +155,19 @@ export function parseRepairArguments(argv: readonly string[]): {
   const gameId = values.get('--game-id'),
     operationId = values.get('--operation-id'),
     expectedPlanSha256 = values.get('--plan-sha');
-  if (gameId || operationId || expectedPlanSha256 || planOnly) {
+  const confirm = values.get('--confirm');
+  const reviewedUiObservationSha256 = values.get('--reviewed-proof-sha');
+  if (
+    gameId ||
+    operationId ||
+    expectedPlanSha256 ||
+    planOnly ||
+    replaceSourceRoster ||
+    confirm ||
+    uiObservationStdin ||
+    reviewedUiObservationSha256 ||
+    finishedUnscoredUi
+  ) {
     if (
       !gameId ||
       !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u.test(gameId) ||
@@ -128,6 +175,15 @@ export function parseRepairArguments(argv: readonly string[]): {
       !/^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$/u.test(operationId) ||
       allowLocalRemovals ||
       values.has('--limit') ||
+      (finishedUnscoredUi && !uiObservationStdin) ||
+      (uiObservationStdin
+        ? !replaceSourceRoster || !/^[a-f0-9]{64}$/u.test(reviewedUiObservationSha256 ?? '')
+        : reviewedUiObservationSha256 !== undefined) ||
+      (replaceSourceRoster
+        ? planOnly
+          ? confirm !== undefined
+          : confirm !== EXACT_SOURCE_REPLACEMENT_CONFIRMATION
+        : confirm !== undefined) ||
       (planOnly
         ? expectedPlanSha256 !== undefined
         : !/^[0-9a-f]{64}$/u.test(expectedPlanSha256 ?? ''))
@@ -141,6 +197,13 @@ export function parseRepairArguments(argv: readonly string[]): {
       operationId,
       planOnly,
       ...(expectedPlanSha256 ? { expectedPlanSha256 } : {}),
+      ...(replaceSourceRoster
+        ? { replaceSourceRoster: true, replacementConfirmed: !planOnly }
+        : {}),
+      ...(uiObservationStdin
+        ? { uiObservationStdin: true, reviewedUiObservationSha256: reviewedUiObservationSha256! }
+        : {}),
+      ...(finishedUnscoredUi ? { finishedUnscoredUi: true } : {}),
     };
   }
   return { tenantKey, limit, allowLocalRemovals };
@@ -232,6 +295,17 @@ async function main(): Promise<void> {
         gameId: arguments_.gameId,
         operationId: arguments_.operationId!,
         planOnly: arguments_.planOnly === true,
+        ...(arguments_.uiObservationStdin
+          ? {
+              uiObservationBytes: await readUiObservationStdin(process.stdin),
+              reviewedUiObservationSha256: arguments_.reviewedUiObservationSha256,
+              providerTenantKey: config.VIVA_AUTH_TENANT_KEY,
+              ...(arguments_.finishedUnscoredUi ? { finishedUnscoredUi: true } : {}),
+            }
+          : {}),
+        ...(arguments_.replaceSourceRoster
+          ? { replaceSourceRoster: true, replacementConfirmed: arguments_.replacementConfirmed }
+          : {}),
         ...(arguments_.expectedPlanSha256
           ? { expectedPlanSha256: arguments_.expectedPlanSha256 }
           : {}),

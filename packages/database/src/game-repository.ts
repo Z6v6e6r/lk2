@@ -2168,6 +2168,14 @@ export function createGameRepository(
         );
         if (!updated) throw new Error('GAME_LIFECYCLE_COMMAND_REVISION_CONFLICT');
         const nextRevision = positiveInteger(updated.revision);
+        // Native lifecycle transitions do not change the verified roster. Carry its exact
+        // revision fence forward without claiming a new provider read or clearing quarantine.
+        await client.query(
+          `update integration.legacy_game_roster_sync_state set last_synced_game_revision = $4
+            where tenant_id = $1 and game_id = $2 and mode = 'MIRROR' and conflict_code is null
+              and last_synced_game_revision = $3`,
+          [input.tenantId, game.id, revision, nextRevision],
+        );
 
         const participants = await client.query<{ readonly user_id: string } & QueryResultRow>(
           `select user_id
