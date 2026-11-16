@@ -735,8 +735,10 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
     'preserves paid rows and mapping absence in %s UI recovery',
     async (phase) => {
       const old = {
-        ...snapshot({ label: 'ui-proof-old', players: 2, capacity: 4 }),
-        vivaExerciseExternalId: 'e'.repeat(64),
+        ...snapshot({ label: `ui-proof-old-${phase}`, players: 2, capacity: 4 }),
+        vivaExerciseExternalId: createHash('sha256')
+          .update(`ui-proof-exercise-${phase}`)
+          .digest('hex'),
       };
       const imported = await repository.importSnapshots({
         tenantKey,
@@ -762,7 +764,11 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
       await repository.importSnapshots({
         tenantKey,
         snapshots: [
-          { ...source, externalId: 'ui-proof-registry', vivaExerciseExternalId: randomUUID() },
+          {
+            ...source,
+            externalId: `ui-proof-registry-${phase}`,
+            vivaExerciseExternalId: randomUUID(),
+          },
         ],
         correlationId: 'ui-registry-import',
       });
@@ -771,12 +777,10 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
         source.startsAt = new Date(Date.now() - 7200000).toISOString();
         source.endsAt = new Date(Date.now() - 3600000).toISOString();
         await withTenantTransaction(pool, tenantId, (c) =>
-          c.query('update games.games set starts_at=$3,ends_at=$4 where tenant_id=$1 and id=$2', [
-            tenantId,
-            gameId,
-            source.startsAt,
-            source.endsAt,
-          ]),
+          c.query(
+            "update games.games set starts_at=$3,ends_at=$4,created_at=$3::timestamptz-interval '1 hour' where tenant_id=$1 and id=$2",
+            [tenantId, gameId, source.startsAt, source.endsAt],
+          ),
         );
         for (const [kind, revision, due] of [
           ['start', 1, source.startsAt],
@@ -849,6 +853,7 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
         ).rows;
         return { rows, mappings, identities, users, profiles };
       });
+      const proofNow = Date.now();
       const ui: LegacyGameUiObservationFence = {
         policy: 'OPERATOR_REVIEWED_VIVA_UI_SUBSCRIPTION_OBSERVATION_V1',
         originAuthenticated: false,
@@ -858,9 +863,9 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
         observationSetSha256: '4'.repeat(64),
         sourceObservationSha256: '5'.repeat(64),
         ...pre.identities,
-        capturedAt: new Date(Date.now() - 60000).toISOString(),
-        reviewedAt: new Date(Date.now() - 30000).toISOString(),
-        expiresAt: new Date(Date.now() + 840000).toISOString(),
+        capturedAt: new Date(proofNow - 60000).toISOString(),
+        reviewedAt: new Date(proofNow - 30000).toISOString(),
+        expiresAt: new Date(proofNow + 840000).toISOString(),
       };
       if (phase === 'finished') {
         const native = await withTenantTransaction(pool, tenantId, (c) =>
@@ -1206,7 +1211,7 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
         ends = new Date(Date.now() - 3600000);
       await withTenantTransaction(pool, tenantId, async (c) => {
         await c.query(
-          'update games.games set starts_at=$3,ends_at=$4,revision=$5 where tenant_id=$1 and id=$2',
+          "update games.games set starts_at=$3,ends_at=$4,revision=$5,created_at=$3::timestamptz-interval '1 hour' where tenant_id=$1 and id=$2",
           [tenantId, gameId, starts, ends, mode === 'stale' ? 2 : 1],
         );
         if (mode === 'quarantined')
