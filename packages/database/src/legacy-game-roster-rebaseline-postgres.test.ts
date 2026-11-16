@@ -717,8 +717,11 @@ describePostgres('legacy roster rebaseline against real PostgreSQL', () => {
         ),
       ),
     });
-    const repeated = await repository.rebaselineParticipants(command);
-    expect(repeated.rebaselined).toHaveLength(0);
+    // The repository fence rejects an old revision. Lost-ACK readback belongs to the Worker,
+    // which recognizes the matching success audit without calling this writer again.
+    await expect(repository.rebaselineParticipants(command)).rejects.toThrow(
+      'LEGACY_GAME_EXACT_REPAIR_DRIFT',
+    );
     expect(await read()).toEqual(after);
   });
 });
