@@ -329,10 +329,17 @@ Unknown files, foreign leases, changed retired-lock inode/marker, pending old lo
 artifacts fail closed. No old receipt, timestamp, dump, filesystem view or legacy identity is rewritten.
 
 A full read-set binds hashes and filesystem identities across the old V4 and original 857 closures,
-both retained helper/install receipts and the installed 4b8 descriptor/manifest. It must match the
+both retained helper/install receipts and the installed 4b8 descriptor and original `artifact/canonical-artifact.zip`. It must match the
 operation's preimage before validation and remain identical afterward. After acquiring its own lease,
 the producer performs live canonical admission **once**, including runtime secrets, verifies the
 unchanged historical read-set again and durably records `CANONICAL_LINEAGE_SEALED` before
 `DUMP_INTENT`. Foreign activity or read-set drift stops before the dump. The terminal proof binds
 that seal to the published prior-reference bytes. Attestation/reconciliation read retained proofs;
 they never recapture the predecessor runtime, replay the dump/TOC or repeat the physical restore.
+
+The canonical predecessor release retains exactly `installed-components.env` and
+`artifact/canonical-artifact.zip`. The manifest and checksum are read from that ZIP in memory,
+never from a standalone manifest file. Admission binds the archive to the hash-bound V4 operation,
+checks the exact two-entry ZIP inventory, checksum and canonical source/publication metadata, and
+includes the ZIP itself in the historical filesystem read-set. A missing or changed ZIP fails
+closed; do not create extracted files in the old release directory to satisfy admission.

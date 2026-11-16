@@ -64,3 +64,10 @@ export function admitNativeWaiverMonitoring(
   transaction: string,
   operationSha256: string,
 ): Promise<Record<string, string>>;
+
+export function validateCanonicalPredecessorArchive(
+  baseline: unknown,
+  operationBytes: Buffer,
+  archiveBytes: Buffer,
+): Buffer;
+export function readCanonicalPredecessorManifest(baseline: unknown): Buffer;

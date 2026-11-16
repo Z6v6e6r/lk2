@@ -5,6 +5,8 @@ import base64
 from contextlib import contextmanager
 import hashlib
 import json
+import io
+import zipfile
 import os
 from pathlib import Path
 import re
@@ -3507,7 +3509,7 @@ def canonical_history_read_set(context):
         base=ROOT/'operator/tools'/commit
         paths.extend([base/'control-timeweb-database-backup.py',base/'installation-receipt.json'])
     release=ROOT/'releases'/CANONICAL_PRIOR_RELEASE
-    paths.extend([release/'installed-components.env',release/'release-manifest.json'])
+    paths.extend([release/'installed-components.env',release/'artifact/canonical-artifact.zip'])
     rows=[]
     for path in sorted(set(paths)):
         before=secure(path);need(0<before.st_size<=MAX_DUMP,'CANONICAL_HISTORY_FILE_SIZE')
@@ -3534,6 +3536,38 @@ def canonical_node_source_guard(op):
             relative=Path(os.fsdecode(raw));need(not relative.is_absolute() and '..' not in relative.parts,'CANONICAL_VALIDATOR_PATH')
             secure(source/relative)
     return source
+
+
+def canonical_prior_manifest(c):
+    """Authenticate original retained ZIP bytes; no extracted historical file is created."""
+    b=c['baseline'];release=ROOT/'releases'/b['installedReleaseId'];artifact=release/'artifact'
+    secure(release,'dir',0o700);secure(artifact,'dir',0o700)
+    need(sorted(p.name for p in release.iterdir())==['artifact','installed-components.env']
+         and sorted(p.name for p in artifact.iterdir())==['canonical-artifact.zip'],'CANONICAL_RELEASE_INVENTORY')
+    operation_raw=read_secure(c['directory']/'operation.json');operation=strict(operation_raw)
+    need(digest(operation_raw)==b['operationSha256']
+         and operation.get('schema')=='PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4'
+         and operation.get('candidateSha')==b['sourceSha'] and operation.get('candidateTree')==b['sourceTree']
+         and operation.get('publicationRunId')==b['publicationRunId'] and operation.get('artifactId')==b['artifactId']
+         and operation.get('manifestSha256')==b['manifestSha256'],'CANONICAL_ARCHIVE_OPERATION')
+    path=artifact/'canonical-artifact.zip';info=secure(path,mode=0o600)
+    need(22<=info.st_size<=4*1024**2,'CANONICAL_ARCHIVE_SIZE');raw=read_secure(path)
+    need('sha256:'+digest(raw)==operation.get('artifactDigest'),'CANONICAL_ARCHIVE_DIGEST')
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            entries=archive.infolist()
+            need(sorted(v.filename for v in entries)==['release-manifest.json','release-manifest.sha256']
+                 and all(0<v.file_size<=1024**2 and not v.flag_bits&1 and v.compress_type in (0,8) for v in entries),'CANONICAL_ARCHIVE_INVENTORY')
+            manifest=archive.read('release-manifest.json');checksum=archive.read('release-manifest.sha256')
+    except (zipfile.BadZipFile,RuntimeError,ValueError,NotImplementedError):raise Stop('CANONICAL_ARCHIVE_INVALID') from None
+    need(digest(manifest)==b['manifestSha256'] and checksum==(b['manifestSha256']+'  release-manifest.json\n').encode(),'CANONICAL_ARCHIVE_CHECKSUM')
+    value=strict(manifest)
+    need(value.get('gitCommit')==b['sourceSha'] and value.get('gitTree')==b['sourceTree']
+         and value.get('publication',{}).get('workflowSha')==b['sourceSha']
+         and value.get('publication',{}).get('runId')==b['publicationRunId']
+         and value.get('publication',{}).get('runAttempt')=='1','CANONICAL_ARCHIVE_SOURCE')
+    need(identity(info)==identity(path.lstat()) and read_secure(path)==raw,'CANONICAL_ARCHIVE_RACE')
+    return raw,manifest
 
 
 def validate_canonical_history_predicates(op,c):
@@ -3565,7 +3599,9 @@ def validate_canonical_history_predicates(op,c):
     need(observation.get('samplesPerService')==61 and observation.get('windowSeconds')==900
          and observation.get('elapsedSeconds',0)>=900 and observation.get('serverErrors')==0,'CANONICAL_PRIOR_OBSERVATION')
     files={name:base64.b64encode(read_secure(directory/name)).decode() for name in CANONICAL_V4_FINAL_FILES if name!='database.pgcustom'}
-    files.update({name:base64.b64encode(read_secure(ROOT/'releases'/CANONICAL_PRIOR_RELEASE/name)).decode() for name in ['installed-components.env','release-manifest.json']})
+    archive,manifest=canonical_prior_manifest(c)
+    files.update({'installed-components.env':base64.b64encode(read_secure(ROOT/'releases'/CANONICAL_PRIOR_RELEASE/'installed-components.env')).decode(),
+                  'canonical-artifact.zip':base64.b64encode(archive).decode(),'release-manifest.json':base64.b64encode(manifest).decode()})
     source=canonical_node_source_guard(op)
     program="import{readFileSync}from'node:fs';import{validateCanonicalHistoricalArtifacts}from'./scripts/timeweb-api-web-upgrade.js';const v=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify(validateCanonicalHistoricalArtifacts(v.baseline,Object.fromEntries(Object.entries(v.files).map(([k,v])=>[k,Buffer.from(v,'base64')])))));"
     result=command(['/usr/bin/node','--input-type=module','-e',program],'CANONICAL_HISTORY_OUTER',input_data=encoded({'baseline':b,'files':files}),cwd=str(source),timeout=60)

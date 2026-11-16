@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type * as NativeFs from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalRosterFixture } from './timeweb-canonical-roster.fixture.js';
+import { canonicalArtifactArchive } from './timeweb-beta-activation-inputs.fixture.js';
 import { ownerDirectedTestChoices } from './timeweb-owner-directed-fixture.js';
 import { OWNER_OPERATION, FRESH_BACKUP_OPERATION } from './timeweb-roster-alert-waiver.js';
 import {
@@ -730,11 +731,18 @@ it.each([
       sealFault = 0,
       sealedCount = 0;
     let lastLinked = '';
+    let archiveFault = '',
+      archiveReads = 0;
     const stat = (path: string) => ({
-      uid: path === inputPath && inputFault === 'owner' ? 1 : 0,
+      uid:
+        (path === inputPath && inputFault === 'owner') ||
+        (path.endsWith('canonical-artifact.zip') && archiveFault === 'owner')
+          ? 1
+          : 0,
       gid: 0,
       mode:
-        path === inputPath && inputFault === 'mode'
+        (path === inputPath && inputFault === 'mode') ||
+        (path.endsWith('canonical-artifact.zip') && archiveFault === 'mode')
           ? 0o644
           : files.has(path)
             ? path === composePath ||
@@ -743,14 +751,26 @@ it.each([
               ? 0o644
               : 0o600
             : 0o700,
-      nlink: path === inputPath && inputFault === 'hardlink' ? 2 : 1,
-      ino: path === inputPath && inputOpened && inputFault === 'open-race' ? 2 : 1,
+      nlink:
+        (path === inputPath && inputFault === 'hardlink') ||
+        (path.endsWith('canonical-artifact.zip') && archiveFault === 'hardlink')
+          ? 2
+          : 1,
+      ino:
+        (path === inputPath && inputOpened && inputFault === 'open-race') ||
+        (path.endsWith('canonical-artifact.zip') &&
+          archiveFault === 'inode-race' &&
+          archiveReads > 0)
+          ? 2
+          : 1,
       dev: 1,
       size:
         path === inputPath && inputFault === 'oversize'
           ? 16 * 1024 * 1024 + 1
           : (files.get(path)?.length ?? 0),
-      isSymbolicLink: () => path === inputPath && inputFault === 'symlink',
+      isSymbolicLink: () =>
+        (path === inputPath && inputFault === 'symlink') ||
+        (path.endsWith('canonical-artifact.zip') && archiveFault === 'symlink'),
       isDirectory: () => !files.has(path),
       isFile: () => files.has(path),
     });
@@ -794,10 +814,18 @@ it.each([
             throw Error('V1 monitoring forbidden in waiver profile');
           const value = files.get(name);
           if (!value) throw Error('unexpected fixture read:' + name);
+          if (name.endsWith('canonical-artifact.zip')) archiveReads++;
           if (name === inputPath && inputFault === 'read-race')
             put(name, Buffer.concat([value, Buffer.from(' ')]));
           return value;
         },
+        readdirSync: (path: string) => [
+          ...new Set(
+            [...files.keys()]
+              .filter((p) => p.startsWith(path + '/'))
+              .map((p) => p.slice(path.length + 1).split('/')[0]!),
+          ),
+        ],
         readSync: (fd: number, buffer: Buffer, offset: number, length: number, position: number) =>
           files.get(descriptors.get(fd)!)!.copy(buffer, offset, position, position + length),
         closeSync: (fd: number) => descriptors.delete(fd),
@@ -1141,6 +1169,20 @@ it.each([
         hb.secretHashes = b.secretHashes;
         const hid = hb.installedReleaseId,
           htx = `${root}/backups/${hid}-api-web`;
+        const nativeFs = await vi.importActual<typeof NativeFs>('node:fs');
+        const historicalManifest = nativeFs.readFileSync(
+          new URL('./fixtures/timeweb-release-manifest-4b8dbaa1.json', import.meta.url),
+        );
+        const historicalArchive = canonicalArtifactArchive(
+          historicalManifest.toString(),
+          `${hash(historicalManifest)}  release-manifest.json\n`,
+        );
+        put(
+          `${source}/deploy/timeweb/base-images.lock.json`,
+          nativeFs.readFileSync(
+            new URL('../deploy/timeweb/base-images.lock.json', import.meta.url),
+          ),
+        );
         const hop = {
           ...op,
           candidateSha: hb.sourceSha,
@@ -1149,6 +1191,7 @@ it.each([
           sourceCiRunId: hb.sourceCiRunId,
           publicationRunId: hb.publicationRunId,
           artifactId: hb.artifactId,
+          artifactDigest: `sha256:${hash(historicalArchive)}`,
           manifestSha256: hb.manifestSha256,
           expiresAt: '2026-11-16T11:00:00.000Z',
         };
@@ -1181,7 +1224,6 @@ it.each([
           installedBaselineSha256: hash(hd),
           ...waiverProfile.ownerDirectedReceipt(hp.monitoring),
         };
-        const nativeFs = await vi.importActual<typeof NativeFs>('node:fs');
         const hf: Record<string, Buffer> = {};
         for (const name of [
           'FRESH_DUMP_INTEGRITY_VERIFIED.json',
@@ -1209,9 +1251,8 @@ it.each([
           'rollout-receipt.json': json(hr),
           'installed-components.env': hd,
           'backup.complete': Buffer.from(hash(json(hp)) + '\n'),
-          'release-manifest.json': nativeFs.readFileSync(
-            new URL('./fixtures/timeweb-release-manifest-4b8dbaa1.json', import.meta.url),
-          ),
+          'release-manifest.json': historicalManifest,
+          'canonical-artifact.zip': historicalArchive,
         });
         for (const name of ['candidate', 'previous-api', 'previous-worker', 'previous-web'])
           hf[name + '.env'] = Buffer.from(controller.overlayBytes(hp, name));
@@ -1234,14 +1275,17 @@ it.each([
           beforeRows = structuredClone(rows);
         try {
           put(`${htx}/database.pgcustom`, dump);
-          for (const [name, bytes] of Object.entries(hf))
+          for (const [name, bytes] of Object.entries(hf)) {
+            if (name === 'release-manifest.json') continue; // Derived in memory, absent on the actual V4 filesystem.
             put(
-              (name.endsWith('.env') && name === 'installed-components.env') ||
-                name === 'release-manifest.json'
+              name === 'installed-components.env'
                 ? `${root}/releases/${hid}/${name}`
-                : `${htx}/${name}`,
+                : name === 'canonical-artifact.zip'
+                  ? `${root}/releases/${hid}/artifact/${name}`
+                  : `${htx}/${name}`,
               bytes,
             );
+          }
           for (const service of ['api', 'worker', 'web', 'realtime']) {
             const row = rows[service]!,
               c = hb.containers[service]!;
@@ -1266,7 +1310,72 @@ it.each([
               },
             ]),
           );
+          expect(files.has(`${root}/releases/${hid}/release-manifest.json`)).toBe(false);
+          expect(controller.readCanonicalPredecessorManifest(hb)).toEqual(historicalManifest);
           expect(controller.attestCanonicalBaseline(hb).bytes).toEqual(hd);
+          const archivePath = `${root}/releases/${hid}/artifact/canonical-artifact.zip`;
+          const preserved = new Map(files),
+            writesBefore = [...filesystemWrites];
+          for (const bad of [
+            undefined,
+            Buffer.from('changed'),
+            canonicalArtifactArchive(historicalManifest.toString(), 'wrong checksum'),
+            canonicalArtifactArchive(
+              historicalManifest.toString(),
+              `${hash(historicalManifest)}  release-manifest.json\n`,
+              [['foreign', Buffer.from('x')]],
+            ),
+          ]) {
+            if (bad) put(archivePath, bad);
+            else files.delete(archivePath);
+            expect(() => controller.readCanonicalPredecessorManifest(hb)).toThrow();
+          }
+          put(archivePath, historicalArchive);
+          for (const fault of ['owner', 'mode', 'hardlink', 'symlink', 'inode-race']) {
+            archiveFault = fault;
+            archiveReads = 0;
+            expect(() => controller.readCanonicalPredecessorManifest(hb), fault).toThrow();
+          }
+          archiveFault = '';
+          archiveReads = 0;
+          // Rebind the synthetic historical operation so parser negatives reach inventory/checksum checks.
+          for (const [bad, reason] of [
+            [canonicalArtifactArchive(historicalManifest.toString(), 'wrong'), 'archive_checksum'],
+            [
+              canonicalArtifactArchive(
+                '{}',
+                `${hash(historicalManifest)}  release-manifest.json\n`,
+              ),
+              'archive_checksum',
+            ],
+            ...['foreign', 'release-manifest.json', '../release-manifest.json'].map(
+              (name) =>
+                [
+                  canonicalArtifactArchive(
+                    historicalManifest.toString(),
+                    `${hash(historicalManifest)}  release-manifest.json\n`,
+                    [[name, Buffer.from('x')]],
+                  ),
+                  'canonical_artifact_inventory',
+                ] as const,
+            ),
+          ] as const) {
+            const changedOp = { ...hop, artifactDigest: `sha256:${hash(bad)}` };
+            Reflect.set(changedOp, 'ownerDecisions', ownerDirectedTestChoices(changedOp));
+            const changedBytes = json(changedOp),
+              changedBaseline = { ...hb, operationSha256: hash(changedBytes) };
+            expect(() =>
+              controller.validateCanonicalPredecessorArchive(changedBaseline, changedBytes, bad),
+            ).toThrow(reason);
+          }
+          put(`${root}/releases/${hid}/release-manifest.json`, historicalManifest);
+          expect(() => controller.readCanonicalPredecessorManifest(hb)).toThrow(
+            'release_inventory',
+          );
+          files.delete(`${root}/releases/${hid}/release-manifest.json`);
+          expect(controller.readCanonicalPredecessorManifest(hb)).toEqual(historicalManifest);
+          expect(files).toEqual(preserved);
+          expect(filesystemWrites).toEqual(writesBefore);
           const runtimeBefore = rows.worker!.Config.Labels['org.opencontainers.image.revision'];
           rows.worker!.Config.Labels['org.opencontainers.image.revision'] = null;
           expect(() => controller.attestCanonicalBaseline(hb)).toThrow();
@@ -1290,6 +1399,7 @@ it.each([
           'backup-operation.json',
           'database-backup-receipt.json',
           'release-manifest.json',
+          'canonical-artifact.zip',
           'legacy-predecessor-attestation.json',
           'legacy-release.env',
           'backup.complete',

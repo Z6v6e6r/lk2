@@ -30,7 +30,10 @@ import {
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
-import { validateTimewebRuntimeSecretPaths } from './render-timeweb-beta-release-env.js';
+import {
+  validateTimewebRuntimeSecretPaths,
+  extractCanonicalArtifactPair,
+} from './render-timeweb-beta-release-env.js';
 import { validateInstalledApiWorkerEvidence } from './timeweb-api-worker-contract.js';
 import { verifySourceCi } from './verify-source-ci.js';
 import { parseStrictJson } from './strict-json.js';
@@ -719,10 +722,10 @@ export function normalizeUpgradeHardlink(path, expectedUid = 0, expectedGid = 0)
   if (lstatSync(path).nlink !== 1) fail('atomic_twin_changed');
   return true;
 }
-function read(path, mode = 0o600, max = 4 * 1024 * 1024) {
+function read(path, mode = 0o600, max = 4 * 1024 * 1024, normalizeAtomicTwin = true) {
   if (path.startsWith(ROOT + '/')) {
     secure(dirname(path));
-    normalizeUpgradeHardlink(path);
+    if (normalizeAtomicTwin) normalizeUpgradeHardlink(path);
   }
   const before = secure(path, mode);
   if (!before.isFile() || before.size > max) fail('invalid_file');
@@ -2177,6 +2180,72 @@ export function readLegacyPredecessor(op, recovering = false) {
       fail('legacy_build_record_drift');
   return { path, bytes, values, secretSetReleaseId: legacy.secretSetReleaseId };
 }
+/** The V4 stager retains the original ZIP, never an extracted manifest file. */
+export function validateCanonicalPredecessorArchive(baseline, operationBytes, archiveBytes) {
+  const b = validateCanonicalBaseline(baseline);
+  const op = validateProductionCutover(parseStrictJson(operationBytes));
+  if (
+    hash(operationBytes) !== b.operationSha256 ||
+    op.schema !== 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4' ||
+    op.candidateSha !== b.sourceSha ||
+    op.candidateTree !== b.sourceTree ||
+    op.sourceCiRunId !== b.sourceCiRunId ||
+    op.publicationRunId !== b.publicationRunId ||
+    op.artifactId !== b.artifactId ||
+    op.manifestSha256 !== b.manifestSha256 ||
+    `sha256:${hash(archiveBytes)}` !== op.artifactDigest
+  )
+    fail('canonical_predecessor_archive_binding');
+  const pair = extractCanonicalArtifactPair(archiveBytes);
+  const bytes = pair.get('release-manifest.json'),
+    checksum = pair.get('release-manifest.sha256');
+  if (
+    hash(bytes) !== b.manifestSha256 ||
+    !checksum.equals(Buffer.from(`${b.manifestSha256}  release-manifest.json\n`))
+  )
+    fail('canonical_predecessor_archive_checksum');
+  const manifest = parseStrictJson(bytes);
+  validateCanonicalManifest(manifest, {
+    expectedPublication: {
+      workflowSha: b.sourceSha,
+      runId: b.publicationRunId,
+      runAttempt: '1',
+    },
+    expectedBaseLockPath: `${SOURCE}/deploy/timeweb/base-images.lock.json`,
+  });
+  if (manifest.gitCommit !== b.sourceSha || manifest.gitTree !== b.sourceTree)
+    fail('canonical_predecessor_archive_source');
+  return bytes;
+}
+export function readCanonicalPredecessorManifest(baseline) {
+  const b = validateCanonicalBaseline(baseline),
+    directory = `${ROOT}/releases/${b.installedReleaseId}`;
+  secure(directory, 0o700);
+  secure(`${directory}/artifact`, 0o700);
+  if (
+    !equal(readdirSync(directory).sort(), ['artifact', 'installed-components.env']) ||
+    !equal(readdirSync(`${directory}/artifact`).sort(), ['canonical-artifact.zip'])
+  )
+    fail('canonical_predecessor_release_inventory');
+  const path = `${directory}/artifact/canonical-artifact.zip`;
+  // Reject links directly: this historical reader must never normalize or write old custody.
+  const before = secure(path, 0o600);
+  const archive = read(path, 0o600, 4 * 1024 * 1024, false),
+    operation = read(
+      `${ROOT}/backups/${b.installedReleaseId}-api-web/operation.json`,
+      0o600,
+      4 * 1024 * 1024,
+      false,
+    );
+  const bytes = validateCanonicalPredecessorArchive(b, operation, archive);
+  const after = secure(path, 0o600);
+  if (
+    ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].some((k) => before[k] !== after[k]) ||
+    !archive.equals(read(path, 0o600, 4 * 1024 * 1024, false))
+  )
+    fail('canonical_predecessor_archive_race');
+  return bytes;
+}
 /** Forward-only live admission. A retained historical predecessor never calls this function. */
 export function attestCanonicalBaseline(baseline) {
   const b = validateCanonicalBaseline(baseline);
@@ -2195,8 +2264,7 @@ export function attestCanonicalBaseline(baseline) {
     hash(installed.bytes) !== b.installedDescriptorSha256 ||
     installed.secretSetReleaseId !== b.secretSetReleaseId ||
     installed.values.PHUB_COMPONENT_ROLLOUT_KIND !== OWNER_KIND ||
-    hash(read(`${ROOT}/releases/${b.installedReleaseId}/release-manifest.json`)) !==
-      b.manifestSha256 ||
+    hash(readCanonicalPredecessorManifest(b)) !== b.manifestSha256 ||
     git(['rev-parse', `${b.sourceSha}^{tree}`]) !== b.sourceTree ||
     Object.entries(files).some(([k, name]) => hash(read(`${transaction}/${name}`)) !== b[k]) ||
     hash(JSON.stringify(excluded(['api', 'worker', 'web']))) !== b.excludedSha256 ||
@@ -2274,6 +2342,7 @@ export function validateCanonicalHistoricalArtifacts(baseline, files) {
     'snapshot-witness.json',
     'installed-components.env',
     'release-manifest.json',
+    'canonical-artifact.zip',
   ];
   exact(files, names);
   if (
@@ -2282,6 +2351,14 @@ export function validateCanonicalHistoricalArtifacts(baseline, files) {
     )
   )
     fail('canonical_history_size');
+  if (
+    !validateCanonicalPredecessorArchive(
+      b,
+      files['operation.json'],
+      files['canonical-artifact.zip'],
+    ).equals(files['release-manifest.json'])
+  )
+    fail('canonical_history_derived_manifest');
   const opBytes = files['operation.json'],
     planBytes = files['plan.json'],
     descriptor = files['installed-components.env'];
