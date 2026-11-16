@@ -90,6 +90,35 @@ export interface LegacyGameExactRepairFence {
   readonly sourceVersion: string;
   readonly syncSourceVersion: string;
   readonly playerMappingsSha256: string;
+  /** Explicit exact replacement; never inferred from the batch removal flag. */
+  readonly replacement?: {
+    readonly participationsSha256: string;
+    readonly retainedParticipationIdsSha256: string;
+  };
+}
+
+export type ExactRosterParticipation = readonly [string, string, string, string, string];
+
+/** Shared private preimage for the read-only plan and the row-locked writer. */
+export function exactRosterParticipations(value: unknown): readonly ExactRosterParticipation[] {
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (row: unknown) =>
+        !Array.isArray(row) ||
+        row.length !== 5 ||
+        row.some((field: unknown) => typeof field !== 'string' || !field),
+    )
+  )
+    throw new Error('LEGACY_GAME_EXACT_REPAIR_PARTICIPATIONS');
+  const rows = value as ExactRosterParticipation[];
+  if (new Set(rows.map((row) => row[0])).size !== rows.length)
+    throw new Error('LEGACY_GAME_EXACT_REPAIR_PARTICIPATIONS');
+  return [...rows].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+}
+
+export function exactRosterValueSha256(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
 export interface LegacyGameExactPlayerMapping {
@@ -1610,6 +1639,30 @@ async function synchronizeOne(
  * the existing mirror contract (the state row must already be `MIRROR`); `upsert` is the audited
  * repair path, where an operator has accepted the source roster for a quarantined game.
  */
+async function readExactParticipations(
+  client: PoolClient,
+  tenantId: string,
+  gameId: string,
+  lock: boolean,
+): Promise<readonly ExactRosterParticipation[]> {
+  const result = await client.query<
+    {
+      id: string;
+      user_id: string;
+      role: string;
+      state: string;
+      payment_state: string;
+    } & QueryResultRow
+  >(
+    `select id,user_id,role,state,payment_state from games.participations
+      where tenant_id=$1 and game_id=$2 order by id${lock ? ' for update' : ''}`,
+    [tenantId, gameId],
+  );
+  return exactRosterParticipations(
+    result.rows.map((p) => [p.id, p.user_id, p.role, p.state, p.payment_state]),
+  );
+}
+
 async function applySourceRoster(
   client: PoolClient,
   input: {
@@ -1624,6 +1677,10 @@ async function applySourceRoster(
     readonly stateWrite: 'mirror-only' | 'upsert';
     readonly verifiedParticipantUsers?: ReadonlyMap<string, string>;
     readonly playerMappingsSha256?: string;
+    readonly exactReplacement?: {
+      readonly before: readonly ExactRosterParticipation[];
+      readonly retainedParticipationIdsSha256: string;
+    };
   },
 ): Promise<{ readonly nextRevision: number; readonly activeParticipantCount: number }> {
   const sourceUsers = new Map<
@@ -1756,6 +1813,34 @@ async function applySourceRoster(
     );
   }
   const projectionEventId = randomUUID();
+  let replacementAudit: Record<string, unknown> | undefined;
+  if (input.exactReplacement) {
+    const after = await readExactParticipations(client, input.tenantId, input.game.id, false);
+    const byId = new Map(after.map((p) => [p[0], p]));
+    const retired = input.exactReplacement.before.filter(
+      (p) => p[3] === 'ACTIVE' && !sourceByUserId.has(p[1]),
+    );
+    for (const before of input.exactReplacement.before) {
+      const actual = byId.get(before[0]);
+      const expectedState = retired.some((p) => p[0] === before[0]) ? 'LEFT' : before[3];
+      if (
+        !actual ||
+        actual[1] !== before[1] ||
+        actual[4] !== before[4] ||
+        actual[3] !== expectedState ||
+        (expectedState === 'LEFT' && actual[2] !== before[2]) ||
+        (before[3] !== 'ACTIVE' && actual[2] !== before[2])
+      )
+        throw new Error('LEGACY_GAME_EXACT_REPAIR_RETENTION');
+    }
+    replacementAudit = {
+      participationsBeforeSha256: exactRosterValueSha256(input.exactReplacement.before),
+      participationsAfterSha256: exactRosterValueSha256(after),
+      retainedParticipationIdsSha256: input.exactReplacement.retainedParticipationIdsSha256,
+      retainedParticipationCount: retired.length,
+      retainedPaidParticipationCount: retired.filter((p) => p[4] === 'PAID').length,
+    };
+  }
   const event = gameDomainEventSchema.parse({
     id: projectionEventId,
     type: 'game.scheduled.v1',
@@ -1802,6 +1887,7 @@ async function applySourceRoster(
         activeParticipantCount: sourceUsers.size,
         revision: nextRevision,
         ...(input.playerMappingsSha256 ? { playerMappingsSha256: input.playerMappingsSha256 } : {}),
+        ...(replacementAudit ? { replacement: replacementAudit } : {}),
       }),
     ],
   );
@@ -1845,10 +1931,22 @@ async function rebaselineOne(
     );
     const mapping = mappings[0];
     if (!mapping) return { outcome: 'skipped' as const };
+    if (
+      input.expected?.replacement &&
+      mappings.some((m) => m.internal_id !== input.expected!.gameId)
+    )
+      throw new Error('LEGACY_GAME_EXACT_REPAIR_DRIFT');
     const gameId = await canonicalRedirectTarget(client, input.tenantId, mapping.internal_id);
-    const game = await queryOne<LegacyGameRow>(
+    const game = await queryOne<
+      LegacyGameRow & {
+        starts_at: Date | string;
+        ends_at: Date | string;
+        capacity: number;
+        before_start: boolean;
+      }
+    >(
       client,
-      `select id, revision, organizer_user_id, lifecycle_state
+      `select id, revision, organizer_user_id, lifecycle_state, starts_at, ends_at, capacity, starts_at > clock_timestamp() as before_start
          from games.games where tenant_id = $1 and id = $2 for update`,
       [input.tenantId, gameId],
     );
@@ -1881,6 +1979,7 @@ async function rebaselineOne(
     )
       return { outcome: 'skipped' as const };
     let verifiedParticipantUsers: ReadonlyMap<string, string> | undefined;
+    let replacementBefore: readonly ExactRosterParticipation[] | undefined;
     if (input.expected) {
       const aliasIds = [
         ...new Set(
@@ -1915,6 +2014,44 @@ async function rebaselineOne(
       )
         throw new Error('LEGACY_GAME_EXACT_REPAIR_DRIFT');
       verifiedParticipantUsers = identity.users;
+      if (input.expected.replacement) {
+        const ids = [...new Set(identity.users.values())].sort();
+        const accounts = await client.query<{ id: string } & QueryResultRow>(
+          "select id from identity.users where tenant_id=$1 and id=any($2::uuid[]) and status='ACTIVE' order by id for share",
+          [input.tenantId, ids],
+        );
+        const profiles = await client.query<{ user_id: string } & QueryResultRow>(
+          'select user_id from profile.user_summaries where tenant_id=$1 and user_id=any($2::uuid[]) order by user_id for share',
+          [input.tenantId, ids],
+        );
+        if (accounts.rows.length !== ids.length || profiles.rows.length !== ids.length)
+          throw new Error('LEGACY_GAME_EXACT_REPAIR_IDENTITY');
+        if (
+          game.before_start !== true ||
+          input.snapshot.participants.length < 1 ||
+          input.snapshot.participants.length > input.snapshot.capacity ||
+          input.snapshot.capacity !== Number(game.capacity) ||
+          Date.parse(input.snapshot.startsAt) !== new Date(game.starts_at).getTime() ||
+          Date.parse(input.snapshot.endsAt) !== new Date(game.ends_at).getTime()
+        )
+          throw new Error('LEGACY_GAME_EXACT_REPAIR_SCHEDULE');
+        const reservations = await client.query(
+          "select id from games.seat_reservations where tenant_id=$1 and game_id=$2 and state='ACTIVE' limit 1 for update",
+          [input.tenantId, game.id],
+        );
+        const waitlist = await client.query(
+          "select id from games.waitlist_entries where tenant_id=$1 and game_id=$2 and state='ACTIVE' limit 1 for update",
+          [input.tenantId, game.id],
+        );
+        if (reservations.rows.length || waitlist.rows.length)
+          throw new Error('LEGACY_GAME_EXACT_REPAIR_PENDING_CAPACITY');
+        replacementBefore = await readExactParticipations(client, input.tenantId, game.id, true);
+        if (
+          exactRosterValueSha256(replacementBefore) !==
+          input.expected.replacement.participationsSha256
+        )
+          throw new Error('LEGACY_GAME_EXACT_REPAIR_DRIFT');
+      }
     }
     const currentParticipants = await client.query<ActiveParticipantRow>(
       `select p.id, p.user_id, p.role, p.payment_state, player.external_id
@@ -1934,6 +2071,32 @@ async function rebaselineOne(
     const removable = participants.filter(
       (participant) => !participant.external_id || !sourceExternalIds.has(participant.external_id),
     );
+    if (input.expected?.replacement) {
+      const retainedIds = removable.map((p) => p.id).sort();
+      if (
+        !retainedIds.length ||
+        exactRosterValueSha256(retainedIds) !==
+          input.expected.replacement.retainedParticipationIdsSha256
+      )
+        throw new Error('LEGACY_GAME_EXACT_REPAIR_DRIFT');
+      const payments = new Map(
+        input.snapshot.participants.map((p) => [
+          verifiedParticipantUsers!.get(p.externalId),
+          p.paymentState,
+        ]),
+      );
+      if (
+        input.snapshot.participants.some(
+          (p) => !['PAID', 'NOT_REQUIRED'].includes(p.paymentState),
+        ) ||
+        participants.some(
+          (p) =>
+            !['PAID', 'NOT_REQUIRED'].includes(p.payment_state) ||
+            (payments.has(p.user_id) && payments.get(p.user_id) !== p.payment_state),
+        )
+      )
+        throw new Error('LEGACY_GAME_EXACT_REPAIR_PAYMENT_STATE');
+    }
     if (removable.length > 0 && !input.allowLocalRemovals) {
       await recordRosterConflict(client, {
         tenantId: input.tenantId,
@@ -1950,6 +2113,14 @@ async function rebaselineOne(
         removableParticipantCount: removable.length,
       };
     }
+    if (input.expected?.replacement) {
+      const timing = await queryOne<{ before_start: boolean } & QueryResultRow>(
+        client,
+        'select clock_timestamp() < $1::timestamptz as before_start',
+        [game.starts_at],
+      );
+      if (timing?.before_start !== true) throw new Error('LEGACY_GAME_EXACT_REPAIR_SCHEDULE');
+    }
     await applySourceRoster(client, {
       tenantId: input.tenantId,
       game,
@@ -1958,12 +2129,23 @@ async function rebaselineOne(
       now: input.now,
       currentParticipants: participants,
       auditAction: 'GAME_PARTICIPANTS_REBASELINED_FROM_LEGACY_SNAPSHOT',
-      auditReason: input.allowLocalRemovals
-        ? 'OPERATOR_REPAIR_WITH_LOCAL_REMOVALS'
-        : 'OPERATOR_REPAIR_ADDITIVE',
+      auditReason: input.expected?.replacement
+        ? 'OPERATOR_EXACT_SOURCE_REPLACEMENT'
+        : input.allowLocalRemovals
+          ? 'OPERATOR_REPAIR_WITH_LOCAL_REMOVALS'
+          : 'OPERATOR_REPAIR_ADDITIVE',
       stateWrite: 'upsert',
       ...(verifiedParticipantUsers
         ? { verifiedParticipantUsers, playerMappingsSha256: input.expected!.playerMappingsSha256 }
+        : {}),
+      ...(replacementBefore && input.expected?.replacement
+        ? {
+            exactReplacement: {
+              before: replacementBefore,
+              retainedParticipationIdsSha256:
+                input.expected.replacement.retainedParticipationIdsSha256,
+            },
+          }
         : {}),
     });
     return { outcome: 'rebaselined' as const, gameId: game.id };
@@ -2223,7 +2405,15 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
     },
 
     async rebaselineParticipants(input) {
-      if (input.expected && (input.snapshots.length !== 1 || input.allowLocalRemovals === true))
+      if (
+        input.expected &&
+        (input.snapshots.length !== 1 ||
+          (input.allowLocalRemovals === true) !== Boolean(input.expected.replacement) ||
+          (input.expected.replacement &&
+            (Object.keys(input.expected.replacement).sort().join(',') !==
+              'participationsSha256,retainedParticipationIdsSha256' ||
+              Object.values(input.expected.replacement).some((v) => !/^[a-f0-9]{64}$/.test(v)))))
+      )
         throw new Error('LEGACY_GAME_EXACT_REPAIR_SCOPE');
 
       const tenant = (

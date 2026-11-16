@@ -641,6 +641,40 @@ function mapLegacyGameReminder(raw: RawLegacyGame): LegacyGameSourceSnapshot | u
   };
 }
 
+/** Destructive exact recovery must prove every source seat, rather than inheriting the generic
+ * mapper's synthetic PAID default or its capacity truncation. Unknown statuses are not payment proof.
+ * Reject the entire source; filtering would incorrectly retire a current participant. */
+function mapExactPaidRoster(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined {
+  if (raw.status !== 'PAID' || raw.organizer?.status !== 'PAID' || !Array.isArray(raw.participants))
+    return undefined;
+  const organizerId = stringValue(raw.organizer.id);
+  if (!organizerId) return undefined;
+  const organizer = participant(raw.organizer, organizerId);
+  if (!organizer) return undefined;
+  const players = new Map([[organizerId, organizer]]);
+  let organizerRepeated = false;
+  for (const player of raw.participants as readonly RawParticipant[]) {
+    if (!player || typeof player !== 'object' || player.status !== 'PAID') return undefined;
+    const mapped = participant(player, organizerId);
+    if (!mapped) return undefined;
+    const previous = players.get(mapped.externalId);
+    if (previous) {
+      if (
+        mapped.externalId !== organizerId ||
+        organizerRepeated ||
+        JSON.stringify(previous) !== JSON.stringify(mapped)
+      )
+        return undefined;
+      organizerRepeated = true;
+    } else players.set(mapped.externalId, mapped);
+  }
+  const capacity = stringValue(raw.metadata?.gameFormat) === 'singles' ? 2 : 4;
+  if (players.size > capacity) return undefined;
+  const snapshot = mapLegacyGame(raw);
+  if (!snapshot || snapshot.participants.length !== players.size) return undefined;
+  return snapshot;
+}
+
 function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -792,6 +826,7 @@ export class LegacyGamesMongoAdapter {
   public async readRosterByExternalIds(input: {
     readonly externalIds: readonly string[];
     readonly limit: number;
+    readonly requirePaidRosterProof?: boolean;
   }): Promise<readonly LegacyGameSourceSnapshot[]> {
     const ids = input.externalIds;
     if (
@@ -818,6 +853,7 @@ export class LegacyGamesMongoAdapter {
       limit: input.limit + 1,
       sort: { _id: 1 },
       strict: true,
+      ...(input.requirePaidRosterProof ? { exactPaidRoster: true } : {}),
     });
     if (snapshots.length > input.limit) throw new Error('LEGACY_GAMES_SOURCE_LIMIT_EXCEEDED');
     return snapshots.map(normalizeMongoSnapshot);
@@ -1020,6 +1056,7 @@ export class LegacyGamesMongoAdapter {
     readonly viewerPhoneE164?: string;
     readonly strict?: boolean;
     readonly reminderOnly?: boolean;
+    readonly exactPaidRoster?: boolean;
   }): Promise<readonly LegacyGameSourceSnapshot[]> {
     const attempts = this.options.maxAttempts ?? 2;
     const sleep = this.options.sleep ?? defaultSleep;
@@ -1050,9 +1087,11 @@ export class LegacyGamesMongoAdapter {
           .limit(input.limit)
           .toArray();
         const snapshots = rows.flatMap((row) => {
-          const mapped = input.reminderOnly
-            ? mapLegacyGameReminder(row)
-            : mapLegacyGame(row, input.viewerPhoneE164);
+          const mapped = input.exactPaidRoster
+            ? mapExactPaidRoster(row)
+            : input.reminderOnly
+              ? mapLegacyGameReminder(row)
+              : mapLegacyGame(row, input.viewerPhoneE164);
           if (!mapped && input.strict) throw new Error('LEGACY_GAMES_SOURCE_ROW_INVALID');
           return mapped ? [mapped] : [];
         });

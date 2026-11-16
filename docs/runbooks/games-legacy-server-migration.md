@@ -122,7 +122,7 @@ backup/restore, source identity, monitoring and rollback prerequisites.
    Reminder snapshots omit participants and are never accepted for this operation. Public-source
    fallback, redirects, cancelled/empty/ambiguous/truncated sources and non-baseline conflicts stop.
 3. Review the returned plan SHA-256, canonical Game and count against the approved preimage/source.
-   Apply with the same target/operation and `--plan-sha <reviewed hash>`. Exact mode forbids local
+   Apply with the same target/operation and `--plan-sha <reviewed hash>`. Default exact mode forbids local
    removals, checks the plan before writing and fences Game/sync revision and source versions again
    under the transaction lock. The plan also binds every existing player-alias/account mapping. Exact recovery locks and rechecks
    those identities before writing; unbound, conflicted or repointed aliases stop. No account or
@@ -143,3 +143,59 @@ backup/restore, source identity, monitoring and rollback prerequisites.
    audited readback with no automatic retry. Redacted source outcome/duration metrics retain the
    operation ID. Compensating rollback bumps revision and emits an audit/outbox event; never delete
    accounts, audit/outbox history or decrement a Game revision.
+
+### Explicit source-roster replacement
+
+When an operator has reviewed a specific source roster and the default exact repair returns
+`LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL`, a separate exact replacement mode can retain
+old participation rows as `LEFT` and make the source participants `ACTIVE`. This is a live roster
+mutation requiring exact Game/source/preimage approval; choosing which roster is correct does not
+itself approve executing the replacement. Prepare and review the plan before requesting execution.
+
+- Plan with the same exact target arguments plus `--replace-source-roster --plan`.
+- Apply only the reviewed plan with `--replace-source-roster --plan-sha <reviewed hash>
+--confirm REPLACE_SOURCE_ROSTER_KEEP_ACCOUNTS_AND_PAYMENTS`. The confirmation is an operator
+  acknowledgement, not an authorization credential. `--limit`, batch `--allow-local-removals`,
+  duplicate options and confirmation on a read-only plan are rejected.
+- The Game must still be `SCHEDULED` and strictly before its canonical start. Source and canonical
+  start/end/capacity must match. The source must be complete, uncancelled and fit capacity; all source
+  and current active payment states must be `PAID` or `NOT_REQUIRED`. An overlapping participant's
+  payment state must remain identical. The transaction checks server time again after taking locks.
+- Replacement requests opt into strict primary/majority roster reading. The raw game, organizer and
+  every raw participant must explicitly be `PAID`; generic mapper defaults are not payment proof.
+  Missing/unknown/`ACTIVE`/pending/cancelled participant statuses, malformed rows, non-array rosters,
+  conflicting duplicates and over-capacity sources stop the entire read instead of dropping or
+  truncating participants. One identical paid organizer repeated in the array represents the same
+  seat. Verify this raw-status evidence for the selected live source before execution; do not infer
+  it from a generic snapshot whose mapper synthesizes `paymentState: PAID`.
+- Every source alias must already resolve bijectively to an active existing account with an existing
+  profile. No account, profile, player mapping or payment is created, rewritten or merged. Game alias
+  disagreement, changed bindings, missing identities, changed revisions, any participation tuple
+  change, or source/sync version drift stops the operation.
+- Any `ACTIVE` seat reservation (including an expired one) or `ACTIVE` waitlist entry stops the plan
+  and the locked writer. This operation does not confirm, cancel, expire or promote pending seats.
+- The plan binds all existing participation IDs, users, roles, states and payment states. The writer
+  locks and rechecks that preimage. Missing source members become `LEFT` with the same participation
+  ID, user, role and payment state. Existing non-active rows stay unchanged. No rows or accounts are
+  deleted, and there is no refund, payment/provider call or result/rating/lifecycle change.
+- One transaction advances the Game revision once, returns sync ownership to `MIRROR`, and writes
+  the existing projection outbox event and success audit. Audit evidence includes before/after roster
+  digests, retained row-ID digest, retained count and retained paid-row count. A post-write retention
+  mismatch rolls the entire transaction back. These row/audit guarantees do not guarantee a visible
+  personal-history entry for the retired participants; review that product effect separately.
+- The existing `game.scheduled.v1` event also reaches messaging membership and notification consumers.
+  Downstream chat membership, lifecycle scheduling and enabled Game reminder/scenario rules can
+  therefore change for the source roster. This is not a card-only write. Review those configured
+  effects and obtain the necessary external-message authority before live execution; this mode
+  neither suppresses notifications nor bypasses their normal runtime and recipient checks.
+- After a lost acknowledgement, retain the same operation ID and reviewed hash. A single matching
+  success audit, unchanged source/mapping/revision and exact post-roster digest permit readback as
+  `ALREADY_REPAIRED` without a second mutation. A different plan for the same successful replacement
+  operation, changed post-state or a new plan request stops. Do not automatically retry an ambiguous
+  outcome, reuse a new operation ID to evade a fence, or rewind a started/finished Game.
+
+After an approved apply, verify source membership and organizer, every retained row/payment, account
+and profile preimages, one revision/audit/outbox, MIRROR and converged card projection. Verify the
+actual authenticated Web and Android reads separately. This command does not authorize merge,
+publication, deployment, replay of reminders/results, or compensating rollback. Production evidence
+must come from the reviewed immutable Worker artifact, not a locally copied script.
