@@ -432,7 +432,7 @@ function crc32(bytes) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-export function extractCanonicalArtifactPair(archiveBytes) {
+function extractCanonicalArtifactPair(archiveBytes) {
   if (archiveBytes.length > 4_194_304 || archiveBytes.length < 22)
     fail('canonical_artifact_archive_size');
   let eocd = -1;
@@ -490,10 +490,7 @@ export function extractCanonicalArtifactPair(archiveBytes) {
     let contents;
     try {
       const compressed = archiveBytes.subarray(dataStart, dataEnd);
-      contents =
-        method === 0
-          ? Buffer.from(compressed)
-          : inflateRawSync(compressed, { maxOutputLength: 1_048_576 });
+      contents = method === 0 ? Buffer.from(compressed) : inflateRawSync(compressed);
     } catch {
       fail('canonical_artifact_archive');
     }

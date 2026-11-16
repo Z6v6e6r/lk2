@@ -343,3 +343,9 @@ never from a standalone manifest file. Admission binds the archive to the hash-b
 checks the exact two-entry ZIP inventory, checksum and canonical source/publication metadata, and
 includes the ZIP itself in the historical filesystem read-set. A missing or changed ZIP fails
 closed; do not create extracted files in the old release directory to satisfy admission.
+
+The bounded historical ZIP reader belongs to the upgrade controller. Keep the deployed renderer
+byte-identical when this is the only archive-reading change: modifying its exports or imports is
+a protected runtime-definition transition. Before publication, test the complete Git delta from
+the installed API and Web source through `validateRuntimeUpgrade`, in addition to testing the PR
+delta. Do not add a runtime bridge or remove the renderer from protected paths to admit this reader.

@@ -71,3 +71,6 @@ export function validateCanonicalPredecessorArchive(
   archiveBytes: Buffer,
 ): Buffer;
 export function readCanonicalPredecessorManifest(baseline: unknown): Buffer;
+
+/** In-memory, bounded ZIP reader for retained canonical predecessor custody only. */
+export function extractCanonicalPredecessorArtifactPair(archiveBytes: Buffer): Map<string, Buffer>;

@@ -29,11 +29,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
+import { inflateRawSync } from 'node:zlib';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
-import {
-  validateTimewebRuntimeSecretPaths,
-  extractCanonicalArtifactPair,
-} from './render-timeweb-beta-release-env.js';
+import { validateTimewebRuntimeSecretPaths } from './render-timeweb-beta-release-env.js';
 import { validateInstalledApiWorkerEvidence } from './timeweb-api-worker-contract.js';
 import { verifySourceCi } from './verify-source-ci.js';
 import { parseStrictJson } from './strict-json.js';
@@ -255,6 +253,116 @@ function exact(value, keys) {
   if (!value || Array.isArray(value) || !equal(Object.keys(value).sort(), [...keys].sort()))
     fail('invalid_keys');
 }
+// Historical admission owns its bounded reader. The deployed renderer remains byte-frozen.
+function decodePredecessorArchiveUtf8(bytes) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    fail('canonical_artifact_filename');
+  }
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+export function extractCanonicalPredecessorArtifactPair(archiveBytes) {
+  if (archiveBytes.length > 4_194_304 || archiveBytes.length < 22)
+    fail('canonical_artifact_archive_size');
+  let eocd = -1;
+  const searchStart = Math.max(0, archiveBytes.length - 65_557);
+  for (let offset = archiveBytes.length - 22; offset >= searchStart; offset -= 1) {
+    if (archiveBytes.readUInt32LE(offset) === 0x06054b50) {
+      eocd = offset;
+      break;
+    }
+  }
+  if (eocd < 0) fail('canonical_artifact_archive');
+  const entryCount = archiveBytes.readUInt16LE(eocd + 10);
+  const directorySize = archiveBytes.readUInt32LE(eocd + 12);
+  const directoryOffset = archiveBytes.readUInt32LE(eocd + 16);
+  if (
+    entryCount !== 2 ||
+    archiveBytes.readUInt16LE(eocd + 8) !== entryCount ||
+    archiveBytes.readUInt16LE(eocd + 4) !== 0 ||
+    archiveBytes.readUInt16LE(eocd + 6) !== 0 ||
+    eocd + 22 + archiveBytes.readUInt16LE(eocd + 20) !== archiveBytes.length ||
+    directoryOffset + directorySize !== eocd
+  )
+    fail('canonical_artifact_inventory');
+
+  const files = new Map();
+  const ranges = [];
+  let cursor = directoryOffset;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (cursor + 46 > eocd) fail('canonical_artifact_archive');
+    if (archiveBytes.readUInt32LE(cursor) !== 0x02014b50) fail('canonical_artifact_archive');
+    const flags = archiveBytes.readUInt16LE(cursor + 8);
+    const method = archiveBytes.readUInt16LE(cursor + 10);
+    const expectedCrc = archiveBytes.readUInt32LE(cursor + 16);
+    const compressedSize = archiveBytes.readUInt32LE(cursor + 20);
+    const uncompressedSize = archiveBytes.readUInt32LE(cursor + 24);
+    const nameLength = archiveBytes.readUInt16LE(cursor + 28);
+    const extraLength = archiveBytes.readUInt16LE(cursor + 30);
+    const commentLength = archiveBytes.readUInt16LE(cursor + 32);
+    const localOffset = archiveBytes.readUInt32LE(cursor + 42);
+    if (cursor + 46 + nameLength + extraLength + commentLength > eocd)
+      fail('canonical_artifact_archive');
+    const name = decodePredecessorArchiveUtf8(
+      archiveBytes.subarray(cursor + 46, cursor + 46 + nameLength),
+    );
+    if (
+      flags & 0x1 ||
+      ![0, 8].includes(method) ||
+      !['release-manifest.json', 'release-manifest.sha256'].includes(name) ||
+      files.has(name) ||
+      uncompressedSize > 1_048_576 ||
+      localOffset + 30 > directoryOffset ||
+      archiveBytes.readUInt32LE(localOffset) !== 0x04034b50
+    )
+      fail('canonical_artifact_inventory');
+    const localNameLength = archiveBytes.readUInt16LE(localOffset + 26);
+    const localExtraLength = archiveBytes.readUInt16LE(localOffset + 28);
+    if (
+      archiveBytes.readUInt16LE(localOffset + 6) !== flags ||
+      archiveBytes.readUInt16LE(localOffset + 8) !== method ||
+      localOffset + 30 + localNameLength + localExtraLength > directoryOffset ||
+      !archiveBytes
+        .subarray(localOffset + 30, localOffset + 30 + localNameLength)
+        .equals(archiveBytes.subarray(cursor + 46, cursor + 46 + nameLength))
+    )
+      fail('canonical_artifact_archive');
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > directoryOffset) fail('canonical_artifact_archive');
+    ranges.push({ start: localOffset, end: dataEnd });
+    let contents;
+    try {
+      const compressed = archiveBytes.subarray(dataStart, dataEnd);
+      contents =
+        method === 0
+          ? Buffer.from(compressed)
+          : inflateRawSync(compressed, { maxOutputLength: 1_048_576 });
+    } catch {
+      fail('canonical_artifact_archive');
+    }
+    if (contents.length !== uncompressedSize || crc32(contents) !== expectedCrc)
+      fail('canonical_artifact_archive');
+    files.set(name, contents);
+    cursor += 46 + nameLength + extraLength + commentLength;
+  }
+  if (cursor !== directoryOffset + directorySize) fail('canonical_artifact_archive');
+  ranges.sort((a, b) => a.start - b.start);
+  if (ranges.some((range, index) => index > 0 && range.start < ranges[index - 1].end))
+    fail('canonical_artifact_archive');
+  return files;
+}
+
 export function validateApiWebOperation(value) {
   if (isProductionCutover(value)) return validateProductionCutover(value);
   if (isJoinOperation(value)) return validateJoinOperation(value);
@@ -2196,7 +2304,7 @@ export function validateCanonicalPredecessorArchive(baseline, operationBytes, ar
     `sha256:${hash(archiveBytes)}` !== op.artifactDigest
   )
     fail('canonical_predecessor_archive_binding');
-  const pair = extractCanonicalArtifactPair(archiveBytes);
+  const pair = extractCanonicalPredecessorArtifactPair(archiveBytes);
   const bytes = pair.get('release-manifest.json'),
     checksum = pair.get('release-manifest.sha256');
   if (
