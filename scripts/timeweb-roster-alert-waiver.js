@@ -14,12 +14,23 @@ export const OWNER_OPERATION = 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOV
 export const OWNER_PLAN = 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_PLAN_V4';
 export const OWNER_RECEIPT = 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_RECEIPT_V4';
 export const OWNER_KIND = 'API_WORKER_WEB_OWNER_DIRECTED_CUTOVER';
+export const CANONICAL_OPERATION = 'PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_UPGRADE_V5';
+export const CANONICAL_PLAN = 'PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_PLAN_V5';
+export const CANONICAL_RECEIPT = 'PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_RECEIPT_V5';
+export const CANONICAL_KIND = 'API_WORKER_WEB_CANONICAL_UPGRADE';
+export const CANONICAL_FRESH_OPERATION = 'PHUB_TIMEWEB_BACKUP_CANONICAL_BETA122_PRIOR_RESTORE_V1';
+export const CANONICAL_FRESH_RECEIPT = 'PHUB_TIMEWEB_CANONICAL_FRESH_DUMP_PRIOR_RESTORE_V1';
+export const CANONICAL_OWNER_POLICY =
+  'CANONICAL_OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_REPEAT_RESTORE_V1';
+export const CANONICAL_PRIOR_RESTORE_POLICY = 'EXACT_CANONICAL_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1';
+export const isCanonicalOwnerDirectedUpgrade = (op) => op?.schema === CANONICAL_OPERATION;
 export const OWNER_POLICY = 'OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_AND_REPEAT_RESTORE_V1';
 export const PROVIDER_SKIPPED = 'NOT_CHECKED_OWNER_SKIPPED';
 export const PRIOR_RESTORE_POLICY = 'EXACT_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1';
 export const FRESH_BACKUP_OPERATION = 'PHUB_TIMEWEB_BACKUP_BETA122_PRIOR_RESTORE_V3';
 export const FRESH_BACKUP_RECEIPT = 'PHUB_TIMEWEB_FRESH_DUMP_PRIOR_RESTORE_V3';
-export const isOwnerDirectedCutover = (op) => op?.schema === OWNER_OPERATION;
+export const isOwnerDirectedCutover = (op) =>
+  op?.schema === OWNER_OPERATION || isCanonicalOwnerDirectedUpgrade(op);
 export const ADMISSION_SCHEMA = 'PHUB_TIMEWEB_NATIVE_MONITOR_ADMISSION_V1';
 // Digest of the original owner instruction, including its original trailing newline.
 export const OWNER_DECISION_SHA256 =
@@ -125,8 +136,18 @@ export function ownerDirectedScopeSha256(op) {
       profile: op.profile,
       serverId: 8886471,
       projectId: 262717,
-      policy: OWNER_POLICY,
-      legacyBaselineSha256: nativeEvidenceHash(Buffer.from(JSON.stringify(op.legacyBaseline))),
+      policy: isCanonicalOwnerDirectedUpgrade(op) ? CANONICAL_OWNER_POLICY : OWNER_POLICY,
+      ...(isCanonicalOwnerDirectedUpgrade(op)
+        ? {
+            canonicalBaselineSha256: nativeEvidenceHash(
+              Buffer.from(JSON.stringify(op.canonicalBaseline)),
+            ),
+          }
+        : {
+            legacyBaselineSha256: nativeEvidenceHash(
+              Buffer.from(JSON.stringify(op.legacyBaseline)),
+            ),
+          }),
       ...Object.fromEntries(WAIVER_BINDINGS.map((key) => [key, op[key]])),
     }),
   );
@@ -173,14 +194,18 @@ export function createOwnerDirectedBinding(op, operationSha256) {
   validateOwnerDirectedDecisions(op);
   need(HASH.test(operationSha256 ?? ''), 'owner_operation_hash');
   return {
-    schema: 'PHUB_TIMEWEB_OWNER_DIRECTED_POLICY_BINDING_V1',
-    policy: OWNER_POLICY,
+    schema: isCanonicalOwnerDirectedUpgrade(op)
+      ? 'PHUB_TIMEWEB_OWNER_DIRECTED_POLICY_BINDING_V2'
+      : 'PHUB_TIMEWEB_OWNER_DIRECTED_POLICY_BINDING_V1',
+    policy: isCanonicalOwnerDirectedUpgrade(op) ? CANONICAL_OWNER_POLICY : OWNER_POLICY,
     operationSha256,
     scopeSha256: ownerDirectedScopeSha256(op),
     ownerDecisionsSha256: nativeEvidenceHash(nativeEvidenceBytes(op.ownerDecisions)),
     providerMonitoringStatus: PROVIDER_SKIPPED,
     alertTestStatus: WAIVER_STATUS,
-    restoreAdmissionPolicy: PRIOR_RESTORE_POLICY,
+    restoreAdmissionPolicy: isCanonicalOwnerDirectedUpgrade(op)
+      ? CANONICAL_PRIOR_RESTORE_POLICY
+      : PRIOR_RESTORE_POLICY,
   };
 }
 export function validateOwnerDirectedBinding(op, binding, operationSha256) {
@@ -189,9 +214,15 @@ export function validateOwnerDirectedBinding(op, binding, operationSha256) {
 }
 export function ownerDirectedReceipt(binding) {
   return {
-    ownerDecisionPolicy: OWNER_POLICY,
+    ownerDecisionPolicy:
+      binding.schema === 'PHUB_TIMEWEB_OWNER_DIRECTED_POLICY_BINDING_V2'
+        ? CANONICAL_OWNER_POLICY
+        : OWNER_POLICY,
     providerMonitoringStatus: PROVIDER_SKIPPED,
-    restoreAdmissionPolicy: PRIOR_RESTORE_POLICY,
+    restoreAdmissionPolicy:
+      binding.schema === 'PHUB_TIMEWEB_OWNER_DIRECTED_POLICY_BINDING_V2'
+        ? CANONICAL_PRIOR_RESTORE_POLICY
+        : PRIOR_RESTORE_POLICY,
     repeatRestoreStatus: 'NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED',
     alertTestStatus: WAIVER_STATUS,
     ownerDecisionsSha256: binding.ownerDecisionsSha256,

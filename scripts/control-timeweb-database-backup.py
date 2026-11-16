@@ -165,6 +165,25 @@ FRESH_SCHEMA = 'PHUB_TIMEWEB_BACKUP_BETA122_PRIOR_RESTORE_V3'
 FRESH_PLAN = 'PHUB_TIMEWEB_FRESH_DUMP_PLAN_V3'
 FRESH_RECEIPT = 'PHUB_TIMEWEB_FRESH_DUMP_PRIOR_RESTORE_V3'
 FRESH_POLICY = 'EXACT_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1'
+CANONICAL_FRESH_SCHEMA = 'PHUB_TIMEWEB_BACKUP_CANONICAL_BETA122_PRIOR_RESTORE_V1'
+CANONICAL_FRESH_PLAN = 'PHUB_TIMEWEB_CANONICAL_FRESH_DUMP_PLAN_V1'
+CANONICAL_FRESH_RECEIPT = 'PHUB_TIMEWEB_CANONICAL_FRESH_DUMP_PRIOR_RESTORE_V1'
+CANONICAL_FRESH_POLICY = 'EXACT_CANONICAL_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1'
+CANONICAL_PRIOR_SOURCE = '4b8dbaa12c1ec3fea478a5e661465955e4b0c7c0'
+CANONICAL_PRIOR_RELEASE = CANONICAL_PRIOR_SOURCE+'-43751306581-1'
+CANONICAL_HISTORY_SCHEMA = 'RETAINED_V4_ROLLOUT_BOUNDED_HISTORICAL_FRESH_TERMINAL_V1'
+
+def is_canonical_fresh(op):
+    return op.get('schema') == CANONICAL_FRESH_SCHEMA
+
+def is_fresh_operation(op):
+    return op.get('schema') in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA)
+
+def fresh_receipt_schema(op):
+    return CANONICAL_FRESH_RECEIPT if is_canonical_fresh(op) else FRESH_RECEIPT
+
+def fresh_policy(op):
+    return CANONICAL_FRESH_POLICY if is_canonical_fresh(op) else FRESH_POLICY
 RESTORE_OWNER_MESSAGE = 'Пропусти повторное пробное восстановление базы — оно уже прошло. Исправь блокер Docker Hub и продолжай выкладку, сохранив данные, учётки, настройки и передачу результатов в ЛК1.\n'
 CUTOVER_DISK_SCHEMA = 'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2'
 CUTOVER_DISK_PLAN = 'PHUB_TIMEWEB_CUTOVER_DISK_RESTORE_PLAN_V1'
@@ -288,7 +307,7 @@ def is_web8158_operation(op):
 
 
 def backup_baseline(op):
-    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or is_owner_acl_backup(op) or op.get('schema') in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA) else BASELINE
+    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or is_owner_acl_backup(op) or op.get('schema') in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA) else BASELINE
 
 NS_DAEMON_MEMORY = 2 * 1024 ** 3
 DISK_MEMORY = 2 * 1024 ** 3
@@ -308,7 +327,7 @@ def is_disk_operation(op):
 
 
 def disk_ledger_sha(op):
-    if op.get('schema') in (CUTOVER_DISK_SCHEMA,FRESH_SCHEMA):return op['expectedLedgerSha256']
+    if op.get('schema') in (CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):return op['expectedLedgerSha256']
     if is_closed_application_backup(op):return CLOSED_APPLICATION_BACKUPS[op['schema']]['ledger']
     if op['schema'] in (JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA):return JOIN_POST105_LEDGER
     return API_WORKER_PRE_LEDGER_SHA256 if op['schema'] in (DISK_PRE_SCHEMA, NS_PRE_SCHEMA) else API_WORKER_LEDGER_SHA256
@@ -2022,7 +2041,7 @@ def now_iso():
 
 
 def operation_mode(value):
-    if value.get('schema') in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA):
+    if value.get('schema') in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):
         return 'api-web', value['releaseId']
     if is_closed_application_backup(value):return closed_application_backup_mode(value), value['releaseId']
     if value['schema'] == JOIN_POST105_SCHEMA:
@@ -2097,8 +2116,17 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if isinstance(value, dict) and 'controllerPromotion' in value:
         need(schema != 'PHUB_TIMEWEB_BACKUP_OPERATION_V1', 'CONTROLLER_PROMOTION_SCHEMA')
         common += ['controllerPromotion']
-    if schema == FRESH_SCHEMA:common += ['priorRestore','ownerRestoreDecision','predecessorRuntimeSha256']
-    if schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA):
+    if schema in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):common += ['priorRestore','ownerRestoreDecision','predecessorRuntimeSha256']
+    if schema == CANONICAL_FRESH_SCHEMA:
+        exact(value,common+['profile','candidateSha','publicationRunId','releaseId','expectedLedgerSha256','expectedDatabaseTarget','predecessorAttestationSha256','canonicalBaseline','historicalReadSetSha256'])
+        mode,release_id='api-web',value['releaseId']
+        need(profile=='production' and 'controllerPromotion' not in value
+             and value['candidateSha']==value['controllerSha']==value['toolCommit']
+             and re.fullmatch(r'[1-9][0-9]*',value['publicationRunId'] or '')
+             and release_id==value['candidateSha']+'-'+value['publicationRunId']+'-1','CANONICAL_OPERATION')
+        validate_canonical_backup_baseline(value)
+        need(allow_expired or -30<=now-utc(value['canonicalBaseline']['capturedAt'])<=7200,'CANONICAL_BASELINE_AGE')
+    elif schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA):
         exact(value, common + ['profile','candidateSha','publicationRunId','releaseId','expectedLedgerSha256','expectedDatabaseTarget','predecessorAttestationSha256'])
         mode,release_id = 'api-web',value['releaseId']
         need(profile == 'production' and 'controllerPromotion' not in value
@@ -2212,7 +2240,13 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and type(row['restarts']) is int and (row['restarts'] == 0 or profile == 'beta')
              and isinstance(row['startedAt'], str), 'BASELINE')
     api, pg = value['expectedApi'], value['expectedPostgres']
-    if schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA):
+    if schema == CANONICAL_FRESH_SCHEMA:
+        need(api==value['canonicalBaseline']['containers']['api'],'CANONICAL_API_BASELINE')
+        need(pg['image']==PG_IMAGE and pg['imageId']==PG_IMAGE.split('@')[1]
+             and pg['releaseId'] is None and pg['revision'] is None,'POSTGRES_BASELINE')
+        for row in (api,pg):
+            need(re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,9}Z',row['startedAt']) is not None,'BASELINE_TIME')
+    elif schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA):
         need(re.fullmatch(r'ghcr\.io/z6v6e6r/phub-api@sha256:[a-f0-9]{64}',api['image'] or '')
              and api['imageId'] == api['image'].split('@')[1]
              and api['releaseId'] == 'lk2-beta-759083e37b40' and api['revision'] is None,
@@ -2271,10 +2305,11 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if schema == LOCATION_PHOTO_PRE0102_SCHEMA:
         confirmation = 'BACKUP_RESTORE_LOCATION_PHOTO_PRE0102_PRIVATE_NAMESPACE_KEEP_RUNTIME'
     if is_closed_application_backup(value):confirmation='BACKUP_RESTORE_'+CLOSED_APPLICATION_BACKUPS[schema]['kind'].upper()+'_PRIVATE_NAMESPACE_KEEP_RUNTIME'
-    if schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA):
+    if schema in (CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):
         confirmation=('BACKUP_RESTORE_BOUNDED_DISK_BETA122_' if schema==CUTOVER_DISK_SCHEMA else 'BACKUP_RESTORE_ATTESTED_BETA122_')+value['candidateSha'][:12].upper()+'_FROM_LK2_BETA_759083E37B40'
-    if schema == FRESH_SCHEMA:
+    if schema in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):
         confirmation='FRESH_DUMP_PRIOR_RESTORE_BETA122_'+value['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS'
+        if schema==CANONICAL_FRESH_SCHEMA:confirmation='FRESH_DUMP_CANONICAL_PRIOR_RESTORE_BETA122_'+value['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS'
         validate_fresh_owner(value)
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
@@ -3367,6 +3402,206 @@ def fresh_owner_scope(op):
     return digest(encoded({k:v for k,v in op.items() if k!='ownerRestoreDecision'}))
 
 
+CANONICAL_BASELINE_FIELDS = ['schema','capturedAt','installedReleaseId','sourceSha','sourceTree','sourceCiRunId',
+    'publicationRunId','artifactId','manifestSha256','installedDescriptorSha256','operationSha256','planSha256',
+    'receiptSha256','observationSha256','backupOperationSha256','backupReceiptSha256','secretSetReleaseId',
+    'secretHashes','containers','excludedSha256','databaseTarget','ledgerSha256']
+CANONICAL_V4_FINAL_FILES = ['FRESH_DUMP_INTEGRITY_VERIFIED.json','backup-operation.json','backup.complete',
+    'candidate.env','database-backup-receipt.json','database.pgcustom','legacy-predecessor-attestation.json',
+    'legacy-release.env','observation.json','operation.json','owner-restore-decision.json','plan.json',
+    'previous-api.env','previous-web.env','previous-worker.env','prior-full-restore-reference.json',
+    'rollout-receipt.json','snapshot-witness.json']
+CANONICAL_OLD_FRESH_PHASES = ['PREPARED','DAEMON_NAMESPACE','LOCK_PREPARED','LOCK_PUBLISH_INTENT','LOCKED',
+    'DUMP_INTENT','DUMP_VERIFIED','TOC_VERIFIED','PUBLISH_READY','PUBLISHED','UNLOCK_INTENT','RECONCILED']
+
+
+def canonical_baseline_hash(b):
+    return digest(json.dumps(b,separators=(',',':'),ensure_ascii=False).encode())
+
+
+def validate_canonical_backup_baseline(op):
+    b=op['canonicalBaseline'];exact(b,CANONICAL_BASELINE_FIELDS)
+    need(b['schema']=='PHUB_TIMEWEB_INSTALLED_CANONICAL_ROSTER_RUNTIME_V1'
+         and b['installedReleaseId']==CANONICAL_PRIOR_RELEASE and b['sourceSha']==CANONICAL_PRIOR_SOURCE
+         and b['sourceTree']=='8907550c2386aaddc97b3fbda186dced43db00bd'
+         and b['sourceCiRunId']=='43749601790' and b['publicationRunId']=='43751306581' and b['artifactId']=='14176493246'
+         and b['manifestSha256']=='15465f17d7d4384ea2392fda664ff438a340389b3c5df29d2bd14d4e5ee82672'
+         and b['databaseTarget']==op['expectedDatabaseTarget']==LOCATION_PHOTO_DATABASE_TARGET
+         and b['ledgerSha256']==op['expectedLedgerSha256']=='4dab86cb18f7e3db7a0598cd657eaebc86f07d5af497dc0eea2e33900b6526c1'
+         and canonical_baseline_hash(b)==op['predecessorAttestationSha256']
+         and legacy_runtime_hash(b)==op['predecessorRuntimeSha256']
+         and HASH.fullmatch(op['historicalReadSetSha256'] or ''),'CANONICAL_BASELINE')
+    utc(b['capturedAt']);need(RELEASE.fullmatch(b['secretSetReleaseId'] or ''),'CANONICAL_SECRET_SET')
+    for k in ['installedDescriptorSha256','operationSha256','planSha256','receiptSha256','observationSha256','backupOperationSha256','backupReceiptSha256','excludedSha256']:
+        need(HASH.fullmatch(b[k] or ''),'CANONICAL_CUSTODY_HASH')
+    exact(b['secretHashes'],['.release-identity.json','api.env','worker.env','realtime.env','migrator.env'])
+    need(all(HASH.fullmatch(v or '') for v in b['secretHashes'].values()),'CANONICAL_SECRET_HASH')
+    exact(b['containers'],['api','web','worker','realtime'])
+    for service,row in b['containers'].items():
+        exact(row,['id','image','imageId','releaseId','revision','restarts','startedAt'])
+        need(HASH.fullmatch(row['id'] or '') and re.fullmatch(r'ghcr\.io/z6v6e6r/phub-'+service+r'@sha256:[a-f0-9]{64}',row['image'] or '')
+             and row['imageId']==row['image'].split('@')[1] and row['restarts']==0
+             and row['releaseId']==(CANONICAL_PRIOR_RELEASE if service in ('api','web') else None)
+             and row['revision']==(None if service=='realtime' else CANONICAL_PRIOR_SOURCE),'CANONICAL_CONTAINER')
+        need(re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,9}Z',row['startedAt'] or ''),'CANONICAL_CONTAINER_TIME')
+
+
+def canonical_own_lock(op):
+    """Historical custody permits ABSENT or exactly this new producer's existing lease."""
+    if not os.path.lexists(LOCK):return 'ABSENT'
+    secure(LOCK,'dir',0o700)
+    need(sorted(p.name for p in LOCK.iterdir())==['backup-restore.json'],'CANONICAL_FOREIGN_LOCK')
+    marker=strict(read_secure(LOCK/'backup-restore.json'))
+    need(marker.get('schema')=='PHUB_TIMEWEB_BACKUP_LOCK_V1' and HASH.fullmatch(marker.get('operationSha256','')),'CANONICAL_FOREIGN_LOCK')
+    work=ROOT/'backups'/('.fresh-dump-'+marker['operationSha256'])
+    raw=read_secure(work/'backup-operation.json')
+    need(digest(raw)==marker['operationSha256'] and strict(raw)==op and marker.get('transaction')==str(work)
+         and marker.get('toolFileSha256')==op['toolFileSha256'],'CANONICAL_FOREIGN_LOCK')
+    journal=DiskJournal(work,digest(raw));prepared=journal.find('LOCK_PREPARED')
+    need(prepared is not None and same_storage(secure(LOCK,'dir',0o700),prepared['identity'])
+         and read_secure(LOCK/'backup-restore.json')==encoded(prepared['marker']),'CANONICAL_OWN_LOCK')
+    return 'OWNED_NEW'
+
+
+def canonical_history_context(op):
+    import importlib.util
+    b=op['canonicalBaseline'];directory=ROOT/'backups'/(CANONICAL_PRIOR_RELEASE+'-api-web')
+    secure(directory,'dir',0o700)
+    need(sorted(p.name for p in directory.iterdir())==sorted(CANONICAL_V4_FINAL_FILES),'CANONICAL_HISTORY_INVENTORY')
+    raw=read_secure(directory/'backup-operation.json');prior=strict(raw)
+    need(digest(raw)==b['backupOperationSha256'] and prior['schema']==FRESH_SCHEMA
+         and prior['candidateSha']==CANONICAL_PRIOR_SOURCE and prior['releaseId']==CANONICAL_PRIOR_RELEASE
+         and prior['expectedLedgerSha256']==op['expectedLedgerSha256']
+         and prior['expectedDatabaseTarget']==op['expectedDatabaseTarget']
+         and prior['expectedPostgres']==op['expectedPostgres'] and prior['priorRestore']==op['priorRestore'],'CANONICAL_PRIOR_OPERATION')
+    tool=ROOT/'operator/tools'/prior['toolCommit']/'control-timeweb-database-backup.py'
+    need(digest(read_secure(tool,0o755))==prior['toolFileSha256']=='d927f5a75f3656f7284980bf1524edb54631cbdfc0066bd351652214dcec4379','CANONICAL_PRIOR_TOOL')
+    spec=importlib.util.spec_from_file_location('canonical_prior_backup',tool)
+    old=importlib.util.module_from_spec(spec);spec.loader.exec_module(old)
+    old.validate_operation(prior,time.time(),prior['toolFileSha256'],allow_expired=True);old._tool_custody_local(prior)
+    work=ROOT/'backups'/('.fresh-dump-'+digest(raw));plan=old.strict(old.read_secure(work/'disk-plan.json'))
+    need(old.read_secure(work/'backup-operation.json')==raw and plan==old.fresh_plan(prior,raw,plan['databaseBytes']),'CANONICAL_PRIOR_PLAN')
+    journal=old.DiskJournal(work,digest(raw))
+    need([e['phase'] for e in journal.events]==CANONICAL_OLD_FRESH_PHASES,'CANONICAL_PRIOR_JOURNAL')
+    need(sorted(p.name for p in work.iterdir())==sorted(['backup-operation.json','boundary.json','disk-plan.json','snapshot-witness.json','retired-lock']+[f'disk-event-{i:04d}.json' for i in range(12)]),'CANONICAL_PRIOR_WORK_INVENTORY')
+    marker=journal.find('LOCK_PREPARED');retired=work/'retired-lock'
+    need(marker is not None and journal.find('UNLOCK_INTENT') is not None
+         and not os.path.lexists(plan['pendingLock']) and old.same_storage(old.secure(retired,'dir',0o700),marker['identity'])
+         and sorted(p.name for p in retired.iterdir())==['backup-restore.json']
+         and old.read_secure(retired/'backup-restore.json')==old.encoded(marker['marker']),'CANONICAL_PRIOR_RETIRED_LOCK')
+    return {'baseline':b,'directory':directory,'raw':raw,'prior':prior,'old':old,'work':work,'plan':plan,'journal':journal,'tool':tool}
+
+
+def canonical_history_read_set(context):
+    """Fixed V4 inventories plus original 857's independently validated retained closure."""
+    c=context;op=c['prior'];ref=op['priorRestore']
+    paths=list(c['directory'].iterdir())+[p for p in c['work'].iterdir() if p.is_file()]+[c['work']/'retired-lock/backup-restore.json']
+    old_directory=ROOT/'backups'/(ref['releaseId']+'-api-web');old_work=ROOT/'backups'/('.disk-restore-'+ref['operationSha256'])
+    for base in (old_directory,old_work):
+        secure(base,'dir',0o700)
+        for current,dirs,files in os.walk(base,followlinks=False):
+            for name in dirs:secure(Path(current)/name,'dir')
+            paths.extend(Path(current)/name for name in files)
+    original=strict(read_secure(old_directory/'backup-operation.json'))
+    for commit in (op['toolCommit'],original['toolCommit']):
+        base=ROOT/'operator/tools'/commit
+        paths.extend([base/'control-timeweb-database-backup.py',base/'installation-receipt.json'])
+    release=ROOT/'releases'/CANONICAL_PRIOR_RELEASE
+    paths.extend([release/'installed-components.env',release/'release-manifest.json'])
+    rows=[]
+    for path in sorted(set(paths)):
+        before=secure(path);need(0<before.st_size<=MAX_DUMP,'CANONICAL_HISTORY_FILE_SIZE')
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+        try:
+            opened=os.fstat(fd);need(identity(before)==identity(opened),'CANONICAL_HISTORY_RACE')
+            h=hashlib.sha256()
+            with os.fdopen(os.dup(fd),'rb') as stream:
+                for block in iter(lambda:stream.read(1024**2),b''):h.update(block)
+            need(identity(opened)==identity(os.fstat(fd))==identity(path.lstat()),'CANONICAL_HISTORY_CHANGED')
+            rows.append({'path':str(path.relative_to(ROOT)),'sha256':h.hexdigest(),'identity':list(identity(opened))})
+        finally:os.close(fd)
+    return rows
+
+
+def canonical_node_source_guard(op):
+    source=ROOT/'standard/source';secure(source,'dir');secure(source/'.git','dir')
+    prefix=['/usr/bin/git','-C',str(source),'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
+    need(command(prefix+['rev-parse','HEAD'],'CANONICAL_VALIDATOR_SOURCE').decode().strip()==op['controllerSha']
+         and command(prefix+['rev-parse','HEAD^{tree}'],'CANONICAL_VALIDATOR_SOURCE').decode().strip()==op['controllerTree']
+         and not command(prefix+['status','--porcelain','--untracked-files=all'],'CANONICAL_VALIDATOR_SOURCE').strip(),'CANONICAL_VALIDATOR_SOURCE')
+    for raw in command(prefix+['ls-files','-z'],'CANONICAL_VALIDATOR_SOURCE').split(b'\0'):
+        if raw:
+            relative=Path(os.fsdecode(raw));need(not relative.is_absolute() and '..' not in relative.parts,'CANONICAL_VALIDATOR_PATH')
+            secure(source/relative)
+    return source
+
+
+def validate_canonical_history_predicates(op,c):
+    """No fake filesystem view: exactly two explicit differences from the old terminal validator.
+    Final V4 inventory includes its legitimate rollout files; the current lease may be OWNED_NEW.
+    All original publication/seal/journal/retired/prior-857 predicates remain in force."""
+    old=c['old'];prior=c['prior'];directory=c['directory'];journal=c['journal'];b=c['baseline']
+    canonical_own_lock(op)
+    r=old.validate_fresh_publication(prior,c['raw'],c['plan'],directory)
+    sha=old.validate_fresh_seal(prior,c['raw'],directory,r)
+    need(journal.find('PUBLISH_READY')==journal.find('PUBLISHED')=={'receiptSha256':sha}
+         and journal.find('DUMP_VERIFIED')==journal.find('TOC_VERIFIED')=={'dumpSha256':r['backupSha256']},'CANONICAL_PRIOR_JOURNAL_BINDING')
+    operation_raw=read_secure(directory/'operation.json');operation=strict(operation_raw)
+    plan_raw=read_secure(directory/'plan.json');plan=strict(plan_raw)
+    receipt_raw=read_secure(directory/'rollout-receipt.json');receipt=strict(receipt_raw)
+    observation_raw=read_secure(directory/'observation.json');observation=strict(observation_raw)
+    descriptor=read_secure(ROOT/'releases'/CANONICAL_PRIOR_RELEASE/'installed-components.env')
+    need(digest(operation_raw)==b['operationSha256'] and digest(plan_raw)==b['planSha256'] and digest(receipt_raw)==b['receiptSha256']
+         and digest(observation_raw)==b['observationSha256'] and digest(descriptor)==b['installedDescriptorSha256']
+         and digest(read_secure(directory/'database-backup-receipt.json'))==b['backupReceiptSha256']
+         and operation.get('schema')=='PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4'
+         and operation.get('candidateSha')==CANONICAL_PRIOR_SOURCE and operation.get('backupOperationSha256')==digest(c['raw'])
+         and plan.get('operationSha256')==digest(operation_raw) and plan.get('backup',{}).get('operationSha256')==digest(c['raw'])
+         and receipt.get('schema')=='PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_RECEIPT_V4'
+         and receipt.get('status')=='RECONCILED' and receipt.get('reconciledStatus')=='SUCCESS'
+         and receipt.get('planSha256')==digest(plan_raw) and receipt.get('installedBaselineSha256')==digest(descriptor)
+         and receipt.get('observationSha256')==digest(observation_raw)
+         and read_secure(directory/'backup.complete')==(digest(plan_raw)+'\n').encode(), 'CANONICAL_PRIOR_ROLLOUT')
+    need(observation.get('samplesPerService')==61 and observation.get('windowSeconds')==900
+         and observation.get('elapsedSeconds',0)>=900 and observation.get('serverErrors')==0,'CANONICAL_PRIOR_OBSERVATION')
+    files={name:base64.b64encode(read_secure(directory/name)).decode() for name in CANONICAL_V4_FINAL_FILES if name!='database.pgcustom'}
+    files.update({name:base64.b64encode(read_secure(ROOT/'releases'/CANONICAL_PRIOR_RELEASE/name)).decode() for name in ['installed-components.env','release-manifest.json']})
+    source=canonical_node_source_guard(op)
+    program="import{readFileSync}from'node:fs';import{validateCanonicalHistoricalArtifacts}from'./scripts/timeweb-api-web-upgrade.js';const v=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify(validateCanonicalHistoricalArtifacts(v.baseline,Object.fromEntries(Object.entries(v.files).map(([k,v])=>[k,Buffer.from(v,'base64')])))));"
+    result=command(['/usr/bin/node','--input-type=module','-e',program],'CANONICAL_HISTORY_OUTER',input_data=encoded({'baseline':b,'files':files}),cwd=str(source),timeout=60)
+    need(0<len(result)<=32768,'CANONICAL_HISTORY_OUTER_SIZE');attestation=strict(result)
+    need(attestation=={'schema':'PHUB_TIMEWEB_CANONICAL_HISTORY_OUTER_VALIDATION_V1','rolloutReceiptSha256':b['receiptSha256'],'runtimeConsulted':False},'CANONICAL_HISTORY_OUTER')
+    # This unmodified historical function recursively checks the original full 857 restore.
+    original=old.validate_prior_restore(prior)
+    return original
+
+
+def validate_canonical_prior_restore(op):
+    validate_fresh_owner(op);validate_canonical_backup_baseline(op)
+    c=canonical_history_context(op);a=canonical_history_read_set(c)
+    need(digest(encoded(a))==op['historicalReadSetSha256'],'CANONICAL_HISTORY_PREIMAGE')
+    original=validate_canonical_history_predicates(op,c)
+    need(canonical_history_read_set(c)==a,'CANONICAL_HISTORY_RACE')
+    return {'schema':CANONICAL_HISTORY_SCHEMA,'canonicalBaselineSha256':op['predecessorAttestationSha256'],
+            'forwardOriginalValidationBoundByRolloutReceiptSha256':c['baseline']['receiptSha256'],
+            'priorRolloutObservedAt':strict(read_secure(c['directory']/'rollout-receipt.json'))['observedAt'],
+            'historicalReadSetSha256':digest(encoded(a)),'files':a,'originalFullRestore':original,
+            'oldFreshTerminalValidatorRerun':False}
+
+
+def canonical_live_admission(op):
+    need(canonical_own_lock(op)=='OWNED_NEW','CANONICAL_ADMISSION_LOCK')
+    source=ROOT/'standard/source'
+    program="import{readFileSync}from'node:fs';import{attestCanonicalBackupOperation}from'./scripts/timeweb-api-web-upgrade.js';console.log(JSON.stringify(attestCanonicalBackupOperation(JSON.parse(readFileSync(0,'utf8')))));"
+    raw=command(['/usr/bin/node','--input-type=module','-e',program],'CANONICAL_ADMISSION',input_data=encoded(op),cwd=str(source),timeout=60)
+    need(0<len(raw)<=32768,'CANONICAL_ADMISSION_SIZE');r=strict(raw)
+    exact(r,['schema','canonicalBaselineSha256','installedDescriptorSha256','runtimeSecretsChecked'])
+    need(r['schema']=='PHUB_TIMEWEB_CANONICAL_BACKUP_ADMISSION_V1' and r['runtimeSecretsChecked'] is True
+         and r['canonicalBaselineSha256']==op['predecessorAttestationSha256']
+         and r['installedDescriptorSha256']==op['canonicalBaseline']['installedDescriptorSha256'],'CANONICAL_ADMISSION')
+    return r
+
+
 def validate_fresh_owner(op):
     need(HASH.fullmatch(op['predecessorRuntimeSha256'] or ''),'FRESH_PREDECESSOR_RUNTIME')
     r=op['ownerRestoreDecision']
@@ -3402,6 +3637,7 @@ def validate_prior_restore(op):
     predicate alone differs from the old five-file terminal validator. The four
     controller files are retained audit evidence, never part of the old restore result.
     """
+    if is_canonical_fresh(op):return validate_canonical_prior_restore(op)
     import importlib.util
     validate_fresh_owner(op)
     ref=op['priorRestore']; directory=ROOT/'backups'/(ref['releaseId']+'-api-web')
@@ -3467,7 +3703,7 @@ def validate_prior_restore(op):
 def fresh_plan(op, raw, database_bytes):
     need(type(database_bytes) is int and 0<database_bytes<2**63,'FRESH_DATABASE_SIZE')
     sha=digest(raw);work=ROOT/'backups'/('.fresh-dump-'+sha)
-    return {'schema':FRESH_PLAN,'operationSha256':sha,'work':str(work),
+    return {'schema':CANONICAL_FRESH_PLAN if is_canonical_fresh(op) else FRESH_PLAN,'operationSha256':sha,'work':str(work),
             'canonical':str(ROOT/'backups'/(op['releaseId']+'-api-web')),
             'publication':str(work/'publication'),'pendingLock':str(ROOT/'standard'/('.fresh-lock-'+sha)),
             'expectedLedgerSha256':op['expectedLedgerSha256'],'databaseBytes':database_bytes,
@@ -3479,7 +3715,7 @@ FRESH_FILES=['database.pgcustom','database-backup-receipt.json','backup-operatio
 
 
 def validate_fresh_publication(op, raw, plan, directory):
-    need(op['schema']==FRESH_SCHEMA,'FRESH_SCHEMA')
+    need(is_fresh_operation(op),'FRESH_SCHEMA')
     directory=Path(directory)
     # Later cutover files are owned by the outer controller. Producer publication is
     # exact before atomic publication; retained validation reads only its sealed files.
@@ -3494,12 +3730,12 @@ def validate_fresh_publication(op, raw, plan, directory):
     owner_raw=read_secure(directory/'owner-restore-decision.json')
     need(read_secure(directory/'backup-operation.json')==raw and prior_raw==encoded(prior)
          and owner_raw==encoded(op['ownerRestoreDecision']), 'FRESH_CAPSULE')
-    need(r['schema']==FRESH_RECEIPT and r['baselineReleaseId']==op['expectedApi']['releaseId']
+    need(r['schema']==fresh_receipt_schema(op) and r['baselineReleaseId']==op['expectedApi']['releaseId']
          and r['operationSha256']==digest(raw) and r['predecessorAttestationSha256']==op['predecessorAttestationSha256']
          and r['databaseTarget']==op['expectedDatabaseTarget'] and r['sourceLedgerSha256']==op['expectedLedgerSha256']
          and r['backupFile']==str(Path(plan['canonical'])/'database.pgcustom') and r['postgresImage']==PG_IMAGE
          and r['freshDumpRestored'] is False and r['freshDumpIntegrityStatus']=='PG16_TOC_PARSE_VERIFIED'
-         and r['restoreAdmissionPolicy']==FRESH_POLICY and r['priorReferenceSha256']==digest(prior_raw)
+         and r['restoreAdmissionPolicy']==fresh_policy(op) and r['priorReferenceSha256']==digest(prior_raw)
          and r['ownerReceiptSha256']==digest(owner_raw) and r['snapshotWitnessSha256']==digest(witness_raw)
          and type(r['dumpBytes']) is int and 0<r['dumpBytes']<=CUTOVER_DUMP_LIMIT
          and r['dumpLimitBytes']==CUTOVER_DUMP_LIMIT and r['dumpCompression']=='zstd:3', 'FRESH_RECEIPT')
@@ -3507,7 +3743,7 @@ def validate_fresh_publication(op, raw, plan, directory):
          and w['sourcePostgres']==op['expectedPostgres'] and HASH.fullmatch(w['snapshotIdSha256'] or '')
          and w['databaseTarget']==r['databaseTarget'] and w['ledgerSha256']==r['sourceLedgerSha256']
          and w['accountsSha256']==r['sourceAccountsSha256'] and HASH.fullmatch(w['accountsSha256'] or '')
-         and utc(prior['laterPreparationAbortAt'])<utc(w['capturedAt'])<=utc(r['completedAt'])<=utc(op['expiresAt'])
+         and utc(prior['priorRolloutObservedAt'] if is_canonical_fresh(op) else prior['laterPreparationAbortAt'])<utc(w['capturedAt'])<=utc(r['completedAt'])<=utc(op['expiresAt'])
          and utc(op['ownerRestoreDecision']['receivedAt'])<=utc(w['capturedAt']), 'FRESH_WITNESS')
     need(secure(directory/'database.pgcustom',mode=0o600).st_size==r['dumpBytes']
          and file_digest(directory/'database.pgcustom')==r['backupSha256'],'FRESH_DUMP_CHANGED')
@@ -3540,12 +3776,16 @@ def validate_fresh_terminal(op, raw):
     need(plan==fresh_plan(op,raw,plan['databaseBytes']),'FRESH_PLAN')
     journal=DiskJournal(work,digest(raw))
     need([e['phase'] for e in journal.events]==['PREPARED','DAEMON_NAMESPACE','LOCK_PREPARED',
-         'LOCK_PUBLISH_INTENT','LOCKED','DUMP_INTENT','DUMP_VERIFIED','TOC_VERIFIED','PUBLISH_READY',
+         'LOCK_PUBLISH_INTENT','LOCKED',*(['CANONICAL_LINEAGE_SEALED'] if is_canonical_fresh(op) else []),'DUMP_INTENT','DUMP_VERIFIED','TOC_VERIFIED','PUBLISH_READY',
          'PUBLISHED','UNLOCK_INTENT','RECONCILED'], 'FRESH_TERMINAL')
     fresh_retired_lock(plan,journal)
     canonical=Path(plan['canonical']);r=validate_fresh_publication(op,raw,plan,canonical)
     need(sorted(p.name for p in canonical.iterdir())==sorted(FRESH_FILES),'FRESH_PUBLICATION_INVENTORY')
     sha=validate_fresh_seal(op,raw,canonical,r)
+    if is_canonical_fresh(op):
+        prior_raw=read_secure(work/'canonical-prior-lineage.json')
+        need(prior_raw==read_secure(canonical/'prior-full-restore-reference.json')
+             and journal.find('CANONICAL_LINEAGE_SEALED')=={'sha256':digest(prior_raw),'runtimeSecretsChecked':True},'CANONICAL_LINEAGE_SEAL')
     need(journal.find('PUBLISH_READY')=={'receiptSha256':sha}
          and journal.find('PUBLISHED')=={'receiptSha256':sha}
          and journal.find('DUMP_VERIFIED')=={'dumpSha256':r['backupSha256']}
@@ -3554,7 +3794,7 @@ def validate_fresh_terminal(op, raw):
 
 
 def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
-    need(op['schema']==FRESH_SCHEMA,'FRESH_SCHEMA');validate_fresh_owner(op)
+    need(is_fresh_operation(op),'FRESH_SCHEMA');validate_fresh_owner(op)
     if attest:
         tool_custody(op)
         return {'status':'FRESH_DUMP_INTEGRITY_VERIFIED','receiptSha256':validate_fresh_terminal(op,raw),'authorizesDeploy':False}
@@ -3574,6 +3814,7 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
         atomic_exclusive(work/'backup-operation.json',raw)
         atomic_exclusive(work/'disk-plan.json',encoded(plan))
         atomic_exclusive(work/'boundary.json',encoded({'sha256':op['expectedBoundarySha256']}))
+        if is_canonical_fresh(op):atomic_exclusive(work/'canonical-prior-lineage.json',encoded(prior))
         journal=DiskJournal(work,sha);journal.add('PREPARED');journal.add('DAEMON_NAMESPACE',**daemon)
         pending=Path(plan['pendingLock']);pending.mkdir(mode=0o700);sync_directory(pending.parent)
         marker={'schema':'PHUB_TIMEWEB_BACKUP_LOCK_V1','operationSha256':sha,'toolFileSha256':file_sha,
@@ -3635,6 +3876,10 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
     if not reconcile:
         guard();cutover_disk_source_stopped(op,sha)
         need(len(strict(ledger_bytes(source_query(SOURCE_LEDGER,op['expectedPostgres']['id']))))==122,'CUTOVER_LEDGER')
+        if is_canonical_fresh(op):
+            canonical_live_admission(op)
+            need(read_secure(work/'canonical-prior-lineage.json')==encoded(prior)==encoded(validate_canonical_prior_restore(op)),'CANONICAL_POST_LOCK_HISTORY_DRIFT')
+            guard();journal.add('CANONICAL_LINEAGE_SEALED',sha256=digest(encoded(prior)),runtimeSecretsChecked=True)
         incoming=work/'database.pgcustom.incoming';journal.add('DUMP_INTENT')
         fd=os.open(incoming,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
         try:
@@ -3658,14 +3903,14 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
         for name,data in [('backup-operation.json',raw),('snapshot-witness.json',read_secure(work/'snapshot-witness.json')),
                           ('prior-full-restore-reference.json',encoded(prior)),('owner-restore-decision.json',encoded(op['ownerRestoreDecision']))]:
             atomic_exclusive(publication/name,data)
-        receipt={'schema':FRESH_RECEIPT,'baselineReleaseId':op['expectedApi']['releaseId'],'completedAt':now_iso(),
+        receipt={'schema':fresh_receipt_schema(op),'baselineReleaseId':op['expectedApi']['releaseId'],'completedAt':now_iso(),
                  'backupFile':str(Path(plan['canonical'])/'database.pgcustom'),'backupSha256':dump_sha,'operationSha256':sha,
                  'predecessorAttestationSha256':op['predecessorAttestationSha256'],'databaseTarget':op['expectedDatabaseTarget'],
                  'sourceLedgerSha256':op['expectedLedgerSha256'],'sourceAccountsSha256':snapshot['accountsSha256'],
                  'snapshotWitnessSha256':digest(read_secure(work/'snapshot-witness.json')),
                  'dumpBytes':secure(publication/'database.pgcustom',mode=0o600).st_size,'dumpLimitBytes':CUTOVER_DUMP_LIMIT,
                  'dumpCompression':'zstd:3','postgresImage':PG_IMAGE,'freshDumpRestored':False,
-                 'freshDumpIntegrityStatus':'PG16_TOC_PARSE_VERIFIED','restoreAdmissionPolicy':FRESH_POLICY,
+                 'freshDumpIntegrityStatus':'PG16_TOC_PARSE_VERIFIED','restoreAdmissionPolicy':fresh_policy(op),
                  'priorReferenceSha256':digest(encoded(prior)),'ownerReceiptSha256':digest(encoded(op['ownerRestoreDecision']))}
         atomic_exclusive(publication/'database-backup-receipt.json',encoded(receipt))
         validate_fresh_publication(op,raw,plan,publication)
@@ -4014,7 +4259,7 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
                  and read_secure(LOCK / 'backup-restore.json') == encoded(marker['marker']), 'DISK_LOCK_DRIFT')
         return True
     def guard(restore=None, cleanup=False, optional_lock=False):
-        if op.get('schema') in (CUTOVER_DISK_SCHEMA,FRESH_SCHEMA):
+        if op.get('schema') in (CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):
             disk_daemon_guard(journal)
             if not cleanup:cutover_disk_reserve()
         if is_namespace_operation(op):namespace_frozen_source(plan)
@@ -4055,7 +4300,7 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
             initial = journal.find('MIGRATION_ATTESTATION')
             if initial is not None:
                 need(initial['proof'] == attestation, 'MIGRATION_ATTESTATION_DRIFT')
-        need(digest(ledger_bytes(source_query(SOURCE_LEDGER,op['expectedPostgres']['id'] if op.get('schema') in (CUTOVER_DISK_SCHEMA,FRESH_SCHEMA) else PG_ID))) == plan['expectedLedgerSha256'], 'SOURCE_LEDGER_DRIFT')
+        need(digest(ledger_bytes(source_query(SOURCE_LEDGER,op['expectedPostgres']['id'] if op.get('schema') in (CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA) else PG_ID))) == plan['expectedLedgerSha256'], 'SOURCE_LEDGER_DRIFT')
     return guard, owned_lock
 
 
@@ -5397,7 +5642,7 @@ def main():
         namespace_supervisor(op, request_bytes, plan); return
     for sig in (signal.SIGTERM,signal.SIGINT):
         signal.signal(sig,lambda *_: (_ for _ in ()).throw(Stop('INTERRUPTED_UNCERTAIN')))
-    if op.get('schema') == FRESH_SCHEMA:
+    if is_fresh_operation(op):
         need(sys.argv[1] in ('--execute','--reconcile-disk','--attest-disk'),'FRESH_ENTRY')
         if sys.argv[1]=='--attest-disk':result=fresh_dump(op,request_bytes,file_sha,attest=True)
         else:

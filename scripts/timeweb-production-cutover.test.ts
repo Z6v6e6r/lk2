@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import type * as NativeFs from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
+import { canonicalRosterFixture } from './timeweb-canonical-roster.fixture.js';
 import { ownerDirectedTestChoices } from './timeweb-owner-directed-fixture.js';
 import { OWNER_OPERATION, FRESH_BACKUP_OPERATION } from './timeweb-roster-alert-waiver.js';
 import {
@@ -21,7 +22,7 @@ const containers = Object.fromEntries(
       image: `ghcr.io/z6v6e6r/phub-${name}@sha256:${String(n + 1).repeat(64)}`,
       imageId: `sha256:${String(n + 1).repeat(64)}`,
       releaseId: n < 2 ? `lk2-beta-${legacySha.slice(0, 12)}` : null,
-      revision: null,
+      revision: null as string | null,
       restarts: 0,
       startedAt: '2026-11-12T10:57:44.208238957Z',
     },
@@ -310,21 +311,24 @@ it('V4 binds both owner-authorized skips and rejects every older producer schema
 // Unrelated monitoring parser semantics have their own suites; this fixture tests custody,
 // evidence hash binding, all three runtime identities and the actual lock-release path.
 it.each([
-  ['SUCCESS', false, false, false],
-  ['ROLLED_BACK', false, false, false],
-  ['ABORTED', false, false, false],
-  ['SUCCESS', true, false, false],
-  ['ROLLED_BACK', true, false, false],
-  ['ABORTED', true, false, false],
-  ['SUCCESS', true, true, false],
-  ['ROLLED_BACK', true, true, false],
-  ['ABORTED', true, true, false],
-  ['SUCCESS', false, false, true],
-  ['ROLLED_BACK', false, false, true],
-  ['ABORTED', false, false, true],
+  ['SUCCESS', false, false, false, false],
+  ['ROLLED_BACK', false, false, false, false],
+  ['ABORTED', false, false, false, false],
+  ['SUCCESS', true, false, false, false],
+  ['ROLLED_BACK', true, false, false, false],
+  ['ABORTED', true, false, false, false],
+  ['SUCCESS', true, true, false, false],
+  ['ROLLED_BACK', true, true, false, false],
+  ['ABORTED', true, true, false, false],
+  ['SUCCESS', false, false, true, false],
+  ['ROLLED_BACK', false, false, true, false],
+  ['ABORTED', false, false, true, false],
+  ['SUCCESS', false, false, true, true],
+  ['ROLLED_BACK', false, false, true, true],
+  ['ABORTED', false, false, true, true],
 ] as const)(
-  'reconciles terminal %s with waiver=%s batch=%s ownerDirected=%s before releasing the retained lock',
-  async (terminal, waived, batch, ownerDirected) => {
+  'reconciles terminal %s with waiver=%s batch=%s ownerDirected=%s canonical=%s before releasing the retained lock',
+  async (terminal, waived, batch, ownerDirected, canonical) => {
     const { createHash } = await import('node:crypto');
     const profile = await import('./timeweb-production-cutover.js');
     const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -347,6 +351,12 @@ it.each([
           : Buffer.from('SYNTHETIC=1\n');
       put(`${runtime}/${name}`, value);
       b.secretHashes[name] = hash(value);
+    }
+    if (ownerDirected && !canonical) {
+      const realtime = canonicalRosterFixture().canonicalBaseline.containers.realtime!;
+      b.containers.realtime!.image = realtime.image;
+      b.containers.realtime!.imageId = realtime.imageId;
+      b.buildRecords.find((v) => v.component === 'realtime')!.imageDigest = realtime.imageId;
     }
     const legacyEnv = Buffer.from(
       `PHUB_RELEASE_ID=${b.containers.api!.releaseId}\nTIMEWEB_RUNTIME_ENV_ROOT=${runtime}\nTIMEWEB_FCM_CREDENTIAL_SOURCE=/etc/phub/timeweb-beta-fcm/fcm-service-account.json\n${b.buildRecords.map((v) => `${v.component.toUpperCase()}_IMAGE_DIGEST=${v.imageDigest}`).join('\n')}\n`,
@@ -591,6 +601,95 @@ it.each([
         ownerReceiptSha256: hash(owner),
       });
     }
+    if (canonical) {
+      const v5 = canonicalRosterFixture();
+      // The runtime baseline is canonical, with non-null OCI revisions. Retain it before
+      // simulating candidate activation; recovery must not consult the old live release.
+      v5.canonicalBaseline.secretSetReleaseId = b.secretSetReleaseId;
+      v5.canonicalBaseline.secretHashes = b.secretHashes;
+      const cb = v5.canonicalBaseline;
+      Object.assign(b.containers, cb.containers);
+      const canonicalEnv = Buffer.from(
+        `PHUB_RELEASE_ID=${cb.installedReleaseId}\nPHUB_COMPONENT_ROLLOUT_KIND=${waiverProfile.OWNER_KIND}\nPHUB_RUNTIME_SECRET_SET_RELEASE_ID=${cb.secretSetReleaseId}\nTIMEWEB_RUNTIME_ENV_ROOT=${runtime}\nPHUB_MIGRATOR_ENABLED=false\n${Object.entries(
+          cb.containers,
+        )
+          .map(([service, c]) => `${service.toUpperCase()}_IMAGE_DIGEST=${c.imageId}`)
+          .join('\n')}\n`,
+      );
+      cb.installedDescriptorSha256 = hash(canonicalEnv);
+      Reflect.deleteProperty(op, 'legacyBaseline');
+      Reflect.set(op, 'canonicalBaseline', cb);
+      op.schema = waiverProfile.CANONICAL_OPERATION;
+      op.expectedApi = {
+        id: cb.containers.api!.id,
+        image: cb.containers.api!.image,
+        releaseId: cb.containers.api!.releaseId,
+      };
+      op.expectedWeb = {
+        id: cb.containers.web!.id,
+        image: cb.containers.web!.image,
+        releaseId: cb.containers.web!.releaseId,
+      };
+      op.expectedWorker = {
+        id: cb.containers.worker!.id,
+        image: cb.containers.worker!.image,
+        releaseId: null,
+      };
+      op.expiresAt = '2026-11-16T11:00:00.000Z';
+      Reflect.set(op, 'ownerDecisions', ownerDirectedTestChoices(op));
+      const baselineHash = profile.cutoverBaselineHash(op);
+      op.confirmation = `UPGRADE_CANONICAL_PRODUCTION_API_WORKER_WEB_OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_REPEAT_RESTORE_${op.candidateSha.slice(0, 12).toUpperCase()}_FROM_${baselineHash.slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+      plan.schema = waiverProfile.CANONICAL_PLAN;
+      Reflect.deleteProperty(plan, 'legacyBaselineSha256');
+      Reflect.set(plan, 'canonicalBaselineSha256', baselineHash);
+      plan.operationSha256 = hash(json(op));
+      plan.previous = {
+        api: cb.containers.api!,
+        web: cb.containers.web!,
+        worker: cb.containers.worker!,
+      };
+      plan.baselineSha256 = hash(canonicalEnv);
+      plan.unchangedServiceImages.realtime = cb.containers.realtime!.image;
+      plan.monitoring = waiverProfile.createOwnerDirectedBinding(op, plan.operationSha256);
+      Object.assign(plan.backup, { admissionPolicy: waiverProfile.CANONICAL_PRIOR_RESTORE_POLICY });
+      const backupValue = JSON.parse(backup.toString()) as Record<string, unknown>;
+      backup = json({
+        ...backupValue,
+        schema: waiverProfile.CANONICAL_FRESH_RECEIPT,
+        restoreAdmissionPolicy: waiverProfile.CANONICAL_PRIOR_RESTORE_POLICY,
+      });
+      plan.backup.sha256 = hash(backup);
+      plan.backup.receiptSha256 = hash(backup);
+      Object.assign(
+        values,
+        Object.fromEntries(
+          canonicalEnv
+            .toString()
+            .trim()
+            .split('\n')
+            .map((v) => v.split('=')),
+        ),
+      );
+      for (const service of ['api', 'worker', 'web', 'realtime']) {
+        if (terminal === 'SUCCESS' && service !== 'realtime') continue;
+        const row = rows[service]!,
+          c = cb.containers[service]!;
+        row.Id = c.id;
+        row.Image = c.imageId;
+        row.Config.Image = c.image;
+        row.Config.Labels['phub.release-id'] = c.releaseId;
+        row.Config.Labels['org.opencontainers.image.revision'] = c.revision;
+        row.State.StartedAt = c.startedAt;
+      }
+      Object.assign(plan.excluded[0]!, {
+        id: rows.realtime!.Id,
+        image: rows.realtime!.Config.Image,
+        imageId: rows.realtime!.Image,
+        startedAt: rows.realtime!.State.StartedAt,
+      });
+      put(`${tx}/canonical-predecessor.env`, canonicalEnv);
+      put(`${tx}/canonical-predecessor-attestation.json`, json(cb));
+    }
     const observation = json({
       windowSeconds: 900,
       samplesPerService: 61,
@@ -657,6 +756,9 @@ it.each([
     });
     const inspected = new Set<string>();
     const mutations: string[] = [];
+    const filesystemWrites: string[] = [];
+    let backupCustodyFixture = false,
+      backupCustodyCalls = 0;
     vi.doMock('node:fs', async (importOriginal) => {
       const actual = await importOriginal<typeof NativeFs>();
       return {
@@ -664,7 +766,10 @@ it.each([
         existsSync: (path: string) => files.has(path),
         lstatSync: stat,
         openSync: (path: string, flags: number | string) => {
-          if (typeof flags === 'number' && flags & actual.constants.O_CREAT) put(path, '');
+          if (typeof flags === 'number' && flags & actual.constants.O_CREAT) {
+            filesystemWrites.push('create:' + path);
+            put(path, '');
+          }
           const fd = nextFd++;
           descriptors.set(fd, path);
           if (path === inputPath) inputOpened = true;
@@ -700,16 +805,22 @@ it.each([
           if (descriptors.get(fd) === tx && lastLinked && sealFault && ++sealedCount === sealFault)
             throw Error('synthetic seal lost acknowledgment');
         },
-        writeFileSync: (fd: number, value: string | Buffer) => put(descriptors.get(fd)!, value),
+        writeFileSync: (fd: number, value: string | Buffer) => {
+          filesystemWrites.push('write:' + descriptors.get(fd)!);
+          put(descriptors.get(fd)!, value);
+        },
         renameSync: (from: string, to: string) => {
+          filesystemWrites.push('renameSync');
           put(to, files.get(from)!);
           files.delete(from);
         },
         linkSync: (from: string, to: string) => {
+          filesystemWrites.push('linkSync');
           put(to, files.get(from)!);
           lastLinked = to;
         },
         unlinkSync: (path: string) => {
+          filesystemWrites.push('unlinkSync');
           if (path === lockPath && !files.has(`${tx}/preparation-aborted.json`))
             expect(
               (JSON.parse(files.get(receiptPath)!.toString()) as { status: string }).status,
@@ -725,9 +836,18 @@ it.each([
           if (args.includes('HEAD')) return op.controllerSha + '\n';
           if (args.includes(`${op.candidateSha}^{tree}`)) return op.candidateTree + '\n';
           if (args.includes(`${b.sourceSha}^{tree}`)) return b.sourceTree + '\n';
+          if (args.includes(`${profile.CANONICAL_BASELINE_SOURCE}^{tree}`))
+            return '8907550c2386aaddc97b3fbda186dced43db00bd\n';
           if (args.includes('status') || args.includes('ls-files') || args.includes('merge-base'))
             return '';
           throw Error('unexpected fixture git:' + args.join(' '));
+        }
+        if (backupCustodyFixture && program === '/usr/bin/python3') {
+          expect(args).toContain('-I');
+          expect(args).toContain('-S');
+          expect(args).toContain('-B');
+          backupCustodyCalls++;
+          return 'FRESH_DUMP_CUSTODY_VERIFIED';
         }
         if (program !== '/usr/bin/docker') throw Error('unexpected fixture command');
         if (args[0] === 'ps') {
@@ -878,20 +998,129 @@ it.each([
           sealFault = 0;
         }
       }
+      if (canonical && terminal === 'SUCCESS') {
+        const saved = new Map(files),
+          cb = canonicalRosterFixture().canonicalBaseline;
+        const fakePg = {
+          ...structuredClone(rows.api!),
+          Id: 'a'.repeat(64),
+          Image: 'sha256:' + '9'.repeat(64),
+        };
+        Object.assign(fakePg.Config, {
+          Image: 'docker.io/library/postgres@' + fakePg.Image,
+          Labels: {
+            'com.docker.compose.project': 'phub-timeweb-beta-dependencies',
+            'com.docker.compose.service': 'postgres',
+            'phub.release-id': null,
+            'org.opencontainers.image.revision': null,
+          },
+        });
+        Reflect.set(rows, 'postgres', fakePg);
+        backupCustodyFixture = true;
+        const cop = structuredClone(op),
+          tool = Buffer.from('synthetic enrolled backup tool');
+        put(`${source}/scripts/control-timeweb-database-backup.py`, tool);
+        const producerValue = {
+          schema: waiverProfile.CANONICAL_FRESH_OPERATION,
+          profile: 'production',
+          candidateSha: cop.candidateSha,
+          controllerSha: cop.controllerSha,
+          controllerTree: cop.candidateTree,
+          toolCommit: cop.controllerSha,
+          publicationRunId: cop.publicationRunId,
+          releaseId: id,
+          canonicalBaseline: Reflect.get(cop, 'canonicalBaseline') as unknown,
+          predecessorRuntimeSha256: profile.canonicalRuntimeHash(
+            Reflect.get(cop, 'canonicalBaseline'),
+          ),
+          expectedApi: b.containers.api,
+          expectedPostgres: {
+            id: fakePg.Id,
+            image: fakePg.Config.Image,
+            imageId: fakePg.Image,
+            releaseId: null,
+            revision: null,
+            restarts: 0,
+            startedAt: fakePg.State.StartedAt,
+          },
+          predecessorAttestationSha256: profile.cutoverBaselineHash(cop),
+          expectedDatabaseTarget: cb.databaseTarget,
+          expectedLedgerSha256: cb.ledgerSha256,
+          toolFileSha256: hash(tool),
+          controllerConfigSha256: hash(files.get('/etc/phub/timeweb-beta-standard-delivery.json')!),
+          ownerRestoreDecision: (Reflect.get(cop, 'ownerDecisions') as Record<string, unknown>)
+            .repeatedRestore,
+          expiresAt: cop.expiresAt,
+        };
+        const pbytes = json(producerValue);
+        cop.backupOperationSha256 = hash(pbytes);
+        Reflect.set(cop, 'ownerDecisions', ownerDirectedTestChoices(cop));
+        put(`${tx}/backup-operation.json`, pbytes);
+        const rvalue = {
+          schema: waiverProfile.CANONICAL_FRESH_RECEIPT,
+          baselineReleaseId: cop.expectedApi.releaseId,
+          completedAt: '2026-11-16T10:01:00.000Z',
+          backupFile: `${tx}/database.pgcustom`,
+          backupSha256: hash(dump),
+          operationSha256: hash(pbytes),
+          predecessorAttestationSha256: profile.cutoverBaselineHash(cop),
+          databaseTarget: cb.databaseTarget,
+          sourceLedgerSha256: cb.ledgerSha256,
+          sourceAccountsSha256: 'a'.repeat(64),
+          snapshotWitnessSha256: 'b'.repeat(64),
+          dumpBytes: dump.length,
+          dumpLimitBytes: (13 * 1024 ** 3) / 2,
+          dumpCompression: 'zstd:3',
+          postgresImage: fakePg.Config.Image,
+          freshDumpRestored: false,
+          freshDumpIntegrityStatus: 'PG16_TOC_PARSE_VERIFIED',
+          restoreAdmissionPolicy: waiverProfile.CANONICAL_PRIOR_RESTORE_POLICY,
+          priorReferenceSha256: hash(files.get(`${tx}/prior-full-restore-reference.json`)!),
+          ownerReceiptSha256: hash(files.get(`${tx}/owner-restore-decision.json`)!),
+        };
+        put(`${tx}/database-backup-receipt.json`, json(rvalue));
+        vi.useFakeTimers();
+        vi.setSystemTime('2026-11-16T10:02:00.000Z');
+        try {
+          const proof = controller.validateUpgradeBackup(tx, cop.expectedApi, 'production', cop);
+          expect(proof.admissionPolicy).toBe(waiverProfile.CANONICAL_PRIOR_RESTORE_POLICY);
+          expect(proof.operationSha256).toBe(hash(pbytes));
+          expect(backupCustodyCalls).toBe(1);
+          for (const mutation of [
+            { schema: waiverProfile.FRESH_BACKUP_RECEIPT },
+            { restoreAdmissionPolicy: waiverProfile.PRIOR_RESTORE_POLICY },
+            { freshDumpRestored: true },
+          ]) {
+            put(`${tx}/database-backup-receipt.json`, json({ ...rvalue, ...mutation }));
+            expect(() =>
+              controller.validateUpgradeBackup(tx, cop.expectedApi, 'production', cop),
+            ).toThrow();
+          }
+        } finally {
+          vi.useRealTimers();
+          backupCustodyFixture = false;
+          Reflect.deleteProperty(rows, 'postgres');
+          files.clear();
+          for (const [name, value] of saved) files.set(name, value);
+        }
+      }
       for (const name of ['candidate', 'previous-api', 'previous-worker', 'previous-web'])
         put(`${tx}/${name}.env`, controller.overlayBytes(plan, name));
       const descriptor = controller.buildApiWebInstalledDescriptor(values, plan, id, receiptPath);
       if (terminal === 'SUCCESS')
         put(`${root}/releases/${id}/installed-components.env`, descriptor);
       const receipt = {
-        schema: ownerDirected
-          ? waiverProfile.OWNER_RECEIPT
-          : waived
-            ? waiverProfile.WAIVER_RECEIPT
-            : profile.ROSTER_CUTOVER_RECEIPT,
+        schema: canonical
+          ? waiverProfile.CANONICAL_RECEIPT
+          : ownerDirected
+            ? waiverProfile.OWNER_RECEIPT
+            : waived
+              ? waiverProfile.WAIVER_RECEIPT
+              : profile.ROSTER_CUTOVER_RECEIPT,
         status: terminal,
         planSha256: hash(json(plan)),
-        legacyBaselineSha256: profile.legacyBaselineHash(b),
+        [canonical ? 'canonicalBaselineSha256' : 'legacyBaselineSha256']:
+          profile.cutoverBaselineHash(op),
         observedAt: waived ? '2026-11-14T12:17:00.000Z' : '2026-11-13T17:16:00.000Z',
         ...(terminal === 'SUCCESS'
           ? {
@@ -906,6 +1135,175 @@ it.each([
           : {}),
       };
       put(receiptPath, json(receipt));
+      if (terminal === 'SUCCESS' && ownerDirected && !canonical) {
+        const hb = canonicalRosterFixture().canonicalBaseline;
+        hb.secretSetReleaseId = b.secretSetReleaseId;
+        hb.secretHashes = b.secretHashes;
+        const hid = hb.installedReleaseId,
+          htx = `${root}/backups/${hid}-api-web`;
+        const hop = {
+          ...op,
+          candidateSha: hb.sourceSha,
+          controllerSha: hb.sourceSha,
+          candidateTree: hb.sourceTree,
+          sourceCiRunId: hb.sourceCiRunId,
+          publicationRunId: hb.publicationRunId,
+          artifactId: hb.artifactId,
+          manifestSha256: hb.manifestSha256,
+          expiresAt: '2026-11-16T11:00:00.000Z',
+        };
+        Reflect.set(hop, 'ownerDecisions', ownerDirectedTestChoices(hop));
+        hop.confirmation = `CUTOVER_PRODUCTION_API_WORKER_WEB_OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_REPEAT_RESTORE_${hop.candidateSha.slice(0, 12).toUpperCase()}_FROM_${profile.legacyBaselineHash(b).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+        const hp = structuredClone(plan);
+        hp.controllerSha = hop.controllerSha;
+        hp.manifestSha256 = hop.manifestSha256;
+        hp.operationSha256 = hash(json(hop));
+        hp.monitoring = waiverProfile.createOwnerDirectedBinding(hop, hp.operationSha256);
+        for (const service of ['api', 'worker', 'web'])
+          hp.candidate[service] = {
+            image: hb.containers[service]!.image,
+            releaseId: service === 'worker' ? null : hid,
+            ...(service === 'worker' ? { revision: hb.sourceSha } : {}),
+          };
+        for (const field of ['path', 'receiptPath', 'operationPath'] as const)
+          hp.backup[field] = hp.backup[field].replace(tx, htx);
+        const hd = controller.buildApiWebInstalledDescriptor(
+          values,
+          hp,
+          hid,
+          `${htx}/rollout-receipt.json`,
+        );
+        const hr = {
+          ...receipt,
+          status: 'RECONCILED',
+          reconciledStatus: 'SUCCESS',
+          planSha256: hash(json(hp)),
+          installedBaselineSha256: hash(hd),
+          ...waiverProfile.ownerDirectedReceipt(hp.monitoring),
+        };
+        const nativeFs = await vi.importActual<typeof NativeFs>('node:fs');
+        const hf: Record<string, Buffer> = {};
+        for (const name of [
+          'FRESH_DUMP_INTEGRITY_VERIFIED.json',
+          'backup-operation.json',
+          'backup.complete',
+          'candidate.env',
+          'database-backup-receipt.json',
+          'legacy-predecessor-attestation.json',
+          'legacy-release.env',
+          'observation.json',
+          'operation.json',
+          'owner-restore-decision.json',
+          'plan.json',
+          'previous-api.env',
+          'previous-web.env',
+          'previous-worker.env',
+          'prior-full-restore-reference.json',
+          'rollout-receipt.json',
+          'snapshot-witness.json',
+        ])
+          hf[name] = files.get(`${tx}/${name}`) ?? json({ synthetic: true });
+        Object.assign(hf, {
+          'operation.json': json(hop),
+          'plan.json': json(hp),
+          'rollout-receipt.json': json(hr),
+          'installed-components.env': hd,
+          'backup.complete': Buffer.from(hash(json(hp)) + '\n'),
+          'release-manifest.json': nativeFs.readFileSync(
+            new URL('./fixtures/timeweb-release-manifest-4b8dbaa1.json', import.meta.url),
+          ),
+        });
+        for (const name of ['candidate', 'previous-api', 'previous-worker', 'previous-web'])
+          hf[name + '.env'] = Buffer.from(controller.overlayBytes(hp, name));
+        for (const [name, key] of [
+          ['operation.json', 'operationSha256'],
+          ['plan.json', 'planSha256'],
+          ['rollout-receipt.json', 'receiptSha256'],
+          ['installed-components.env', 'installedDescriptorSha256'],
+          ['observation.json', 'observationSha256'],
+          ['backup-operation.json', 'backupOperationSha256'],
+          ['database-backup-receipt.json', 'backupReceiptSha256'],
+        ] as const)
+          Reflect.set(hb, key, hash(hf[name]!));
+        expect(controller.validateCanonicalHistoricalArtifacts(hb, hf)).toEqual({
+          schema: 'PHUB_TIMEWEB_CANONICAL_HISTORY_OUTER_VALIDATION_V1',
+          rolloutReceiptSha256: hb.receiptSha256,
+          runtimeConsulted: false,
+        });
+        const beforeFiles = new Map(files),
+          beforeRows = structuredClone(rows);
+        try {
+          put(`${htx}/database.pgcustom`, dump);
+          for (const [name, bytes] of Object.entries(hf))
+            put(
+              (name.endsWith('.env') && name === 'installed-components.env') ||
+                name === 'release-manifest.json'
+                ? `${root}/releases/${hid}/${name}`
+                : `${htx}/${name}`,
+              bytes,
+            );
+          for (const service of ['api', 'worker', 'web', 'realtime']) {
+            const row = rows[service]!,
+              c = hb.containers[service]!;
+            row.Id = c.id;
+            row.Image = c.imageId;
+            row.Config.Image = c.image;
+            row.Config.Labels['phub.release-id'] = c.releaseId;
+            row.Config.Labels['org.opencontainers.image.revision'] = c.revision;
+            row.State.StartedAt = c.startedAt;
+          }
+          const rt = rows.realtime!;
+          hb.excludedSha256 = hash(
+            JSON.stringify([
+              {
+                id: rt.Id,
+                image: rt.Config.Image,
+                imageId: rt.Image,
+                restarts: 0,
+                startedAt: rt.State.StartedAt,
+                status: 'running',
+                health: 'healthy',
+              },
+            ]),
+          );
+          expect(controller.attestCanonicalBaseline(hb).bytes).toEqual(hd);
+          const runtimeBefore = rows.worker!.Config.Labels['org.opencontainers.image.revision'];
+          rows.worker!.Config.Labels['org.opencontainers.image.revision'] = null;
+          expect(() => controller.attestCanonicalBaseline(hb)).toThrow();
+          rows.worker!.Config.Labels['org.opencontainers.image.revision'] = runtimeBefore;
+          const oldReceipt = files.get(`${htx}/rollout-receipt.json`)!;
+          put(`${htx}/rollout-receipt.json`, json({ ...hr, reconciledStatus: 'ROLLED_BACK' }));
+          expect(() => controller.attestCanonicalBaseline(hb)).toThrow();
+          put(`${htx}/rollout-receipt.json`, oldReceipt);
+          expect(controller.attestCanonicalBaseline(hb).bytes).toEqual(hd);
+        } finally {
+          files.clear();
+          for (const [name, bytes] of beforeFiles) files.set(name, bytes);
+          Object.assign(rows, beforeRows);
+        }
+        for (const name of [
+          'operation.json',
+          'plan.json',
+          'rollout-receipt.json',
+          'installed-components.env',
+          'observation.json',
+          'backup-operation.json',
+          'database-backup-receipt.json',
+          'release-manifest.json',
+          'legacy-predecessor-attestation.json',
+          'legacy-release.env',
+          'backup.complete',
+          'candidate.env',
+          'previous-api.env',
+          'previous-worker.env',
+          'previous-web.env',
+        ]) {
+          const before = hf[name]!;
+          hf[name] = Buffer.from('changed');
+          expect(() => controller.validateCanonicalHistoricalArtifacts(hb, hf), name).toThrow();
+          hf[name] = before;
+        }
+      }
       if (terminal === 'SUCCESS' && waived) {
         const path = `${source}/scripts/timeweb-native-observability.js`,
           old = files.get(path)!;
@@ -933,7 +1331,7 @@ it.each([
       }
       if (terminal === 'SUCCESS' && ownerDirected) {
         expect(controller.readInstalledApiBaseline(id).values.PHUB_COMPONENT_ROLLOUT_KIND).toBe(
-          waiverProfile.OWNER_KIND,
+          canonical ? waiverProfile.CANONICAL_KIND : waiverProfile.OWNER_KIND,
         );
         for (const delta of [
           { providerMonitoringStatus: 'PASS' },
@@ -982,6 +1380,21 @@ it.each([
         expect(files.has(lockPath)).toBe(true);
         files.delete(path);
       }
+      if (canonical) {
+        const retained = `${tx}/canonical-predecessor.env`,
+          before = files.get(retained)!;
+        put(retained, Buffer.from('changed'));
+        await expect(
+          controller.runManualApiWebUpgrade('reconcile', `${root}/operator/api-web-upgrade.json`),
+        ).rejects.toThrow();
+        expect(files.has(lockPath)).toBe(true);
+        put(retained, before);
+        expect(
+          files.has(
+            `${root}/releases/${profile.CANONICAL_BASELINE_RELEASE}/installed-components.env`,
+          ),
+        ).toBe(false);
+      }
       const result = await controller.runManualApiWebUpgrade(
         'reconcile',
         `${root}/operator/api-web-upgrade.json`,
@@ -1000,6 +1413,24 @@ it.each([
       );
       expect([...inspected]).toEqual(expect.arrayContaining(['api', 'worker', 'web']));
       expect(mutations).toEqual([]);
+      if (canonical) {
+        const sealed = Buffer.from(files.get(receiptPath)!),
+          writes = filesystemWrites.length;
+        vi.useFakeTimers();
+        vi.setSystemTime(Date.parse(String(reconciled.observedAt)) + 60000);
+        try {
+          await controller.runManualApiWebUpgrade(
+            'reconcile',
+            `${root}/operator/api-web-upgrade.json`,
+          );
+          expect(files.has(lockPath)).toBe(false);
+          expect(mutations).toEqual([]);
+          expect(files.get(receiptPath)).toEqual(sealed);
+          expect(filesystemWrites.length).toBe(writes);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
     } finally {
       uid.mockRestore();
       fetch.mockRestore();

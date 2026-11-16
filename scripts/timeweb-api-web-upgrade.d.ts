@@ -8,6 +8,32 @@ export function readInstalledApiBaseline(
   secretSetReleaseId: string;
   workerGate?: unknown;
 };
+export function validateUpgradeBackup(
+  directory: string,
+  previous: Record<string, unknown>,
+  profile?: string,
+  cutover?: Record<string, unknown>,
+): Record<string, unknown>;
+export function attestCanonicalBaseline(baseline: unknown): {
+  path: string;
+  bytes: Buffer;
+  values: Record<string, string>;
+  secretSetReleaseId: string;
+};
+export function attestCanonicalBackupOperation(operation: Record<string, unknown>): {
+  schema: string;
+  canonicalBaselineSha256: string;
+  installedDescriptorSha256: string;
+  runtimeSecretsChecked: true;
+};
+export function validateCanonicalHistoricalArtifacts(
+  baseline: unknown,
+  files: Record<string, Buffer>,
+): { schema: string; rolloutReceiptSha256: string; runtimeConsulted: false };
+export function readCanonicalPredecessor(
+  operation: Record<string, unknown>,
+  recovering?: boolean,
+): { path: string; bytes: Buffer; values: Record<string, string>; secretSetReleaseId: string };
 
 export function readJoinPost105Backup(
   op: Record<string, unknown>,

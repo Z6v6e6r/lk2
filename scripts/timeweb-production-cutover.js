@@ -7,6 +7,14 @@ import {
   OWNER_PLAN,
   OWNER_RECEIPT,
   OWNER_KIND,
+  CANONICAL_OPERATION,
+  CANONICAL_PLAN,
+  CANONICAL_RECEIPT,
+  CANONICAL_KIND,
+  CANONICAL_FRESH_OPERATION,
+  CANONICAL_FRESH_RECEIPT,
+  CANONICAL_PRIOR_RESTORE_POLICY,
+  isCanonicalOwnerDirectedUpgrade,
   isOwnerDirectedCutover,
   validateOwnerDirectedDecisions,
   validateOwnerDirectedBinding,
@@ -72,31 +80,144 @@ export const isRosterCutover = (value) =>
   isOwnerDirectedCutover(value);
 export const isProductionCutover = (value) =>
   value?.schema === CUTOVER_OPERATION || isRosterCutover(value);
+export const isLegacyProductionCutover = (value) =>
+  isProductionCutover(value) && !isCanonicalOwnerDirectedUpgrade(value);
+export const cutoverBaseline = (op) =>
+  isCanonicalOwnerDirectedUpgrade(op) ? op.canonicalBaseline : op.legacyBaseline;
+export const cutoverBaselineField = (op) =>
+  isCanonicalOwnerDirectedUpgrade(op) ? 'canonicalBaselineSha256' : 'legacyBaselineSha256';
+export const cutoverBaselineHash = (op) => hash(JSON.stringify(cutoverBaseline(op)));
 export const cutoverPlanSchema = (value) =>
-  isOwnerDirectedCutover(value)
-    ? OWNER_PLAN
-    : isWaivedRosterCutover(value)
-      ? WAIVER_PLAN
-      : isRosterCutover(value)
-        ? ROSTER_CUTOVER_PLAN
-        : CUTOVER_PLAN;
+  isCanonicalOwnerDirectedUpgrade(value)
+    ? CANONICAL_PLAN
+    : isOwnerDirectedCutover(value)
+      ? OWNER_PLAN
+      : isWaivedRosterCutover(value)
+        ? WAIVER_PLAN
+        : isRosterCutover(value)
+          ? ROSTER_CUTOVER_PLAN
+          : CUTOVER_PLAN;
 export const cutoverReceiptSchema = (value) =>
-  isOwnerDirectedCutover(value)
-    ? OWNER_RECEIPT
-    : isWaivedRosterCutover(value)
-      ? WAIVER_RECEIPT
-      : isRosterCutover(value)
-        ? ROSTER_CUTOVER_RECEIPT
-        : CUTOVER_RECEIPT;
+  isCanonicalOwnerDirectedUpgrade(value)
+    ? CANONICAL_RECEIPT
+    : isOwnerDirectedCutover(value)
+      ? OWNER_RECEIPT
+      : isWaivedRosterCutover(value)
+        ? WAIVER_RECEIPT
+        : isRosterCutover(value)
+          ? ROSTER_CUTOVER_RECEIPT
+          : CUTOVER_RECEIPT;
 export const cutoverInstalledKind = (value) =>
-  [OWNER_OPERATION, OWNER_PLAN].includes(value?.schema)
-    ? OWNER_KIND
-    : [WAIVER_OPERATION, WAIVER_PLAN].includes(value?.schema)
-      ? WAIVER_KIND
-      : [ROSTER_CUTOVER_OPERATION, ROSTER_CUTOVER_PLAN].includes(value?.schema)
-        ? ROSTER_CUTOVER_KIND
-        : 'API_WEB';
+  [CANONICAL_OPERATION, CANONICAL_PLAN].includes(value?.schema)
+    ? CANONICAL_KIND
+    : [OWNER_OPERATION, OWNER_PLAN].includes(value?.schema)
+      ? OWNER_KIND
+      : [WAIVER_OPERATION, WAIVER_PLAN].includes(value?.schema)
+        ? WAIVER_KIND
+        : [ROSTER_CUTOVER_OPERATION, ROSTER_CUTOVER_PLAN].includes(value?.schema)
+          ? ROSTER_CUTOVER_KIND
+          : 'API_WEB';
 export const legacyBaselineHash = (baseline) => hash(JSON.stringify(baseline));
+export const CANONICAL_BASELINE_SOURCE = '4b8dbaa12c1ec3fea478a5e661465955e4b0c7c0';
+export const CANONICAL_BASELINE_RELEASE = `${CANONICAL_BASELINE_SOURCE}-43751306581-1`;
+export const CANONICAL_BASELINE_SCHEMA = 'PHUB_TIMEWEB_INSTALLED_CANONICAL_ROSTER_RUNTIME_V1';
+export const CANONICAL_BASELINE_IMAGES = Object.freeze({
+  api: 'sha256:f589eadccc4beeb0c629c029354acbf4d5f427517bce9d81c71fe07c4053f0e3',
+  worker: 'sha256:010cc45bff9633efee72979356c7534d400becd379e86d2069307d5a39726c8b',
+  web: 'sha256:3dd7c4846c3e4d65830e66b7c57de41d5a60b147b72709e70d68888b937d0f69',
+  realtime: 'sha256:7e4f30ab2b8e871f459fd103a2856a801cf2796d2fe24910d9e931fda8301fed',
+});
+/** One real canonical predecessor; this is not a fallback for legacy or arbitrary manual state. */
+export function validateCanonicalBaseline(value) {
+  exact(value, [
+    'schema',
+    'capturedAt',
+    'installedReleaseId',
+    'sourceSha',
+    'sourceTree',
+    'sourceCiRunId',
+    'publicationRunId',
+    'artifactId',
+    'manifestSha256',
+    'installedDescriptorSha256',
+    'operationSha256',
+    'planSha256',
+    'receiptSha256',
+    'observationSha256',
+    'backupOperationSha256',
+    'backupReceiptSha256',
+    'secretSetReleaseId',
+    'secretHashes',
+    'containers',
+    'excludedSha256',
+    'databaseTarget',
+    'ledgerSha256',
+  ]);
+  if (
+    value.schema !== CANONICAL_BASELINE_SCHEMA ||
+    value.installedReleaseId !== CANONICAL_BASELINE_RELEASE ||
+    value.sourceSha !== CANONICAL_BASELINE_SOURCE ||
+    value.sourceTree !== '8907550c2386aaddc97b3fbda186dced43db00bd' ||
+    value.sourceCiRunId !== '43749601790' ||
+    value.publicationRunId !== '43751306581' ||
+    value.artifactId !== '14176493246' ||
+    value.manifestSha256 !== '15465f17d7d4384ea2392fda664ff438a340389b3c5df29d2bd14d4e5ee82672' ||
+    !timestamp(value.capturedAt) ||
+    !ID.test(value.secretSetReleaseId ?? '') ||
+    value.ledgerSha256 !== '4dab86cb18f7e3db7a0598cd657eaebc86f07d5af497dc0eea2e33900b6526c1' ||
+    [
+      'installedDescriptorSha256',
+      'operationSha256',
+      'planSha256',
+      'receiptSha256',
+      'observationSha256',
+      'backupOperationSha256',
+      'backupReceiptSha256',
+      'excludedSha256',
+    ].some((k) => !HASH.test(value[k] ?? ''))
+  )
+    fail('canonical_identity');
+  exact(value.databaseTarget, ['databaseName', 'systemIdentifier']);
+  if (
+    value.databaseTarget.databaseName !== 'phub_beta' ||
+    value.databaseTarget.systemIdentifier !== '7679125609183186977'
+  )
+    fail('canonical_database');
+  exact(value.secretHashes, SECRETS);
+  if (SECRETS.some((k) => !HASH.test(value.secretHashes[k] ?? ''))) fail('canonical_secret_hash');
+  exact(value.containers, ['api', 'web', 'worker', 'realtime']);
+  for (const service of ['api', 'web', 'worker', 'realtime']) {
+    const c = value.containers[service];
+    exact(c, ['id', 'image', 'imageId', 'releaseId', 'revision', 'restarts', 'startedAt']);
+    if (
+      !HASH.test(c.id ?? '') ||
+      !image(service, c.image) ||
+      c.imageId !== CANONICAL_BASELINE_IMAGES[service] ||
+      c.imageId !== c.image.split('@')[1] ||
+      c.restarts !== 0 ||
+      !timestamp(c.startedAt) ||
+      c.releaseId !== (['api', 'web'].includes(service) ? CANONICAL_BASELINE_RELEASE : null) ||
+      c.revision !== (service === 'realtime' ? null : CANONICAL_BASELINE_SOURCE)
+    )
+      fail('canonical_container');
+  }
+  return value;
+}
+export function canonicalRuntimeHash(baseline) {
+  validateCanonicalBaseline(baseline);
+  const sorted = (v) =>
+    Array.isArray(v)
+      ? v.map(sorted)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v)
+              .sort()
+              .map((k) => [k, sorted(v[k])]),
+          )
+        : v;
+  const { capturedAt: _capturedAt, ...runtime } = baseline;
+  return hash(JSON.stringify(sorted(runtime)));
+}
 // Compatibility only. Full lineage/confirmation/freshness keep the complete baseline hash.
 export function legacyRuntimeHash(baseline) {
   validateLegacyBaseline(baseline);
@@ -217,7 +338,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
     ...(isRosterCutover(value) ? ['expectedWorker'] : []),
     ...(isWaivedRosterCutover(value) ? ['alertWaiver'] : []),
     ...(isOwnerDirectedCutover(value) ? ['ownerDecisions'] : []),
-    'legacyBaseline',
+    isCanonicalOwnerDirectedUpgrade(value) ? 'canonicalBaseline' : 'legacyBaseline',
     'expiresAt',
     'confirmation',
   ]);
@@ -238,7 +359,10 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
     !timestamp(value.expiresAt)
   )
     fail('operation');
-  const baseline = validateLegacyBaseline(value.legacyBaseline);
+  const canonical = isCanonicalOwnerDirectedUpgrade(value);
+  const baseline = canonical
+    ? validateCanonicalBaseline(value.canonicalBaseline)
+    : validateLegacyBaseline(value.legacyBaseline);
   if (isWaivedRosterCutover(value))
     validateRosterAlertWaiver(value, legacyBaselineHash(baseline), fresh, now);
   if (isOwnerDirectedCutover(value)) validateOwnerDirectedDecisions(value, fresh, now);
@@ -255,7 +379,7 @@ export function validateProductionCutover(value, fresh = false, now = Date.now()
     )
       fail('previous_identity');
   }
-  const expected = `CUTOVER_PRODUCTION_${isRosterCutover(value) ? 'API_WORKER_WEB_' : ''}${isOwnerDirectedCutover(value) ? 'OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_REPEAT_RESTORE_' : isWaivedRosterCutover(value) ? 'WITHOUT_INDUCED_ALERT_KEEP_OTHER_GATES_' : ''}${value.candidateSha.slice(0, 12).toUpperCase()}_FROM_${legacyBaselineHash(baseline).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
+  const expected = `${canonical ? 'UPGRADE_CANONICAL_PRODUCTION_' : 'CUTOVER_PRODUCTION_'}${isRosterCutover(value) ? 'API_WORKER_WEB_' : ''}${isOwnerDirectedCutover(value) ? 'OWNER_SKIPPED_ALERT_DRILL_PROVIDER_READBACK_REPEAT_RESTORE_' : isWaivedRosterCutover(value) ? 'WITHOUT_INDUCED_ALERT_KEEP_OTHER_GATES_' : ''}${value.candidateSha.slice(0, 12).toUpperCase()}_FROM_${legacyBaselineHash(baseline).slice(0, 12).toUpperCase()}_KEEP_DATA_AND_ACCOUNTS`;
   if (value.confirmation !== expected) fail('confirmation');
   if (
     fresh &&
@@ -396,14 +520,18 @@ export function validateLegacyBuildRecord(baseline, component, archiveBytes, ind
 }
 export function validateCutoverLineage(receipt, plan, operation, descriptor, operationBytes) {
   validateProductionCutover(operation);
-  const digest = legacyBaselineHash(operation.legacyBaseline);
+  const digest = cutoverBaselineHash(operation),
+    field = cutoverBaselineField(operation);
+  const prefix = isCanonicalOwnerDirectedUpgrade(operation)
+    ? 'PHUB_CANONICAL_PREDECESSOR_'
+    : 'PHUB_LEGACY_PREDECESSOR_';
   if (
     receipt.schema !== cutoverReceiptSchema(operation) ||
     plan.schema !== cutoverPlanSchema(operation) ||
-    receipt.legacyBaselineSha256 !== digest ||
-    plan.legacyBaselineSha256 !== digest ||
-    descriptor.PHUB_LEGACY_PREDECESSOR_SHA256 !== digest ||
-    descriptor.PHUB_LEGACY_PREDECESSOR_RELEASE_ID !== operation.expectedApi.releaseId ||
+    receipt[field] !== digest ||
+    plan[field] !== digest ||
+    descriptor[prefix + 'SHA256'] !== digest ||
+    descriptor[prefix + 'RELEASE_ID'] !== operation.expectedApi.releaseId ||
     !Buffer.isBuffer(operationBytes) ||
     plan.operationSha256 !== hash(operationBytes) ||
     plan.backup?.operationSha256 !== operation.backupOperationSha256 ||
@@ -428,7 +556,10 @@ export function validateCutoverPlanProofs(operation, plan, transaction) {
   if (isOwnerDirectedCutover(operation)) {
     validateOwnerDirectedBinding(operation, plan.monitoring, plan.operationSha256);
     if (
-      plan.backup.admissionPolicy !== PRIOR_RESTORE_POLICY ||
+      plan.backup.admissionPolicy !==
+        (isCanonicalOwnerDirectedUpgrade(operation)
+          ? CANONICAL_PRIOR_RESTORE_POLICY
+          : PRIOR_RESTORE_POLICY) ||
       ![plan.backup.priorReferenceSha256, plan.backup.ownerReceiptSha256].every((v) =>
         HASH.test(v ?? ''),
       )
@@ -468,7 +599,10 @@ export function assertCutoverBackupFiles(operation, plan, transaction, read, has
   if (isOwnerDirectedCutover(operation)) {
     const r = parseStrictJson(read(plan.backup.receiptPath));
     if (
-      r.schema !== FRESH_BACKUP_RECEIPT ||
+      r.schema !==
+        (isCanonicalOwnerDirectedUpgrade(operation)
+          ? CANONICAL_FRESH_RECEIPT
+          : FRESH_BACKUP_RECEIPT) ||
       r.freshDumpRestored !== false ||
       r.freshDumpIntegrityStatus !== 'PG16_TOC_PARSE_VERIFIED' ||
       r.restoreAdmissionPolicy !== plan.backup.admissionPolicy ||
@@ -530,6 +664,9 @@ export function validateCutoverBackupOperation(operation, bytes, facts) {
   validateProductionCutover(operation);
   if (hash(bytes) !== operation.backupOperationSha256) fail('backup_operation_hash');
   const producer = parseStrictJson(bytes);
+  const canonical = isCanonicalOwnerDirectedUpgrade(operation),
+    baseline = cutoverBaseline(operation);
+  const freshSchema = canonical ? CANONICAL_FRESH_OPERATION : FRESH_BACKUP_OPERATION;
   const sameIdentity = (actual, expected) =>
     ['id', 'image', 'imageId', 'releaseId', 'revision', 'restarts', 'startedAt'].every(
       (key) => actual[key] === expected?.[key],
@@ -538,11 +675,13 @@ export function validateCutoverBackupOperation(operation, bytes, facts) {
     ![
       'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1',
       'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2',
-      ...(isOwnerDirectedCutover(operation) ? [FRESH_BACKUP_OPERATION] : []),
+      ...(isOwnerDirectedCutover(operation) ? [freshSchema] : []),
     ].includes(producer.schema) ||
-    (isOwnerDirectedCutover(operation) && producer.schema !== FRESH_BACKUP_OPERATION) ||
+    (isOwnerDirectedCutover(operation) && producer.schema !== freshSchema) ||
+    (canonical && !equal(producer.canonicalBaseline, baseline)) ||
     (isOwnerDirectedCutover(operation) &&
-      producer.predecessorRuntimeSha256 !== legacyRuntimeHash(operation.legacyBaseline)) ||
+      producer.predecessorRuntimeSha256 !==
+        (canonical ? canonicalRuntimeHash(baseline) : legacyRuntimeHash(baseline))) ||
     producer.profile !== 'production' ||
     producer.candidateSha !== operation.candidateSha ||
     producer.controllerSha !== operation.controllerSha ||
@@ -551,11 +690,11 @@ export function validateCutoverBackupOperation(operation, bytes, facts) {
     producer.publicationRunId !== operation.publicationRunId ||
     producer.releaseId !== `${operation.candidateSha}-${operation.publicationRunId}-1` ||
     facts.directory !== `${ROOT}/backups/${producer.releaseId}-api-web` ||
-    !sameIdentity(operation.legacyBaseline.containers.api, producer.expectedApi) ||
+    !sameIdentity(baseline.containers.api, producer.expectedApi) ||
     !sameIdentity(facts.postgres, producer.expectedPostgres) ||
-    producer.predecessorAttestationSha256 !== legacyBaselineHash(operation.legacyBaseline) ||
-    !equal(producer.expectedDatabaseTarget, operation.legacyBaseline.databaseTarget) ||
-    producer.expectedLedgerSha256 !== operation.legacyBaseline.ledgerSha256 ||
+    producer.predecessorAttestationSha256 !== cutoverBaselineHash(operation) ||
+    !equal(producer.expectedDatabaseTarget, baseline.databaseTarget) ||
+    producer.expectedLedgerSha256 !== baseline.ledgerSha256 ||
     producer.toolFileSha256 !== facts.toolFileSha256 ||
     producer.controllerConfigSha256 !== facts.configSha256
   )

@@ -1899,3 +1899,40 @@ Freeze one source containing this procedure, Docker Hub redirect correction and 
 budget; publish and enroll that same source. Never mix the failed partial 758 publication with
 new images, replay the aborted 857 transaction, retimestamp its backup receipt, or relabel the
 fresh dump as restored. A failed or uncertain new transaction uses its own reconciliation entry.
+
+### Canonical predecessor roster upgrade V5
+
+`PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_UPGRADE_V5` is the single-operation successor for the
+installed canonical `4b8dbaa12c1e…-43751306581-1` API/Worker/Web release. It reuses this controller's
+three-service phase machine, immutable publisher, backup entry and rollback. It does not admit an
+arbitrary predecessor or relabel the canonical release as legacy 759. V1–V4 keep their original
+schemas, policy binding and validation. A new exact source package needs its own owner approval;
+merge of the product fix alone is not approval of changed controller source.
+
+V5 binds a closed `canonicalBaseline`: exact source/tree, CI/publication/artifact/manifest,
+installed descriptor and completed V4 operation/plan/receipt/observation/backup hashes, all four
+runtime identities, excluded containers, secret-set hashes, database system identity and unchanged
+122-row ledger. Forward admission validates the actual installed 4b8 terminal closure and running
+API/Worker/Web/Realtime. Its API/Worker/Web OCI revisions are non-null. No secrets, migrations,
+account creation, payment state, provider writes or Realtime transition are part of this profile.
+
+The outer plan and receipt use `PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_PLAN_V5` and
+`PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_RECEIPT_V5`. The installed descriptor records
+`API_WORKER_WEB_CANONICAL_UPGRADE`, `PHUB_CANONICAL_PREDECESSOR_SHA256`, release ID and the exact
+retained attestation pointer. The owner-policy binding is V2; it records skipped provider monitoring
+and declined alert drill truthfully, without a PASS claim. Existing source-bound owner decisions are
+carried into the new package and expire with it. The canonical prior-restore policy is
+`EXACT_CANONICAL_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1`.
+
+Retain `canonical-predecessor.env` and `canonical-predecessor-attestation.json` before activation.
+Recovery and terminal reconciliation validate those retained bytes rather than the old live 4b8
+runtime. Canonical rollback contains the Worker first and restores all three recorded images through
+the same engine; no manual Worker update is allowed. A completed V5 transaction can be reconciled
+again without a shared lease, but only from its exact retained RECONCILED operation and receipt.
+Foreign or changed predecessor bytes, receipt/pointer/schema mismatches and failed identity checks
+retain the lock/evidence and stop. Reconciliation never restarts deployment or repeats a dump.
+
+The existing 61-round, at least 900-second observation, private readiness, public exact-200 checks,
+image entrypoint smoke, zero unexpected restarts, unchanged excluded services and tested rollback
+remain required. See the [canonical fresh backup profile](timeweb-prerequisite-producers.md#canonical-predecessor-fresh-dump)
+for historical restore custody. Keep LOCAL, CI, publication and PRODUCTION proof distinct.
