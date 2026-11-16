@@ -3,12 +3,21 @@ import {
   attestExactRosterPlayerMappings,
   exactRosterParticipations,
   exactRosterValueSha256,
+  readExactRosterUiIdentityPreimage,
+  readFinishedUnscoredUiPreimage,
   withTenantTransaction,
   type LegacyGameExactPlayerMapping,
   type LegacyGameImportRepository,
+  type LegacyGameUiObservationFence,
 } from '@phub/database';
-import type { LegacyGamesMongoAdapter } from '@phub/legacy-games-adapter';
+import type { LegacyGamesMongoAdapter, LegacyGameSourceSnapshot } from '@phub/legacy-games-adapter';
 import type { Pool, QueryResultRow } from 'pg';
+import {
+  parseUiObservationProof,
+  verifyUiObservationMembership,
+  assertUiObservationFresh,
+  UI_OBSERVATION_POLICY,
+} from './roster-ui-observation-proof.js';
 
 interface TargetRow extends QueryResultRow {
   game_id: string;
@@ -34,13 +43,17 @@ interface TargetRow extends QueryResultRow {
   }[];
 }
 export interface ExactRosterRepairReport {
-  schema: 'PHUB_EXACT_LEGACY_ROSTER_REPAIR_V1' | 'PHUB_EXACT_LEGACY_ROSTER_REPLACEMENT_V1';
+  schema:
+    | 'PHUB_EXACT_LEGACY_ROSTER_REPAIR_V1'
+    | 'PHUB_EXACT_LEGACY_ROSTER_REPLACEMENT_V1'
+    | 'PHUB_EXACT_LEGACY_ROSTER_UI_OBSERVATION_REPLACEMENT_V1';
   status: 'PLAN' | 'REPAIRED' | 'ALREADY_REPAIRED' | 'DEFERRED';
   gameId: string;
   operationId: string;
   planSha256: string;
   sourceParticipants: number;
   allowLocalRemovals: boolean;
+  uiObservation?: LegacyGameUiObservationFence;
   replacement?: {
     retainedParticipationCount: number;
     retainedPaidParticipationCount: number;
@@ -57,6 +70,7 @@ interface ReplacementAudit {
   retainedParticipationIdsSha256: string;
   retainedParticipationCount: number;
   retainedPaidParticipationCount: number;
+  uiObservation?: LegacyGameUiObservationFence;
 }
 export const EXACT_SOURCE_REPLACEMENT_CONFIRMATION =
   'REPLACE_SOURCE_ROSTER_KEEP_ACCOUNTS_AND_PAYMENTS';
@@ -87,7 +101,8 @@ function replacementReport(value: Omit<ReplacementAudit, 'participationsAfterSha
 export async function exactLegacyGameRosterRepair(input: {
   readonly pool: Pool;
   readonly repository: Pick<LegacyGameImportRepository, 'rebaselineParticipants'>;
-  readonly source: Pick<LegacyGamesMongoAdapter, 'readRosterByExternalIds'>;
+  readonly source: Pick<LegacyGamesMongoAdapter, 'readRosterByExternalIds'> &
+    Partial<Pick<LegacyGamesMongoAdapter, 'readRosterMembershipByExternalIds'>>;
   readonly tenantKey: string;
   readonly gameId: string;
   readonly operationId: string;
@@ -96,8 +111,25 @@ export async function exactLegacyGameRosterRepair(input: {
   readonly now?: Date;
   readonly replaceSourceRoster?: boolean;
   readonly replacementConfirmed?: boolean;
+  readonly uiObservationBytes?: Uint8Array;
+  readonly reviewedUiObservationSha256?: string;
+  readonly providerTenantKey?: string;
+  readonly finishedUnscoredUi?: boolean;
 }): Promise<ExactRosterRepairReport> {
   const replacing = input.replaceSourceRoster === true;
+  need(
+    input.uiObservationBytes
+      ? replacing &&
+          HASH.test(input.reviewedUiObservationSha256 ?? '') &&
+          input.providerTenantKey &&
+          typeof input.source.readRosterMembershipByExternalIds === 'function'
+      : input.reviewedUiObservationSha256 === undefined,
+    'UI_OBSERVATION_SCOPE',
+  );
+  const ui = input.uiObservationBytes
+    ? parseUiObservationProof(input.uiObservationBytes, input.reviewedUiObservationSha256!)
+    : undefined;
+  need(!input.finishedUnscoredUi || ui, 'UI_OBSERVATION_SCOPE');
   need(
     replacing
       ? input.planOnly
@@ -160,30 +192,42 @@ export async function exactLegacyGameRosterRepair(input: {
         )
       ).rows[0],
   );
-  need(row && row.game_id === input.gameId && row.lifecycle_state === 'SCHEDULED', 'TARGET');
-  need(row.source_aliases.length > 0 && row.source_aliases.length <= 30, 'SOURCE_MAPPING');
-  const snapshots = await input.source.readRosterByExternalIds({
-    externalIds: row.source_aliases,
-    limit: 1,
-    ...(replacing ? { requirePaidRosterProof: true } : {}),
-  });
-  need(snapshots.length === 1, 'SOURCE_CARDINALITY');
-  const snapshot = snapshots[0]!;
   need(
-    [snapshot.externalId, ...(snapshot.externalAliases ?? [])].some((id) =>
+    row &&
+      row.game_id === input.gameId &&
+      row.lifecycle_state === (input.finishedUnscoredUi ? 'FINISHED' : 'SCHEDULED'),
+    'TARGET',
+  );
+  need(row.source_aliases.length > 0 && row.source_aliases.length <= 30, 'SOURCE_MAPPING');
+  const snapshots = ui
+    ? await input.source.readRosterMembershipByExternalIds!({
+        externalIds: row.source_aliases,
+        limit: 1,
+      })
+    : await input.source.readRosterByExternalIds({
+        externalIds: row.source_aliases,
+        limit: 1,
+        ...(replacing ? { requirePaidRosterProof: true } : {}),
+      });
+  need(snapshots.length === 1, 'SOURCE_CARDINALITY');
+  const observedSnapshot = snapshots[0]!;
+  need(
+    [observedSnapshot.externalId, ...(observedSnapshot.externalAliases ?? [])].some((id) =>
       row.source_aliases.includes(id),
     ),
     'SOURCE_MAPPING',
   );
   need(
-    !snapshot.cancelled &&
-      snapshot.participants.length > 0 &&
-      snapshot.participants.length <= snapshot.capacity,
+    !observedSnapshot.cancelled &&
+      observedSnapshot.participants.length > 0 &&
+      observedSnapshot.participants.length <= observedSnapshot.capacity,
     'SOURCE_ROSTER',
   );
-  need(HASH.test(snapshot.externalVersion), 'SOURCE_VERSION');
+  need(HASH.test(observedSnapshot.externalVersion), 'SOURCE_VERSION');
   const playerAliases = [
-    ...new Set(snapshot.participants.flatMap((p) => [p.externalId, ...(p.externalAliases ?? [])])),
+    ...new Set(
+      observedSnapshot.participants.flatMap((p) => [p.externalId, ...(p.externalAliases ?? [])]),
+    ),
   ].sort();
   const mappings = await withTenantTransaction(
     input.pool,
@@ -198,7 +242,47 @@ export async function exactLegacyGameRosterRepair(input: {
         )
       ).rows,
   );
-  const identity = attestExactRosterPlayerMappings(snapshot, mappings);
+  const identity = attestExactRosterPlayerMappings(observedSnapshot, mappings);
+  let snapshot: LegacyGameSourceSnapshot;
+  let uiObservation: LegacyGameUiObservationFence | undefined;
+  if (ui) {
+    need('sourceObservationSha256' in observedSnapshot, 'UI_OBSERVATION_SOURCE');
+    const verified = verifyUiObservationMembership({
+      envelope: ui.envelope,
+      source: observedSnapshot,
+      mappings,
+      tenantKey: input.tenantKey,
+      gameId: input.gameId,
+      operationId: input.operationId,
+      providerTenantKey: input.providerTenantKey!,
+    });
+    snapshot = verified.snapshot;
+    const binding = await withTenantTransaction(input.pool, tenant.id, (client) =>
+      readExactRosterUiIdentityPreimage(client, {
+        tenantId: tenant.id,
+        gameId: input.gameId,
+        source: snapshot,
+        mappings,
+        lock: false,
+      }),
+    );
+    uiObservation = {
+      policy: UI_OBSERVATION_POLICY,
+      originAuthenticated: false,
+      proofSha256: ui.proofSha256,
+      reviewSha256: ui.reviewSha256,
+      captureSetSha256: ui.envelope.body.captureSetSha256,
+      observationSetSha256: verified.observationSetSha256,
+      sourceObservationSha256: observedSnapshot.sourceObservationSha256,
+      ...binding,
+      capturedAt: ui.envelope.body.capturedAt,
+      reviewedAt: ui.envelope.review.reviewedAt,
+      expiresAt: ui.envelope.body.expiresAt,
+    };
+  } else {
+    need(!('sourceObservationSha256' in observedSnapshot), 'UI_OBSERVATION_SCOPE');
+    snapshot = observedSnapshot;
+  }
   // Stable operation/correlation evidence permits a lost-ACK readback without reapplying.
   if (row.previous_audits.length > 0) {
     need(
@@ -221,11 +305,27 @@ export async function exactLegacyGameRosterRepair(input: {
             audit.participationsAfterSha256,
         'PREVIOUS_OUTCOME_DRIFT',
       );
+      need(
+        Boolean(audit.uiObservation?.finishedUnscored) === Boolean(input.finishedUnscoredUi),
+        'PREVIOUS_OUTCOME_DRIFT',
+      );
+      need(
+        uiObservation
+          ? audit.uiObservation?.proofSha256 === uiObservation.proofSha256 &&
+              audit.uiObservation.reviewSha256 === uiObservation.reviewSha256 &&
+              audit.uiObservation.legacySourceIdentityPreimageSha256 ===
+                uiObservation.legacySourceIdentityPreimageSha256 &&
+              audit.uiObservation.exerciseMappingSha256 === uiObservation.exerciseMappingSha256
+          : !audit.uiObservation,
+        'PREVIOUS_OUTCOME_DRIFT',
+      );
     } else need(!row.previous_audits[0]!.replacement, 'PREVIOUS_OUTCOME_DRIFT');
     return {
-      schema: replacing
-        ? 'PHUB_EXACT_LEGACY_ROSTER_REPLACEMENT_V1'
-        : 'PHUB_EXACT_LEGACY_ROSTER_REPAIR_V1',
+      schema: uiObservation
+        ? 'PHUB_EXACT_LEGACY_ROSTER_UI_OBSERVATION_REPLACEMENT_V1'
+        : replacing
+          ? 'PHUB_EXACT_LEGACY_ROSTER_REPLACEMENT_V1'
+          : 'PHUB_EXACT_LEGACY_ROSTER_REPAIR_V1',
       status: 'ALREADY_REPAIRED',
       gameId: input.gameId,
       operationId: input.operationId,
@@ -233,22 +333,52 @@ export async function exactLegacyGameRosterRepair(input: {
       sourceParticipants: snapshot.participants.length,
       allowLocalRemovals: replacing,
       authorizesDeploy: false,
+      ...(uiObservation
+        ? { uiObservation: row.previous_audits[0]!.replacement!.uiObservation! }
+        : {}),
       ...(replacing
         ? { replacement: replacementReport(row.previous_audits[0]!.replacement!) }
         : {}),
+    };
+  }
+  if (ui) assertUiObservationFresh(ui.envelope, input.now ?? new Date());
+  const finished = input.finishedUnscoredUi
+    ? await withTenantTransaction(input.pool, tenant.id, (client) =>
+        readFinishedUnscoredUiPreimage(client, {
+          tenantId: tenant.id,
+          gameId: input.gameId,
+          lock: false,
+        }),
+      )
+    : undefined;
+  if (finished) {
+    need(
+      finished.revision === Number(row.revision) &&
+        finished.syncRevision === Number(row.sync_revision),
+      'FINISHED_PHASE_DRIFT',
+    );
+    need(uiObservation, 'UI_OBSERVATION_SCOPE');
+    uiObservation = {
+      ...uiObservation,
+      finishedUnscored: {
+        policy: 'EXACT_UI_PROOF_FINISHED_UNSCORED',
+        preimageSha256: finished.sha256,
+      },
     };
   }
   need(
     row.mode === 'CONFLICT' &&
       (row.conflict_code === 'LEGACY_GAME_ROSTER_BASELINE_MISMATCH' ||
         (replacing && row.conflict_code === 'LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL')) &&
-      Number(row.sync_revision) === Number(row.revision),
+      (finished
+        ? Number(row.sync_revision) + 2 === Number(row.revision)
+        : Number(row.sync_revision) === Number(row.revision)),
     'QUARANTINE',
   );
   let replacement: Omit<ReplacementAudit, 'participationsAfterSha256'> | undefined;
   if (replacing) {
     need(
-      row.before_start === true &&
+      (finished || row.before_start === true) &&
         Date.parse(snapshot.startsAt) === new Date(row.starts_at!).getTime() &&
         Date.parse(snapshot.endsAt) === new Date(row.ends_at!).getTime() &&
         snapshot.capacity === row.capacity,
@@ -284,6 +414,7 @@ export async function exactLegacyGameRosterRepair(input: {
       retainedParticipationIdsSha256: exactRosterValueSha256(retired.map((p) => p[0]).sort()),
       retainedParticipationCount: retired.length,
       retainedPaidParticipationCount: retired.filter((p) => p[4] === 'PAID').length,
+      ...(uiObservation ? { uiObservation } : {}),
     };
   }
   const planSha256 = digest({
@@ -310,22 +441,25 @@ export async function exactLegacyGameRosterRepair(input: {
       : {}),
   });
   const base = {
-    schema: replacing
-      ? ('PHUB_EXACT_LEGACY_ROSTER_REPLACEMENT_V1' as const)
-      : ('PHUB_EXACT_LEGACY_ROSTER_REPAIR_V1' as const),
+    schema: uiObservation
+      ? ('PHUB_EXACT_LEGACY_ROSTER_UI_OBSERVATION_REPLACEMENT_V1' as const)
+      : replacing
+        ? ('PHUB_EXACT_LEGACY_ROSTER_REPLACEMENT_V1' as const)
+        : ('PHUB_EXACT_LEGACY_ROSTER_REPAIR_V1' as const),
     gameId: input.gameId,
     operationId: input.operationId,
     planSha256,
     sourceParticipants: snapshot.participants.length,
     allowLocalRemovals: replacing,
     authorizesDeploy: false as const,
+    ...(uiObservation ? { uiObservation } : {}),
     ...(replacement ? { replacement: replacementReport(replacement) } : {}),
   };
   if (input.planOnly) return { ...base, status: 'PLAN' };
   need(input.expectedPlanSha256 === planSha256, 'PLAN_DRIFT');
   const result = await input.repository.rebaselineParticipants({
     tenantKey: input.tenantKey,
-    snapshots,
+    snapshots: [snapshot],
     correlationId: `legacy-roster-repair:${input.operationId}:${planSha256}`,
     allowLocalRemovals: replacing,
     expected: {
@@ -339,6 +473,7 @@ export async function exactLegacyGameRosterRepair(input: {
             replacement: {
               participationsSha256: replacement.participationsBeforeSha256,
               retainedParticipationIdsSha256: replacement.retainedParticipationIdsSha256,
+              ...(uiObservation ? { uiObservation } : {}),
             },
           }
         : {}),

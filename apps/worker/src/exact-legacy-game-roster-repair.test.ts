@@ -1,3 +1,4 @@
+import { uiObservationFixture } from './roster-ui-observation-proof.fixtures.js';
 import { expect, it, vi } from 'vitest';
 import type { LegacyGameSourceSnapshot } from '@phub/legacy-games-adapter';
 import {
@@ -531,3 +532,224 @@ it.each(['same', 'wrong-plan', 'paid-change', 'new-plan'])(
     expect(f.rebaselineParticipants).not.toHaveBeenCalled();
   },
 );
+
+function uiRepairFixture() {
+  const f = replacementFixture(),
+    ui = uiObservationFixture();
+  f.playerMappings.splice(0, f.playerMappings.length, ...ui.mappings);
+  const original = f.query.getMockImplementation()!;
+  f.query.mockImplementation((sql: string) => {
+    if (sql.includes("entity_type='exercise'"))
+      return Promise.resolve({
+        rows: [
+          {
+            external_id: ui.source.vivaExerciseExternalId,
+            internal_id: gameId,
+            sync_status: 'synced',
+            sync_error_code: null,
+          },
+        ],
+      });
+    if (sql.includes('from identity.users'))
+      return Promise.resolve({ rows: ui.users.map((id) => ({ id })) });
+    if (sql.includes('from profile.user_summaries'))
+      return Promise.resolve({ rows: ui.users.map((user_id) => ({ user_id })) });
+    return original(sql);
+  });
+  const sealed = ui.seal();
+  const readRosterMembershipByExternalIds = vi.fn().mockResolvedValue([ui.source]);
+  const input = {
+    ...f.input,
+    source: { ...f.input.source, readRosterMembershipByExternalIds },
+    operationId: ui.envelope.body.operationId,
+    uiObservationBytes: sealed.bytes,
+    reviewedUiObservationSha256: sealed.sha,
+    providerTenantKey: ui.envelope.body.providerTenantKey,
+    now: ui.now,
+  };
+  return { ...f, ui, input, readRosterMembershipByExternalIds };
+}
+it('plans and applies four reviewed subscription observations through the retained-row writer without logging provider identity', async () => {
+  const f = uiRepairFixture();
+  const plan = await exactLegacyGameRosterRepair(f.input);
+  expect(plan.schema).toBe('PHUB_EXACT_LEGACY_ROSTER_UI_OBSERVATION_REPLACEMENT_V1');
+  expect(plan.uiObservation).toMatchObject({
+    policy: 'OPERATOR_REVIEWED_VIVA_UI_SUBSCRIPTION_OBSERVATION_V1',
+    originAuthenticated: false,
+    proofSha256: f.input.reviewedUiObservationSha256,
+  });
+  expect(f.readRosterByExternalIds).not.toHaveBeenCalled();
+  expect(f.rebaselineParticipants).not.toHaveBeenCalled();
+  expect(JSON.stringify(plan)).not.toMatch(
+    /33333333|55555555|Private test name|originalToolTextExcerpt/,
+  );
+  expect(
+    (
+      await exactLegacyGameRosterRepair({
+        ...f.input,
+        planOnly: false,
+        replacementConfirmed: true,
+        expectedPlanSha256: plan.planSha256,
+      })
+    ).status,
+  ).toBe('REPAIRED');
+  expect(f.rebaselineParticipants).toHaveBeenCalledTimes(1);
+  const call = f.rebaselineParticipants.mock.calls[0] as unknown as [
+    {
+      expected: { replacement: { uiObservation: unknown } };
+      snapshots: { participants: { paymentState: string }[] }[];
+    },
+  ];
+  expect(call[0].expected.replacement.uiObservation).toEqual(plan.uiObservation);
+  expect(call[0].snapshots[0]!.participants.map((p) => p.paymentState)).toEqual([
+    'PAID',
+    'PAID',
+    'PAID',
+    'PAID',
+  ]);
+});
+it.each(['expired', 'wrong-proof', 'mapping-change', 'exercise-map-change', 'missing-method'])(
+  'stops unsupported UI recovery %s before the writer',
+  async (scenario) => {
+    const f = uiRepairFixture();
+    const plan = await exactLegacyGameRosterRepair(f.input);
+    const input = {
+      ...f.input,
+      planOnly: false,
+      replacementConfirmed: true,
+      expectedPlanSha256: plan.planSha256,
+    };
+    if (scenario === 'expired') input.now = new Date('2099-11-16T05:16:00Z');
+    if (scenario === 'wrong-proof') input.reviewedUiObservationSha256 = 'f'.repeat(64);
+    if (scenario === 'mapping-change')
+      f.playerMappings[0]!.internal_id = '99999999-9999-4999-8999-999999999999';
+    if (scenario === 'exercise-map-change') {
+      const original = f.query.getMockImplementation()!;
+      f.query.mockImplementation((sql: string) =>
+        sql.includes("entity_type='exercise'") ? Promise.resolve({ rows: [] }) : original(sql),
+      );
+    }
+    if (scenario === 'missing-method')
+      Object.assign(input, { source: { readRosterByExternalIds: f.readRosterByExternalIds } });
+    await expect(exactLegacyGameRosterRepair(input)).rejects.toThrow(/LEGACY_GAME_/);
+    expect(f.rebaselineParticipants).not.toHaveBeenCalled();
+  },
+);
+it('recognizes a historical UI-proof lost ACK after expiry, but refuses a different proof for that operation', async () => {
+  const f = uiRepairFixture();
+  const plan = await exactLegacyGameRosterRepair(f.input);
+  const post = f.row.participations.map((p) => [...p]);
+  post.forEach((p) => {
+    p[3] = 'LEFT';
+  });
+  post.push(
+    ...f.ui.users.map((id, i) => [
+      `new-${i}`,
+      id,
+      i === 0 ? 'ORGANIZER' : 'PLAYER',
+      'ACTIVE',
+      'PAID',
+    ]),
+  );
+  Object.assign(f.row, {
+    revision: 2,
+    sync_revision: 2,
+    mode: 'MIRROR',
+    conflict_code: null,
+    sync_version: f.ui.source.externalVersion,
+    participations: post,
+    previous_audits: [
+      {
+        revision: 2,
+        playerMappingsSha256: attestExactRosterPlayerMappings(f.ui.source, f.ui.mappings).sha256,
+        correlationId: `legacy-roster-repair:${f.input.operationId}:${plan.planSha256}`,
+        replacement: {
+          ...plan.replacement,
+          participationsAfterSha256: exactRosterValueSha256(exactRosterParticipations(post)),
+          uiObservation: plan.uiObservation,
+        },
+      },
+    ],
+  });
+  const input = {
+    ...f.input,
+    planOnly: false,
+    replacementConfirmed: true,
+    expectedPlanSha256: plan.planSha256,
+    now: new Date('2099-11-16T05:20:00Z'),
+  };
+  expect((await exactLegacyGameRosterRepair(input)).status).toBe('ALREADY_REPAIRED');
+  f.ui.envelope.review.toolCallPointer = 'different-review';
+  const changed = f.ui.seal();
+  await expect(
+    exactLegacyGameRosterRepair({
+      ...input,
+      uiObservationBytes: changed.bytes,
+      reviewedUiObservationSha256: changed.sha,
+    }),
+  ).rejects.toThrow('PREVIOUS_OUTCOME_DRIFT');
+  expect(f.rebaselineParticipants).not.toHaveBeenCalled();
+});
+it('requires an exact reviewed stdin hash and rejects UI observation in batch/additive modes', () => {
+  const args = [
+    '--tenant-key',
+    'local-padel',
+    '--game-id',
+    gameId,
+    '--operation-id',
+    'synthetic-ui-operation',
+    '--replace-source-roster',
+    '--plan',
+  ];
+  expect(
+    parseRepairArguments([
+      ...args,
+      '--ui-observation-stdin',
+      '--reviewed-proof-sha',
+      'e'.repeat(64),
+    ]),
+  ).toMatchObject({ uiObservationStdin: true, reviewedUiObservationSha256: 'e'.repeat(64) });
+  expect(
+    parseRepairArguments([
+      ...args,
+      '--ui-observation-stdin',
+      '--reviewed-proof-sha',
+      'e'.repeat(64),
+      '--finished-unscored-ui',
+    ]),
+  ).toMatchObject({ finishedUnscoredUi: true });
+  expect(() => parseRepairArguments([...args, '--finished-unscored-ui'])).toThrow();
+  for (const tail of [
+    ['--ui-observation-stdin'],
+    ['--reviewed-proof-sha', 'e'.repeat(64)],
+    ['--ui-observation-stdin', '--ui-observation-stdin', '--reviewed-proof-sha', 'e'.repeat(64)],
+  ])
+    expect(() => parseRepairArguments([...args, ...tail])).toThrow();
+  expect(() =>
+    parseRepairArguments([
+      '--tenant-key',
+      'local-padel',
+      '--ui-observation-stdin',
+      '--reviewed-proof-sha',
+      'e'.repeat(64),
+    ]),
+  ).toThrow();
+});
+
+it('keeps finished recovery explicit and refuses it without the complete native phase preimage', async () => {
+  const f = uiRepairFixture();
+  Object.assign(f.row, {
+    lifecycle_state: 'FINISHED',
+    revision: 3,
+    sync_revision: 1,
+    before_start: false,
+  });
+  await expect(exactLegacyGameRosterRepair(f.input)).rejects.toThrow('TARGET');
+  await expect(
+    exactLegacyGameRosterRepair({ ...f.input, finishedUnscoredUi: true }),
+  ).rejects.toThrow('LEGACY_GAME_UI_FINISHED_TARGET');
+  await expect(
+    exactLegacyGameRosterRepair({ ...replacementFixture().input, finishedUnscoredUi: true }),
+  ).rejects.toThrow('UI_OBSERVATION_SCOPE');
+  expect(f.rebaselineParticipants).not.toHaveBeenCalled();
+});

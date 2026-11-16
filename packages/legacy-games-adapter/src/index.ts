@@ -59,6 +59,20 @@ export interface LegacyGameSourceSnapshot {
   readonly viewerParticipantExternalId?: string | null;
 }
 
+/** Exact recovery observation only: membership is deliberately not payment authority. */
+export interface LegacyGameRosterMembershipSnapshot extends Omit<
+  LegacyGameSourceSnapshot,
+  'participants'
+> {
+  readonly sourceObservationSha256: string;
+  readonly providerExerciseId: string;
+  readonly providerStationId: string;
+  readonly providerCourtId: string | null;
+  readonly participants: readonly (Omit<LegacyGameSourceParticipant, 'paymentState'> & {
+    readonly sourceStatus: 'CONFIRMED' | 'PAID';
+  })[];
+}
+
 export interface LegacyGamesMongoAdapterOptions {
   readonly uri: string;
   readonly dbName?: string;
@@ -675,6 +689,87 @@ function mapExactPaidRoster(raw: RawLegacyGame): LegacyGameSourceSnapshot | unde
   return snapshot;
 }
 
+function mapExactRosterMembership(
+  raw: RawLegacyGame,
+): LegacyGameRosterMembershipSnapshot | undefined {
+  const allowed = (status: unknown): status is 'CONFIRMED' | 'PAID' =>
+    status === 'CONFIRMED' || status === 'PAID';
+  if (
+    raw.status !== 'PAID' ||
+    !raw.organizer ||
+    !allowed(raw.organizer.status) ||
+    !Array.isArray(raw.participants)
+  )
+    return undefined;
+  const organizerId = stringValue(raw.organizer.id);
+  const exerciseId =
+    uuidValue(raw.metadata?.vivaExerciseId) ?? uuidValue(raw.booking?.vivaExerciseId);
+  const stationId = stringValue(raw.booking?.studioId);
+  if (!organizerId || !exerciseId || !stationId) return undefined;
+  const organizer = participant(raw.organizer, organizerId);
+  if (!organizer) return undefined;
+  const players = new Map([
+    [organizerId, { participant: organizer, status: raw.organizer.status }],
+  ]);
+  let organizerRepeated = false;
+  for (const player of raw.participants as readonly RawParticipant[]) {
+    if (!player || typeof player !== 'object' || !allowed(player.status)) return undefined;
+    const mapped = participant(player, organizerId);
+    if (!mapped) return undefined;
+    const previous = players.get(mapped.externalId);
+    if (previous) {
+      if (
+        mapped.externalId !== organizerId ||
+        organizerRepeated ||
+        previous.status !== player.status ||
+        JSON.stringify(previous.participant) !== JSON.stringify(mapped)
+      )
+        return undefined;
+      organizerRepeated = true;
+    } else players.set(mapped.externalId, { participant: mapped, status: player.status });
+  }
+  const capacity = stringValue(raw.metadata?.gameFormat) === 'singles' ? 2 : 4;
+  if (players.size !== capacity || capacity !== 4) return undefined;
+  const legacy = mapLegacyGame(raw);
+  if (!legacy || legacy.participants.length !== players.size) return undefined;
+  const { participants, ...base } = normalizeMongoSnapshot(legacy);
+  const statuses = new Map(
+    [...players].map(([id, p]) => [localVivaProfileAssociationId(id), p.status]),
+  );
+  const members = participants.map((p) => ({
+    externalId: p.externalId,
+    ...(p.externalAliases ? { externalAliases: p.externalAliases } : {}),
+    displayName: p.displayName,
+    level: p.level,
+    levelValue: p.levelValue,
+    role: p.role,
+    avatarSourceUrl: p.avatarSourceUrl,
+    sourceStatus: statuses.get(p.externalId)!,
+  }));
+  const providerCourtId = stringValue(raw.booking?.roomId) ?? null;
+  return {
+    ...base,
+    providerExerciseId: exerciseId,
+    providerStationId: stationId,
+    providerCourtId,
+    sourceObservationSha256: createHash('sha256')
+      .update(
+        JSON.stringify({
+          schema: 'PHUB_EXACT_ROSTER_MEMBERSHIP_OBSERVATION_V1',
+          sourceVersion: base.externalVersion,
+          providerExerciseId: exerciseId,
+          providerStationId: stationId,
+          providerCourtId,
+          members: [...players]
+            .map(([id, p]) => [id, p.status])
+            .sort(([a], [b]) => a!.localeCompare(b!)),
+        }),
+      )
+      .digest('hex'),
+    participants: members,
+  };
+}
+
 function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -857,6 +952,37 @@ export class LegacyGamesMongoAdapter {
     });
     if (snapshots.length > input.limit) throw new Error('LEGACY_GAMES_SOURCE_LIMIT_EXCEEDED');
     return snapshots.map(normalizeMongoSnapshot);
+  }
+
+  /** Complete membership observation for an operator-reviewed settlement proof. It never returns
+   * paymentState; only a separate four-seat proof may materialize a paid repository snapshot. */
+  public async readRosterMembershipByExternalIds(input: {
+    readonly externalIds: readonly string[];
+    readonly limit: number;
+  }): Promise<readonly LegacyGameRosterMembershipSnapshot[]> {
+    const ids = input.externalIds;
+    if (
+      input.limit !== 1 ||
+      ids.length === 0 ||
+      ids.length > 30 ||
+      new Set(ids).size !== ids.length ||
+      ids.some((id) => !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(id))
+    )
+      throw new Error('LEGACY_GAMES_EXACT_ROSTER_INPUT_INVALID');
+    const primary = new LegacyGamesMongoAdapter({
+      ...this.options,
+      consistency: 'reminder-primary',
+      maxAttempts: 1,
+    });
+    const snapshots = await primary.readMatching({
+      filter: { id: { $in: [...ids] }, archived: { $ne: true }, status: 'PAID' },
+      limit: 2,
+      sort: { _id: 1 },
+      strict: true,
+      mapper: mapExactRosterMembership,
+    });
+    if (snapshots.length > 1) throw new Error('LEGACY_GAMES_SOURCE_LIMIT_EXCEEDED');
+    return snapshots;
   }
 
   /**
@@ -1049,7 +1175,7 @@ export class LegacyGamesMongoAdapter {
       .map(normalizeMongoSnapshot);
   }
 
-  private async readMatching(input: {
+  private async readMatching<T = LegacyGameSourceSnapshot>(input: {
     readonly filter: Filter<RawLegacyGame>;
     readonly limit: number;
     readonly sort: Document;
@@ -1057,7 +1183,8 @@ export class LegacyGamesMongoAdapter {
     readonly strict?: boolean;
     readonly reminderOnly?: boolean;
     readonly exactPaidRoster?: boolean;
-  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    readonly mapper?: (raw: RawLegacyGame) => T | undefined;
+  }): Promise<readonly T[]> {
     const attempts = this.options.maxAttempts ?? 2;
     const sleep = this.options.sleep ?? defaultSleep;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -1087,11 +1214,13 @@ export class LegacyGamesMongoAdapter {
           .limit(input.limit)
           .toArray();
         const snapshots = rows.flatMap((row) => {
-          const mapped = input.exactPaidRoster
-            ? mapExactPaidRoster(row)
-            : input.reminderOnly
-              ? mapLegacyGameReminder(row)
-              : mapLegacyGame(row, input.viewerPhoneE164);
+          const mapped = input.mapper
+            ? input.mapper(row)
+            : ((input.exactPaidRoster
+                ? mapExactPaidRoster(row)
+                : input.reminderOnly
+                  ? mapLegacyGameReminder(row)
+                  : mapLegacyGame(row, input.viewerPhoneE164)) as T | undefined);
           if (!mapped && input.strict) throw new Error('LEGACY_GAMES_SOURCE_ROW_INVALID');
           return mapped ? [mapped] : [];
         });

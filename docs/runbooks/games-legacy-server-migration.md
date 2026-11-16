@@ -194,6 +194,75 @@ itself approve executing the replacement. Prepare and review the plan before req
   operation, changed post-state or a new plan request stops. Do not automatically retry an ambiguous
   outcome, reuse a new operation ID to evade a fence, or rewind a started/finished Game.
 
+### Reviewed Viva UI settlement observations
+
+Some LK1 create records contain `CONFIRMED` seats and a synthetic game-level paid flag, even when
+Viva has settled each booking with an entitlement. Those fields alone never authorize paid seats.
+The exact replacement CLI additionally accepts `--ui-observation-stdin --reviewed-proof-sha <sha>`.
+Only this mode reads complete membership without inferring payment from LK1. It requires exactly
+four distinct, existing beneficiaries and a closed, canonical JSON observation envelope, delivered
+on bounded stdin. Keep the envelope and original UI excerpts in private operator storage, outside
+Git, logs, command arguments and public DTOs. Never copy OAuth/address history or authentication data.
+
+The trust label is `OPERATOR_REVIEWED_VIVA_UI_SUBSCRIPTION_OBSERVATION_V1`, with
+`originAuthenticated: false`: this is an independently reviewed authenticated-session observation,
+not a provider-signed receipt. Each seat binds the complete actual Viva client UUID through an
+unchanged original UI capture to the exact exercise, venue/court/time, one active paid booking and
+one applied subscription usage. The reviewer verifies beneficiary ownership, acquisition class,
+one-unit debit, no duplicate/family ambiguity, cancellation, reversal or outstanding charge.
+Hidden booking/subscription/usage identifiers stay explicitly unavailable; never invent UUIDs.
+The unique compound observation uses the client/exercise/occurrence and booking/usage creation
+times, entitlement and before/after balance. Cash-purchased and administratively issued zero-price
+entitlements both settle a seat; this does not assert that every participant paid cash.
+
+The proof binds tenant/Game/operation/source versions and snapshot, all existing alias mappings,
+capture and reviewer hashes. Reader and independent reviewer differ. Its maximum lifetime is
+15 minutes, and the locked writer checks database time immediately before mutation. Renew captures
+only after the selected immutable artifact is ready. Existing raw UUID/pseudonym aliases may
+establish the supported legacy identity fallback; no direct Viva profile mapping is created.
+Existing optional Viva mappings must agree. Identity bindings, mapping presence/absence and the
+exercise mapping are rechecked under the writer's exclusion/row locks. Only after all evidence is
+validated are these four seats materialized as `PAID`. No provider, payment, subscription or identity
+mutation is performed. The audit stores hashes and non-sensitive custody metadata, not UI excerpts
+or raw provider identities.
+
+For apply only, the first business lock is `EXCLUSIVE NOWAIT` on the physical external mapping
+table, followed by nonblocking import/client advisory locks. Busy means rollback and manual
+readback, never automatic retry. This also excludes attestation writers and same-user/different-
+client phantoms. Ordinary SELECT remains available, but mapping/login/attestation writers for all
+tenants can briefly wait. Measure the physical successful critical section before live use; require
+low-single-second duration. Statement timeout is per query, not a 15-second total transaction
+bound; the catastrophic outer process deadline remains 90 seconds. Verify the actual runtime role
+has the necessary existing lock privileges. Do not add grants to make recovery pass.
+
+### Finished, unscored exact UI recovery
+
+`--finished-unscored-ui` is an additional explicit flag accepted only with the reviewed UI-proof
+replacement mode. Generic, additive and raw-PAID replacements remain `SCHEDULED` only. A finished
+Game is eligible only while its original 12-hour result window is open according to database time,
+with `AWAITING_SUBMISSION`, original start/finish timestamps, and precisely the quarantined baseline
+followed by its two native completed START/FINISH commands, matching success audits and outbox
+events. The plan binds that entire preimage. A different lifecycle predecessor or any result
+submission, review, result, set, player fact, result audit/event or result-derived history stops.
+
+The transaction locks the exact mapping, lifecycle commands, Game and sync state in compatible
+order, rechecks the preimage and result absence, and serializes with result submission on the same
+Game lock. It changes only roster/organizer, advances revision once and restores `MIRROR`. It never
+rewinds lifecycle/time, changes the result deadline, reconciles or replays scheduled commands, emits
+a second `game.finished.v1`, or backfills a missed notification. Review actual runtime consumers of
+the one existing `game.scheduled.v1` projection event before live execution. Delayed events must
+project the current aggregate; they must not replace the restored roster with an old payload.
+After restoration a normal result submission must use the restored four-member roster.
+
+Lost-ACK recognition requires the unchanged current postimage. If a legitimate later result has
+already advanced the Game, the retry stops for manual audit/readback and never reapplies the repair.
+Do not widen the mode or use another operation ID to evade this stop.
+
+Native START/FINISH transitions carry `last_synced_game_revision` forward only for an exact clean
+`MIRROR` old revision. They do not refresh source timestamps/version, validate stale evidence or
+clear a conflict. This preserves roster visibility in Web/Android across lifecycle transitions
+without claiming a new provider read.
+
 After an approved apply, verify source membership and organizer, every retained row/payment, account
 and profile preimages, one revision/audit/outbox, MIRROR and converged card projection. Verify the
 actual authenticated Web and Android reads separately. This command does not authorize merge,

@@ -10,6 +10,8 @@ import {
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
+import { readFinishedUnscoredUiPreimage } from './legacy-game-finished-roster-preimage.js';
+export { readFinishedUnscoredUiPreimage } from './legacy-game-finished-roster-preimage.js';
 
 const EXTERNAL_SYSTEM = 'LK_LEGACY_SNAPSHOT';
 const VIVA_EXTERNAL_SYSTEM = 'VIVA';
@@ -94,6 +96,26 @@ export interface LegacyGameExactRepairFence {
   readonly replacement?: {
     readonly participationsSha256: string;
     readonly retainedParticipationIdsSha256: string;
+    readonly uiObservation?: LegacyGameUiObservationFence;
+  };
+}
+
+export interface LegacyGameUiObservationFence {
+  readonly policy: 'OPERATOR_REVIEWED_VIVA_UI_SUBSCRIPTION_OBSERVATION_V1';
+  readonly originAuthenticated: false;
+  readonly proofSha256: string;
+  readonly reviewSha256: string;
+  readonly captureSetSha256: string;
+  readonly observationSetSha256: string;
+  readonly sourceObservationSha256: string;
+  readonly legacySourceIdentityPreimageSha256: string;
+  readonly exerciseMappingSha256: string;
+  readonly capturedAt: string;
+  readonly reviewedAt: string;
+  readonly expiresAt: string;
+  readonly finishedUnscored?: {
+    readonly policy: 'EXACT_UI_PROOF_FINISHED_UNSCORED';
+    readonly preimageSha256: string;
   };
 }
 
@@ -132,7 +154,12 @@ export interface LegacyGameExactPlayerMapping {
  * Exact recovery adopts existing synced aliases only; it never creates or rebinds an account.
  */
 export function attestExactRosterPlayerMappings(
-  snapshot: Pick<LegacyGameImportSnapshot, 'participants'>,
+  snapshot: {
+    readonly participants: readonly Pick<
+      LegacyGameImportParticipant,
+      'externalId' | 'externalAliases'
+    >[];
+  },
   rows: readonly LegacyGameExactPlayerMapping[],
 ): { readonly sha256: string; readonly users: ReadonlyMap<string, string> } {
   const aliases = new Set(
@@ -168,6 +195,97 @@ export function attestExactRosterPlayerMappings(
     .sort((a, b) => (a.external_id < b.external_id ? -1 : a.external_id > b.external_id ? 1 : 0))
     .map((r) => [r.external_id, r.internal_id, r.sync_status, r.sync_error_code]);
   return { sha256: createHash('sha256').update(JSON.stringify(canonical)).digest('hex'), users };
+}
+
+/** The existing legacy raw UUID + one-way association fallback grants roster identity only.
+ * Missing direct Viva mappings are retained as absence; no identity row is created or rebound. */
+export async function readExactRosterUiIdentityPreimage(
+  client: PoolClient,
+  input: {
+    tenantId: string;
+    gameId: string;
+    source: {
+      vivaExerciseExternalId: string | null;
+      participants: readonly Pick<LegacyGameImportParticipant, 'externalId' | 'externalAliases'>[];
+    };
+    mappings: readonly LegacyGameExactPlayerMapping[];
+    lock: boolean;
+  },
+): Promise<{ legacySourceIdentityPreimageSha256: string; exerciseMappingSha256: string }> {
+  const identity = attestExactRosterPlayerMappings(input.source, input.mappings);
+  const clients = new Map<string, string>();
+  for (const p of input.source.participants) {
+    const raw = canonicalAndAliases(p.externalId, p.externalAliases).filter((a) =>
+      /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u.test(a),
+    );
+    if (
+      raw.length !== 1 ||
+      createHash('sha256')
+        .update('phub-local-public-clone-v1:player:' + raw[0]!)
+        .digest('hex') !== p.externalId
+    )
+      throw new Error('LEGACY_GAME_UI_OBSERVATION_IDENTITY');
+    clients.set(identity.users.get(p.externalId)!, raw[0]!);
+  }
+  const aliases = [
+    ...new Set(
+      input.source.participants.flatMap((p) =>
+        canonicalAndAliases(p.externalId, p.externalAliases),
+      ),
+    ),
+  ].sort();
+  const bindings = await client.query<
+    {
+      source_player_association_id: string;
+      user_id: string;
+      proof_kind: string;
+      created_at: Date;
+      updated_at: Date;
+    } & QueryResultRow
+  >(
+    `select source_player_association_id,user_id,proof_kind,created_at,updated_at from integration.legacy_game_player_bindings
+      where tenant_id=$1 and (source_player_association_id=any($2::text[]) or user_id=any($3::uuid[])) order by source_player_association_id${input.lock ? ' for update' : ''}`,
+    [input.tenantId, aliases, [...clients.keys()].sort()],
+  );
+  const ownerByAlias = new Map(input.mappings.map((m) => [m.external_id, m.internal_id]));
+  if (bindings.rows.some((b) => ownerByAlias.get(b.source_player_association_id) !== b.user_id))
+    throw new Error('LEGACY_GAME_UI_OBSERVATION_IDENTITY');
+  const viva = await client.query<LegacyGameExactPlayerMapping & QueryResultRow>(
+    `select external_id,internal_id,sync_status,sync_error_code from integration.external_entity_map where tenant_id=$1 and external_system='VIVA' and entity_type='viva_profile'
+      and (internal_id=any($2::uuid[]) or lower(external_id)=any($3::text[])) order by external_id${input.lock ? ' for update' : ''}`,
+    [input.tenantId, [...clients.keys()].sort(), [...clients.values()].sort()],
+  );
+  if (
+    viva.rows.some(
+      (v) =>
+        clients.get(v.internal_id) !== v.external_id.toLowerCase() ||
+        v.sync_status !== 'synced' ||
+        v.sync_error_code !== null,
+    )
+  )
+    throw new Error('LEGACY_GAME_UI_OBSERVATION_IDENTITY');
+  const exercise = await client.query<LegacyGameExactPlayerMapping & QueryResultRow>(
+    `select external_id,internal_id,sync_status,sync_error_code from integration.external_entity_map where tenant_id=$1 and external_system='VIVA' and entity_type='exercise'
+      and (internal_id=$2 or external_id=$3) order by external_id${input.lock ? ' for update' : ''}`,
+    [input.tenantId, input.gameId, input.source.vivaExerciseExternalId],
+  );
+  if (
+    exercise.rows.length !== 1 ||
+    exercise.rows[0]!.internal_id !== input.gameId ||
+    exercise.rows[0]!.external_id !== input.source.vivaExerciseExternalId ||
+    exercise.rows[0]!.sync_status !== 'synced' ||
+    exercise.rows[0]!.sync_error_code !== null
+  )
+    throw new Error('LEGACY_GAME_UI_OBSERVATION_EXERCISE_MAPPING');
+  return {
+    legacySourceIdentityPreimageSha256: exactRosterValueSha256({
+      policy: 'EXISTING_LEGACY_SOURCE_ALIAS_BINDING',
+      mappings: [...input.mappings].sort((a, b) => a.external_id.localeCompare(b.external_id)),
+      bindings: bindings.rows,
+      viva: viva.rows,
+    }),
+    exerciseMappingSha256: exactRosterValueSha256(exercise.rows),
+  };
 }
 
 export interface LegacyGameImportRepository {
@@ -1680,6 +1798,7 @@ async function applySourceRoster(
     readonly exactReplacement?: {
       readonly before: readonly ExactRosterParticipation[];
       readonly retainedParticipationIdsSha256: string;
+      readonly uiObservation?: LegacyGameUiObservationFence;
     };
   },
 ): Promise<{ readonly nextRevision: number; readonly activeParticipantCount: number }> {
@@ -1839,6 +1958,9 @@ async function applySourceRoster(
       retainedParticipationIdsSha256: input.exactReplacement.retainedParticipationIdsSha256,
       retainedParticipationCount: retired.length,
       retainedPaidParticipationCount: retired.filter((p) => p[4] === 'PAID').length,
+      ...(input.exactReplacement.uiObservation
+        ? { uiObservation: input.exactReplacement.uiObservation }
+        : {}),
     };
   }
   const event = gameDomainEventSchema.parse({
@@ -1920,6 +2042,30 @@ async function rebaselineOne(
   | { readonly outcome: 'skipped' }
 > {
   return withTenantTransaction(pool, input.tenantId, async (client) => {
+    if (input.expected?.replacement?.uiObservation) {
+      // One-operation exclusion covers absent mappings, including writers that do not use the
+      // provider advisory lock and a different client UUID claiming the same existing user.
+      // Ordinary SELECT remains available. Never wait table->advisory: auth uses the reverse order.
+      await client.query('lock table integration.external_entity_map in exclusive mode nowait');
+      const acquire = async (key: string): Promise<void> => {
+        const locked = await queryOne<{ locked: boolean } & QueryResultRow>(
+          client,
+          'select pg_try_advisory_xact_lock(hashtextextended($1, 0)) as locked',
+          [key],
+        );
+        if (locked?.locked !== true) throw new Error('LEGACY_GAME_UI_OBSERVATION_WRITER_BUSY');
+      };
+      await acquire(`legacy-game-import:${input.tenantId}`);
+      const clients = [
+        ...new Set(
+          input.snapshot.participants
+            .flatMap((p) => canonicalAndAliases(p.externalId, p.externalAliases))
+            .filter((a) => /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u.test(a)),
+        ),
+      ].sort();
+      if (clients.length !== 4) throw new Error('LEGACY_GAME_UI_OBSERVATION_IDENTITY');
+      for (const id of clients) await acquire(`${input.tenantId}\u001fVIVA\u001f${id}`);
+    }
     await client.query("select set_config('app.profile_level_history_origin', $1, true)", [
       EXTERNAL_SYSTEM,
     ]);
@@ -1937,6 +2083,16 @@ async function rebaselineOne(
     )
       throw new Error('LEGACY_GAME_EXACT_REPAIR_DRIFT');
     const gameId = await canonicalRedirectTarget(client, input.tenantId, mapping.internal_id);
+    const finishedFence = input.expected?.replacement?.uiObservation?.finishedUnscored;
+    const finished = finishedFence
+      ? await readFinishedUnscoredUiPreimage(client, {
+          tenantId: input.tenantId,
+          gameId: gameId,
+          lock: true,
+        })
+      : undefined;
+    if (finished && finished.sha256 !== finishedFence!.preimageSha256)
+      throw new Error('LEGACY_GAME_UI_FINISHED_PREIMAGE_DRIFT');
     const game = await queryOne<
       LegacyGameRow & {
         starts_at: Date | string;
@@ -1950,7 +2106,8 @@ async function rebaselineOne(
          from games.games where tenant_id = $1 and id = $2 for update`,
       [input.tenantId, gameId],
     );
-    if (!game || game.lifecycle_state !== 'SCHEDULED') return { outcome: 'skipped' as const };
+    if (!game || game.lifecycle_state !== (finished ? 'FINISHED' : 'SCHEDULED'))
+      return { outcome: 'skipped' as const };
     const state = await queryOne<RosterSyncStateRow>(
       client,
       `select source_external_version, last_synced_game_revision, mode, conflict_code
@@ -1974,7 +2131,7 @@ async function rebaselineOne(
           input.allowLocalRemovals &&
           state.conflict_code === 'LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL'
         )) ||
-      Number(state.last_synced_game_revision) !== Number(game.revision) ||
+      Number(state.last_synced_game_revision) + (finished ? 2 : 0) !== Number(game.revision) ||
       input.snapshot.cancelled
     )
       return { outcome: 'skipped' as const };
@@ -2015,6 +2172,22 @@ async function rebaselineOne(
         throw new Error('LEGACY_GAME_EXACT_REPAIR_DRIFT');
       verifiedParticipantUsers = identity.users;
       if (input.expected.replacement) {
+        if (input.expected.replacement.uiObservation) {
+          const binding = await readExactRosterUiIdentityPreimage(client, {
+            tenantId: input.tenantId,
+            gameId: game.id,
+            source: input.snapshot,
+            mappings: mappingRows.rows,
+            lock: true,
+          });
+          if (
+            binding.legacySourceIdentityPreimageSha256 !==
+              input.expected.replacement.uiObservation.legacySourceIdentityPreimageSha256 ||
+            binding.exerciseMappingSha256 !==
+              input.expected.replacement.uiObservation.exerciseMappingSha256
+          )
+            throw new Error('LEGACY_GAME_UI_OBSERVATION_IDENTITY_DRIFT');
+        }
         const ids = [...new Set(identity.users.values())].sort();
         const accounts = await client.query<{ id: string } & QueryResultRow>(
           "select id from identity.users where tenant_id=$1 and id=any($2::uuid[]) and status='ACTIVE' order by id for share",
@@ -2027,7 +2200,7 @@ async function rebaselineOne(
         if (accounts.rows.length !== ids.length || profiles.rows.length !== ids.length)
           throw new Error('LEGACY_GAME_EXACT_REPAIR_IDENTITY');
         if (
-          game.before_start !== true ||
+          (!finished && game.before_start !== true) ||
           input.snapshot.participants.length < 1 ||
           input.snapshot.participants.length > input.snapshot.capacity ||
           input.snapshot.capacity !== Number(game.capacity) ||
@@ -2071,6 +2244,7 @@ async function rebaselineOne(
     const removable = participants.filter(
       (participant) => !participant.external_id || !sourceExternalIds.has(participant.external_id),
     );
+    let writeAt = input.now;
     if (input.expected?.replacement) {
       const retainedIds = removable.map((p) => p.id).sort();
       if (
@@ -2114,19 +2288,42 @@ async function rebaselineOne(
       };
     }
     if (input.expected?.replacement) {
-      const timing = await queryOne<{ before_start: boolean } & QueryResultRow>(
+      const timing = await queryOne<{ checked_at: Date } & QueryResultRow>(
         client,
-        'select clock_timestamp() < $1::timestamptz as before_start',
-        [game.starts_at],
+        'select clock_timestamp() as checked_at',
       );
-      if (timing?.before_start !== true) throw new Error('LEGACY_GAME_EXACT_REPAIR_SCHEDULE');
+      let checkedAt = timing ? new Date(timing.checked_at) : new Date(NaN);
+      if (
+        !Number.isFinite(checkedAt.getTime()) ||
+        (!finished && checkedAt.getTime() >= new Date(game.starts_at).getTime())
+      )
+        throw new Error('LEGACY_GAME_EXACT_REPAIR_SCHEDULE');
+      if (finished) {
+        const phase = await readFinishedUnscoredUiPreimage(client, {
+          tenantId: input.tenantId,
+          gameId: game.id,
+          lock: false,
+        });
+        if (phase.sha256 !== finished.sha256)
+          throw new Error('LEGACY_GAME_UI_FINISHED_PREIMAGE_DRIFT');
+        checkedAt = phase.checkedAt;
+      }
+      const proof = input.expected.replacement.uiObservation;
+      if (
+        proof &&
+        (checkedAt.getTime() < Date.parse(proof.capturedAt) ||
+          checkedAt.getTime() < Date.parse(proof.reviewedAt) ||
+          checkedAt.getTime() > Date.parse(proof.expiresAt))
+      )
+        throw new Error('LEGACY_GAME_UI_OBSERVATION_EXPIRED');
+      if (proof) writeAt = checkedAt;
     }
     await applySourceRoster(client, {
       tenantId: input.tenantId,
       game,
       snapshot: input.snapshot,
       correlationId: input.correlationId,
-      now: input.now,
+      now: writeAt,
       currentParticipants: participants,
       auditAction: 'GAME_PARTICIPANTS_REBASELINED_FROM_LEGACY_SNAPSHOT',
       auditReason: input.expected?.replacement
@@ -2144,6 +2341,9 @@ async function rebaselineOne(
               before: replacementBefore,
               retainedParticipationIdsSha256:
                 input.expected.replacement.retainedParticipationIdsSha256,
+              ...(input.expected.replacement.uiObservation
+                ? { uiObservation: input.expected.replacement.uiObservation }
+                : {}),
             },
           }
         : {}),
@@ -2411,10 +2611,53 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
           (input.allowLocalRemovals === true) !== Boolean(input.expected.replacement) ||
           (input.expected.replacement &&
             (Object.keys(input.expected.replacement).sort().join(',') !==
-              'participationsSha256,retainedParticipationIdsSha256' ||
-              Object.values(input.expected.replacement).some((v) => !/^[a-f0-9]{64}$/.test(v)))))
+              (input.expected.replacement.uiObservation
+                ? 'participationsSha256,retainedParticipationIdsSha256,uiObservation'
+                : 'participationsSha256,retainedParticipationIdsSha256') ||
+              !/^[a-f0-9]{64}$/.test(input.expected.replacement.participationsSha256) ||
+              !/^[a-f0-9]{64}$/.test(input.expected.replacement.retainedParticipationIdsSha256))))
       )
         throw new Error('LEGACY_GAME_EXACT_REPAIR_SCOPE');
+      const ui = input.expected?.replacement?.uiObservation;
+      if (ui) {
+        const fields = [
+          'policy',
+          'originAuthenticated',
+          'proofSha256',
+          'reviewSha256',
+          'captureSetSha256',
+          'observationSetSha256',
+          'sourceObservationSha256',
+          'legacySourceIdentityPreimageSha256',
+          'exerciseMappingSha256',
+          'capturedAt',
+          'reviewedAt',
+          'expiresAt',
+          ...(ui.finishedUnscored ? ['finishedUnscored'] : []),
+        ].sort();
+        if (
+          Object.keys(ui).sort().join(',') !== fields.join(',') ||
+          ui.policy !== 'OPERATOR_REVIEWED_VIVA_UI_SUBSCRIPTION_OBSERVATION_V1' ||
+          ui.originAuthenticated !== false ||
+          (ui.finishedUnscored !== undefined &&
+            (Object.keys(ui.finishedUnscored).sort().join(',') !== 'policy,preimageSha256' ||
+              ui.finishedUnscored.policy !== 'EXACT_UI_PROOF_FINISHED_UNSCORED' ||
+              !/^[a-f0-9]{64}$/.test(ui.finishedUnscored.preimageSha256))) ||
+          fields
+            .filter((k) => k.endsWith('Sha256'))
+            .some(
+              (k) => !/^[a-f0-9]{64}$/.test(ui[k as keyof LegacyGameUiObservationFence] as string),
+            ) ||
+          !Number.isFinite(Date.parse(ui.capturedAt)) ||
+          !Number.isFinite(Date.parse(ui.reviewedAt)) ||
+          !Number.isFinite(Date.parse(ui.expiresAt)) ||
+          Date.parse(ui.expiresAt) <= Date.parse(ui.capturedAt) ||
+          Date.parse(ui.reviewedAt) < Date.parse(ui.capturedAt) ||
+          Date.parse(ui.reviewedAt) > Date.parse(ui.expiresAt) ||
+          Date.parse(ui.expiresAt) - Date.parse(ui.capturedAt) > 900000
+        )
+          throw new Error('LEGACY_GAME_UI_OBSERVATION_SCOPE');
+      }
 
       const tenant = (
         await pool.query<TenantRow>(
