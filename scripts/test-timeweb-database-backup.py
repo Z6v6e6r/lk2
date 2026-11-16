@@ -1654,7 +1654,7 @@ class FreshDumpScenario(CutoverDiskScenario):
 
 def canonical_backup_baseline():
     images={
-        'api':'f589eadccc4beeb0c629c029354acbf4d5f427517bce9d81c71fe07c4053f0e3',
+        'api':'f589eadccc4beeb0c629c029354acbf4d5f427517bce9d81c71fe07c4053f0e3', # gitleaks:allow -- public immutable OCI digest
         'worker':'010cc45bff9633efee72979356c7534d400becd379e86d2069307d5a39726c8b',
         'web':'3dd7c4846c3e4d65830e66b7c57de41d5a60b147b72709e70d68888b937d0f69',
         'realtime':'7e4f30ab2b8e871f459fd103a2856a801cf2796d2fe24910d9e931fda8301fed'}
