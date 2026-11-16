@@ -305,3 +305,34 @@ process/shared lease; reconciliation retains partial artifacts, proves both oper
 source backends are absent, publishes only completely verified data, and atomically retires only
 its own lock. It never repeats the dump or TOC. Keep the original full-restore backup and the new
 fresh backup. Service activation and live restoration remain separate operations.
+
+## Canonical predecessor fresh dump
+
+Only V5 accepts `PHUB_TIMEWEB_BACKUP_CANONICAL_BETA122_PRIOR_RESTORE_V1`, with distinct plan
+`PHUB_TIMEWEB_CANONICAL_FRESH_DUMP_PLAN_V1` and receipt
+`PHUB_TIMEWEB_CANONICAL_FRESH_DUMP_PRIOR_RESTORE_V1`. It uses the existing full exported-snapshot
+PG16 dump, zstd cap, TOC validation, shared lease and no-replay reconciler. The fresh bytes are
+**not restored**: `freshDumpRestored:false` remains explicit. The owner's prior full-restore waiver
+never becomes a new restorability claim, disk purchase or deletion authority.
+
+The exact canonical baseline binds the completed 4b8 V4 rollout and its historical backup. A dedicated
+`RETAINED_V4_ROLLOUT_BOUNDED_HISTORICAL_FRESH_TERMINAL_V1` proof validates the retained closure, its
+pinned historical helper and original Git/install custody, dump/receipt/snapshot/seal/journal,
+publication and retired lock. The unmodified historical `validate_prior_restore` recursively checks
+the original 857 full restore. `oldFreshTerminalValidatorRerun:false` means the old full _fresh
+terminal_ function is not called; its publication/seal and original full-restore validators are called.
+
+Exactly two historical predicates differ from calling the old fresh-terminal function: the completed
+V4 directory has its closed 18-file inventory including legitimate rollout audit files, and the global
+lease may be ABSENT before execution or exactly OWNED_NEW after the new producer acquires it.
+Unknown files, foreign leases, changed retired-lock inode/marker, pending old lock or altered old
+artifacts fail closed. No old receipt, timestamp, dump, filesystem view or legacy identity is rewritten.
+
+A full read-set binds hashes and filesystem identities across the old V4 and original 857 closures,
+both retained helper/install receipts and the installed 4b8 descriptor/manifest. It must match the
+operation's preimage before validation and remain identical afterward. After acquiring its own lease,
+the producer performs live canonical admission **once**, including runtime secrets, verifies the
+unchanged historical read-set again and durably records `CANONICAL_LINEAGE_SEALED` before
+`DUMP_INTENT`. Foreign activity or read-set drift stops before the dump. The terminal proof binds
+that seal to the published prior-reference bytes. Attestation/reconciliation read retained proofs;
+they never recapture the predecessor runtime, replay the dump/TOC or repeat the physical restore.

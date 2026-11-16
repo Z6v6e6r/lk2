@@ -14,6 +14,11 @@ import {
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   if (process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')
     throw Error('Explicit fixture opt-in required');
+  const canonical = process.env.TIMEWEB_CANONICAL_ROSTER_FIXTURE === '1';
+  const predecessorRevision = '4b8dbaa12c1ec3fea478a5e661465955e4b0c7c0';
+  const candidateRevision = 'd'.repeat(40);
+  const revisionEnv = (candidate = false) =>
+    canonical ? `WORKER_REVISION=${candidate ? candidateRevision : predecessorRevision}\n` : '';
   const directory = mkdtempSync(join(tmpdir(), 'lk2-roster-fixture-'));
   const project = `lk2-roster-fixture-${process.pid}`;
   const pinned = JSON.parse(readFileSync('deploy/timeweb/base-images.lock.json'));
@@ -22,7 +27,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     baseline = join(directory, 'baseline.env');
   writeFileSync(
     baseline,
-    'RELEASE=web-previous\nAPI_RELEASE=api-previous\nWORKER_GENERATION=previous\n',
+    'RELEASE=web-previous\nAPI_RELEASE=api-previous\nWORKER_GENERATION=previous\n' + revisionEnv(),
   );
   const healthcheck = {
     test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/'],
@@ -51,7 +56,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
           image,
           healthcheck,
           profiles: ['background'],
-          labels: { 'fixture.owner': project, 'fixture.worker-generation': '${WORKER_GENERATION}' },
+          labels: {
+            'fixture.owner': project,
+            'fixture.worker-generation': '${WORKER_GENERATION}',
+            ...(canonical ? { 'org.opencontainers.image.revision': '${WORKER_REVISION}' } : {}),
+          },
         },
         realtime: { image, healthcheck, labels: { 'fixture.owner': project } },
       },
@@ -112,11 +121,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     const rosterCandidate = join(directory, 'roster-candidate.env');
     writeFileSync(
       rosterPrevious,
-      'RELEASE=web-previous\nAPI_RELEASE=api-previous\nWORKER_GENERATION=previous\n',
+      'RELEASE=web-previous\nAPI_RELEASE=api-previous\nWORKER_GENERATION=previous\n' +
+        revisionEnv(),
     );
     writeFileSync(
       rosterCandidate,
-      'RELEASE=web-candidate\nAPI_RELEASE=api-candidate\nWORKER_GENERATION=candidate\n',
+      'RELEASE=web-candidate\nAPI_RELEASE=api-candidate\nWORKER_GENERATION=candidate\n' +
+        revisionEnv(true),
     );
     const realtimeId = inspect('realtime').Id;
     const worker = inspect('worker');
@@ -133,7 +144,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
         worker: {
           image: worker.Config.Image,
           releaseId: worker.Config.Labels['phub.release-id'] ?? null,
-          revision: worker.Config.Labels['org.opencontainers.image.revision'] ?? null,
+          revision: canonical ? candidateRevision : null,
         },
       },
     };
@@ -166,6 +177,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
             : value.Config.Labels['phub.release-id'] !== `${service}-${side}`
         )
           throw Error('Roster fixture generation drift');
+        if (
+          canonical &&
+          service === 'worker' &&
+          value.Config.Labels['org.opencontainers.image.revision'] !==
+            (side === 'previous' ? predecessorRevision : candidateRevision)
+        )
+          throw Error('Canonical fixture OCI revision drift');
       }
     };
     const rosterOps = {
@@ -241,7 +259,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     )
       throw Error('Roster fixture missing durable phases');
     process.stdout.write(
-      'API_WORKER_WEB_COMPOSE_REHEARSAL_PASS contained_first=true lost_worker_ack_recovered=true realtime_unchanged=true\n',
+      `API_WORKER_WEB_COMPOSE_REHEARSAL_PASS canonical=${canonical} contained_first=true lost_worker_ack_recovered=true realtime_unchanged=true\n`,
     );
   } finally {
     docker([

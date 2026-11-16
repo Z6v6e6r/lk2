@@ -1649,7 +1649,257 @@ class FreshDumpScenario(CutoverDiskScenario):
                 stack.enter_context(patch.object(m,name,side_effect=fn))
             stack.enter_context(patch.object(m.time,'time',return_value=m.utc(self.clockAt)))
             stack.enter_context(patch.object(m.DiskJournal,'add',new=phase))
-            return m.fresh_dump(copy.deepcopy(self.op),m.encoded(self.op),'2'*64,reconcile=reconcile,attest=attest)
+            return m.fresh_dump(copy.deepcopy(self.op),m.encoded(self.op),self.op['toolFileSha256'],reconcile=reconcile,attest=attest)
+
+
+def canonical_backup_baseline():
+    images={
+        'api':'f589eadccc4beeb0c629c029354acbf4d5f427517bce9d81c71fe07c4053f0e3', # gitleaks:allow -- public immutable OCI digest
+        'worker':'010cc45bff9633efee72979356c7534d400becd379e86d2069307d5a39726c8b',
+        'web':'3dd7c4846c3e4d65830e66b7c57de41d5a60b147b72709e70d68888b937d0f69',
+        'realtime':'7e4f30ab2b8e871f459fd103a2856a801cf2796d2fe24910d9e931fda8301fed'}
+    b={'schema':'PHUB_TIMEWEB_INSTALLED_CANONICAL_ROSTER_RUNTIME_V1','capturedAt':'2026-11-15T20:00:00.000Z',
+       'installedReleaseId':m.CANONICAL_PRIOR_RELEASE,'sourceSha':m.CANONICAL_PRIOR_SOURCE,
+       'sourceTree':'8907550c2386aaddc97b3fbda186dced43db00bd','sourceCiRunId':'43749601790',
+       'publicationRunId':'43751306581','artifactId':'14176493246',
+       'manifestSha256':'15465f17d7d4384ea2392fda664ff438a340389b3c5df29d2bd14d4e5ee82672',
+       **{k:'a'*64 for k in ['installedDescriptorSha256','operationSha256','planSha256','receiptSha256',
+           'observationSha256','backupOperationSha256','backupReceiptSha256','excludedSha256']},
+       'secretSetReleaseId':'b'*40+'-10-1',
+       'secretHashes':{k:'c'*64 for k in ['.release-identity.json','api.env','worker.env','realtime.env','migrator.env']},
+       'containers':{},'databaseTarget':copy.deepcopy(m.LOCATION_PHOTO_DATABASE_TARGET),
+       'ledgerSha256':'4dab86cb18f7e3db7a0598cd657eaebc86f07d5af497dc0eea2e33900b6526c1'}
+    for i,(service,image) in enumerate(images.items()):
+        b['containers'][service]={'id':str(i+1)*64,'image':f'ghcr.io/z6v6e6r/phub-{service}@sha256:{image}',
+            'imageId':'sha256:'+image,'releaseId':m.CANONICAL_PRIOR_RELEASE if service in ('api','web') else None,
+            'revision':None if service=='realtime' else m.CANONICAL_PRIOR_SOURCE,
+            'restarts':0,'startedAt':'2026-11-15T19:00:00.000Z'}
+    return b
+
+
+class CanonicalFreshDumpScenario(FreshDumpScenario):
+    def __init__(self,directory,fault=None):
+        super().__init__(directory,fault)
+        b=canonical_backup_baseline()
+        self.op.update(schema=m.CANONICAL_FRESH_SCHEMA,canonicalBaseline=b,historicalReadSetSha256='d'*64,
+            expectedApi=copy.deepcopy(b['containers']['api']),predecessorAttestationSha256=m.canonical_baseline_hash(b),
+            expectedLedgerSha256=b['ledgerSha256'],
+            predecessorRuntimeSha256=m.legacy_runtime_hash(b),
+            confirmation='FRESH_DUMP_CANONICAL_PRIOR_RESTORE_BETA122_'+self.op['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS')
+        self.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(self.op)
+        self.runtime_api=copy.deepcopy(self.op['expectedApi'])
+        self.ledger=[[p.name,m.digest(p.read_bytes())] for p in sorted(Path(__file__).parent.parent.joinpath('packages/database/migrations').glob('*.sql'))]
+        assert m.digest(m.encoded(self.ledger))==b['ledgerSha256']
+        self.op['expectedBoundarySha256']=m.digest(m.encoded(sorted([self.service_row(True),self.service_row(False)],key=lambda r:r['Id'])))
+        self.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(self.op)
+        self.request.write_bytes(m.encoded(self.op))
+        with patch.object(m,'ROOT',self.root):self.plan=m.fresh_plan(self.op,m.encoded(self.op),1024)
+        self.prior={'schema':m.CANONICAL_HISTORY_SCHEMA,'canonicalBaselineSha256':self.op['predecessorAttestationSha256'],
+            'forwardOriginalValidationBoundByRolloutReceiptSha256':b['receiptSha256'],
+            'priorRolloutObservedAt':'2026-11-15T19:30:00.000Z','historicalReadSetSha256':'d'*64,
+            'files':[],'originalFullRestore':self.prior,'oldFreshTerminalValidatorRerun':False}
+        self.admissions=0
+
+    def invoke(self,reconcile=False,attest=False):
+        def admission(op):
+            self.admissions+=1
+            self.trip('CANONICAL_ADMISSION')
+            self.assert_lease=bool((self.root/'standard/active/backup-restore.json').exists())
+            assert self.assert_lease
+        def history(op):
+            if self.fault=='history-race':raise m.Stop('CANONICAL_HISTORY_RACE')
+            return self.prior
+        with patch.object(m,'canonical_live_admission',side_effect=admission),patch.object(m,'validate_canonical_prior_restore',side_effect=history):
+            return super().invoke(reconcile,attest)
+
+
+class CanonicalFreshDumpTests(unittest.TestCase):
+    def test_closed_operation_and_legacy_mutual_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);now=m.utc(s.clockAt)
+            self.assertEqual(m.validate_operation(s.op,now,'2'*64),s.op)
+            for field in ['schema','historicalReadSetSha256','predecessorRuntimeSha256','predecessorAttestationSha256','confirmation']:
+                bad=copy.deepcopy(s.op);bad[field]=m.FRESH_SCHEMA if field=='schema' else 'foreign'
+                with self.subTest(field=field),self.assertRaises(m.Stop):m.validate_operation(bad,now,'2'*64)
+            for field in ['sourceSha','sourceTree','sourceCiRunId','publicationRunId','artifactId','manifestSha256','receiptSha256','excludedSha256']:
+                bad=copy.deepcopy(s.op);bad['canonicalBaseline'][field]='foreign'
+                with self.subTest(field=field),self.assertRaises(m.Stop):m.validate_operation(bad,now,'2'*64)
+            old=FreshDumpScenario(directory);old.op['schema']=m.CANONICAL_FRESH_SCHEMA
+            with self.assertRaises(m.Stop):m.validate_operation(old.op,now,'2'*64)
+
+    def test_distinct_truthful_receipt_and_seal_before_dump_no_live_recapture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);s.invoke();self.assertEqual(s.admissions,1)
+            r=json.loads((Path(s.plan['canonical'])/'database-backup-receipt.json').read_bytes())
+            self.assertEqual(r['schema'],m.CANONICAL_FRESH_RECEIPT)
+            self.assertEqual(s.plan['schema'],m.CANONICAL_FRESH_PLAN)
+            self.assertFalse(r['freshDumpRestored'])
+            with patch.object(m,'ROOT',s.root),patch.object(m,'read_secure',side_effect=s.read):
+                phases=[e['phase'] for e in m.DiskJournal(Path(s.plan['work']),m.digest(m.encoded(s.op))).events]
+            self.assertLess(phases.index('CANONICAL_LINEAGE_SEALED'),phases.index('DUMP_INTENT'))
+            s.invoke(attest=True);s.invoke(reconcile=True);self.assertEqual(s.admissions,1)
+            self.assertFalse(any('luks' in str(c) or 'losetup' in str(c) for c in s.calls))
+
+    def test_crashes_never_recapture_live_predecessor_or_replay_dump(self):
+        for fault in ['after:PHASE_LOCKED','before:CANONICAL_ADMISSION','after:PHASE_CANONICAL_LINEAGE_SEALED',
+                      'before:DUMP','after:PHASE_DUMP_VERIFIED','after:PHASE_PUBLISH_READY','after:PHASE_PUBLISHED']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                s=CanonicalFreshDumpScenario(directory,fault)
+                with self.assertRaises(m.Stop):s.invoke()
+                before=len(s.calls);admissions=s.admissions;s.fault=None
+                s.invoke(reconcile=True);s.invoke(reconcile=True)
+                self.assertEqual(s.admissions,admissions)
+                self.assertFalse(any('--snapshot=' in str(c) or 'pg_restore' in c for c in s.calls[before:]))
+                self.assertFalse((s.root/'standard/active').exists())
+
+    def test_history_change_and_seal_tamper_stop_without_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory,'history-race')
+            with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_RACE'):s.invoke()
+            self.assertFalse(any('--snapshot=' in str(c) for c in s.calls))
+            s.fault=None;s.invoke(reconcile=True)
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);s.invoke()
+            (Path(s.plan['work'])/'canonical-prior-lineage.json').write_bytes(b'{}')
+            with self.assertRaisesRegex(m.Stop,'CANONICAL_LINEAGE_SEAL'):s.invoke(attest=True)
+
+
+class CanonicalHistoryTests(unittest.TestCase):
+    def test_actual_pinned_old_tool_publication_custody_journal_and_retirement(self):
+        # Real Git objects authenticate the historical helper; only OS ownership and
+        # the innermost 857 restore boundary are simulated. No provider/Docker calls.
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);commit=m.CANONICAL_PRIOR_SOURCE
+            def git(*args):return subprocess.check_output(['git',*args],cwd=Path(__file__).parent.parent)
+            tool_bytes=git('show',commit+':scripts/control-timeweb-database-backup.py')
+            self.assertEqual(m.digest(tool_bytes),'d927f5a75f3656f7284980bf1524edb54631cbdfc0066bd351652214dcec4379')
+            tool=s.root/'operator/tools'/commit/'control-timeweb-database-backup.py';tool.parent.mkdir(parents=True)
+            tool.write_bytes(tool_bytes);tool.chmod(0o755)
+            proof={'schema':'PHUB_TIMEWEB_BACKUP_SOURCE_PROOF_V1','repository':{'name':'Z6v6e6r/lk2','id':1297548073},
+                   'path':'scripts/control-timeweb-database-backup.py'}
+            for key,kind,ref in [('commit','commit',commit),('rootTree','tree',commit+'^{tree}'),('scriptsTree','tree',commit+':scripts')]:
+                oid=git('rev-parse',ref).decode().strip();raw=git('cat-file',kind,oid)
+                proof[key]={'oid':oid,'sha256':m.digest(raw),'base64':base64.b64encode(raw).decode()}
+            proof['blob']={'oid':m.git_oid('blob',tool_bytes),'sha256':m.digest(tool_bytes)}
+            info=tool.lstat();installation=m.encoded({'schema':'PHUB_TIMEWEB_BACKUP_INSTALLATION_V1','sourceProof':proof,
+                'installedPath':str(tool),'installedAt':'2026-11-15T19:00:00.000Z','installationPlanSha256':'f'*64,
+                'metadata':{k:getattr(info,'st_'+k) for k in ['dev','ino','uid','gid','mode','nlink','size']}})
+            (tool.parent/'installation-receipt.json').write_bytes(installation)
+            s.op.update(candidateSha=commit,controllerSha=commit,toolCommit=commit,controllerTree='8907550c2386aaddc97b3fbda186dced43db00bd',
+                toolFileSha256=m.digest(tool_bytes),toolProofSha256=m.digest(m.encoded(proof)),toolInstallationSha256=m.digest(installation),
+                publicationRunId='43751306581',releaseId=m.CANONICAL_PRIOR_RELEASE,
+                confirmation='FRESH_DUMP_PRIOR_RESTORE_BETA122_'+commit[:12].upper()+'_KEEP_DATA_AND_ACCOUNTS')
+            s.config=m.encoded({'controllerSha':commit,'enabled':True});s.op['controllerConfigSha256']=m.digest(s.config)
+            s.ledger=[[p.name,m.digest(p.read_bytes())] for p in sorted(Path(__file__).parent.parent.joinpath('packages/database/migrations').glob('*.sql'))]
+            s.op['expectedLedgerSha256']=m.digest(m.encoded(s.ledger))
+            s.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(s.op)
+            s.prior['ledgerSha256']=s.op['expectedLedgerSha256']
+            s.request.write_bytes(m.encoded(s.op))
+            with patch.object(m,'ROOT',s.root):s.plan=m.fresh_plan(s.op,m.encoded(s.op),1024)
+            s.invoke();current=Path(s.plan['canonical'])
+            for name in set(m.CANONICAL_V4_FINAL_FILES)-set(m.FRESH_FILES):(current/name).write_bytes(m.encoded({'synthetic':name}))
+            b=canonical_backup_baseline();b['backupOperationSha256']=m.digest(m.encoded(s.op))
+            b['backupReceiptSha256']=m.digest((current/'database-backup-receipt.json').read_bytes())
+            outer_op={'schema':'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4','candidateSha':commit,'backupOperationSha256':b['backupOperationSha256']}
+            outer_plan={'operationSha256':m.digest(m.encoded(outer_op)),'backup':{'operationSha256':b['backupOperationSha256']}}
+            observation={'samplesPerService':61,'windowSeconds':900,'elapsedSeconds':901,'serverErrors':0}
+            descriptor=b'synthetic installed descriptor';release=s.root/'releases'/m.CANONICAL_PRIOR_RELEASE;release.mkdir(parents=True)
+            (release/'installed-components.env').write_bytes(descriptor);(release/'release-manifest.json').write_bytes(b'synthetic public manifest')
+            receipt={'schema':'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_RECEIPT_V4','status':'RECONCILED','reconciledStatus':'SUCCESS',
+                'planSha256':m.digest(m.encoded(outer_plan)),'installedBaselineSha256':m.digest(descriptor),
+                'observationSha256':m.digest(m.encoded(observation)),'observedAt':'2026-11-15T20:30:00.000Z'}
+            for name,value in [('operation.json',outer_op),('plan.json',outer_plan),('observation.json',observation),('rollout-receipt.json',receipt)]:
+                (current/name).write_bytes(m.encoded(value))
+            (current/'backup.complete').write_bytes((receipt['planSha256']+'\n').encode())
+            for name,key in [('operation.json','operationSha256'),('plan.json','planSha256'),('rollout-receipt.json','receiptSha256'),('observation.json','observationSha256')]:b[key]=m.digest((current/name).read_bytes())
+            b['installedDescriptorSha256']=m.digest(descriptor)
+            op=CanonicalFreshDumpScenario(directory).op
+            op.update(canonicalBaseline=b,expectedPostgres=s.op['expectedPostgres'],priorRestore=s.op['priorRestore'])
+            real_module_from_spec=importlib.util.module_from_spec;loaded=[]
+            def module_from_spec(spec):
+                module=real_module_from_spec(spec);execute=spec.loader.exec_module
+                def configured(value):
+                    execute(value);value.ROOT=s.root;value.LOCK=s.root/'standard/active'
+                    value.secure=lambda p,*a,**kw:Path(p).lstat();value.read_secure=s.read
+                    value.validate_prior_restore=unittest.mock.Mock(return_value=s.prior);loaded.append(value)
+                spec.loader.exec_module=configured;return module
+            def outer(*args,**kwargs):
+                self.assertEqual(args[1],'CANONICAL_HISTORY_OUTER')
+                return m.encoded({'schema':'PHUB_TIMEWEB_CANONICAL_HISTORY_OUTER_VALIDATION_V1','rolloutReceiptSha256':b['receiptSha256'],'runtimeConsulted':False})
+            with patch.object(m,'ROOT',s.root),patch.object(m,'LOCK',s.root/'standard/active'),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()),patch.object(m,'read_secure',side_effect=s.read),patch.object(importlib.util,'module_from_spec',side_effect=module_from_spec),patch.object(m,'canonical_node_source_guard',return_value=s.root/'standard/source'),patch.object(m,'command',side_effect=outer):
+                context=m.canonical_history_context(op)
+                self.assertEqual(m.validate_canonical_history_predicates(op,context),s.prior)
+                self.assertEqual(loaded[-1].validate_prior_restore.call_count,2)
+                for call in loaded[-1].validate_prior_restore.call_args_list:self.assertEqual(call.args,(s.op,))
+                for path in [current/'database.pgcustom',current/'database-backup-receipt.json',current/'FRESH_DUMP_INTEGRITY_VERIFIED.json',
+                             Path(s.plan['work'])/'retired-lock/backup-restore.json',Path(s.plan['work'])/'disk-event-0006.json',tool]:
+                    before=path.read_bytes();path.write_bytes(b'changed')
+                    with self.subTest(path=path.name),self.assertRaisesRegex(Exception,'CANONICAL_|FRESH_|DISK_|TOOL_|INVALID_JSON|SOURCE_'):
+                        c=m.canonical_history_context(op);m.validate_canonical_history_predicates(op,c)
+                    path.write_bytes(before)
+                extra=current/'foreign.json';extra.write_bytes(b'{}')
+                with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_INVENTORY'):m.canonical_history_context(op)
+                extra.unlink()
+
+    def test_absent_owned_and_foreign_leases_are_distinct(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory,'before:DUMP')
+            with patch.object(m,'ROOT',s.root),patch.object(m,'LOCK',s.root/'standard/active'),patch.object(m,'read_secure',side_effect=s.read),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()):
+                self.assertEqual(m.canonical_own_lock(s.op),'ABSENT')
+                with self.assertRaises(m.Stop):s.invoke()
+                self.assertEqual(m.canonical_own_lock(s.op),'OWNED_NEW')
+                marker=s.root/'standard/active/backup-restore.json';raw=marker.read_bytes()
+                changed=json.loads(raw);changed['operationSha256']='f'*64;marker.write_bytes(m.encoded(changed))
+                with self.assertRaises((m.Stop,FileNotFoundError)):m.canonical_own_lock(s.op)
+                self.assertEqual(marker.read_bytes(),m.encoded(changed))
+                marker.write_bytes(raw)
+                capsule=Path(s.plan['work'])/'backup-operation.json';capsule.write_bytes(b'{}')
+                with self.assertRaisesRegex(m.Stop,'CANONICAL_FOREIGN_LOCK'):m.canonical_own_lock(s.op)
+
+    def test_historical_read_set_binds_all_retained_files_and_original_restore_closure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);ref=s.op['priorRestore']
+            current=s.root/'backups'/(m.CANONICAL_PRIOR_RELEASE+'-api-web');current.mkdir()
+            work=s.root/'backups'/'.old-fresh';work.mkdir();(work/'retired-lock').mkdir()
+            original=s.root/'backups'/(ref['releaseId']+'-api-web');original.mkdir()
+            original_work=s.root/'backups'/('.disk-restore-'+ref['operationSha256']);original_work.mkdir()
+            original_commit='e'*40;old_commit='f'*40
+            for path in [*[current/n for n in m.CANONICAL_V4_FINAL_FILES],work/'disk-plan.json',work/'retired-lock/backup-restore.json',
+                         original/'database.pgcustom',original_work/'disk-event-0000.json',
+                         s.root/'releases'/m.CANONICAL_PRIOR_RELEASE/'installed-components.env',
+                         s.root/'releases'/m.CANONICAL_PRIOR_RELEASE/'release-manifest.json',
+                         *[s.root/'operator/tools'/c/n for c in [original_commit,old_commit] for n in ['control-timeweb-database-backup.py','installation-receipt.json']]]:
+                path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'synthetic retained bytes')
+            (original/'backup-operation.json').write_bytes(m.encoded({'toolCommit':original_commit}))
+            context={'directory':current,'work':work,'prior':{'priorRestore':ref,'toolCommit':old_commit}}
+            with patch.object(m,'ROOT',s.root),patch.object(m,'read_secure',side_effect=s.read),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()):
+                before=m.canonical_history_read_set(context)
+                paths={r['path'] for r in before}
+                self.assertIn(str((original/'database.pgcustom').relative_to(s.root)),paths)
+                self.assertIn(str((work/'retired-lock/backup-restore.json').relative_to(s.root)),paths)
+                for row in before:
+                    path=s.root/row['path'];raw=path.read_bytes()
+                    fresh=m.canonical_history_read_set(context)
+                    path.write_bytes(raw+b'changed')
+                    # The original operation must remain parseable to enumerate its fixed tool.
+                    if path==original/'backup-operation.json':path.write_bytes(m.encoded({'toolCommit':original_commit,'changed':True}))
+                    with self.subTest(path=row['path']):self.assertNotEqual(next(r for r in m.canonical_history_read_set(context) if r['path']==row['path']),next(r for r in fresh if r['path']==row['path']))
+                    path.write_bytes(raw)
+
+    def test_lineage_requires_matching_preimage_and_post_validation_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);rows=[{'path':'synthetic','sha256':'a'*64,'identity':[1,2,3]}]
+            s.op['historicalReadSetSha256']=m.digest(m.encoded(rows));s.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(s.op)
+            current=s.root/'history';current.mkdir();(current/'rollout-receipt.json').write_bytes(m.encoded({'observedAt':'2026-11-15T19:30:00.000Z'}))
+            context={'baseline':s.op['canonicalBaseline'],'directory':current}
+            with patch.object(m,'canonical_history_context',return_value=context),patch.object(m,'canonical_history_read_set',return_value=rows),patch.object(m,'read_secure',side_effect=s.read),patch.object(m,'validate_canonical_history_predicates',return_value={'original':'verified'}) as predicates:
+                r=m.validate_canonical_prior_restore(s.op)
+                self.assertFalse(r['oldFreshTerminalValidatorRerun']);self.assertEqual(r['originalFullRestore'],{'original':'verified'})
+                self.assertEqual(predicates.call_count,1)
+                with patch.object(m,'canonical_history_read_set',side_effect=[rows,[{**rows[0],'sha256':'b'*64}]]):
+                    with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_RACE'):m.validate_canonical_prior_restore(s.op)
+                with patch.object(m,'canonical_history_read_set',return_value=[]):
+                    with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_PREIMAGE'):m.validate_canonical_prior_restore(s.op)
 
 
 class FreshDumpTests(unittest.TestCase):
