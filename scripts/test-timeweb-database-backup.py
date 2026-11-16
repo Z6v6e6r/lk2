@@ -4,6 +4,7 @@ from contextlib import ExitStack
 import copy
 import importlib.util
 import io
+import zipfile
 import re
 import shutil
 import json
@@ -1804,7 +1805,12 @@ class CanonicalHistoryTests(unittest.TestCase):
             outer_plan={'operationSha256':m.digest(m.encoded(outer_op)),'backup':{'operationSha256':b['backupOperationSha256']}}
             observation={'samplesPerService':61,'windowSeconds':900,'elapsedSeconds':901,'serverErrors':0}
             descriptor=b'synthetic installed descriptor';release=s.root/'releases'/m.CANONICAL_PRIOR_RELEASE;release.mkdir(parents=True)
-            (release/'installed-components.env').write_bytes(descriptor);(release/'release-manifest.json').write_bytes(b'synthetic public manifest')
+            (release/'installed-components.env').write_bytes(descriptor);(release/'artifact').mkdir()
+            manifest=Path(__file__).with_name('fixtures').joinpath('timeweb-release-manifest-4b8dbaa1.json').read_bytes()
+            with zipfile.ZipFile(release/'artifact/canonical-artifact.zip','w') as z:
+                z.writestr('release-manifest.json',manifest);z.writestr('release-manifest.sha256',m.digest(manifest)+'  release-manifest.json\n')
+            outer_op.update(candidateTree=b['sourceTree'],sourceCiRunId=b['sourceCiRunId'],publicationRunId=b['publicationRunId'],artifactId=b['artifactId'],manifestSha256=b['manifestSha256'],artifactDigest='sha256:'+m.digest((release/'artifact/canonical-artifact.zip').read_bytes()))
+            outer_plan['operationSha256']=m.digest(m.encoded(outer_op))
             receipt={'schema':'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_RECEIPT_V4','status':'RECONCILED','reconciledStatus':'SUCCESS',
                 'planSha256':m.digest(m.encoded(outer_plan)),'installedBaselineSha256':m.digest(descriptor),
                 'observationSha256':m.digest(m.encoded(observation)),'observedAt':'2026-11-15T20:30:00.000Z'}
@@ -1867,7 +1873,7 @@ class CanonicalHistoryTests(unittest.TestCase):
             for path in [*[current/n for n in m.CANONICAL_V4_FINAL_FILES],work/'disk-plan.json',work/'retired-lock/backup-restore.json',
                          original/'database.pgcustom',original_work/'disk-event-0000.json',
                          s.root/'releases'/m.CANONICAL_PRIOR_RELEASE/'installed-components.env',
-                         s.root/'releases'/m.CANONICAL_PRIOR_RELEASE/'release-manifest.json',
+                         s.root/'releases'/m.CANONICAL_PRIOR_RELEASE/'artifact/canonical-artifact.zip',
                          *[s.root/'operator/tools'/c/n for c in [original_commit,old_commit] for n in ['control-timeweb-database-backup.py','installation-receipt.json']]]:
                 path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'synthetic retained bytes')
             (original/'backup-operation.json').write_bytes(m.encoded({'toolCommit':original_commit}))
@@ -1900,6 +1906,69 @@ class CanonicalHistoryTests(unittest.TestCase):
                     with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_RACE'):m.validate_canonical_prior_restore(s.op)
                 with patch.object(m,'canonical_history_read_set',return_value=[]):
                     with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_PREIMAGE'):m.validate_canonical_prior_restore(s.op)
+
+
+class CanonicalArchiveTests(unittest.TestCase):
+    def fixture(self,directory,entries=None):
+        root=Path(directory);b=canonical_backup_baseline();release=root/'releases'/b['installedReleaseId'];artifact=release/'artifact';artifact.mkdir(parents=True)
+        (release/'installed-components.env').write_bytes(b'preserved descriptor')
+        tx=root/'backups'/(b['installedReleaseId']+'-api-web');tx.mkdir(parents=True)
+        manifest=Path(__file__).with_name('fixtures').joinpath('timeweb-release-manifest-4b8dbaa1.json').read_bytes()
+        if entries is None:entries=[('release-manifest.json',manifest),('release-manifest.sha256',(m.digest(manifest)+'  release-manifest.json\n').encode())]
+        path=artifact/'canonical-artifact.zip'
+        with zipfile.ZipFile(path,'w',zipfile.ZIP_DEFLATED) as z:
+            for name,data in entries:z.writestr(name,data)
+        operation={'schema':'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4','candidateSha':b['sourceSha'],
+                   'candidateTree':b['sourceTree'],'publicationRunId':b['publicationRunId'],'artifactId':b['artifactId'],
+                   'manifestSha256':b['manifestSha256'],'artifactDigest':'sha256:'+m.digest(path.read_bytes())}
+        (tx/'operation.json').write_bytes(m.encoded(operation));b['operationSha256']=m.digest(m.encoded(operation))
+        return root,{'baseline':b,'directory':tx},path,manifest
+
+    def test_real_retained_layout_is_read_only_and_repeatable(self):
+        with tempfile.TemporaryDirectory() as td:
+            root,c,path,manifest=self.fixture(td)
+            before={str(p):[p.read_bytes(),m.identity(p.lstat())] for p in root.rglob('*') if p.is_file()}
+            with patch.object(m,'ROOT',root),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()):
+                for _ in range(2):self.assertEqual(m.canonical_prior_manifest(c),(path.read_bytes(),manifest))
+            self.assertFalse((path.parent.parent/'release-manifest.json').exists())
+            self.assertEqual(before,{str(p):[p.read_bytes(),m.identity(p.lstat())] for p in root.rglob('*') if p.is_file()})
+
+    def test_missing_changed_foreign_duplicate_traversal_checksum_source_and_race_stop(self):
+        for case in ['missing','changed','foreign-root','standalone-only','extra','duplicate','traversal','checksum','manifest','source','operation','custody','race']:
+            with self.subTest(case=case),tempfile.TemporaryDirectory() as td:
+                root,c,path,manifest=self.fixture(td)
+                if case in ['extra','duplicate','traversal','checksum','manifest','source']:
+                    checksum=(m.digest(manifest)+'  release-manifest.json\n').encode()
+                    entries=[('release-manifest.json',manifest),('release-manifest.sha256',checksum)]
+                    if case in ['extra','duplicate','traversal']:entries.append(({'extra':'foreign','duplicate':'release-manifest.json','traversal':'../release-manifest.json'}[case],b'x'))
+                    if case=='checksum':entries[1]=('release-manifest.sha256',b'wrong')
+                    if case=='manifest':entries[0]=('release-manifest.json',b'{}')
+                    if case=='source':
+                        v=json.loads(manifest);v['publication']['runId']='999';manifest=m.encoded(v);entries=[('release-manifest.json',manifest),('release-manifest.sha256',(m.digest(manifest)+'  release-manifest.json\n').encode())]
+                    with zipfile.ZipFile(path,'w') as z:
+                        for name,data in entries:z.writestr(name,data)
+                    operation=m.strict((c['directory']/'operation.json').read_bytes());operation['artifactDigest']='sha256:'+m.digest(path.read_bytes())
+                    if case=='source':operation['manifestSha256']=c['baseline']['manifestSha256']=m.digest(manifest)
+                    raw=m.encoded(operation);(c['directory']/'operation.json').write_bytes(raw);c['baseline']['operationSha256']=m.digest(raw)
+                if case in ['missing','standalone-only']:
+                    path.unlink()
+                    if case=='standalone-only':(path.parent.parent/'release-manifest.json').write_bytes(manifest)
+                if case=='changed':path.write_bytes(path.read_bytes()+b'changed')
+                if case=='foreign-root':(path.parent.parent/'foreign').write_bytes(b'x')
+                if case=='operation':(c['directory']/'operation.json').write_bytes(b'{}')
+                calls=0
+                def secure(p,*a,**k):
+                    if case=='custody' and Path(p)==path:raise m.Stop('CANONICAL_TEST_CUSTODY')
+                    return Path(p).lstat()
+                def read(p,*a,**k):
+                    nonlocal calls
+                    raw=Path(p).read_bytes()
+                    if Path(p)==path:
+                        calls+=1
+                        if case=='race' and calls==2:return raw+b'changed'
+                    return raw
+                with patch.object(m,'ROOT',root),patch.object(m,'secure',side_effect=secure),patch.object(m,'read_secure',side_effect=read):
+                    with self.assertRaises((m.Stop,FileNotFoundError)):m.canonical_prior_manifest(c)
 
 
 class FreshDumpTests(unittest.TestCase):
