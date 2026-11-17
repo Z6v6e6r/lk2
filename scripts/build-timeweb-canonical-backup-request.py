@@ -7,6 +7,7 @@ scope, and writes the closed request to the fixed path. It never dumps, activate
 touches the database.
 """
 import argparse
+import subprocess
 import datetime
 import importlib.util
 import json
@@ -39,10 +40,26 @@ def main():
     template = json.loads(pathlib.Path(args.template).read_text())
     op = dict(template)
 
-    baseline = dict(op['canonicalBaseline'])
+    derived = json.loads(
+        subprocess.run(
+            ['/usr/bin/python3', '-I', '-S', '-B', str(tool), '--baseline', args.template],
+            capture_output=True,
+            check=True,
+            env={'PATH': '/usr/bin:/bin'},
+        ).stdout
+    )
+    baseline = derived['baseline']
     now = datetime.datetime.now(datetime.UTC)
-    baseline['capturedAt'] = now.strftime('%Y-%m-%dT%H:%M:%S.') + f'{now.microsecond // 1000:03d}Z'
     op['canonicalBaseline'] = baseline
+    op.update(
+        {
+            'expectedApi': derived['expectedApi'],
+            'expectedPostgres': derived['expectedPostgres'],
+            'expectedBoundarySha256': derived['expectedBoundarySha256'],
+            'expectedLedgerSha256': derived['expectedLedgerSha256'],
+            'expectedDatabaseTarget': derived['expectedDatabaseTarget'],
+        }
+    )
 
     config = pathlib.Path('/etc/phub/timeweb-beta-standard-delivery.json').read_bytes()
     tool_dir = pathlib.Path(args.tool_dir)
