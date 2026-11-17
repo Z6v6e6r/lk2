@@ -29,19 +29,24 @@ node scripts/perf/measure-web-first-screen.mjs http://127.0.0.1:4173/ --runs=10
 
 `scripts/perf/measure-web-first-screen.mjs` drives real Chrome over the DevTools protocol:
 412x915 viewport, CPU throttled 4x, network limited to 1.6 Mbit/s down / 750 kbit/s up with 150 ms
-RTT ("slow 4G"), cold run clears the HTTP cache, the following runs reuse it. It reports the time to
-the first useful screen (the auth screen heading or the mobile login gate), LCP, DOMContentLoaded,
-request count and encoded transfer bytes. The mobile column uses `apps/mobile` (Capacitor WebView
-assets, same React tree).
+RTT ("slow 4G"). It reports the time to the first useful screen (the auth screen heading or the
+mobile login gate), LCP, DOMContentLoaded, request count and encoded transfer bytes. The mobile
+column uses `apps/mobile` (Capacitor WebView assets, same React tree).
+
+Two modes were used, five to nine runs each:
+
+- `--cold-every-run` clears the HTTP cache before every navigation: every sample is a first visit,
+  reported as p50/p95;
+- the default mode clears it once, then reuses it: a cold first visit plus repeat opens.
 
 ## Baseline before the change
 
-| Shell        | Run            | First useful screen | LCP        | DCL        | Requests | Transfer  | JS        | CSS      |
-| ------------ | -------------- | ------------------- | ---------- | ---------- | -------- | --------- | --------- | -------- |
-| Web          | cold           | 1880 ms             | 1720 ms    | 1639 ms    | 22       | 248 012 B | 96 564 B  | 44 814 B |
-| Web          | warm (p50/p95) | 1002/1017 ms        | 840/852 ms | 757/771 ms | 22       | 248 012 B | 96 564 B  | 44 814 B |
-| Mobile shell | cold           | 2088 ms             | 1912 ms    | 703 ms     | 12       | 258 944 B | 207 290 B | 43 993 B |
-| Mobile shell | warm (p50)     | 986 ms              | 848 ms     | 395 ms     | 11       | 254 057 B | 207 290 B | 43 993 B |
+| Shell        | Run                | First useful screen | LCP        | DCL        | Requests | Transfer  | JS        | CSS      |
+| ------------ | ------------------ | ------------------- | ---------- | ---------- | -------- | --------- | --------- | -------- |
+| Web          | cold p50/p95 (n=5) | 1927/1964 ms        | 1764/1788  | 1661/1683  | 21       | 243 125 B | 96 564 B  | 44 814 B |
+| Web          | warm p50/p95 (n=9) | 1002/1017 ms        | 840/852 ms | 757/771 ms | 22       | 248 012 B | 96 564 B  | 44 814 B |
+| Mobile shell | cold p50/p95 (n=5) | 2071/2089 ms        | 1908/1972  | 690/735    | 12       | 258 944 B | 207 290 B | 43 993 B |
+| Mobile shell | warm p50/p95 (n=5) | 986/1019 ms         | 848/864 ms | 395/399 ms | 11       | 254 057 B | 207 290 B | 43 993 B |
 
 Static first-paint closure of the web build: **14 eager JS/CSS files**, 671 093 B of JS
 (195 063 B gzip), 242 397 B of CSS (43 391 B gzip) — 238 454 B gzip in total, of which the entry
@@ -83,6 +88,9 @@ bodyless `304` that keeps `ETag` and `Cache-Control`, and still stream the objec
 changed. The public contract documents the added response and header
 (`contracts/openapi/public/v1/openapi.yaml`).
 
+The 200 response now also documents `ETag` and `Cache-Control`, and the 304 branch releases the
+already-opened object stream so a revalidation does not hold an S3 socket and its read timeout.
+
 Effect: an unchanged avatar/logo costs headers instead of image bytes on every revalidation, which
 is what a returning WebView does for every image it shows. Changed photos still use the same URL,
 so the 300 s freshness plus ETag revalidation remains the correctness guarantee — no stale image is
@@ -113,12 +121,12 @@ preferences); Home unchanged for the dashboard read, minus three badge reads tha
 
 ## After the change
 
-| Shell        | Run            | First useful screen                       | LCP                | DCL              | Requests | Transfer           | JS                 | CSS      |
-| ------------ | -------------- | ----------------------------------------- | ------------------ | ---------------- | -------- | ------------------ | ------------------ | -------- |
-| Web          | cold           | 1662 ms (-11.6%)                          | 1500 ms (-12.8%)   | 1408 ms (-14.1%) | 18 (-4)  | 202 128 B (-18.5%) | 86 355 B           | 42 743 B |
-| Web          | warm (p50/p95) | 978/996 ms (-2.4%)                        | 804/836 ms (-4.3%) | 730/740 ms       | 18 (-4)  | 202 128 B (-18.5%) | 86 355 B           | 42 743 B |
-| Mobile shell | cold           | 1871 ms (-10.4%)                          | 1704 ms (-10.9%)   | 692 ms           | 13 (+1)  | 216 232 B (-16.5%) | 165 715 B (-20.1%) | 42 856 B |
-| Mobile shell | warm (p50)     | 1016 ms (+3.0%, within run-to-run spread) | 860 ms             | 392 ms           | 12       | 211 345 B (-16.8%) | 165 715 B          | 42 856 B |
+| Shell        | Run          | First useful screen            | LCP          | DCL          | Requests | Transfer           | JS                 | CSS      |
+| ------------ | ------------ | ------------------------------ | ------------ | ------------ | -------- | ------------------ | ------------------ | -------- |
+| Web          | cold p50/p95 | 1666/1720 ms (−13.5% / −12.4%) | 1500/1548 ms | 1419/1460 ms | 17       | 197 241 B (−18.9%) | 86 355 B           | 42 743 B |
+| Web          | warm p50/p95 | 978/996 ms (−2.4% / −2.1%)     | 804/836 ms   | 730/740 ms   | 18       | 202 128 B (−18.5%) | 86 355 B           | 42 743 B |
+| Mobile shell | cold p50/p95 | 1860/1891 ms (−10.2% / −9.5%)  | 1692/1716 ms | 686/706 ms   | 13       | 216 232 B (−16.5%) | 165 715 B (−20.1%) | 42 856 B |
+| Mobile shell | warm p50     | 1016 ms (+3.0%, within spread) | 860 ms       | 392 ms       | 12       | 211 345 B (−16.8%) | 165 715 B          | 42 856 B |
 
 Static closure after: **13 eager files**, 512 725 B JS (151 328 B gzip) + 236 173 B CSS
 (41 677 B gzip) = 193 005 B gzip (-19.1%).
