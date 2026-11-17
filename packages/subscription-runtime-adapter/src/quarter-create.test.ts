@@ -178,6 +178,36 @@ describe('private quarter HTTP boundary', () => {
   );
 });
 
+it('bounds a timed-out owner call to exactly one POST, then opens the breaker', async () => {
+  const f = await quarterFixture(),
+    fetchImplementation = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+          );
+        }),
+    ),
+    client = new QuarterCreateOwnerClient({
+      baseUrl: 'https://padlhub.su/',
+      environment: 'production',
+      timeoutMs: 100,
+      fetchImplementation,
+    });
+  // Each attempt is bounded by the configured timeout: a hung LK1/Viva call is never retried and
+  // never becomes a second provider write.
+  for (let attempt = 1; attempt <= 3; attempt += 1)
+    await expect(
+      client.admit(f.admission, { ...env, operationId: f.receipt.operationId }),
+    ).rejects.toMatchObject({ code: 'GAME_QUARTER_CREATE_UNAVAILABLE', status: 504 });
+  expect(fetchImplementation).toHaveBeenCalledTimes(3);
+  // The third failure opens the client breaker; the next call fails before any request.
+  await expect(
+    client.admit(f.admission, { ...env, operationId: f.receipt.operationId }),
+  ).rejects.toMatchObject({ code: 'GAME_QUARTER_CREATE_UNAVAILABLE' });
+  expect(fetchImplementation).toHaveBeenCalledTimes(3);
+});
+
 it('emits only bounded redacted metrics for success/refusal/malformed response and ignores observer failure', async () => {
   const f = await quarterFixture(),
     metrics: { operation: string; outcome: string; durationMs: number }[] = [];

@@ -419,8 +419,11 @@ function LegacyCreateGamePage({
             lockManager,
           );
           setActiveAttempt(null);
+          // Same readback contract as the free path: without a revision the games screen skips
+          // the projection wait and can show a card that is not updated yet.
+          const revision = result.operation.aggregateRevision ?? 0;
           navigate(
-            `/games/${encodeURIComponent(result.operation.gameId)}?created=1${
+            `/games/${encodeURIComponent(result.operation.gameId)}?created=1&revision=${revision}${
               result.replayed ? '&recovered=1' : ''
             }`,
           );
@@ -528,7 +531,10 @@ function LegacyCreateGamePage({
           lockManager,
         );
         setActiveAttempt(null);
-        navigate(`/games/${encodeURIComponent(result.operation.gameId)}?created=1&recovered=1`);
+        const revision = result.operation.aggregateRevision ?? 0;
+        navigate(
+          `/games/${encodeURIComponent(result.operation.gameId)}?created=1&revision=${revision}&recovered=1`,
+        );
       } else {
         setNotice('Пока не подтверждено. Платёж и бронь не выполнены; проверьте статус позже.');
       }

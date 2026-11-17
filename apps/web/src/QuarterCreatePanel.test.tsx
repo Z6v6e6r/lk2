@@ -179,6 +179,78 @@ it('reload reads custody only and storage-denied fails closed without mutating H
   expect(h.g.createQuarterGame).not.toHaveBeenCalled();
 });
 
+it('shows the explicit waiting state and recovers the original operation without a second create', async () => {
+  const h = setup(),
+    user = userEvent.setup();
+  h.g.createQuarterGame.mockImplementation(async () => {
+    const v = await value();
+    return { ...v, operation: { ...v.operation, status: 'UNKNOWN' } };
+  });
+  render(
+    <QuarterCreatePanel
+      gateway={h.gateway}
+      principal={principal}
+      attemptStorage={localStorage}
+      attemptLockManager={locks}
+    />,
+  );
+  await user.selectOptions(await screen.findByLabelText('Корт'), input.courtId);
+  await user.type(screen.getByLabelText(/^Начало — ваше местное время/), '2030-01-01T15:00');
+  await screen.findByRole('option', { name: 'Synthetic subscription' });
+  await user.selectOptions(
+    screen.getByRole('combobox', { name: 'Выберите подписку' }),
+    input.subscriptionId,
+  );
+  await user.click(screen.getByRole('button', { name: 'Создать игру по подписке' }));
+
+  expect(await screen.findByRole('heading', { name: 'Ожидаем подтверждения' })).toBeVisible();
+  expect(screen.getByText('Результат ещё неизвестен. Сохранён исходный запрос.')).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: 'Создать игру по подписке' }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Открыть игру' })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Продолжить исходную операцию' }));
+  await screen.findByText('Создание игры подтверждено.');
+  expect(h.g.createQuarterGame).toHaveBeenCalledOnce();
+  expect(h.g.reconcileQuarterCreateOperation).toHaveBeenCalledOnce();
+});
+
+it('sends one quarter create when the submit button is pressed twice', async () => {
+  const h = setup(),
+    user = userEvent.setup();
+  type QuarterView = Awaited<ReturnType<typeof value>>;
+  let release!: (view: QuarterView) => void;
+  h.g.createQuarterGame.mockImplementation(
+    () =>
+      new Promise<QuarterView>((resolve) => {
+        release = resolve;
+      }),
+  );
+  render(
+    <QuarterCreatePanel
+      gateway={h.gateway}
+      principal={principal}
+      attemptStorage={localStorage}
+      attemptLockManager={locks}
+    />,
+  );
+  await user.selectOptions(await screen.findByLabelText('Корт'), input.courtId);
+  await user.type(screen.getByLabelText(/^Начало — ваше местное время/), '2030-01-01T15:00');
+  await screen.findByRole('option', { name: 'Synthetic subscription' });
+  await user.selectOptions(
+    screen.getByRole('combobox', { name: 'Выберите подписку' }),
+    input.subscriptionId,
+  );
+  const submit = screen.getByRole('button', { name: 'Создать игру по подписке' });
+  await user.click(submit);
+  await user.click(submit);
+  expect(h.g.createQuarterGame).toHaveBeenCalledOnce();
+  release(await value());
+  await screen.findByText('Создание игры подтверждено.');
+  expect(h.g.createQuarterGame).toHaveBeenCalledOnce();
+});
+
 it('late subscription read after principal logout is not shown or usable', async () => {
   const h = setup();
   let resolve!: (value: Awaited<ReturnType<typeof h.g.getHomeDashboard>>) => void;
