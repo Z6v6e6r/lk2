@@ -29,6 +29,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
+import { inflateRawSync } from 'node:zlib';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
 import { validateTimewebRuntimeSecretPaths } from './render-timeweb-beta-release-env.js';
 import { validateInstalledApiWorkerEvidence } from './timeweb-api-worker-contract.js';
@@ -63,9 +64,76 @@ import {
 } from './produce-timeweb-api-web-observability-evidence.js';
 import { validateTimewebMonitoringEvidence } from './verify-timeweb-api-web-observability.js';
 import {
+  OWNER_PLAN,
+  OWNER_RECEIPT,
+  OWNER_KIND,
+  CANONICAL_PLAN,
+  CANONICAL_RECEIPT,
+  CANONICAL_KIND,
+  CANONICAL_FRESH_OPERATION,
+  CANONICAL_FRESH_RECEIPT,
+  isCanonicalOwnerDirectedUpgrade,
+  CANONICAL_OWNER_POLICY,
+  CANONICAL_PRIOR_RESTORE_POLICY,
+  OWNER_POLICY,
+  PROVIDER_SKIPPED,
+  FRESH_BACKUP_OPERATION,
+  FRESH_BACKUP_RECEIPT,
+  PRIOR_RESTORE_POLICY,
+  isOwnerDirectedCutover,
+  createOwnerDirectedBinding,
+  validateOwnerDirectedBinding,
+  ownerDirectedReceipt,
+  WAIVER_PLAN,
+  WAIVER_RECEIPT,
+  WAIVER_KIND,
+  WAIVER_POLICY,
+  WAIVER_STATUS,
+  NATIVE_INPUTS,
+  NATIVE_DERIVED,
+  NATIVE_ENVELOPE,
+  decodeNativeInputEnvelope,
+  isWaivedRosterCutover,
+  createNativeWaiverAdmission,
+  validateRetainedNativeAdmission,
+  validateSealedNativeAdmission,
+  nativeAdmissionReceipt,
+} from './timeweb-roster-alert-waiver.js';
+import {
   ADOPTED_MANUAL_FULL_KIND,
   validateAdoptedBaseline,
 } from './timeweb-adopt-manual-baseline.js';
+import {
+  CUTOVER_RECEIPT,
+  ROSTER_CUTOVER_RECEIPT,
+  ROSTER_CUTOVER_KIND,
+  isRosterCutover,
+  cutoverPlanSchema,
+  cutoverReceiptSchema,
+  cutoverInstalledKind,
+  validateRosterCutoverObservation,
+  isProductionCutover,
+  validateProductionCutover,
+  legacyBaselineHash,
+  validateCanonicalBaseline,
+  isLegacyProductionCutover,
+  cutoverBaseline,
+  cutoverBaselineHash,
+  cutoverBaselineField,
+  legacyReleaseEnvPath,
+  legacyBuildArchivePath,
+  legacyEnvironment,
+  validateLegacyRuntime,
+  validateLegacyRun,
+  validateLegacyArtifact,
+  validateLegacyBuildRecord,
+  validateCutoverLineage,
+  validateCutoverBackupOperation,
+  assertCutoverBackupFiles,
+  validateCutoverPlanProofs,
+  assertCutoverReadbackFreshness,
+  COMPONENTS,
+} from './timeweb-production-cutover.js';
 
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
@@ -109,6 +177,8 @@ const CONTROLLER_FILES = new Set([
   'scripts/timeweb-critical-web.test.ts',
   'scripts/timeweb-api-web-upgrade.js',
   'scripts/timeweb-api-web-upgrade.test.ts',
+  'scripts/timeweb-production-cutover.js',
+  'scripts/timeweb-production-cutover.test.ts',
   'scripts/timeweb-api-worker-contract.d.ts',
   'scripts/control-timeweb-location-photo-acl.py',
   'scripts/control-timeweb-location-photo-acl.test.ts',
@@ -183,7 +253,118 @@ function exact(value, keys) {
   if (!value || Array.isArray(value) || !equal(Object.keys(value).sort(), [...keys].sort()))
     fail('invalid_keys');
 }
+// Historical admission owns its bounded reader. The deployed renderer remains byte-frozen.
+function decodePredecessorArchiveUtf8(bytes) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    fail('canonical_artifact_filename');
+  }
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+export function extractCanonicalPredecessorArtifactPair(archiveBytes) {
+  if (archiveBytes.length > 4_194_304 || archiveBytes.length < 22)
+    fail('canonical_artifact_archive_size');
+  let eocd = -1;
+  const searchStart = Math.max(0, archiveBytes.length - 65_557);
+  for (let offset = archiveBytes.length - 22; offset >= searchStart; offset -= 1) {
+    if (archiveBytes.readUInt32LE(offset) === 0x06054b50) {
+      eocd = offset;
+      break;
+    }
+  }
+  if (eocd < 0) fail('canonical_artifact_archive');
+  const entryCount = archiveBytes.readUInt16LE(eocd + 10);
+  const directorySize = archiveBytes.readUInt32LE(eocd + 12);
+  const directoryOffset = archiveBytes.readUInt32LE(eocd + 16);
+  if (
+    entryCount !== 2 ||
+    archiveBytes.readUInt16LE(eocd + 8) !== entryCount ||
+    archiveBytes.readUInt16LE(eocd + 4) !== 0 ||
+    archiveBytes.readUInt16LE(eocd + 6) !== 0 ||
+    eocd + 22 + archiveBytes.readUInt16LE(eocd + 20) !== archiveBytes.length ||
+    directoryOffset + directorySize !== eocd
+  )
+    fail('canonical_artifact_inventory');
+
+  const files = new Map();
+  const ranges = [];
+  let cursor = directoryOffset;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (cursor + 46 > eocd) fail('canonical_artifact_archive');
+    if (archiveBytes.readUInt32LE(cursor) !== 0x02014b50) fail('canonical_artifact_archive');
+    const flags = archiveBytes.readUInt16LE(cursor + 8);
+    const method = archiveBytes.readUInt16LE(cursor + 10);
+    const expectedCrc = archiveBytes.readUInt32LE(cursor + 16);
+    const compressedSize = archiveBytes.readUInt32LE(cursor + 20);
+    const uncompressedSize = archiveBytes.readUInt32LE(cursor + 24);
+    const nameLength = archiveBytes.readUInt16LE(cursor + 28);
+    const extraLength = archiveBytes.readUInt16LE(cursor + 30);
+    const commentLength = archiveBytes.readUInt16LE(cursor + 32);
+    const localOffset = archiveBytes.readUInt32LE(cursor + 42);
+    if (cursor + 46 + nameLength + extraLength + commentLength > eocd)
+      fail('canonical_artifact_archive');
+    const name = decodePredecessorArchiveUtf8(
+      archiveBytes.subarray(cursor + 46, cursor + 46 + nameLength),
+    );
+    if (
+      flags & 0x1 ||
+      ![0, 8].includes(method) ||
+      !['release-manifest.json', 'release-manifest.sha256'].includes(name) ||
+      files.has(name) ||
+      uncompressedSize > 1_048_576 ||
+      localOffset + 30 > directoryOffset ||
+      archiveBytes.readUInt32LE(localOffset) !== 0x04034b50
+    )
+      fail('canonical_artifact_inventory');
+    const localNameLength = archiveBytes.readUInt16LE(localOffset + 26);
+    const localExtraLength = archiveBytes.readUInt16LE(localOffset + 28);
+    if (
+      archiveBytes.readUInt16LE(localOffset + 6) !== flags ||
+      archiveBytes.readUInt16LE(localOffset + 8) !== method ||
+      localOffset + 30 + localNameLength + localExtraLength > directoryOffset ||
+      !archiveBytes
+        .subarray(localOffset + 30, localOffset + 30 + localNameLength)
+        .equals(archiveBytes.subarray(cursor + 46, cursor + 46 + nameLength))
+    )
+      fail('canonical_artifact_archive');
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > directoryOffset) fail('canonical_artifact_archive');
+    ranges.push({ start: localOffset, end: dataEnd });
+    let contents;
+    try {
+      const compressed = archiveBytes.subarray(dataStart, dataEnd);
+      contents =
+        method === 0
+          ? Buffer.from(compressed)
+          : inflateRawSync(compressed, { maxOutputLength: 1_048_576 });
+    } catch {
+      fail('canonical_artifact_archive');
+    }
+    if (contents.length !== uncompressedSize || crc32(contents) !== expectedCrc)
+      fail('canonical_artifact_archive');
+    files.set(name, contents);
+    cursor += 46 + nameLength + extraLength + commentLength;
+  }
+  if (cursor !== directoryOffset + directorySize) fail('canonical_artifact_archive');
+  ranges.sort((a, b) => a.start - b.start);
+  if (ranges.some((range, index) => index > 0 && range.start < ranges[index - 1].end))
+    fail('canonical_artifact_archive');
+  return files;
+}
+
 export function validateApiWebOperation(value) {
+  if (isProductionCutover(value)) return validateProductionCutover(value);
   if (isJoinOperation(value)) return validateJoinOperation(value);
   if (value?.schema === 'PHUB_TIMEWEB_API_WEB_OPERATION_V2')
     return validateDirectApiWebOperation(value);
@@ -346,8 +527,11 @@ export function validateControllerDelta(entries) {
   )
     fail('candidate_controller_delta');
 }
-export function apiWebComposeArgs(baseline, overlay, action, service) {
-  if (!['api', 'web'].includes(service) || !['config', 'pull', 'up'].includes(action))
+export function apiWebComposeArgs(baseline, overlay, action, service, roster = false) {
+  if (
+    !['api', 'web', ...(roster ? ['worker'] : [])].includes(service) ||
+    !['config', 'pull', 'up'].includes(action)
+  )
     fail('invalid_stage');
   return [
     'compose',
@@ -359,6 +543,7 @@ export function apiWebComposeArgs(baseline, overlay, action, service) {
     COMPOSE,
     // Render dormant services for identity checks; activation never enables profiles.
     ...(action === 'config' ? ['--profile', '*'] : []),
+    ...(service === 'worker' && action !== 'config' ? ['--profile', 'background'] : []),
     ...(action === 'config'
       ? ['config', '--format', 'json']
       : action === 'pull'
@@ -368,9 +553,9 @@ export function apiWebComposeArgs(baseline, overlay, action, service) {
 }
 // nginx -t creates its pid and cache paths even when it only validates configuration.
 // Keep the artifact root read-only; only these bounded, ephemeral scratch paths are writable.
-export function apiWebArtifactSmokeArgs(service, image) {
+export function apiWebArtifactSmokeArgs(service, image, roster = false) {
   if (
-    !['api', 'web'].includes(service) ||
+    !['api', 'web', ...(roster ? ['worker'] : [])].includes(service) ||
     !new RegExp(`^ghcr\\.io/z6v6e6r/phub-${service}@sha256:[a-f0-9]{64}$`).test(image)
   )
     fail('invalid_artifact_smoke');
@@ -393,7 +578,12 @@ export function apiWebArtifactSmokeArgs(service, image) {
     image,
     ...(service === 'api'
       ? ['--check', '/app/apps/api/dist/main.js']
-      : ['-ec', 'nginx -t && test -s /usr/share/nginx/html/index.html']),
+      : service === 'worker'
+        ? [
+            '-ec',
+            'node --check /app/apps/worker/dist/main.js && node --check /app/apps/worker/dist/repair-legacy-game-rosters.js',
+          ]
+        : ['-ec', 'nginx -t && test -s /usr/share/nginx/html/index.html']),
   ];
 }
 // Every ambiguous activation has a durable intent. Recovery always converges to the previous pair.
@@ -404,6 +594,11 @@ export async function runApiWebTransition(ops) {
     await ops.pullAndSmoke();
     await ops.journal('PREPARED');
     activationIntent = true; // An intent write may have committed even when its fsync fails.
+    if (ops.workerMode === 'legacy-roster-cutover') {
+      await ops.journal('WORKER_STOP_INTENT');
+      await ops.containWorker(false);
+      await ops.journal('WORKER_STOPPED');
+    }
     if (ops.secretMode === 'join-dormant') {
       await ops.journal('SECRET_SWAP_INTENT');
       await ops.installSecrets();
@@ -412,12 +607,18 @@ export async function runApiWebTransition(ops) {
     await ops.journal('API_INTENT');
     await ops.activate('api');
     await ops.journal('API_ACTIVE');
+    if (ops.workerMode === 'legacy-roster-cutover') {
+      await ops.journal('WORKER_INTENT');
+      await ops.activate('worker');
+      await ops.journal('WORKER_ACTIVE');
+    }
     await ops.journal('WEB_INTENT');
     await ops.activate('web');
     await ops.journal('OBSERVING');
     await ops.observe();
     await ops.attest();
-    if (ops.secretMode === 'join-dormant') await ops.journal('BASELINE_INTENT');
+    if (ops.secretMode === 'join-dormant' || ops.workerMode === 'legacy-roster-cutover')
+      await ops.journal('BASELINE_INTENT');
     await ops.installBaseline();
     await ops.journal('SUCCESS');
   } catch (error) {
@@ -434,6 +635,13 @@ export async function recoverApiWebTransition(ops) {
     await ops.journal('ROLLBACK_INTENT');
     // Continue API restoration even if Web restoration fails; never declare a partial restore safe.
     const errors = [];
+    if (ops.workerMode === 'legacy-roster-cutover') {
+      try {
+        await ops.containWorker(true);
+      } catch {
+        fail('worker_containment_failed');
+      }
+    }
     if (ops.secretMode === 'join-dormant') {
       try {
         await ops.restoreSecrets();
@@ -441,7 +649,11 @@ export async function recoverApiWebTransition(ops) {
         errors.push('secrets');
       }
     }
-    for (const service of ['web', 'api']) {
+    for (const service of [
+      'web',
+      'api',
+      ...(ops.workerMode === 'legacy-roster-cutover' ? ['worker'] : []),
+    ]) {
       if (service === 'api' && errors.includes('secrets')) continue;
       try {
         await ops.restore(service);
@@ -450,7 +662,8 @@ export async function recoverApiWebTransition(ops) {
       }
     }
     if (errors.length) fail('restore_failed');
-    if (ops.secretMode === 'join-dormant') await ops.removeCandidateBaseline();
+    if (ops.secretMode === 'join-dormant' || ops.workerMode === 'legacy-roster-cutover')
+      await ops.removeCandidateBaseline();
     await (ops.attestRestored ?? ops.attest)();
     await ops.journal('ROLLED_BACK');
   } catch {
@@ -472,6 +685,15 @@ export async function recoverApiWebPhase(phase, ops) {
       'OBSERVING',
       'ROLLBACK_INTENT',
       'ROLLBACK_FAILED',
+      ...(ops.workerMode === 'legacy-roster-cutover'
+        ? [
+            'WORKER_STOP_INTENT',
+            'WORKER_STOPPED',
+            'WORKER_INTENT',
+            'WORKER_ACTIVE',
+            'BASELINE_INTENT',
+          ]
+        : []),
       ...(ops.secretMode === 'join-dormant'
         ? ['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'BASELINE_INTENT']
         : []),
@@ -481,9 +703,10 @@ export async function recoverApiWebPhase(phase, ops) {
   await recoverApiWebTransition(ops);
   return 'ROLLED_BACK';
 }
-export function validateUnchangedImages(values) {
-  exact(values, ['worker', 'realtime']);
-  for (const service of ['worker', 'realtime'])
+export function validateUnchangedImages(values, roster = false) {
+  const services = roster ? ['realtime'] : ['worker', 'realtime'];
+  exact(values, services);
+  for (const service of services)
     if (
       values[service] !== null &&
       !new RegExp(`^ghcr.io/z6v6e6r/phub-${service}@sha256:[a-f0-9]{64}$`).test(
@@ -500,6 +723,56 @@ export async function reconcileApiWebPhase(receipt, ops) {
   await ops.journalReconciled(terminal);
   await ops.releaseLock();
   return 'RECONCILED';
+}
+// A lost disaster-recovery dump blocks forward success, never verification of a safe abort
+// or restoration of the recorded images. All other configuration/runtime guards still run.
+export async function attestApiWebTerminal(terminal, attest) {
+  if (!['SUCCESS', 'ROLLED_BACK', 'ABORTED'].includes(terminal)) fail('invalid_terminal');
+  await attest(terminal !== 'SUCCESS');
+}
+// Stops only a recognized member of this sealed three-service transaction. Never guesses
+// after a missing/foreign container. The caller journals intent before this command.
+export function containRosterCutoverWorker(plan, runDocker = docker) {
+  const ids = runDocker([
+    'ps',
+    '-aq',
+    '--filter',
+    'label=com.docker.compose.project=phub-timeweb-beta',
+    '--filter',
+    'label=com.docker.compose.service=worker',
+  ])
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  if (ids.length !== 1) fail('worker_containment_count');
+  const load = () => JSON.parse(runDocker(['inspect', ids[0]]))[0];
+  const actual = load();
+  const known = [plan.previous.worker, plan.candidate.worker].find(
+    (v) =>
+      v.image === actual.Config.Image &&
+      v.releaseId === (actual.Config.Labels['phub.release-id'] ?? null) &&
+      v.revision === (actual.Config.Labels['org.opencontainers.image.revision'] ?? null),
+  );
+  if (!known || !HASH.test(actual.Id ?? '') || (known.imageId && actual.Image !== known.imageId))
+    fail('foreign_worker_containment');
+  const image = JSON.parse(runDocker(['image', 'inspect', known.image]))[0];
+  if (image.Id !== actual.Image || !image.RepoDigests?.includes(known.image))
+    fail('worker_containment_image');
+  if (actual.State.Status === 'running') runDocker(['stop', '--time', '60', actual.Id]);
+  const stopped = load();
+  if (
+    stopped.Id !== actual.Id ||
+    stopped.Image !== actual.Image ||
+    !['exited', 'created'].includes(stopped.State.Status) ||
+    stopped.State.Running !== false
+  )
+    fail('worker_not_contained');
+  return stopped.Id;
+}
+export function retainLegacyAttestation(path, bytes, readExisting, create) {
+  if (existsSync(path)) {
+    if (!readExisting(path).equals(bytes)) fail('legacy_attestation_drift');
+  } else create(path, bytes, true);
 }
 function secure(path, mode) {
   const value = lstatSync(path);
@@ -557,10 +830,10 @@ export function normalizeUpgradeHardlink(path, expectedUid = 0, expectedGid = 0)
   if (lstatSync(path).nlink !== 1) fail('atomic_twin_changed');
   return true;
 }
-function read(path, mode = 0o600, max = 4 * 1024 * 1024) {
+function read(path, mode = 0o600, max = 4 * 1024 * 1024, normalizeAtomicTwin = true) {
   if (path.startsWith(ROOT + '/')) {
     secure(dirname(path));
-    normalizeUpgradeHardlink(path);
+    if (normalizeAtomicTwin) normalizeUpgradeHardlink(path);
   }
   const before = secure(path, mode);
   if (!before.isFile() || before.size > max) fail('invalid_file');
@@ -738,7 +1011,7 @@ function inspect(service, project = 'phub-timeweb-beta', optional = false) {
     startedAt: value.State.StartedAt,
   };
 }
-function excluded() {
+function excluded(targets = ['api', 'web']) {
   if (docker(['ps', '-q', '--filter', 'label=com.docker.compose.service=migrator']).trim())
     fail('active_migrator');
   // All existing non-target running containers are part of the unchanged boundary, including ingress/dependencies.
@@ -749,7 +1022,7 @@ function excluded() {
       (v) =>
         !(
           v.Config.Labels['com.docker.compose.project'] === 'phub-timeweb-beta' &&
-          ['api', 'web'].includes(v.Config.Labels['com.docker.compose.service'])
+          targets.includes(v.Config.Labels['com.docker.compose.service'])
         ),
     )
     .map((v) => ({
@@ -819,22 +1092,29 @@ async function candidateAuthority(op, directory) {
     fail('manifest_source');
   return manifest;
 }
-function imagePresent(ref, source) {
+function imagePresent(ref, source, legacyImageId = undefined) {
   const v = JSON.parse(docker(['image', 'inspect', ref]))[0];
   if (
     v.Os !== 'linux' ||
     v.Architecture !== 'amd64' ||
     !v.RepoDigests?.includes(ref) ||
-    v.Config.Labels?.['org.opencontainers.image.revision'] !== source
+    (legacyImageId
+      ? v.Id !== legacyImageId ||
+        (v.Config.Labels?.['org.opencontainers.image.revision'] ?? null) !== null
+      : v.Config.Labels?.['org.opencontainers.image.revision'] !== source)
   )
     fail('image_identity');
 }
 async function probe(service, publicProbe = false) {
+  if (!['api', 'web', 'worker'].includes(service) || (service === 'worker' && publicProbe))
+    fail('invalid_probe');
   const url = publicProbe
     ? `https://lk2.padlhub.su/${service === 'api' ? 'health/ready' : ''}`
     : service === 'api'
       ? 'http://172.30.26.12:3000/health/ready'
-      : 'http://172.30.26.11:8080/';
+      : service === 'worker'
+        ? 'http://172.30.26.14:3002/health/ready'
+        : 'http://172.30.26.11:8080/';
   const started = performance.now();
   const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(10000) });
   const body = await response.text();
@@ -910,7 +1190,11 @@ async function wait(service, expected) {
       if (
         v.image !== expected.image ||
         v.releaseId !== expected.releaseId ||
-        v.revision !== expected.releaseId.slice(0, 40) ||
+        v.revision !==
+          (Object.hasOwn(expected, 'revision')
+            ? expected.revision
+            : expected.releaseId.slice(0, 40)) ||
+        (expected.imageId !== undefined && v.imageId !== expected.imageId) ||
         v.restarts !== 0
       )
         fail('runtime_identity');
@@ -922,7 +1206,7 @@ async function wait(service, expected) {
   }
   fail('readiness_timeout');
 }
-function validateBackupProof(directory, previous, profile = 'beta') {
+function validateBackupProof(directory, previous, profile = 'beta', cutover = undefined) {
   // Operator-authorized degraded proof: when an interrupted transition left no receipt,
   // bind a deterministic marker. The authoritative database backup and restore evidence
   // remains in the release evidence store. A present receipt is still validated strictly.
@@ -938,6 +1222,9 @@ function validateBackupProof(directory, previous, profile = 'beta') {
     };
   }
   const v = JSON.parse(bytes);
+  if (cutover && isOwnerDirectedCutover(cutover))
+    return validateFreshDumpProof(directory, previous, cutover, bytes, v);
+  const diskCutover = cutover && v.schema === 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V2';
   exact(v, [
     'schema',
     'baselineReleaseId',
@@ -948,9 +1235,26 @@ function validateBackupProof(directory, previous, profile = 'beta') {
     'restoreImage',
     'restoredLedgerSha256',
     'sourceLedgerSha256',
+    ...(cutover
+      ? [
+          'operationSha256',
+          'predecessorAttestationSha256',
+          'databaseTarget',
+          'sourceAccountsSha256',
+          'restoredAccountsSha256',
+          ...(diskCutover
+            ? ['snapshotWitnessSha256', 'dumpBytes', 'dumpLimitBytes', 'dumpCompression']
+            : []),
+        ]
+      : []),
   ]);
   if (
-    v.schema !== 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1' ||
+    v.schema !==
+      (cutover
+        ? diskCutover
+          ? 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V2'
+          : 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V1'
+        : 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1') ||
     v.baselineReleaseId !== previous.releaseId ||
     v.restoreVerified !== true ||
     !/^docker\.io\/library\/postgres@sha256:[a-f0-9]{64}$/.test(v.restoreImage ?? '') ||
@@ -964,7 +1268,184 @@ function validateBackupProof(directory, previous, profile = 'beta') {
     hashBackupFile(v.backupFile) !== v.backupSha256
   )
     fail('backup_restore_proof');
+  if (
+    cutover &&
+    (v.predecessorAttestationSha256 !== cutoverBaselineHash(cutover) ||
+      !equal(v.databaseTarget, cutoverBaseline(cutover).databaseTarget) ||
+      v.sourceLedgerSha256 !== cutoverBaseline(cutover).ledgerSha256 ||
+      !HASH.test(v.sourceAccountsSha256 ?? '') ||
+      v.sourceAccountsSha256 !== v.restoredAccountsSha256)
+  )
+    fail('cutover_backup_binding');
+  if (cutover) {
+    const operationPath = `${directory}/backup-operation.json`;
+    const operationBytes = read(operationPath);
+    const operationSha256 = hash(operationBytes);
+    if (v.operationSha256 !== operationSha256) fail('cutover_backup_operation');
+    const producer = validateCutoverBackupOperation(cutover, operationBytes, {
+      directory,
+      postgres: inspect('postgres', 'phub-timeweb-beta-dependencies'),
+      toolFileSha256: hash(read(`${SOURCE}/scripts/control-timeweb-database-backup.py`, 0o644)),
+      configSha256: hash(read(CONFIG)),
+    });
+    if (
+      diskCutover !== (producer.schema === 'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2') ||
+      (diskCutover &&
+        (!HASH.test(v.snapshotWitnessSha256 ?? '') ||
+          !Number.isSafeInteger(v.dumpBytes) ||
+          v.dumpBytes <= 0 ||
+          v.dumpBytes > (13 * 1024 ** 3) / 2 ||
+          v.dumpLimitBytes !== (13 * 1024 ** 3) / 2 ||
+          v.dumpCompression !== 'zstd:3' ||
+          lstatSync(v.backupFile).size !== v.dumpBytes))
+    )
+      fail('cutover_backup_profile');
+    // Pure request validation and local installation/Git-object custody checks. This entry calls
+    // neither execute() nor any Docker/database operation in the producer.
+    const program = `import importlib.util,json,sys,time
+spec=importlib.util.spec_from_file_location('backup','${SOURCE}/scripts/control-timeweb-database-backup.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+raw=sys.stdin.buffer.read();op=m.strict(raw);m.validate_operation(op,time.time(),op['toolFileSha256'],allow_expired=True)
+m.tool_custody(op)
+if op['schema']==m.CUTOVER_DISK_SCHEMA:
+ m.validate_cutover_disk_terminal(op,raw)
+sys.stdout.write('CUTOVER_BACKUP_CUSTODY_VERIFIED')`;
+    if (
+      command('/usr/bin/python3', ['-I', '-S', '-B', '-c', program], {
+        input: operationBytes,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 30000,
+      }) !== 'CUTOVER_BACKUP_CUSTODY_VERIFIED'
+    )
+      fail('cutover_backup_custody');
+    const terminal = parseStrictJson(read(`${directory}/SUCCESS_CLEANUP_VERIFIED.json`));
+    exact(terminal, ['phase', 'operationSha256', 'observedAt', 'receiptSha256']);
+    if (
+      terminal.phase !== 'SUCCESS_CLEANUP_VERIFIED' ||
+      terminal.operationSha256 !== operationSha256 ||
+      terminal.receiptSha256 !== hash(bytes) ||
+      !Number.isFinite(Date.parse(terminal.observedAt)) ||
+      Date.parse(terminal.observedAt) < Date.parse(v.completedAt)
+    )
+      fail('cutover_backup_terminal');
+    return {
+      path,
+      sha256: hash(bytes),
+      operationPath,
+      operationSha256,
+      receiptPath: path,
+      receiptSha256: hash(bytes),
+      dumpSha256: v.backupSha256,
+    };
+  }
   return { path, sha256: hash(bytes) };
+}
+
+function validateFreshDumpProof(directory, previous, cutover, bytes, receipt) {
+  exact(receipt, [
+    'schema',
+    'baselineReleaseId',
+    'completedAt',
+    'backupFile',
+    'backupSha256',
+    'operationSha256',
+    'predecessorAttestationSha256',
+    'databaseTarget',
+    'sourceLedgerSha256',
+    'sourceAccountsSha256',
+    'snapshotWitnessSha256',
+    'dumpBytes',
+    'dumpLimitBytes',
+    'dumpCompression',
+    'postgresImage',
+    'freshDumpRestored',
+    'freshDumpIntegrityStatus',
+    'restoreAdmissionPolicy',
+    'priorReferenceSha256',
+    'ownerReceiptSha256',
+  ]);
+  const operationPath = `${directory}/backup-operation.json`,
+    operationBytes = read(operationPath);
+  const producer = validateCutoverBackupOperation(cutover, operationBytes, {
+    directory,
+    postgres: inspect('postgres', 'phub-timeweb-beta-dependencies'),
+    toolFileSha256: hash(read(`${SOURCE}/scripts/control-timeweb-database-backup.py`, 0o644)),
+    configSha256: hash(read(CONFIG)),
+  });
+  const decision = cutover.ownerDecisions.repeatedRestore;
+  if (
+    producer.schema !==
+      (isCanonicalOwnerDirectedUpgrade(cutover)
+        ? CANONICAL_FRESH_OPERATION
+        : FRESH_BACKUP_OPERATION) ||
+    receipt.schema !==
+      (isCanonicalOwnerDirectedUpgrade(cutover) ? CANONICAL_FRESH_RECEIPT : FRESH_BACKUP_RECEIPT) ||
+    receipt.baselineReleaseId !== previous.releaseId ||
+    receipt.operationSha256 !== hash(operationBytes) ||
+    receipt.predecessorAttestationSha256 !== cutoverBaselineHash(cutover) ||
+    !equal(receipt.databaseTarget, cutoverBaseline(cutover).databaseTarget) ||
+    receipt.sourceLedgerSha256 !== cutoverBaseline(cutover).ledgerSha256 ||
+    receipt.backupFile !== `${directory}/database.pgcustom` ||
+    receipt.freshDumpRestored !== false ||
+    receipt.freshDumpIntegrityStatus !== 'PG16_TOC_PARSE_VERIFIED' ||
+    receipt.restoreAdmissionPolicy !==
+      (isCanonicalOwnerDirectedUpgrade(cutover)
+        ? CANONICAL_PRIOR_RESTORE_POLICY
+        : PRIOR_RESTORE_POLICY) ||
+    ![
+      'backupSha256',
+      'sourceAccountsSha256',
+      'snapshotWitnessSha256',
+      'priorReferenceSha256',
+      'ownerReceiptSha256',
+    ].every((k) => HASH.test(receipt[k] ?? '')) ||
+    !Number.isSafeInteger(receipt.dumpBytes) ||
+    receipt.dumpBytes <= 0 ||
+    receipt.dumpBytes > (13 * 1024 ** 3) / 2 ||
+    receipt.dumpLimitBytes !== (13 * 1024 ** 3) / 2 ||
+    receipt.dumpCompression !== 'zstd:3' ||
+    lstatSync(receipt.backupFile).size !== receipt.dumpBytes ||
+    hashBackupFile(receipt.backupFile) !== receipt.backupSha256 ||
+    hash(read(`${directory}/prior-full-restore-reference.json`)) !== receipt.priorReferenceSha256 ||
+    hash(read(`${directory}/owner-restore-decision.json`)) !== receipt.ownerReceiptSha256 ||
+    !Number.isFinite(Date.parse(receipt.completedAt)) ||
+    Date.now() < Date.parse(receipt.completedAt) ||
+    Date.now() - Date.parse(receipt.completedAt) > 3600000 ||
+    ['messageSha256', 'reference', 'receivedAt'].some(
+      (k) => producer.ownerRestoreDecision?.[k] !== decision[k],
+    ) ||
+    Date.parse(cutover.expiresAt) > Date.parse(producer.expiresAt)
+  )
+    fail('fresh_backup_proof');
+  const program = `import importlib.util,sys,time
+spec=importlib.util.spec_from_file_location('backup','${SOURCE}/scripts/control-timeweb-database-backup.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+raw=sys.stdin.buffer.read();op=m.strict(raw);m.validate_operation(op,time.time(),op['toolFileSha256'],allow_expired=True)
+m.tool_custody(op);m.validate_fresh_terminal(op,raw)
+sys.stdout.write('FRESH_DUMP_CUSTODY_VERIFIED')`;
+  if (
+    command('/usr/bin/python3', ['-I', '-S', '-B', '-c', program], {
+      input: operationBytes,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 60000,
+    }) !== 'FRESH_DUMP_CUSTODY_VERIFIED'
+  )
+    fail('fresh_backup_custody');
+  const path = `${directory}/database-backup-receipt.json`;
+  return {
+    path,
+    sha256: hash(bytes),
+    operationPath,
+    operationSha256: hash(operationBytes),
+    receiptPath: path,
+    receiptSha256: hash(bytes),
+    dumpSha256: receipt.backupSha256,
+    admissionPolicy: isCanonicalOwnerDirectedUpgrade(cutover)
+      ? CANONICAL_PRIOR_RESTORE_POLICY
+      : PRIOR_RESTORE_POLICY,
+    priorReferenceSha256: receipt.priorReferenceSha256,
+    ownerReceiptSha256: receipt.ownerReceiptSha256,
+  };
 }
 
 // Read only the authenticated original POST105 bundle. The installed producer's terminal
@@ -1057,12 +1538,111 @@ export function readJoinPost105Backup(op, controllerTree, { fresh = true } = {})
   );
 }
 
+export function readNativeOperatorSnapshot(path) {
+  if (path !== `${ROOT}/operator/${NATIVE_ENVELOPE}`) fail('native_input_path');
+  secure(dirname(path));
+  const before = secure(path, 0o600);
+  if (!before.isFile() || before.nlink !== 1 || before.size <= 0 || before.size > 16 * 1024 * 1024)
+    fail('native_input_file');
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = fstatSync(fd);
+    if (
+      ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'nlink', 'uid', 'gid', 'mode'].some(
+        (key) => before[key] !== opened[key],
+      )
+    )
+      fail('native_input_race');
+    const bytes = readFileSync(fd),
+      after = fstatSync(fd),
+      named = lstatSync(path);
+    if (
+      bytes.length !== before.size ||
+      ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'nlink', 'uid', 'gid', 'mode'].some(
+        (key) => before[key] !== after[key] || before[key] !== named[key],
+      )
+    )
+      fail('native_input_race');
+    return bytes;
+  } finally {
+    closeSync(fd);
+  }
+}
+function nativeSourceHashes() {
+  return {
+    adapterSourceSha256: hash(read(`${SOURCE}/scripts/timeweb-native-observability.js`, 0o644)),
+    reviewValidatorSha256: hash(read(`${SOURCE}/scripts/timeweb-native-capture-review.js`, 0o644)),
+  };
+}
+function readRetainedNativeEvidence(transaction) {
+  return Object.fromEntries(
+    [...NATIVE_INPUTS, NATIVE_DERIVED, NATIVE_ENVELOPE].map((name) => [
+      name,
+      read(
+        `${transaction}/${name}`,
+        0o600,
+        name === NATIVE_ENVELOPE ? 16 * 1024 * 1024 : 4 * 1024 * 1024,
+      ),
+    ]),
+  );
+}
+export async function admitNativeWaiverMonitoring(op, transaction, operationSha256) {
+  if (
+    process.getuid?.() !== 0 ||
+    transaction !== `${ROOT}/backups/${op.candidateSha}-${op.publicationRunId}-1-api-web` ||
+    existsSync(`${transaction}/plan.json`) ||
+    !read(LOCK).equals(Buffer.from(`${transaction}/plan.json\n`)) ||
+    hash(read(`${transaction}/operation.json`)) !== operationSha256
+  )
+    fail('native_admission_lease');
+  validateProductionCutover(op, true);
+  const source = nativeSourceHashes(),
+    path = `${ROOT}/operator/${NATIVE_ENVELOPE}`;
+  process.stderr.write(
+    `PHUB_NATIVE_INPUT_REQUIRED|operationSha256=${operationSha256}|waitSeconds=120\n`,
+  );
+  const deadline = performance.now() + 120000;
+  while (!existsSync(path)) {
+    if (performance.now() >= deadline) fail('native_input_deadline');
+    await delay(250);
+  }
+  const envelope = readNativeOperatorSnapshot(path);
+  const inputs = decodeNativeInputEnvelope(envelope, operationSha256);
+  const { admission, evidence } = createNativeWaiverAdmission(
+    op,
+    inputs,
+    source,
+    new Date().toISOString(),
+    operationSha256,
+  );
+  if (!evidence[NATIVE_ENVELOPE].equals(envelope)) fail('native_envelope_canonical_order');
+  for (const [name, bytes] of Object.entries(evidence))
+    durable(`${transaction}/${name}`, bytes, true);
+  const retained = readRetainedNativeEvidence(transaction);
+  validateRetainedNativeAdmission(op, admission, operationSha256, retained);
+  return admission;
+}
+function attestSealedNativeMonitoring(op, plan, transaction) {
+  if (
+    !equal(nativeSourceHashes(), {
+      adapterSourceSha256: plan.monitoring.adapterSourceSha256,
+      reviewValidatorSha256: plan.monitoring.reviewValidatorSha256,
+    })
+  )
+    fail('native_source_drift');
+  validateSealedNativeAdmission(
+    op,
+    plan.monitoring,
+    plan.operationSha256,
+    readRetainedNativeEvidence(transaction),
+  );
+}
 export function validateUpgradeMonitoring(provider, alerts, contract, observedAt) {
   const monitors = validateTimewebMonitorReadback(provider, contract, observedAt);
   const alertTest = validateTimewebAlertReadback(alerts, contract);
   validateTimewebMonitoringEvidence({ monitors, alertTest }, contract, observedAt);
 }
-function validateMonitoring(transaction, profile = 'beta') {
+function validateMonitoring(transaction, profile = 'beta', { fresh = false } = {}) {
   const providerPath = `${ROOT}/observability/timeweb-monitor-readback.json`;
   const alertPath = `${ROOT}/observability/alert-test-readback.json`;
   const provider = read(providerPath),
@@ -1072,14 +1652,15 @@ function validateMonitoring(transaction, profile = 'beta') {
     // acknowledgement and recovery semantics. The snapshot is validated against its own
     // readAt, so a long apply cannot invalidate it by wall-clock age (the beta lesson).
     const contract = parseStrictJson(
-      read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`),
+      read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`, 0o644),
     );
     const providerValue = parseStrictJson(provider);
+    if (fresh) assertCutoverReadbackFreshness(providerValue.readAt);
     validateUpgradeMonitoring(
       providerValue,
       parseStrictJson(alerts),
       contract,
-      providerValue.readAt,
+      fresh ? new Date().toISOString() : providerValue.readAt,
     );
   }
   // Beta records monitoring as evidence: keep immutable hash binding, but do not block on a
@@ -1088,10 +1669,16 @@ function validateMonitoring(transaction, profile = 'beta') {
 }
 export function overlayBytes(plan, name) {
   if (name === 'candidate')
-    return `PHUB_RELEASE_ID=${plan.candidate.api.releaseId}\nAPI_IMAGE_DIGEST=${plan.candidate.api.image.split('@')[1]}\nWEB_IMAGE_DIGEST=${plan.candidate.web.image.split('@')[1]}\n`;
+    return `PHUB_RELEASE_ID=${plan.candidate.api.releaseId}\nAPI_IMAGE_DIGEST=${plan.candidate.api.image.split('@')[1]}\nWEB_IMAGE_DIGEST=${plan.candidate.web.image.split('@')[1]}\n${plan.candidate.worker ? `WORKER_IMAGE_DIGEST=${plan.candidate.worker.image.split('@')[1]}\n` : ''}`;
   const service =
-    name === 'previous-api' ? 'api' : name === 'previous-web' ? 'web' : fail('overlay_name');
-  return `PHUB_RELEASE_ID=${plan.previous[service].releaseId}\n${service.toUpperCase()}_IMAGE_DIGEST=${plan.previous[service].image.split('@')[1]}\n`;
+    name === 'previous-api'
+      ? 'api'
+      : name === 'previous-web'
+        ? 'web'
+        : name === 'previous-worker' && plan.candidate.worker
+          ? 'worker'
+          : fail('overlay_name');
+  return `PHUB_RELEASE_ID=${service === 'worker' ? plan.previous.api.releaseId : plan.previous[service].releaseId}\n${service.toUpperCase()}_IMAGE_DIGEST=${plan.previous[service].image.split('@')[1]}\n`;
 }
 export function assertOverlayBytes(plan, name, bytes) {
   if (!Buffer.from(bytes).equals(Buffer.from(overlayBytes(plan, name)))) fail('overlay_drift');
@@ -1219,6 +1806,24 @@ export function validateUpgradeReceipt(
     return validateJoinReceipt(receipt, planSha256, op, plan, planBytes);
   const keys = ['schema', 'status', 'planSha256', 'observedAt'];
   const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
+  const cutover = [
+    CUTOVER_RECEIPT,
+    ROSTER_CUTOVER_RECEIPT,
+    WAIVER_RECEIPT,
+    OWNER_RECEIPT,
+    CANONICAL_RECEIPT,
+  ].includes(receipt.schema);
+  const ownerDirected = [OWNER_RECEIPT, CANONICAL_RECEIPT].includes(receipt.schema);
+  const baselineField =
+    receipt.schema === CANONICAL_RECEIPT ? 'canonicalBaselineSha256' : 'legacyBaselineSha256';
+  const waived = receipt.schema === WAIVER_RECEIPT;
+  const roster = [
+    ROSTER_CUTOVER_RECEIPT,
+    WAIVER_RECEIPT,
+    OWNER_RECEIPT,
+    CANONICAL_RECEIPT,
+  ].includes(receipt.schema);
+  if (cutover) keys.push(baselineField);
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
   if (
     receipt.status === 'SUCCESS' ||
@@ -1227,18 +1832,42 @@ export function validateUpgradeReceipt(
     keys.push(
       'installedBaselineSha256',
       'observationSha256',
-      ...(direct
-        ? ['ownerObservationSha256', 'evidencePolicySha256']
-        : ['providerReadbackSha256', 'alertReadbackSha256']),
+      ...(ownerDirected
+        ? [
+            'ownerDecisionPolicy',
+            'providerMonitoringStatus',
+            'alertTestStatus',
+            'restoreAdmissionPolicy',
+            'repeatRestoreStatus',
+            'ownerDecisionsSha256',
+          ]
+        : waived
+          ? [
+              'monitoringPolicy',
+              'alertTestStatus',
+              'nativeMonitoringAdmissionSha256',
+              'ownerAlertWaiverSha256',
+              'nativeMonitorReadbackSha256',
+            ]
+          : direct
+            ? ['ownerObservationSha256', 'evidencePolicySha256']
+            : ['providerReadbackSha256', 'alertReadbackSha256']),
     );
   if (receipt.status === 'RECONCILED') keys.push('reconciledStatus');
   exact(receipt, keys);
   if (
-    !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
-      receipt.schema,
-    ) ||
+    ![
+      'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
+      'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
+      CUTOVER_RECEIPT,
+      ROSTER_CUTOVER_RECEIPT,
+      WAIVER_RECEIPT,
+      OWNER_RECEIPT,
+      CANONICAL_RECEIPT,
+    ].includes(receipt.schema) ||
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
+    (cutover && !HASH.test(receipt[baselineField] ?? '')) ||
     !Number.isFinite(Date.parse(receipt.observedAt)) ||
     ![
       'PREPARING',
@@ -1253,9 +1882,32 @@ export function validateUpgradeReceipt(
       'ROLLBACK_FAILED',
       'ABORTED',
       'RECONCILED',
+      ...(roster
+        ? [
+            'WORKER_STOP_INTENT',
+            'WORKER_STOPPED',
+            'WORKER_INTENT',
+            'WORKER_ACTIVE',
+            'BASELINE_INTENT',
+          ]
+        : []),
     ].includes(receipt.status) ||
     (receipt.status === 'RECONCILED' &&
       !['SUCCESS', 'ROLLED_BACK', 'ABORTED'].includes(receipt.reconciledStatus)) ||
+    (ownerDirected &&
+      keys.includes('installedBaselineSha256') &&
+      (receipt.ownerDecisionPolicy !==
+        (receipt.schema === CANONICAL_RECEIPT ? CANONICAL_OWNER_POLICY : OWNER_POLICY) ||
+        receipt.restoreAdmissionPolicy !==
+          (receipt.schema === CANONICAL_RECEIPT
+            ? CANONICAL_PRIOR_RESTORE_POLICY
+            : PRIOR_RESTORE_POLICY) ||
+        receipt.repeatRestoreStatus !== 'NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED' ||
+        receipt.providerMonitoringStatus !== PROVIDER_SKIPPED ||
+        receipt.alertTestStatus !== WAIVER_STATUS)) ||
+    (waived &&
+      keys.includes('installedBaselineSha256') &&
+      (receipt.monitoringPolicy !== WAIVER_POLICY || receipt.alertTestStatus !== WAIVER_STATUS)) ||
     (direct &&
       (receipt.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
         receipt.providerEvidenceStatus !== 'NOT_COLLECTED_EXPLICIT_OVERRIDE')) ||
@@ -1263,9 +1915,17 @@ export function validateUpgradeReceipt(
       [
         'installedBaselineSha256',
         'observationSha256',
-        ...(direct
-          ? ['ownerObservationSha256', 'evidencePolicySha256']
-          : ['providerReadbackSha256', 'alertReadbackSha256']),
+        ...(ownerDirected
+          ? ['ownerDecisionsSha256']
+          : waived
+            ? [
+                'nativeMonitoringAdmissionSha256',
+                'ownerAlertWaiverSha256',
+                'nativeMonitorReadbackSha256',
+              ]
+            : direct
+              ? ['ownerObservationSha256', 'evidencePolicySha256']
+              : ['providerReadbackSha256', 'alertReadbackSha256']),
       ].some((key) => !HASH.test(receipt[key] ?? '')))
   )
     fail('invalid_receipt');
@@ -1274,13 +1934,48 @@ export function validateUpgradeReceipt(
       !op ||
       !plan ||
       isDirectOperation(op) !== direct ||
+      isProductionCutover(op) !== cutover ||
+      (cutover && receipt.schema !== cutoverReceiptSchema(op)) ||
+      isRosterCutover(op) !== roster ||
+      isWaivedRosterCutover(op) !== waived ||
+      isOwnerDirectedCutover(op) !== ownerDirected ||
       !Buffer.isBuffer(planBytes) ||
       hash(planBytes) !== planSha256 ||
       !equal(JSON.parse(planBytes), plan) ||
       plan.controllerSha !== op.controllerSha ||
-      plan.schema !== (direct ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2' : 'PHUB_TIMEWEB_API_WEB_PLAN_V1')
+      plan.schema !==
+        (cutover
+          ? cutoverPlanSchema(op)
+          : direct
+            ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
+            : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
+      (cutover &&
+        (plan[baselineField] !== cutoverBaselineHash(op) ||
+          receipt[baselineField] !== plan[baselineField]))
     )
       fail('receipt_context');
+    if (ownerDirected) {
+      validateOwnerDirectedBinding(op, plan.monitoring, plan.operationSha256);
+      if (
+        keys.includes('installedBaselineSha256') &&
+        Object.entries(ownerDirectedReceipt(plan.monitoring)).some(([k, v]) => receipt[k] !== v)
+      )
+        fail('receipt_owner_decision');
+    }
+    if (
+      waived &&
+      keys.includes('installedBaselineSha256') &&
+      Object.entries(nativeAdmissionReceipt(plan.monitoring)).some(
+        ([key, value]) => receipt[key] !== value,
+      )
+    )
+      fail('receipt_native_admission');
+    if (
+      waived &&
+      keys.includes('installedBaselineSha256') &&
+      Date.parse(plan.monitoring.admittedAt) > Date.parse(receipt.observedAt)
+    )
+      fail('receipt_native_time');
     if (
       direct &&
       (plan.evidencePolicy !== receipt.evidencePolicy ||
@@ -1409,7 +2104,16 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
   const next = {
     ...values,
     PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
-    PHUB_COMPONENT_ROLLOUT_KIND: 'API_WEB',
+    PHUB_COMPONENT_ROLLOUT_KIND:
+      plan.schema === CANONICAL_PLAN
+        ? CANONICAL_KIND
+        : plan.schema === OWNER_PLAN
+          ? OWNER_KIND
+          : plan.schema === WAIVER_PLAN
+            ? WAIVER_KIND
+            : plan.candidate.worker
+              ? ROSTER_CUTOVER_KIND
+              : 'API_WEB',
     PHUB_RELEASE_ID: id,
     PHUB_RUNTIME_SECRET_SET_RELEASE_ID: plan.secretSetReleaseId,
     PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
@@ -1419,6 +2123,9 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
     PHUB_ROLLBACK_PREVIOUS_RELEASE_ID: previousReleaseId ?? 'NONE',
     API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
     WEB_IMAGE_DIGEST: plan.candidate.web.image.split('@')[1],
+    ...(plan.candidate.worker
+      ? { WORKER_IMAGE_DIGEST: plan.candidate.worker.image.split('@')[1] }
+      : {}),
   };
   if (values.PHUB_WORKER_DELIVERY_GATE_RECEIPT) {
     if (
@@ -1437,16 +2144,46 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
       key.startsWith('PHUB_CANONICAL_') ||
       key.startsWith('PHUB_PUBLICATION_') ||
       key.startsWith('PHUB_ADOPTION_') ||
+      key.startsWith('PHUB_LEGACY_') ||
       key.endsWith('_RUNTIME_DIGEST') ||
       key === 'PHUB_RELEASE_SOURCE_SHA' ||
       key === 'PHUB_RELEASE_SOURCE_TREE'
     )
       delete next[key];
+  if (plan.legacyBaselineSha256) {
+    next.PHUB_ROLLBACK_MODE = 'attested-previous-runtime';
+    next.PHUB_ROLLBACK_PREVIOUS_RELEASE_ID = 'NONE';
+    next.PHUB_LEGACY_PREDECESSOR_SHA256 = plan.legacyBaselineSha256;
+    next.PHUB_LEGACY_PREDECESSOR_RELEASE_ID = plan.previous.api.releaseId;
+    next.PHUB_LEGACY_PREDECESSOR_RECEIPT = `${dirname(journalPath)}/legacy-predecessor-attestation.json`;
+  }
+  if (plan.canonicalBaselineSha256) {
+    next.PHUB_CANONICAL_PREDECESSOR_SHA256 = plan.canonicalBaselineSha256;
+    next.PHUB_CANONICAL_PREDECESSOR_RELEASE_ID = plan.previous.api.releaseId;
+    next.PHUB_CANONICAL_PREDECESSOR_ATTESTATION = `${dirname(journalPath)}/canonical-predecessor-attestation.json`;
+  }
   return Buffer.from(
     Object.entries(next)
       .map(([k, v]) => `${k}=${v}`)
       .join('\n') + '\n',
   );
+}
+export function validateInstalledCutoverKind(kind, receiptSchema) {
+  if (kind === CANONICAL_KIND || receiptSchema === CANONICAL_RECEIPT) {
+    if (kind !== CANONICAL_KIND || receiptSchema !== CANONICAL_RECEIPT)
+      fail('installed_cutover_kind');
+    return;
+  }
+  if (kind === OWNER_KIND || receiptSchema === OWNER_RECEIPT) {
+    if (kind !== OWNER_KIND || receiptSchema !== OWNER_RECEIPT) fail('installed_cutover_kind');
+    return;
+  }
+  if (kind === WAIVER_KIND || receiptSchema === WAIVER_RECEIPT) {
+    if (kind !== WAIVER_KIND || receiptSchema !== WAIVER_RECEIPT) fail('installed_cutover_kind');
+    return;
+  }
+  if ((kind === ROSTER_CUTOVER_KIND) !== (receiptSchema === ROSTER_CUTOVER_RECEIPT))
+    fail('installed_cutover_kind');
 }
 export function readInstalledWorkerGate(receiptPath, installedWorkerImage) {
   const match =
@@ -1514,6 +2251,357 @@ export function readInstalledWorkerGate(receiptPath, installedWorkerImage) {
   );
   return { receiptPath, directory, override, binding, configHash };
 }
+export function readLegacyPredecessor(op, recovering = false) {
+  const legacy = op.legacyBaseline;
+  validateProductionCutover(op);
+  const transaction = `${ROOT}/backups/${op.candidateSha}-${op.publicationRunId}-1-api-web`;
+  if (recovering) {
+    if (
+      hash(read(`${transaction}/legacy-predecessor-attestation.json`)) !==
+      legacyBaselineHash(legacy)
+    )
+      fail('legacy_attestation_drift');
+  } else {
+    const current = read(`${ROOT}/beta-lane/current`);
+    const history = read(`${ROOT}/beta-lane/history`);
+    if (
+      current.toString() !== `${legacy.sourceSha}\n` ||
+      hash(current) !== legacy.laneCurrentSha256 ||
+      hash(history) !== legacy.laneHistorySha256 ||
+      history.toString().trimEnd().split('\n').at(-1)?.split(' ')[1] !== legacy.sourceSha ||
+      git(['rev-parse', `${legacy.sourceSha}^{tree}`]) !== legacy.sourceTree
+    )
+      fail('legacy_lane_drift');
+  }
+  const path = recovering ? `${transaction}/legacy-release.env` : legacyReleaseEnvPath(legacy),
+    bytes = read(path);
+  const identity = parseStrictJson(read(`${RUNTIME}/.release-identity.json`));
+  const values = legacyEnvironment(legacy, bytes, identity);
+  const secrets = secretHashes();
+  if (!SECRET_NAMES.every((name) => secrets[name] === legacy.secretHashes[name]))
+    fail('legacy_secret_drift');
+  for (const record of recovering ? [] : legacy.buildRecords)
+    if (
+      `sha256:${hash(read(legacyBuildArchivePath(legacy, record.component)))}` !==
+      record.archiveDigest
+    )
+      fail('legacy_build_record_drift');
+  return { path, bytes, values, secretSetReleaseId: legacy.secretSetReleaseId };
+}
+/** The V4 stager retains the original ZIP, never an extracted manifest file. */
+export function validateCanonicalPredecessorArchive(baseline, operationBytes, archiveBytes) {
+  const b = validateCanonicalBaseline(baseline);
+  const op = validateProductionCutover(parseStrictJson(operationBytes));
+  if (
+    hash(operationBytes) !== b.operationSha256 ||
+    op.schema !== 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4' ||
+    op.candidateSha !== b.sourceSha ||
+    op.candidateTree !== b.sourceTree ||
+    op.sourceCiRunId !== b.sourceCiRunId ||
+    op.publicationRunId !== b.publicationRunId ||
+    op.artifactId !== b.artifactId ||
+    op.manifestSha256 !== b.manifestSha256 ||
+    `sha256:${hash(archiveBytes)}` !== op.artifactDigest
+  )
+    fail('canonical_predecessor_archive_binding');
+  const pair = extractCanonicalPredecessorArtifactPair(archiveBytes);
+  const bytes = pair.get('release-manifest.json'),
+    checksum = pair.get('release-manifest.sha256');
+  if (
+    hash(bytes) !== b.manifestSha256 ||
+    !checksum.equals(Buffer.from(`${b.manifestSha256}  release-manifest.json\n`))
+  )
+    fail('canonical_predecessor_archive_checksum');
+  const manifest = parseStrictJson(bytes);
+  validateCanonicalManifest(manifest, {
+    expectedPublication: {
+      workflowSha: b.sourceSha,
+      runId: b.publicationRunId,
+      runAttempt: '1',
+    },
+    expectedBaseLockPath: `${SOURCE}/deploy/timeweb/base-images.lock.json`,
+  });
+  if (manifest.gitCommit !== b.sourceSha || manifest.gitTree !== b.sourceTree)
+    fail('canonical_predecessor_archive_source');
+  return bytes;
+}
+export function readCanonicalPredecessorManifest(baseline) {
+  const b = validateCanonicalBaseline(baseline),
+    directory = `${ROOT}/releases/${b.installedReleaseId}`;
+  secure(directory, 0o700);
+  secure(`${directory}/artifact`, 0o700);
+  if (
+    !equal(readdirSync(directory).sort(), ['artifact', 'installed-components.env']) ||
+    !equal(readdirSync(`${directory}/artifact`).sort(), ['canonical-artifact.zip'])
+  )
+    fail('canonical_predecessor_release_inventory');
+  const path = `${directory}/artifact/canonical-artifact.zip`;
+  // Reject links directly: this historical reader must never normalize or write old custody.
+  const before = secure(path, 0o600);
+  const archive = read(path, 0o600, 4 * 1024 * 1024, false),
+    operation = read(
+      `${ROOT}/backups/${b.installedReleaseId}-api-web/operation.json`,
+      0o600,
+      4 * 1024 * 1024,
+      false,
+    );
+  const bytes = validateCanonicalPredecessorArchive(b, operation, archive);
+  const after = secure(path, 0o600);
+  if (
+    ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].some((k) => before[k] !== after[k]) ||
+    !archive.equals(read(path, 0o600, 4 * 1024 * 1024, false))
+  )
+    fail('canonical_predecessor_archive_race');
+  return bytes;
+}
+/** Forward-only live admission. A retained historical predecessor never calls this function. */
+export function attestCanonicalBaseline(baseline) {
+  const b = validateCanonicalBaseline(baseline);
+  const installed = readInstalledApiBaseline(b.installedReleaseId, { checkRuntimeSecrets: true });
+  const currentSecrets = secretHashes();
+  const transaction = `${ROOT}/backups/${b.installedReleaseId}-api-web`;
+  const files = {
+    operationSha256: 'operation.json',
+    planSha256: 'plan.json',
+    receiptSha256: 'rollout-receipt.json',
+    observationSha256: 'observation.json',
+    backupOperationSha256: 'backup-operation.json',
+    backupReceiptSha256: 'database-backup-receipt.json',
+  };
+  if (
+    hash(installed.bytes) !== b.installedDescriptorSha256 ||
+    installed.secretSetReleaseId !== b.secretSetReleaseId ||
+    installed.values.PHUB_COMPONENT_ROLLOUT_KIND !== OWNER_KIND ||
+    hash(readCanonicalPredecessorManifest(b)) !== b.manifestSha256 ||
+    git(['rev-parse', `${b.sourceSha}^{tree}`]) !== b.sourceTree ||
+    Object.entries(files).some(([k, name]) => hash(read(`${transaction}/${name}`)) !== b[k]) ||
+    hash(JSON.stringify(excluded(['api', 'worker', 'web']))) !== b.excludedSha256 ||
+    SECRET_NAMES.some((name) => currentSecrets[name] !== b.secretHashes[name])
+  )
+    fail('canonical_predecessor_custody');
+  const priorReceipt = parseStrictJson(read(`${transaction}/rollout-receipt.json`));
+  if (
+    priorReceipt.schema !== OWNER_RECEIPT ||
+    priorReceipt.status !== 'RECONCILED' ||
+    priorReceipt.reconciledStatus !== 'SUCCESS'
+  )
+    fail('canonical_predecessor_terminal');
+  for (const service of ['api', 'worker', 'web', 'realtime']) {
+    const actual = inspect(service),
+      expected = b.containers[service];
+    if (Object.keys(expected).some((k) => actual[k] !== expected[k]))
+      fail('canonical_predecessor_runtime');
+    if (installed.values[`${service.toUpperCase()}_IMAGE_DIGEST`] !== expected.image.split('@')[1])
+      fail('canonical_predecessor_descriptor');
+  }
+  return installed;
+}
+export function attestCanonicalBackupOperation(op) {
+  if (
+    op.schema !== CANONICAL_FRESH_OPERATION ||
+    op.controllerSha !== op.candidateSha ||
+    op.toolCommit !== op.controllerSha ||
+    git(['rev-parse', 'HEAD']) !== op.controllerSha ||
+    git(['rev-parse', 'HEAD^{tree}']) !== op.controllerTree ||
+    git(['status', '--porcelain', '--untracked-files=all']) !== ''
+  )
+    fail('canonical_backup_source');
+  const config = parseStrictJson(read(CONFIG));
+  if (
+    config.schema !== 1 ||
+    config.enabled !== true ||
+    config.controllerSha !== op.controllerSha ||
+    hash(read(CONFIG)) !== op.controllerConfigSha256
+  )
+    fail('canonical_backup_controller');
+  for (const path of git(['ls-files', '-z']).split('\0').filter(Boolean))
+    secure(`${SOURCE}/${path}`);
+  const installed = attestCanonicalBaseline(op.canonicalBaseline);
+  return {
+    schema: 'PHUB_TIMEWEB_CANONICAL_BACKUP_ADMISSION_V1',
+    canonicalBaselineSha256: cutoverBaselineHash({
+      schema: 'PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_UPGRADE_V5',
+      canonicalBaseline: op.canonicalBaseline,
+    }),
+    installedDescriptorSha256: hash(installed.bytes),
+    runtimeSecretsChecked: true,
+  };
+}
+/** Offline validation of the exact retained V4 outer files; never consults active 4b8 runtime. */
+export function validateCanonicalHistoricalArtifacts(baseline, files) {
+  const b = validateCanonicalBaseline(baseline);
+  const names = [
+    'FRESH_DUMP_INTEGRITY_VERIFIED.json',
+    'backup-operation.json',
+    'backup.complete',
+    'candidate.env',
+    'database-backup-receipt.json',
+    'legacy-predecessor-attestation.json',
+    'legacy-release.env',
+    'observation.json',
+    'operation.json',
+    'owner-restore-decision.json',
+    'plan.json',
+    'previous-api.env',
+    'previous-web.env',
+    'previous-worker.env',
+    'prior-full-restore-reference.json',
+    'rollout-receipt.json',
+    'snapshot-witness.json',
+    'installed-components.env',
+    'release-manifest.json',
+    'canonical-artifact.zip',
+  ];
+  exact(files, names);
+  if (
+    names.some(
+      (n) => !Buffer.isBuffer(files[n]) || files[n].length < 1 || files[n].length > 4 * 1024 * 1024,
+    )
+  )
+    fail('canonical_history_size');
+  if (
+    !validateCanonicalPredecessorArchive(
+      b,
+      files['operation.json'],
+      files['canonical-artifact.zip'],
+    ).equals(files['release-manifest.json'])
+  )
+    fail('canonical_history_derived_manifest');
+  const opBytes = files['operation.json'],
+    planBytes = files['plan.json'],
+    descriptor = files['installed-components.env'];
+  const op = validateProductionCutover(parseStrictJson(opBytes)),
+    plan = parseStrictJson(planBytes),
+    values = parseEnv(descriptor);
+  const receipt = validateUpgradeReceipt(
+    parseStrictJson(files['rollout-receipt.json']),
+    hash(planBytes),
+    op,
+    plan,
+    planBytes,
+  );
+  if (
+    op.schema !== 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4' ||
+    op.candidateSha !== b.sourceSha ||
+    op.candidateTree !== b.sourceTree ||
+    op.sourceCiRunId !== b.sourceCiRunId ||
+    op.publicationRunId !== b.publicationRunId ||
+    op.artifactId !== b.artifactId ||
+    op.manifestSha256 !== b.manifestSha256 ||
+    receipt.status !== 'RECONCILED' ||
+    receipt.reconciledStatus !== 'SUCCESS' ||
+    receipt.installedBaselineSha256 !== hash(descriptor) ||
+    values.PHUB_COMPONENT_ROLLOUT_KIND !== OWNER_KIND ||
+    values.PHUB_RELEASE_ID !== b.installedReleaseId
+  )
+    fail('canonical_history_identity');
+  const tx = `${ROOT}/backups/${b.installedReleaseId}-api-web`;
+  validateCutoverLineage(receipt, plan, op, values, opBytes);
+  validateCutoverPlanProofs(op, plan, tx);
+  validateRosterCutoverObservation(parseStrictJson(files['observation.json']), receipt.observedAt);
+  for (const [name, key] of [
+    ['operation.json', 'operationSha256'],
+    ['plan.json', 'planSha256'],
+    ['rollout-receipt.json', 'receiptSha256'],
+    ['observation.json', 'observationSha256'],
+    ['backup-operation.json', 'backupOperationSha256'],
+    ['database-backup-receipt.json', 'backupReceiptSha256'],
+    ['installed-components.env', 'installedDescriptorSha256'],
+    ['release-manifest.json', 'manifestSha256'],
+  ])
+    if (hash(files[name]) !== b[key]) fail('canonical_history_hash');
+  if (
+    receipt.observationSha256 !== hash(files['observation.json']) ||
+    !files['backup.complete'].equals(Buffer.from(hash(planBytes) + '\n')) ||
+    !files['legacy-predecessor-attestation.json'].equals(
+      Buffer.from(JSON.stringify(op.legacyBaseline)),
+    )
+  )
+    fail('canonical_history_lineage');
+  for (const name of ['candidate', 'previous-api', 'previous-worker', 'previous-web'])
+    assertOverlayBytes(plan, name, files[name + '.env']);
+  // This identity is derived from the two immutable historical records, not a live secret read.
+  if (
+    values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID !== op.legacyBaseline.secretSetReleaseId ||
+    values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID !== b.secretSetReleaseId
+  )
+    fail('canonical_history_secret_identity');
+  const original = legacyEnvironment(op.legacyBaseline, files['legacy-release.env'], {
+    schema: 'PHUB_TIMEWEB_SECRET_SET_V1',
+    releaseId: values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID,
+  });
+  if (
+    !descriptor.equals(
+      buildApiWebInstalledDescriptor(
+        original,
+        plan,
+        b.installedReleaseId,
+        `${tx}/rollout-receipt.json`,
+      ),
+    )
+  )
+    fail('canonical_history_descriptor');
+  return {
+    schema: 'PHUB_TIMEWEB_CANONICAL_HISTORY_OUTER_VALIDATION_V1',
+    rolloutReceiptSha256: b.receiptSha256,
+    runtimeConsulted: false,
+  };
+}
+export function readCanonicalPredecessor(op, recovering = false) {
+  const b = validateCanonicalBaseline(op.canonicalBaseline);
+  if (!recovering) return attestCanonicalBaseline(b);
+  const transaction = `${ROOT}/backups/${op.candidateSha}-${op.publicationRunId}-1-api-web`;
+  if (
+    !read(`${transaction}/canonical-predecessor-attestation.json`).equals(
+      Buffer.from(JSON.stringify(b)),
+    )
+  )
+    fail('canonical_attestation_drift');
+  const path = `${transaction}/canonical-predecessor.env`,
+    bytes = read(path),
+    values = parseEnv(bytes);
+  if (
+    hash(bytes) !== b.installedDescriptorSha256 ||
+    values.PHUB_RELEASE_ID !== b.installedReleaseId ||
+    values.PHUB_COMPONENT_ROLLOUT_KIND !== OWNER_KIND ||
+    values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID !== b.secretSetReleaseId ||
+    values.TIMEWEB_RUNTIME_ENV_ROOT !== RUNTIME ||
+    values.PHUB_MIGRATOR_ENABLED !== 'false'
+  )
+    fail('canonical_retained_descriptor');
+  for (const service of ['api', 'worker', 'web', 'realtime'])
+    if (
+      values[`${service.toUpperCase()}_IMAGE_DIGEST`] !== b.containers[service].image.split('@')[1]
+    )
+      fail('canonical_retained_descriptor');
+  return { path, bytes, values, secretSetReleaseId: b.secretSetReleaseId };
+}
+async function verifyLegacyAuthority(op) {
+  const legacy = op.legacyBaseline;
+  await verifyCi(legacy.sourceCiRunId, legacy.sourceSha);
+  const run = await githubPublic(`actions/runs/${legacy.testStandRunId}`);
+  validateLegacyRun(run, legacy);
+  const list = await githubPublic(`actions/runs/${legacy.testStandRunId}/artifacts?per_page=100`);
+  if (list.total_count !== list.artifacts?.length) fail('truncated_legacy_artifacts');
+  for (const component of COMPONENTS) {
+    const record = legacy.buildRecords.find((v) => v.component === component);
+    const matches = list.artifacts.filter((v) => String(v.id) === record.artifactId);
+    if (matches.length !== 1) fail('legacy_artifact_missing');
+    validateLegacyArtifact(matches[0], record, legacy);
+    const archive = legacyBuildArchivePath(legacy, component);
+    validateLegacyBuildRecord(
+      legacy,
+      component,
+      read(archive),
+      command('/usr/bin/tar', ['-xOzf', archive, 'index.json'], { encoding: null }),
+      (digest) =>
+        command('/usr/bin/tar', ['-xOzf', archive, `blobs/sha256/${digest.slice(7)}`], {
+          encoding: null,
+        }),
+    );
+  }
+}
+
 export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true } = {}) {
   if (!ID.test(releaseId)) fail('baseline_release_id');
   const directory = `${ROOT}/releases/${releaseId}`;
@@ -1633,7 +2721,9 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
     } else {
       if (
         values.PHUB_COMPONENT_ROLLOUT_KIND !== undefined &&
-        values.PHUB_COMPONENT_ROLLOUT_KIND !== 'API_WEB'
+        !['API_WEB', ROSTER_CUTOVER_KIND, WAIVER_KIND, OWNER_KIND, CANONICAL_KIND].includes(
+          values.PHUB_COMPONENT_ROLLOUT_KIND,
+        )
       )
         fail('installed_baseline_kind');
       if (
@@ -1643,21 +2733,97 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
       )
         fail('installed_baseline_identity');
       const receipt = JSON.parse(read(values.PHUB_COMPONENT_ROLLOUT_RECEIPT));
+      validateInstalledCutoverKind(values.PHUB_COMPONENT_ROLLOUT_KIND, receipt.schema);
       const planBytes = read(`${ROOT}/backups/${releaseId}-api-web/plan.json`);
       const plan = JSON.parse(planBytes);
       validateUpgradeReceipt(receipt, hash(planBytes));
       const transaction = `${ROOT}/backups/${releaseId}-api-web`;
       const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
-      for (const [file, key] of direct
-        ? [
-            ['observation.json', 'observationSha256'],
-            ['release-owner-observation.json', 'ownerObservationSha256'],
-          ]
-        : [
-            ['observation.json', 'observationSha256'],
-            ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-            ['alert-test-readback.json', 'alertReadbackSha256'],
-          ])
+      if (
+        [
+          CUTOVER_RECEIPT,
+          ROSTER_CUTOVER_RECEIPT,
+          WAIVER_RECEIPT,
+          OWNER_RECEIPT,
+          CANONICAL_RECEIPT,
+        ].includes(receipt.schema)
+      ) {
+        const operationBytes = read(`${transaction}/operation.json`);
+        const operation = validateProductionCutover(parseStrictJson(operationBytes));
+        validateUpgradeReceipt(receipt, hash(planBytes), operation, plan, planBytes);
+        validateCutoverLineage(receipt, plan, operation, values, operationBytes);
+        if (values.PHUB_COMPONENT_ROLLOUT_KIND !== cutoverInstalledKind(operation))
+          fail('installed_cutover_kind');
+        if (isRosterCutover(operation)) {
+          validateRosterCutoverObservation(
+            parseStrictJson(read(`${transaction}/observation.json`)),
+            receipt.observedAt,
+          );
+          if (
+            values.WORKER_IMAGE_DIGEST !== plan.candidate.worker.image.split('@')[1] ||
+            plan.candidate.worker.releaseId !== null ||
+            plan.candidate.worker.revision !== operation.candidateSha
+          )
+            fail('installed_cutover_worker');
+          const actual = inspect('worker');
+          if (
+            actual.image !== plan.candidate.worker.image ||
+            actual.revision !== operation.candidateSha ||
+            actual.releaseId !== null ||
+            actual.restarts !== 0
+          )
+            fail('installed_cutover_worker_runtime');
+        }
+        validateCutoverPlanProofs(operation, plan, transaction);
+        if (isOwnerDirectedCutover(operation))
+          assertCutoverBackupFiles(operation, plan, transaction, read, hashBackupFile);
+        if (isWaivedRosterCutover(operation)) {
+          if (!(
+            receipt.status === 'SUCCESS' ||
+            (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
+          ))
+            fail('installed_native_terminal');
+          if (
+            Date.parse(parseStrictJson(read(`${transaction}/observation.json`)).startedAt) <
+            Date.parse(plan.monitoring.admittedAt)
+          )
+            fail('installed_native_observation_time');
+          validateRetainedNativeAdmission(
+            operation,
+            plan.monitoring,
+            hash(operationBytes),
+            readRetainedNativeEvidence(transaction),
+          );
+        }
+        if (
+          hash(read(plan.backup.operationPath)) !== operation.backupOperationSha256 ||
+          hash(read(plan.backup.receiptPath)) !== plan.backup.receiptSha256
+        )
+          fail('installed_cutover_backup_drift');
+        const predecessorPointer = isCanonicalOwnerDirectedUpgrade(operation)
+          ? values.PHUB_CANONICAL_PREDECESSOR_ATTESTATION
+          : values.PHUB_LEGACY_PREDECESSOR_RECEIPT;
+        if (
+          predecessorPointer !==
+            `${transaction}/${isCanonicalOwnerDirectedUpgrade(operation) ? 'canonical' : 'legacy'}-predecessor-attestation.json` ||
+          hash(read(predecessorPointer)) !== plan[cutoverBaselineField(operation)]
+        )
+          fail('installed_legacy_attestation_drift');
+      }
+      for (const [file, key] of [WAIVER_RECEIPT, OWNER_RECEIPT, CANONICAL_RECEIPT].includes(
+        receipt.schema,
+      )
+        ? [['observation.json', 'observationSha256']]
+        : direct
+          ? [
+              ['observation.json', 'observationSha256'],
+              ['release-owner-observation.json', 'ownerObservationSha256'],
+            ]
+          : [
+              ['observation.json', 'observationSha256'],
+              ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+              ['alert-test-readback.json', 'alertReadbackSha256'],
+            ])
         if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
       if (direct)
         validateDirectInstalledEvidence(
@@ -1673,9 +2839,15 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           },
         );
       if (
-        !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
-          receipt.schema,
-        ) ||
+        ![
+          'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
+          'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
+          CUTOVER_RECEIPT,
+          ROSTER_CUTOVER_RECEIPT,
+          WAIVER_RECEIPT,
+          OWNER_RECEIPT,
+          CANONICAL_RECEIPT,
+        ].includes(receipt.schema) ||
         !(
           receipt.status === 'SUCCESS' ||
           (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
@@ -1714,7 +2886,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   let recoveredTransaction;
   let terminalWithoutLock = false;
   if (mode === 'reconcile' && !existsSync(LOCK)) {
-    const terminalOp = validateJoinOperation(parseStrictJson(read(REQUEST)));
+    const terminalInput = parseStrictJson(read(REQUEST));
+    const terminalOp = isCanonicalOwnerDirectedUpgrade(terminalInput)
+      ? validateApiWebOperation(terminalInput)
+      : validateJoinOperation(terminalInput);
     recoveredTransaction = `${ROOT}/backups/${terminalOp.candidateSha}-${terminalOp.publicationRunId}-1-api-web`;
     if (!read(`${recoveredTransaction}/operation.json`).equals(read(REQUEST)))
       fail('terminal_operation_drift');
@@ -1733,9 +2908,17 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const opBytes = read(recoveredTransaction ? `${recoveredTransaction}/operation.json` : REQUEST);
   const parsedOperation = JSON.parse(opBytes);
   const op = validateApiWebOperation(
-    isJoinOperation(parsedOperation) ? parseStrictJson(opBytes) : parsedOperation,
+    isJoinOperation(parsedOperation) || isProductionCutover(parsedOperation)
+      ? parseStrictJson(opBytes)
+      : parsedOperation,
   );
   const join = isJoinOperation(op);
+  const cutover = isProductionCutover(op);
+  const roster = isRosterCutover(op);
+  const targets = roster ? ['api', 'worker', 'web'] : ['api', 'web'];
+  const overlays = ['candidate', ...targets.map((service) => `previous-${service}`)];
+  const excludedTargets = () => excluded(targets);
+  if (mode === 'deploy' && cutover) validateProductionCutover(op, true);
   const profile = join ? 'production' : (op.profile ?? 'beta');
   if (mode === 'deploy' && join) validateJoinOperation(op, true);
   if (mode === 'deploy' && isDirectOperation(op)) validateDirectApiWebOperation(op, true);
@@ -1808,10 +2991,24 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const planPath = `${transaction}/plan.json`;
   const previousApi = op.expectedApi,
     previousWeb = op.expectedWeb;
-  const previousBaseline = readInstalledApiBaseline(previousApi.releaseId, {
-    checkRuntimeSecrets: !join || mode === 'deploy',
-  });
-  const { path: baseline, bytes: baselineBytes, values, secretSetReleaseId } = previousBaseline;
+  const previousBaseline = cutover
+    ? isCanonicalOwnerDirectedUpgrade(op)
+      ? readCanonicalPredecessor(op, mode !== 'deploy')
+      : readLegacyPredecessor(op, mode !== 'deploy')
+    : readInstalledApiBaseline(previousApi.releaseId, {
+        checkRuntimeSecrets: !join || mode === 'deploy',
+      });
+  const predecessorSource = (previous) =>
+    cutover ? cutoverBaseline(op).sourceSha : previous.releaseId.slice(0, 40);
+  const {
+    path: predecessorPath,
+    bytes: baselineBytes,
+    values,
+    secretSetReleaseId,
+  } = previousBaseline;
+  const baseline = cutover
+    ? `${transaction}/${isCanonicalOwnerDirectedUpgrade(op) ? 'canonical-predecessor.env' : 'legacy-release.env'}`
+    : predecessorPath;
   if (
     values.PHUB_RELEASE_ID !== previousApi.releaseId ||
     values.TIMEWEB_RUNTIME_ENV_ROOT !== RUNTIME ||
@@ -1843,6 +3040,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       for (const [service, expected] of [
         ['api', previousApi],
         ['web', previousWeb],
+        ...(roster ? [['worker', op.expectedWorker]] : []),
       ]) {
         const actual = inspect(service);
         if (
@@ -1859,6 +3057,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         'candidate.env',
         'previous-api.env',
         'previous-web.env',
+        ...(roster ? ['previous-worker.env'] : []),
         'release-owner-observation.json',
         'backup.complete',
         'rollout-receipt.json',
@@ -1900,9 +3099,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       receipt.schema !==
         (join
           ? JOIN_RECEIPT
-          : isDirectOperation(op)
-            ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
-            : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1') ||
+          : cutover
+            ? cutoverReceiptSchema(op)
+            : isDirectOperation(op)
+              ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
+              : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1') ||
       ![
         'PREPARING',
         'PREPARED',
@@ -1917,18 +3118,45 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         'ABORTED',
         'RECONCILED',
         ...(join ? ['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'BASELINE_INTENT'] : []),
+        ...(roster
+          ? [
+              'WORKER_STOP_INTENT',
+              'WORKER_STOPPED',
+              'WORKER_INTENT',
+              'WORKER_ACTIVE',
+              'BASELINE_INTENT',
+            ]
+          : []),
       ].includes(receipt.status) ||
       (!terminalWithoutLock && !read(LOCK).equals(Buffer.from(`${planPath}\n`))) ||
       (terminalWithoutLock &&
-        (!join || receipt.status !== 'RECONCILED' || existsSync(provisionLock)))
+        ((!join && !isCanonicalOwnerDirectedUpgrade(op)) ||
+          receipt.status !== 'RECONCILED' ||
+          existsSync(provisionLock)))
     )
       fail('recovery_identity');
   } else {
+    if (
+      (isWaivedRosterCutover(op) || isOwnerDirectedCutover(op)) &&
+      existsSync(`${transaction}/preparation-aborted.json`)
+    )
+      fail('native_aborted_operation_not_replayable');
     if (existsSync(LOCK) || existsSync(planPath) || existsSync(journalPath))
       fail('unreconciled_transaction');
     await verifyCi(op.sourceCiRunId, op.candidateSha);
+    if (isLegacyProductionCutover(op)) {
+      await verifyLegacyAuthority(op);
+      validateLegacyRuntime(
+        op.legacyBaseline,
+        Object.fromEntries(
+          ['api', 'web', 'worker', 'realtime'].map((service) => [service, inspect(service)]),
+        ),
+        excluded(),
+        secretHashes(),
+      );
+    }
     for (const previous of [previousApi, previousWeb]) {
-      git(['merge-base', '--is-ancestor', previous.releaseId.slice(0, 40), op.candidateSha]);
+      git(['merge-base', '--is-ancestor', predecessorSource(previous), op.candidateSha]);
       const entries = parseRuntimeDelta(
         git([
           'diff',
@@ -1936,7 +3164,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           '--no-abbrev',
           '--no-renames',
           '-z',
-          previous.releaseId.slice(0, 40),
+          predecessorSource(previous),
           op.candidateSha,
         ]),
       ).map((v) => ({
@@ -1947,7 +3175,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       if (!join)
         validateRuntimeUpgrade(
           {
-            previousSha: previous.releaseId.slice(0, 40),
+            previousSha: predecessorSource(previous),
             candidateSha: op.candidateSha,
             candidateTree: op.candidateTree,
           },
@@ -1994,37 +3222,47 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     }
     const backup = join
       ? readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']))
-      : validateBackupProof(transaction, previousApi, profile);
+      : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
     const direct = isDirectOperation(op);
     let ownerBytes;
-    if (!direct) validateMonitoring(transaction, profile);
+    const monitoring = !direct
+      ? isOwnerDirectedCutover(op)
+        ? createOwnerDirectedBinding(op, hash(opBytes))
+        : isWaivedRosterCutover(op)
+          ? null
+          : validateMonitoring(transaction, profile, { fresh: cutover })
+      : null;
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
     }
     plan = {
-      schema: join
-        ? JOIN_PLAN
-        : direct
-          ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
-          : 'PHUB_TIMEWEB_API_WEB_PLAN_V1',
+      schema: cutover
+        ? cutoverPlanSchema(op)
+        : join
+          ? JOIN_PLAN
+          : direct
+            ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
+            : 'PHUB_TIMEWEB_API_WEB_PLAN_V1',
       operationSha256: hash(opBytes),
+      ...(cutover ? { [cutoverBaselineField(op)]: cutoverBaselineHash(op) } : {}),
       controllerSha: op.controllerSha,
       manifestSha256: op.manifestSha256,
       artifactDigest: op.artifactDigest,
       composeSha256: hash(read(COMPOSE, 0o644)),
-      previous: { api, web },
+      previous: { api, web, ...(roster ? { worker: inspect('worker') } : {}) },
       candidate: Object.fromEntries(
-        ['api', 'web'].map((service) => [
+        targets.map((service) => [
           service,
           {
             image: `ghcr.io/z6v6e6r/phub-${service}@${manifest.images.find((v) => v.component === service).digest}`,
-            releaseId: id,
+            releaseId: service === 'worker' ? null : id,
+            ...(service === 'worker' ? { revision: op.candidateSha } : {}),
           },
         ]),
       ),
-      excluded: excluded(),
+      excluded: excludedTargets(),
       unchangedServiceImages: Object.fromEntries(
-        ['worker', 'realtime'].map((service) => [
+        (roster ? ['realtime'] : ['worker', 'realtime']).map((service) => [
           service,
           join
             ? `ghcr.io/z6v6e6r/phub-${service}@${values[service.toUpperCase() + '_IMAGE_DIGEST']}`
@@ -2036,6 +3274,17 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       secretHashes: secretHashes(),
       backup,
       createdAt: new Date().toISOString(),
+      ...(cutover
+        ? {
+            monitoring:
+              isWaivedRosterCutover(op) || isOwnerDirectedCutover(op)
+                ? monitoring
+                : {
+                    providerSha256: monitoring.providerSha256,
+                    alertSha256: monitoring.alertSha256,
+                  },
+          }
+        : {}),
       ...(join
         ? {
             baselinePath: baseline,
@@ -2053,7 +3302,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           }
         : {}),
     };
-    validateUnchangedImages(plan.unchangedServiceImages);
+    validateUnchangedImages(plan.unchangedServiceImages, roster);
     if (
       join &&
       (plan.candidateSecrets.releaseId !== id ||
@@ -2061,9 +3310,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         hash(JSON.stringify(plan.excluded)) !== op.expectedExcludedSha256)
     )
       fail('join_snapshot_identity');
-    for (const service of ['api', 'web'])
+    for (const service of targets)
       if (
-        plan.candidate[service].releaseId === plan.previous[service].releaseId ||
+        (service !== 'worker' &&
+          plan.candidate[service].releaseId === plan.previous[service].releaseId) ||
         plan.candidate[service].image === plan.previous[service].image
       )
         fail('no_op_upgrade');
@@ -2071,25 +3321,37 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     if (existsSync(operationCopy)) {
       if (!read(operationCopy).equals(opBytes)) fail('operation_copy_drift');
     } else durable(operationCopy, opBytes, true);
+    if (cutover)
+      retainLegacyAttestation(
+        `${transaction}/${isCanonicalOwnerDirectedUpgrade(op) ? 'canonical' : 'legacy'}-predecessor-attestation.json`,
+        Buffer.from(JSON.stringify(cutoverBaseline(op))),
+        read,
+        durable,
+      );
+    if (cutover) retainLegacyAttestation(baseline, baselineBytes, read, durable);
     durable(LOCK, `${planPath}\n`, true);
+    if (isWaivedRosterCutover(op))
+      plan.monitoring = await admitNativeWaiverMonitoring(op, transaction, hash(opBytes));
     if (direct) durable(`${transaction}/release-owner-observation.json`, ownerBytes, true);
     durable(planPath, `${JSON.stringify(plan)}\n`, true);
-    for (const name of ['candidate', 'previous-api', 'previous-web'])
+    for (const name of overlays)
       durable(`${transaction}/${name}.env`, overlayBytes(plan, name), true);
     durable(`${transaction}/backup.complete`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: join ? JOIN_RECEIPT : direct ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2' : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1', status: 'PREPARING', planSha256: hash(read(planPath)), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: cutover ? cutoverReceiptSchema(op) : join ? JOIN_RECEIPT : direct ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2' : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1', status: 'PREPARING', planSha256: hash(read(planPath)), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
   if (
     plan.schema !==
-      (join
-        ? JOIN_PLAN
-        : isDirectOperation(op)
-          ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
-          : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
+      (cutover
+        ? cutoverPlanSchema(op)
+        : join
+          ? JOIN_PLAN
+          : isDirectOperation(op)
+            ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
+            : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
     plan.controllerSha !== op.controllerSha ||
     !equal(plan.previous.api.image, previousApi.image) ||
     plan.previous.api.releaseId !== previousApi.releaseId ||
@@ -2113,6 +3375,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     'secretHashes',
     'backup',
     'createdAt',
+    ...(cutover ? [cutoverBaselineField(op), 'monitoring'] : []),
     ...(join
       ? [
           'baselinePath',
@@ -2126,10 +3389,23 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       ? ['evidencePolicy', 'evidencePolicySha256', 'ownerObservationSha256']
       : []),
   ]);
-  for (const service of ['api', 'web']) {
-    exact(plan.candidate[service], ['image', 'releaseId']);
+  exact(plan.previous, targets);
+  exact(plan.candidate, targets);
+  if (
+    roster &&
+    (!equal(plan.previous.worker, cutoverBaseline(op).containers.worker) ||
+      op.expectedWorker.id !== plan.previous.worker.id)
+  )
+    fail('plan_worker_preimage');
+  for (const service of targets) {
+    exact(plan.candidate[service], [
+      'image',
+      'releaseId',
+      ...(service === 'worker' ? ['revision'] : []),
+    ]);
     if (
-      plan.candidate[service].releaseId !== id ||
+      plan.candidate[service].releaseId !== (service === 'worker' ? null : id) ||
+      (service === 'worker' && plan.candidate.worker.revision !== op.candidateSha) ||
       !new RegExp(`^ghcr.io/z6v6e6r/phub-${service}@sha256:[a-f0-9]{64}$`).test(
         plan.candidate[service].image,
       )
@@ -2149,19 +3425,23 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       plan.ownerObservationSha256 !== hash(directOwnerBytes(op, hash(opBytes))))
   )
     fail('direct_plan_identity');
-  validateUnchangedImages(plan.unchangedServiceImages);
-  for (const service of ['api', 'web'])
+  validateUnchangedImages(plan.unchangedServiceImages, roster);
+  for (const service of targets)
     if (
-      plan.candidate[service].releaseId === plan.previous[service].releaseId ||
+      (service !== 'worker' &&
+        plan.candidate[service].releaseId === plan.previous[service].releaseId) ||
       plan.candidate[service].image === plan.previous[service].image
     )
       fail('no_op_upgrade');
   const planSha256 = hash(read(planPath));
+  if (cutover) validateCutoverPlanProofs(op, plan, transaction);
   if (!read(`${transaction}/backup.complete`).equals(Buffer.from(`${planSha256}\n`)))
     fail('backup_incomplete');
   const expectedDescriptor = join
     ? buildJoinInstalledDescriptor(values, plan, id, journalPath)
-    : null;
+    : roster
+      ? buildApiWebInstalledDescriptor(values, plan, id, journalPath)
+      : null;
   if (
     join &&
     (plan.baselinePath !== baseline ||
@@ -2206,15 +3486,55 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       !secretAttest()
     )
       fail('compose_input_drift');
-    return docker(apiWebComposeArgs(baseline, path, action, service));
+    return docker(apiWebComposeArgs(baseline, path, action, service, roster));
   };
-  const attest = () => {
+  const active = {};
+  let stoppedWorkerId = null;
+  const attest = (recovering = false) => {
+    if (roster && !recovering && stoppedWorkerId && !active.worker) {
+      const stopped = JSON.parse(docker(['inspect', stoppedWorkerId]))[0];
+      if (
+        stopped.Id !== stoppedWorkerId ||
+        stopped.State.Running !== false ||
+        !['exited', 'created'].includes(stopped.State.Status)
+      )
+        fail('worker_resumed_during_cutover');
+    }
+    if (cutover) {
+      if (isCanonicalOwnerDirectedUpgrade(op)) readCanonicalPredecessor(op, true);
+      else readLegacyPredecessor(op, recovering);
+      if (
+        plan[cutoverBaselineField(op)] !== cutoverBaselineHash(op) ||
+        hash(
+          read(
+            `${transaction}/${isCanonicalOwnerDirectedUpgrade(op) ? 'canonical' : 'legacy'}-predecessor-attestation.json`,
+          ),
+        ) !== plan[cutoverBaselineField(op)]
+      )
+        fail('legacy_attestation_drift');
+      // Forward admission requires the sealed backup and monitoring inputs. Image-only
+      // recovery still restores the predecessor if these inputs disappear or rotate.
+      if (!recovering) {
+        assertCutoverBackupFiles(op, plan, transaction, read, hashBackupFile);
+        if (isOwnerDirectedCutover(op))
+          validateOwnerDirectedBinding(op, plan.monitoring, hash(opBytes));
+        else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
+        else {
+          const monitoring = validateMonitoring(transaction, profile);
+          if (
+            monitoring.providerSha256 !== plan.monitoring.providerSha256 ||
+            monitoring.alertSha256 !== plan.monitoring.alertSha256
+          )
+            fail('cutover_monitoring_drift');
+        }
+      }
+    }
     if (
       hash(read(COMPOSE, 0o644)) !== plan.composeSha256 ||
-      !equal(excluded(), plan.excluded) ||
+      !equal(excludedTargets(), plan.excluded) ||
       hash(read(baseline)) !== plan.baselineSha256 ||
       !secretAttest() ||
-      !['candidate', 'previous-api', 'previous-web'].every((name) =>
+      !overlays.every((name) =>
         read(`${transaction}/${name}.env`).equals(Buffer.from(overlayBytes(plan, name))),
       )
     )
@@ -2241,11 +3561,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       `${JSON.stringify({
         schema: join
           ? JOIN_RECEIPT
-          : isDirectOperation(op)
-            ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
-            : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
+          : cutover
+            ? cutoverReceiptSchema(op)
+            : isDirectOperation(op)
+              ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
+              : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
         status,
         planSha256,
+        ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}),
         ...(isDirectOperation(op)
           ? {
               evidencePolicy: CALLBACK_DIRECT_POLICY,
@@ -2256,17 +3579,21 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           ? {
               installedBaselineSha256,
               observationSha256: hash(read(`${transaction}/observation.json`)),
-              ...(isDirectOperation(op)
-                ? {
-                    ownerObservationSha256: plan.ownerObservationSha256,
-                    evidencePolicySha256: plan.evidencePolicySha256,
-                  }
-                : {
-                    providerReadbackSha256: hash(
-                      read(`${transaction}/timeweb-monitor-readback.json`),
-                    ),
-                    alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)),
-                  }),
+              ...(isOwnerDirectedCutover(op)
+                ? ownerDirectedReceipt(plan.monitoring)
+                : isWaivedRosterCutover(op)
+                  ? nativeAdmissionReceipt(plan.monitoring)
+                  : isDirectOperation(op)
+                    ? {
+                        ownerObservationSha256: plan.ownerObservationSha256,
+                        evidencePolicySha256: plan.evidencePolicySha256,
+                      }
+                    : {
+                        providerReadbackSha256: hash(
+                          read(`${transaction}/timeweb-monitor-readback.json`),
+                        ),
+                        alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)),
+                      }),
             }
           : {}),
         observedAt: new Date().toISOString(),
@@ -2294,6 +3621,32 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   };
   const ops = {
     journal,
+    ...(roster
+      ? {
+          workerMode: 'legacy-roster-cutover',
+          containWorker: async (recovering = true) => {
+            if (!recovering && (isWaivedRosterCutover(op) || isOwnerDirectedCutover(op)))
+              validateProductionCutover(op, true);
+            attest(recovering);
+            stoppedWorkerId = containRosterCutoverWorker(plan);
+            delete active.worker;
+            attest(recovering);
+          },
+          removeCandidateBaseline: async () => {
+            const path = `${directory}/installed-components.env`;
+            if (existsSync(path)) {
+              if (!read(path).equals(expectedDescriptor)) fail('foreign_candidate_descriptor');
+              unlinkSync(path);
+              const fd = openSync(directory, 'r');
+              try {
+                fsyncSync(fd);
+              } finally {
+                closeSync(fd);
+              }
+            }
+          },
+        }
+      : {}),
     ...(join
       ? {
           secretMode: 'join-dormant',
@@ -2350,13 +3703,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         }
       : {}),
     attestRestored: async () => {
-      attest();
+      await attestApiWebTerminal('ROLLED_BACK', attest);
       attestJoinRunningEnv();
+      if (roster) for (const service of targets) await wait(service, plan.previous[service]);
     },
     abort: async () => {
       if (join) expectedSecrets = plan.previousSecrets;
-      attest();
-      for (const service of ['api', 'web'])
+      await attestApiWebTerminal('ABORTED', attest);
+      for (const service of targets)
         if (!equal(inspect(service), plan.previous[service])) fail('abort_baseline_changed');
     },
     installBaseline: async () => {
@@ -2380,31 +3734,36 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     preflight: async () => {
       attest();
       attestJoinBackup();
-      for (const s of ['api', 'web']) {
+      for (const s of targets) {
         if (!equal(inspect(s), plan.previous[s])) fail('baseline_drift');
-        imagePresent(plan.previous[s].image, plan.previous[s].releaseId.slice(0, 40));
+        imagePresent(
+          plan.previous[s].image,
+          predecessorSource(plan.previous[s]),
+          isLegacyProductionCutover(op) ? plan.previous[s].imageId : undefined,
+        );
         const rendered = JSON.parse(compose('candidate', 'config', s));
         for (const component of ['api', 'web', 'realtime', 'worker', 'migrator']) {
-          const expected = ['api', 'web'].includes(component)
+          const expected = targets.includes(component)
             ? plan.candidate[component].image
             : `ghcr.io/z6v6e6r/phub-${component}@${values[`${component.toUpperCase()}_IMAGE_DIGEST`]}`;
           if (rendered.services[component].image !== expected) fail('compose_image_identity');
         }
         await probe(s);
-        await probe(s, true);
+        if (s !== 'worker') await probe(s, true);
       }
       attestJoinRunningEnv();
     },
     pullAndSmoke: async () => {
-      for (const s of ['api', 'web']) {
+      for (const s of targets) {
         compose('candidate', 'pull', s);
         imagePresent(plan.candidate[s].image, op.candidateSha);
-        docker(apiWebArtifactSmokeArgs(s, plan.candidate[s].image));
+        docker(apiWebArtifactSmokeArgs(s, plan.candidate[s].image, roster));
       }
       attest();
     },
     activate: async (s) => {
       if (join) validateJoinOperation(op, true);
+      if (cutover) validateProductionCutover(op, true);
       if (isDirectOperation(op)) validateDirectApiWebOperation(op, true);
       attest();
       compose('candidate', 'up', s);
@@ -2414,6 +3773,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       if (s === 'api' && !equal(inspect('web'), plan.previous.web))
         fail('web_changed_before_activation');
       if (s === 'web' && !equal(inspect('api'), active.api)) fail('api_changed_during_activation');
+      if (roster && s !== 'api' && !equal(inspect('api'), active.api))
+        fail('api_changed_during_activation');
+      if (roster && s === 'web' && !equal(inspect('worker'), active.worker))
+        fail('worker_changed_during_activation');
     },
     observe: async () => {
       if (isDirectOperation(op)) {
@@ -2443,11 +3806,12 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         web: { privateMs: [], publicMs: [], timestamps: [] },
       };
       const times = { api: [], web: [] };
+      if (roster) times.worker = [];
       for (let round = 0; round <= 60; round++) {
-        for (const s of ['api', 'web']) {
+        for (const s of targets) {
           if (!equal(inspect(s), active[s])) fail('candidate_restarted');
           const privateMs = await probe(s),
-            publicMs = await probe(s, true);
+            publicMs = s === 'worker' ? null : await probe(s, true);
           times[s].push(privateMs);
           if (join) {
             samples[s].privateMs.push(privateMs);
@@ -2458,7 +3822,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         if (join) validateJoinOperation(op, true);
         attest();
         attestJoinRunningEnv();
-        validateMonitoring(transaction, profile);
+        if (!isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
+          validateMonitoring(transaction, profile);
         if (round < 60) await delay(15000);
       }
       for (const s of ['api', 'web']) {
@@ -2467,9 +3832,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           limit = s === 'api' ? 1500 : 1000;
         if (join ? p95 >= limit : p95 > limit) fail('latency_threshold');
       }
-      const finalMonitoring = validateMonitoring(transaction, profile);
-      durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
-      durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
+      if (isOwnerDirectedCutover(op))
+        validateOwnerDirectedBinding(op, plan.monitoring, hash(opBytes));
+      else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
+      else {
+        const finalMonitoring = validateMonitoring(transaction, profile);
+        durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
+        durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
+      }
       const completedAt = new Date().toISOString();
       for (const service of ['api', 'web'])
         for (const [key, source] of [
@@ -2500,7 +3870,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
             latencyMs: times,
             serverErrors: 0,
             completedAt,
+            ...(roster
+              ? {
+                  startedAt,
+                  elapsedSeconds: (Date.parse(completedAt) - Date.parse(startedAt)) / 1000,
+                }
+              : {}),
           };
+      if (roster) validateRosterCutoverObservation(observation);
       durable(`${transaction}/observation.json`, `${JSON.stringify(observation)}\n`, true);
     },
     restore: async (s) => {
@@ -2522,16 +3899,23 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         ![plan.previous[s], plan.candidate[s]].some(
           (v) =>
             v.image === actual.Config.Image &&
-            v.releaseId === actual.Config.Labels['phub.release-id'],
+            v.releaseId === (actual.Config.Labels['phub.release-id'] ?? null) &&
+            (!Object.hasOwn(v, 'revision') ||
+              v.revision === (actual.Config.Labels['org.opencontainers.image.revision'] ?? null)),
         )
       )
         fail('foreign_recovery_image');
-      imagePresent(plan.previous[s].image, plan.previous[s].releaseId.slice(0, 40));
+      imagePresent(
+        plan.previous[s].image,
+        predecessorSource(plan.previous[s]),
+        isLegacyProductionCutover(op) ? plan.previous[s].imageId : undefined,
+      );
       compose(`previous-${s}`, 'up', s);
       await wait(s, plan.previous[s]);
+      delete active[s];
+      if (s === 'worker') stoppedWorkerId = null;
     },
   };
-  const active = {};
   const receipt = validateUpgradeReceipt(
     JSON.parse(read(journalPath)),
     planSha256,
@@ -2542,11 +3926,13 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   if (mode === 'reconcile') {
     await reconcileApiWebPhase(receipt, {
       attestTerminal: async (terminal) => {
+        if (roster && terminal !== 'SUCCESS' && existsSync(`${directory}/installed-components.env`))
+          fail('non_success_candidate_descriptor');
         attestJoinBackup();
         if (join)
           expectedSecrets = terminal === 'SUCCESS' ? plan.candidateSecrets : plan.previousSecrets;
-        attest();
-        for (const service of ['api', 'web'])
+        await attestApiWebTerminal(terminal, attest);
+        for (const service of targets)
           await wait(
             service,
             terminal === 'SUCCESS' ? plan.candidate[service] : plan.previous[service],
@@ -2579,7 +3965,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         }
       },
       journalReconciled: async (terminal) => {
-        if (join && receipt.status === 'RECONCILED') return;
+        if ((join || isCanonicalOwnerDirectedUpgrade(op)) && receipt.status === 'RECONCILED')
+          return;
         durable(
           journalPath,
           `${JSON.stringify({ ...receipt, status: 'RECONCILED', reconciledStatus: terminal, observedAt: new Date().toISOString() })}\n`,
@@ -2611,10 +3998,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     try {
       await runApiWebTransition(ops);
     } catch (error) {
-      if (!join && JSON.parse(read(journalPath)).status === 'ABORTED') releaseLock();
+      if (!join && !roster && JSON.parse(read(journalPath)).status === 'ABORTED') releaseLock();
       throw error;
     }
-    if (!join) releaseLock();
+    if (!join && !roster) releaseLock();
   }
   return {
     status: mode === 'recover' ? recoveredStatus : 'SUCCESS',
@@ -2637,4 +4024,5 @@ export {
   probe as probeUpgradeService,
   validateBackupProof as validateUpgradeBackup,
   validateMonitoring as readUpgradeMonitoring,
+  wait as waitUpgradeService,
 };

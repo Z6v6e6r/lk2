@@ -24,13 +24,13 @@ import { registerTrainingRegistrationRoutes } from './bookings/training-registra
 import type { TrainingRegistrationRuntime } from './bookings/training-registration-runtime.js';
 import type { ManagedSelfLeaveRuntime } from './games/game-managed-self-leave.js';
 import { attachUpcomingRosters } from './bookings/upcoming-rosters.js';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import { monthlySubscriptionLaunchOrigins } from '@phub/config';
+import { cupAdminDelegationTenantKeys, monthlySubscriptionLaunchOrigins } from '@phub/config';
 import type { AppConfig, RuntimeContourAttestation } from '@phub/config';
 import type {
   CommunityCreateService,
@@ -126,6 +126,10 @@ import { registerCommunityDirectInviteAdminRoutes } from './admin/community-dire
 import { registerCommunityCreateQuotaAdminRoutes } from './admin/community-create-quota-admin-routes.js';
 import { registerCommunityContentModerationAdminRoutes } from './admin/community-content-moderation-admin-routes.js';
 import { registerMessagingModerationAdminRoutes } from './admin/messaging-moderation-admin-routes.js';
+import {
+  registerUserVivaAdminRoutes,
+  type UserVivaAdminSource,
+} from './admin/user-viva-admin-routes.js';
 import type { AuthService } from './auth/auth-service.js';
 import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
 import {
@@ -206,7 +210,7 @@ import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-r
 import { registerProfileProviderIdentityRoutes } from './profile/profile-provider-identity-routes.js';
 import type { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
 import type { ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
-import { buildLocalHomeProfile } from './profile/local-home-profile.js';
+import { buildLocalHomeProfile, freshProviderObservation } from './profile/local-home-profile.js';
 import {
   homeProfilePhotoUserIds,
   stabilizeHomeProfilePhotos,
@@ -214,6 +218,9 @@ import {
 } from './profile/profile-photo-url.js';
 import { registerProfileContactRoutes } from './profile/profile-contact-routes.js';
 import { buildPlayerProfileView } from './profile/profile-view.js';
+import type { ProfileProviderObservationRepository } from '@phub/database/profile-provider-observation';
+import type { ProfileProviderReadJobStore } from './profile/profile-read-job-store.js';
+import { registerProfileProviderReadRoutes } from './profile/profile-provider-read-routes.js';
 import { buildClientRoutingPlan, canUseDirectViva } from './routing/client-routing-plan.js';
 import { registerRealtimeRoutes } from './realtime/realtime-routes.js';
 import {
@@ -264,6 +271,11 @@ declare module 'fastify' {
   interface FastifyRequest {
     padlHubClaims?: PadlHubClaims;
     tenantId?: string;
+    /**
+     * Set only by `authenticateCupAdmin`: the request was authorized by the ЦУП delegation
+     * credential, which is tenant-scoped by configuration rather than by `padlHubClaims.tenants`.
+     */
+    cupAdminDelegated?: boolean;
   }
 }
 
@@ -371,9 +383,16 @@ export interface BuildAppOptions {
   readonly profileFriendshipRepository?: ProfileFriendshipRepository;
   readonly profileReachabilityRepository?: ProfileReachabilityRepository;
   readonly profileLevelHistoryRepository?: ProfileLevelHistoryRepository;
+  readonly profileProviderObservationRepository?: ProfileProviderObservationRepository;
   readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'>;
   /** One server-side answer for the verified user's configured residency product. */
   readonly clientResidencyService?: ClientResidencyService;
+  /** Read-only CUP view of a user's Viva card, subscriptions, bookings and transactions. */
+  readonly userVivaAdminSource?: UserVivaAdminSource;
+  readonly resolveUserVivaClientId?: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+  }) => Promise<string | undefined>;
   readonly promotionEngagementRepository?: PromotionEngagementRepository;
   readonly promotionEngagementSink?: PromotionEngagementSink;
   readonly profilePhotoMediaRepository?: Pick<
@@ -404,6 +423,11 @@ export interface BuildAppOptions {
   readonly communityLogoMediaRepository?: CommunityLogoMediaRepository;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
+  /**
+   * Short-lived native provider-read job store. Only the Android profile.read exception needs it;
+   * the GET /profile fallback reads the observation repository instead.
+   */
+  readonly profileProviderReadJobStore?: ProfileProviderReadJobStore;
   readonly trainingCatalogueSource?: TrainingCatalogueSource;
   readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
   readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
@@ -411,6 +435,15 @@ export interface BuildAppOptions {
   readonly activityHistoryRepository?: ActivityHistoryRepository;
   readonly activityHistoryRefresher?: ActivityHistoryRefreshService;
   readonly activityHistoryProjector?: ActivityHistoryProjectionService;
+  /**
+   * Current viewer game cards for history entries. History rows store the card snapshot taken at
+   * sync time, so a result submitted afterwards would otherwise stay invisible in the list.
+   */
+  readonly activityHistoryGameCards?: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly gameIds: readonly string[];
+  }) => Promise<ReadonlyMap<string, unknown>>;
   readonly tournamentSummarySource?: TournamentSummarySource;
   readonly eventAvatarMedia?: EventAvatarMedia;
   readonly trainerAvatarRepository?: TrainerAvatarRepository;
@@ -614,6 +647,125 @@ async function authenticateAdmin(request: FastifyRequest, reply: FastifyReply): 
   return authenticateForAudience(request, reply, request.server.config.JWT_ADMIN_AUDIENCE);
 }
 
+// The ЦУП delegation credential stands for the operator console itself: it carries exactly the
+// grants the notification and station-card admin contours need and nothing else.
+const CUP_ADMIN_DELEGATION_PERMISSIONS = [
+  'notifications.manage',
+  'locations.read',
+  'locations.manage',
+  'locations.publish',
+] as const;
+// The claims shape requires a session id and the console has no PadlHub session of its own to name.
+const CUP_ADMIN_DELEGATION_SESSION_ID = '00000000-0000-4000-8000-000000000000';
+// Versioned, tenant-bound, time-bound assertion: `cupv1.<issuedAtMs>.<hmacSha256Hex>`.
+const CUP_ADMIN_DELEGATION_ASSERTION_VERSION = 'cupv1';
+const CUP_ADMIN_DELEGATION_ASSERTION_PATTERN = /^cupv1\.(\d{10,16})\.([0-9a-f]{64})$/;
+
+function cupAdminDelegationMac(secret: string, tenantKey: string, issuedAtMs: string): string {
+  return createHmac('sha256', secret)
+    .update(`${CUP_ADMIN_DELEGATION_ASSERTION_VERSION}\n${tenantKey}\n${issuedAtMs}`)
+    .digest('hex');
+}
+
+/**
+ * Verifies the ЦУП delegation assertion for one tenant at one moment.
+ *
+ * The shared secret never travels: the console sends an HMAC over the tenant key and the current
+ * timestamp, so a captured request is worthless outside the replay window and cannot be replayed
+ * against another tenant. Both sides of the comparison are fixed-length digests, which also removes
+ * the length oracle a raw secret comparison would leak.
+ */
+function verifyCupAdminDelegationAssertion(input: {
+  readonly presented: string;
+  readonly secret: string;
+  readonly tenantKey: string;
+  readonly maxAgeMs: number;
+  readonly nowMs: number;
+}): boolean {
+  const match = CUP_ADMIN_DELEGATION_ASSERTION_PATTERN.exec(input.presented);
+  if (!match) return false;
+  const issuedAtMs = match[1];
+  const presentedMac = match[2];
+  if (!issuedAtMs || !presentedMac) return false;
+  const issuedAt = Number(issuedAtMs);
+  if (!Number.isSafeInteger(issuedAt)) return false;
+  if (Math.abs(input.nowMs - issuedAt) > input.maxAgeMs) return false;
+  const expectedMac = cupAdminDelegationMac(input.secret, input.tenantKey, issuedAtMs);
+  return timingSafeEqual(Buffer.from(presentedMac, 'hex'), Buffer.from(expectedMac, 'hex'));
+}
+
+/**
+ * Authorization for the notification and station-card admin contours (`/admin/api/v1/...`).
+ *
+ * Accepts a real `phub-admin` PadlHub session, or — only while the owner-enabled
+ * `CUP_ADMIN_DELEGATION_ENABLED` switch is on — the ЦУП server assertion, so the operator of the
+ * console does not need a second PadlHub session for those two blocks. The delegated principal is
+ * tenant-scoped by `CUP_ADMIN_DELEGATION_TENANT_KEYS`, keeps the ЦУП client guard, and its writes are
+ * audited under `CUP_ADMIN_DELEGATION_ACTOR_ID`.
+ */
+async function authenticateCupAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const config = request.server.config;
+  const authorization = request.headers.authorization;
+  if (!authorization?.startsWith('Bearer ')) {
+    sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+    return;
+  }
+  const presented = authorization.slice('Bearer '.length);
+  const delegationSecret = config.CUP_ADMIN_DELEGATION_ENABLED
+    ? (config.CUP_ADMIN_DELEGATION_TOKEN ?? '').trim()
+    : '';
+  const tenantKey = (request.params as { tenantKey?: string }).tenantKey ?? '';
+  if (
+    delegationSecret.length > 0 &&
+    verifyCupAdminDelegationAssertion({
+      presented,
+      secret: delegationSecret,
+      tenantKey,
+      maxAgeMs: config.CUP_ADMIN_DELEGATION_MAX_AGE_SECONDS * 1000,
+      nowMs: Date.now(),
+    })
+  ) {
+    if (request.headers['x-app-platform'] !== 'cup-admin') {
+      sendApiError(
+        request,
+        reply,
+        403,
+        'ADMIN_CLIENT_REQUIRED',
+        'Операция доступна только из ЦУП.',
+      );
+      return;
+    }
+    if (
+      !cupAdminDelegationTenantKeys(config.CUP_ADMIN_DELEGATION_TENANT_KEYS).includes(tenantKey)
+    ) {
+      sendApiError(request, reply, 403, 'TENANT_ACCESS_DENIED', 'Доступ к организации запрещён.');
+      return;
+    }
+    const actorUserId = config.CUP_ADMIN_DELEGATION_ACTOR_ID;
+    if (!actorUserId) {
+      // Unreachable in a started API: the loader refuses the switch without an actor.
+      sendApiError(
+        request,
+        reply,
+        503,
+        'CUP_ADMIN_DELEGATION_UNAVAILABLE',
+        'Делегирование ЦУП не настроено.',
+      );
+      return;
+    }
+    request.padlHubClaims = {
+      sub: actorUserId,
+      tenants: [],
+      roles: ['admin'],
+      permissions: [...CUP_ADMIN_DELEGATION_PERMISSIONS],
+      sid: CUP_ADMIN_DELEGATION_SESSION_ID,
+    };
+    request.cupAdminDelegated = true;
+    return;
+  }
+  await authenticateForAudience(request, reply, config.JWT_ADMIN_AUDIENCE);
+}
+
 function authorizeNotificationAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (reply.sent) return Promise.resolve();
   if (request.headers['x-app-platform'] !== 'cup-admin') {
@@ -698,6 +850,13 @@ async function resolveTenant(request: FastifyRequest, reply: FastifyReply): Prom
   const tenantId = result.rows[0]?.id;
   if (!tenantId) {
     sendApiError(request, reply, 404, 'TENANT_NOT_FOUND', 'Организация не найдена.');
+    return;
+  }
+  // The delegated ЦУП principal has no PadlHub session of its own: `authenticateCupAdmin` already
+  // checked this same `:tenantKey` against the configured allowlist, and there is no session id to
+  // revoke here. Every other caller keeps the claim and live-session checks below.
+  if (request.cupAdminDelegated) {
+    request.tenantId = tenantId;
     return;
   }
   if (!request.padlHubClaims?.tenants.includes(tenantId)) {
@@ -1118,6 +1277,13 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });
+  registerUserVivaAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.userVivaAdminSource ? { source: options.userVivaAdminSource } : {}),
+    ...(options.resolveUserVivaClientId
+      ? { resolveVivaClientId: options.resolveUserVivaClientId }
+      : {}),
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+  });
   registerMessagingModerationAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.messagingModerationRepository
       ? { repository: options.messagingModerationRepository }
@@ -1371,6 +1537,9 @@ export async function buildApp(options: BuildAppOptions) {
       ? { clientAssistedJobStore: options.bookingScreenReadJobStore }
       : {}),
     ...(options.activityHistoryProjector ? { projector: options.activityHistoryProjector } : {}),
+    ...(options.activityHistoryGameCards
+      ? { viewerGameCards: options.activityHistoryGameCards }
+      : {}),
     providerPageSize: options.config.ACTIVITY_HISTORY_PROVIDER_PAGE_SIZE,
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
@@ -1438,9 +1607,9 @@ export async function buildApp(options: BuildAppOptions) {
       ? { repository: options.notificationScenarioRepository }
       : {}),
     runtimeEnabled: options.config.NOTIFICATION_SCENARIOS_ENABLED,
-    authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    authenticatedTenantHandlers: [authenticateCupAdmin, authorizeNotificationAdmin, resolveTenant],
     commandHandlers: [
-      authenticateAdmin,
+      authenticateCupAdmin,
       authorizeNotificationAdmin,
       resolveTenant,
       requireIdempotencyKey,
@@ -1457,14 +1626,18 @@ export async function buildApp(options: BuildAppOptions) {
     webPushGloballyEnabled: options.config.WEB_PUSH_ENABLED,
     webPushAppId: options.config.WEB_PUSH_APP_ID,
     webPushEnvironment: options.config.WEB_PUSH_ENVIRONMENT,
-    authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    authenticatedTenantHandlers: [authenticateCupAdmin, authorizeNotificationAdmin, resolveTenant],
     androidPush: {
       globallyEnabled: options.config.FCM_ENABLED && Boolean(options.notificationEndpointCipher),
       appId: options.config.FCM_APP_ID,
       environment: options.config.FCM_ENVIRONMENT,
     },
+    iosPush: {
+      appId: options.config.APNS_APP_ID,
+      environment: options.config.APNS_ENVIRONMENT,
+    },
     commandHandlers: [
-      authenticateAdmin,
+      authenticateCupAdmin,
       authorizeNotificationAdmin,
       resolveTenant,
       requireIdempotencyKey,
@@ -1472,8 +1645,8 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerLocationAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.locationRepository ? { repository: options.locationRepository } : {}),
-    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
-    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+    authenticatedTenantHandlers: [authenticateCupAdmin, resolveTenant],
+    commandHandlers: [authenticateCupAdmin, resolveTenant, requireIdempotencyKey],
   });
   registerLevelEligibilityAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.levelEligibilityPolicyRepository
@@ -1544,8 +1717,8 @@ export async function buildApp(options: BuildAppOptions) {
     ),
     maxDimension: options.config.LOCATION_MEDIA_MAX_DIMENSION,
     webpQuality: options.config.LOCATION_MEDIA_WEBP_QUALITY,
-    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
-    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+    authenticatedTenantHandlers: [authenticateCupAdmin, resolveTenant],
+    commandHandlers: [authenticateCupAdmin, resolveTenant, requireIdempotencyKey],
     publicTenantHandlers: [resolvePublicTenant],
   });
   registerProfilePhotoMediaRoutes(app as unknown as FastifyInstance, {
@@ -1634,6 +1807,19 @@ export async function buildApp(options: BuildAppOptions) {
   registerProfileLevelHistoryRoutes(app as unknown as FastifyInstance, {
     ...(options.profileLevelHistoryRepository
       ? { repository: options.profileLevelHistoryRepository }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerProfileProviderReadRoutes(app as unknown as FastifyInstance, {
+    config: options.config,
+    ...(options.profileProviderReadJobStore
+      ? { jobStore: options.profileProviderReadJobStore }
+      : {}),
+    ...(options.profileProviderObservationRepository
+      ? { observationRepository: options.profileProviderObservationRepository }
+      : {}),
+    ...(options.clientRoutingPlanRepository
+      ? { clientRoutingPlanRepository: options.clientRoutingPlanRepository }
       : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
@@ -1765,6 +1951,27 @@ export async function buildApp(options: BuildAppOptions) {
           summary && options.profilePhotoMediaRepository
             ? await options.profilePhotoMediaRepository.getPhotoDeliveryIds(tenantId, [userId])
             : new Map<string, string>();
+        // A fresh observation only adds the provider fields the local slice cannot see; a
+        // transient observation read failure degrades to the local slice instead of failing it.
+        // The rollout flag is the read-path kill switch as well: off means no merge at all, so an
+        // immediate rollback hides an already stored observation without waiting for its age window.
+        const observation =
+          options.config.PROFILE_NATIVE_READ_ENABLED && options.profileProviderObservationRepository
+            ? freshProviderObservation(
+                await options.profileProviderObservationRepository
+                  .get(tenantId, userId)
+                  .catch((error: unknown) => {
+                    // The local slice stays authoritative when a cache read fails; the log keeps
+                    // only the error class so no provider or personal value can leak.
+                    request.log.warn(
+                      { errorClass: error instanceof Error ? error.name : 'UNKNOWN' },
+                      'profile provider observation read failed',
+                    );
+                    return undefined;
+                  }),
+                options.config.PROFILE_OBSERVATION_MAX_AGE_SECONDS,
+              )
+            : undefined;
         reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
         return buildLocalHomeProfile({
           userId,
@@ -1781,6 +1988,7 @@ export async function buildApp(options: BuildAppOptions) {
                 levelValue: summary.levelValue,
               }
             : {}),
+          ...(observation ? { observation } : {}),
         });
       }
       const parsedDashboard = homeDashboardSchema.safeParse(
@@ -2019,6 +2227,47 @@ export async function buildApp(options: BuildAppOptions) {
 
       if (options.upcomingBookingsRepository) {
         const projection = await options.upcomingBookingsRepository.get(tenantId, userId);
+        if (
+          options.gameReadRepository &&
+          (!projection ||
+            Date.now() >
+              Date.parse(projection.staleAt) +
+                options.config.HOME_PROJECTION_MAX_STALE_SECONDS * 1_000)
+        ) {
+          // Pending scores belong to canonical Games even when the provider's upcoming list
+          // no longer contains the elapsed game or its projection is unavailable.
+          const now = new Date().toISOString();
+          try {
+            const retained = await attachUpcomingRosters(
+              {
+                tenantId,
+                userId,
+                version: 'canonical-game-results',
+                generatedAt: now,
+                staleAt: now,
+                updatedAt: now,
+                items: [],
+              },
+              {
+                repository: options.gameReadRepository,
+                ...(options.profilePhotoMediaRepository
+                  ? { photoRepository: options.profilePhotoMediaRepository }
+                  : {}),
+                now,
+                maxStaleSeconds: options.config.HOME_PROJECTION_MAX_STALE_SECONDS,
+              },
+            );
+            if (retained.items.length > 0) {
+              reply.header('Cache-Control', 'private, no-store');
+              return retained;
+            }
+          } catch {
+            request.log.warn(
+              { event: 'pending_results_read_failed' },
+              'Pending game results unavailable',
+            );
+          }
+        }
         if (!projection) {
           // No bookings projection exists in this contour. Answer with an
           // explicit unavailable state instead of failing the whole endpoint.

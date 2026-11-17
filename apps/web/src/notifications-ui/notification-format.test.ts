@@ -349,3 +349,10 @@ describe('notification feed entries', () => {
     expect(notificationFeedMatchesFilter(entry!, 'MESSAGING')).toBe(false);
   });
 });
+
+it('shows score notifications under Games with the score-entry category name', () => {
+  expect(notificationCategory('GAME_RESULT')).toMatchObject({
+    filter: 'GAME',
+    categoryLabel: 'Внести счёт игры',
+  });
+});

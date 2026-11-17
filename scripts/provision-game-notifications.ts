@@ -4,12 +4,9 @@ import {
   GAME_NOTIFICATION_LOCALE,
   GAME_NOTIFICATION_REQUEST_HASH,
   GAME_NOTIFICATION_RULE_ACTIVE,
-  GAME_NOTIFICATION_RULE_CHANNEL_OVERRIDE,
   GAME_NOTIFICATION_RULE_KEY_SUFFIX,
   GAME_NOTIFICATION_RULESET_VERSION,
   GAME_NOTIFICATION_TEMPLATE_ACTIVE,
-  GAME_NOTIFICATION_TEMPLATE_CATEGORY,
-  GAME_NOTIFICATION_TEMPLATE_CHANNELS,
   GAME_NOTIFICATION_TEMPLATE_DEEP_LINK,
   GAME_NOTIFICATION_TEMPLATE_VERSION,
 } from '@phub/notifications';
@@ -59,8 +56,8 @@ function templateMatches(
   definition: (typeof GAME_NOTIFICATION_DEFINITIONS)[number],
 ): boolean {
   return (
-    row.category === GAME_NOTIFICATION_TEMPLATE_CATEGORY &&
-    JSON.stringify(row.channels) === JSON.stringify(GAME_NOTIFICATION_TEMPLATE_CHANNELS) &&
+    row.category === definition.category &&
+    JSON.stringify(row.channels) === JSON.stringify(definition.channels) &&
     row.title_template === definition.title &&
     row.body_template === definition.body &&
     row.deep_link_template === GAME_NOTIFICATION_TEMPLATE_DEEP_LINK
@@ -152,6 +149,8 @@ try {
       sourceEventType: definition.sourceEventType,
       audienceSelector: definition.audienceSelector,
       mandatory: definition.mandatory,
+      category: definition.category,
+      channels: definition.channels,
     })),
   };
 
@@ -198,8 +197,8 @@ try {
             definition.key,
             GAME_NOTIFICATION_TEMPLATE_VERSION,
             GAME_NOTIFICATION_LOCALE,
-            GAME_NOTIFICATION_TEMPLATE_CATEGORY,
-            [...GAME_NOTIFICATION_TEMPLATE_CHANNELS],
+            definition.category,
+            [...definition.channels],
             definition.title,
             definition.body,
             GAME_NOTIFICATION_TEMPLATE_DEEP_LINK,
@@ -257,7 +256,7 @@ try {
             definition.sourceEventType,
             template.id,
             JSON.stringify(definition.audienceSelector),
-            [...GAME_NOTIFICATION_RULE_CHANNEL_OVERRIDE],
+            [...definition.channels],
             definition.mandatory,
             GAME_NOTIFICATION_RULE_ACTIVE,
             actorId,

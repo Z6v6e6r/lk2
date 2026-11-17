@@ -373,7 +373,7 @@ function Profile({
           subscriptions={dashboard.value?.subscriptions ?? null}
           friendsAvailable={false}
           subscriptionRenewalAvailable={false}
-          subscriptionsError={dashboard.error}
+          subscriptionsUnavailable={dashboard.error !== null}
           communities={dashboard.value ? { items: dashboard.value.communities } : null}
           communitiesError={dashboard.error}
           bookingPreferences={saved.preferences ?? preferences.value}

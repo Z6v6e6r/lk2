@@ -4,6 +4,7 @@ import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
 import {
   androidSessionPlugin,
   createNativeApiFetch,
+  createNativeProfileObservationRefresh,
   type NativeReadFailure,
 } from './native-api-fetch.js';
 import { installMobileNavigation } from './navigation.js';
@@ -75,12 +76,16 @@ function MobileSession({
           });
         })
       : undefined;
+    // Android-only ADR 0023 exception: the device reads the provider profile and the gateway
+    // rereads the canonical PadlHub profile afterwards. Web builds never receive this capability.
+    const refreshProfileObservation = native ? createNativeProfileObservationRefresh() : undefined;
     const service = createBrowserAuthGateway({
       baseUrl: config.apiBaseUrl,
       tenantKey: config.tenantKey,
       appVersion: config.appVersion,
       platform: native ? 'android' : 'web',
       nativeSessionTransport: native,
+      ...(refreshProfileObservation ? { refreshProfileObservation } : {}),
       ...(native
         ? {
             openSubscriptionPayment: async (input: { operationId: string; launchCode: string }) => {

@@ -156,3 +156,196 @@ Before this format can support delivery, establish actual nonce/template feasibi
 Run focused Vitest tests and `python3 -I -S -B scripts/test-timeweb-database-backup.py`; all Docker/Git/server interfaces in pipeline scenarios are mocked and temporary files are task-owned. For this CRITICAL operational-code preparation also run the existing `npm run check`, configured secret/PII checks and independent security/release review. Use CI evidence for the exact task head; a missing local scanner is reported rather than silently claimed.
 
 Remaining before live execution: current source decision/eligibility, exact installation plan/approval, physical pinned-image and phase-recovery rehearsal, real private captures and native nonce/template feasibility, independently reviewed original-record assertions or fixed native adapters, canonical collector/writer and explicit new-policy adoption, fresh bounded proofs and exact live approval. Neither preparation nor a green Draft PR authorizes a deploy.
+
+## Account-preserving cutover backup
+
+`PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1` is a closed production, tmpfs-only profile of the
+existing producer. Candidate, controller and tool commit are identical. It binds the actual API
+preimage (`lk2-beta-759083e37b40`, revision null), actual pinned PostgreSQL preimage, cluster
+`phub_beta` / `7679125609183186977`, exact 122-row ledger hash and predecessor-attestation SHA-256.
+The output directory is `backups/<candidate-sha>-<publication-run>-1-api-web`.
+
+Existing source read-only sessions, container-boundary checks, immutable PostgreSQL restore image,
+network-none/read-only-root tmpfs isolation, capacity gate, phase journal and no-replay behavior
+remain unchanged. All source queries/dump use the request's verified
+PostgreSQL container, not a stale global ID. A failed capacity check has no disk/namespace fallback.
+
+Only this cutover profile uses a unique `PGAPPNAME` plus an in-container 580-second BusyBox-compatible timeout
+(`-s TERM -k 10 580`: TERM, then KILL after 10 seconds), with a 620-second outer client timeout. A zero matching-backend
+readback is mandatory before dump success or cleanup. An active/unknown backend blocks cleanup;
+never terminate an unrelated session or replay the dump. The canonical PostgreSQL image must
+provide `/usr/bin/timeout` with those short options before live use. The dump is serial
+without parallel jobs; this bounds the direct `pg_dump`, not arbitrary child process groups.
+
+Failed cutover attempts use `--reconcile-cutover-tmpfs` with the same exact installed tool and
+root-owned request. The reconciler reattests source/runtime/controller/boundary and marker custody,
+stops/removes only the operation-labeled and fully inspected isolated restore container, proves its
+absence, retains the partial dump/journals, and emits `CUTOVER_RECONCILED` without authorizing deploy
+or replay. Foreign containers/locks, changed source custody, active dump backends and uncertain
+stop/remove acknowledgements remain STOP. Acquisition publishes a complete pending marker with
+atomic no-replace rename; retirement preserves the complete lock directory under the transaction,
+so a crash cannot expose an unowned empty global lock. The new execute/reconcile entries share the
+existing host-local mutation flock. Ordinary tmpfs/disk profiles retain their existing behavior.
+
+The complete dump is restored independently. Aggregate witnesses cover users, external identities,
+profile identity keys, refresh-session chains/status and Viva delegation identity/key version/status;
+only counts and hashes leave PostgreSQL. They are additional continuity evidence, not a substitute
+for the full restore. Normal identity/session updates between source and dump snapshots may safely
+abort this witness; reconcile retained state rather than retrying automatically.
+
+`PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V1` extends the previous receipt only for this profile with the
+producer operation hash, predecessor-attestation hash, database target and matching source/restored
+account witness hashes. The consuming cutover checks the retained producer capsule, installed helper
+custody, cleanup phase and dump bytes. Ordinary V1 receipts remain unchanged and cannot substitute
+for this proof. This profile does not activate an application, change a live row, or authorize a
+live database restore.
+
+### Bounded disk profile for the legacy cutover
+
+`PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2` is an explicitly selected alternative, never an
+automatic fallback from failed tmpfs admission. It uses the existing Disk V1 LUKS/ext4 engine and
+host Docker daemon. The exact target, legacy API, PostgreSQL preimage, controller, candidate,
+122-row ledger and predecessor bindings are identical to the tmpfs cutover profile. Confirmation:
+`BACKUP_RESTORE_BOUNDED_DISK_BETA122_<CANDIDATE12>_FROM_LK2_BETA_759083E37B40`.
+
+The producer admits a source database of at most 18 GiB (19,327,352,832 bytes), a complete serial custom-format zstd
+level-3 dump of at most 6.5 GiB, a fully allocated 19 GiB encrypted restore image and 5 GiB plus
+256 MiB host free-space reserve. Before dumping, all three budgets must fit together
+(33,017,561,088 bytes). After dumping, image plus reserve must still fit. Available memory must
+include the fixed 2 GiB restore limit and 2 GiB headroom. These are admission budgets, not a claim
+that a full restore will fit: mounted ext4 free space must exceed source size plus 256 MiB, and
+WAL, indexes or database growth can still cause a safe ENOSPC abort. The source-size allowance does
+not enlarge the restore image or reduce any reserve; a database above the cap must stop before the
+dump, and a database inside the cap is eligible only for an attempt, not guaranteed to fit. No dump filtering, truncation,
+parallel restore, source-setting changes or reduction of fsync/full-page-writes is allowed.
+Allocation runs in an owned child and is polled, as are long Docker dump/TOC/restore calls; phase
+and readiness checks preserve the reserve. A breach retains the transaction and blocks publication.
+
+A bounded read-only REPEATABLE READ exporter supplies the same snapshot to the complete dump and
+the five account witnesses. `pg_dump --snapshot` uses `--compress=zstd:level=3` without
+`--serializable-deferrable`; the in-container BusyBox deadline is 1200 seconds, outer client 1230.
+The exporter has a 1400-second idle-transaction limit and 1500-second absolute deadline. Both
+operation-specific PostgreSQL application names must be absent before success/reconciliation.
+Legitimate later session rotation is not compared to the old snapshot. The isolated restore alone
+uses `wal_level=minimal`, zero WAL senders/replication slots and `archive_mode=off`; fsync,
+full-page-writes and synchronous-commit remain on. Full serial restore uses one transaction and
+`--exit-on-error`, with an in-container 3500-second deadline and outer 3600-second deadline.
+
+The closed V2 receipt binds actual dump size/hash/compression, exact caps, matching snapshot/restored
+account hashes, database/ledger identity, operation and predecessor. Canonical root-only publication
+contains dump, operation, receipt, hash-only snapshot witness and cleanup terminal. Publication and
+reconciliation validate both canonical and retained witness bytes. Raw tokens and identity rows are
+never written to metadata. The host root/Docker daemon are trusted: decrypted PGDATA is temporarily
+visible at the owned host mount, and the retained dump is plaintext under root-only permissions.
+LUKS protects scratch PGDATA, not Docker metadata or the dump.
+
+Use only `--reconcile-disk` with the retained exact request/tool after any uncertain result. It never
+replays dump/restore, and it retains partial dumps privately. It checks the owned source backends,
+container, mapper/loop/mount/image, frozen container boundary and original Docker daemon PID/start
+identity before cleanup and unlock. Daemon identity drift is STOP requiring a separately reviewed
+exact-kernel recovery; automatic cleanup after a daemon restart is not promised. Do not delete an
+existing backup or retry under a new operation merely to regain space. The full actual restore and
+account/ledger proof are prerequisites to activation; the producer never authorizes deployment.
+
+On Linux, allocation and Docker clients use a parent-death signal plus a parent-PID check.
+This kills the owned allocation child on controller death. It does not prove in-container dump or
+restore work stopped: inner deadlines bound those processes, the retained shared lock prevents
+activation, and exact reconciliation is required promptly. Reserve polling is not continuous after
+the producer dies. Crypt/mkfs tools are checked immediately before and after; only long allocation,
+dump, TOC and restore subprocesses are continuously polled while the producer remains alive.
+
+## Fresh dump with the exact prior full restore
+
+Only the explicitly owner-directed V4 legacy roster cutover accepts
+`PHUB_TIMEWEB_BACKUP_BETA122_PRIOR_RESTORE_V3`. The original full-restore schemas and their disk
+capacity requirements remain unchanged. This mode produces a new full, unfiltered, serial
+PG16 custom dump from one exported REPEATABLE READ snapshot, with zstd level 3 and the existing
+6.5 GiB cap. It verifies the archive TOC using `pg_restore --list` inside the exact existing source
+PG16 container. It creates no restore container, encrypted image, loop device, mount or scratch
+filesystem. Required free capacity is the dump cap plus the 5 GiB reserve and 256 MiB control
+margin; no paid disk or deletion of old backups is required.
+
+The producer operation binds the exact historical release 857 / operation `06e07622…` / receipt
+`dd8db103…`, original dump/witness/terminal/helper hashes, and later preparation-abort marker.
+`ownerRestoreDecision` binds the entire new operation excluding only that receipt itself, including
+its prior reference, source/tree, target, database/system identity, ledger, runtime boundary and
+expiry. The new outer V4 operation also binds the producer operation hash. Owner receipt references
+and original message/timestamp must match in producer and outer operation.
+
+The old installed helper is verified before isolated import. Its operation, local tool custody,
+plan, full-restore journal and receipt validation primitives validate the original bytes. An explicit
+read-only compatibility adapter admits the original five files plus exactly four retained controller
+audit files: `operation.json`, `legacy-release.env`, `legacy-predecessor-attestation.json`, and
+`preparation-aborted.json`. The operation bytes match the independently retained aborted cutover;
+the legacy environment and attestation hashes match its exact predecessor, and the abort marker
+has `runtimeMutated:false`. Unknown files or any changed original hash fail closed. The original
+operation, receipt, dates, dump, witness, journal, terminal and helper are never rewritten/copied.
+
+A refreshed legacy runtime observation has its own `capturedAt` and full predecessor hash. The
+old restore retains its original full predecessor hash and timestamp. Only prior-restore
+compatibility uses `predecessorRuntimeSha256`: recursively key-sorted UTF-8 JSON without a newline,
+with only top-level `capturedAt` removed. JS verifies it against the fresh outer baseline; Python
+verifies it against the old retained baseline, plus the unchanged 14-container boundary, API/PG
+identities, ledger and database target. Every other field remains bound. This projection never
+replaces full confirmation, lineage, installed predecessor hashes or the two-hour freshness gate.
+Both old and current full predecessor hashes remain explicit in the prior reference.
+
+The fresh receipt schema is `PHUB_TIMEWEB_FRESH_DUMP_PRIOR_RESTORE_V3`, with
+`freshDumpRestored:false`, `freshDumpIntegrityStatus:PG16_TOC_PARSE_VERIFIED`, exact prior-reference
+and owner-receipt hashes, fresh source ledger/accounts/snapshot witnesses and dump size/SHA-256.
+It contains no fresh `restored*` or `restoreVerified:true` claims. Its terminal file is
+`FRESH_DUMP_INTEGRITY_VERIFIED.json`; the result is `FRESH_DUMP_INTEGRITY_VERIFIED`, never
+`BACKUP_RESTORE_VERIFIED`. The historical restore proves the old dump/toolchain; TOC plus fresh
+snapshot/integrity checks do not prove full restorability of the new bytes. This residual risk is
+the precise scope of the owner's instruction to skip repetition.
+
+Use the enrolled helper's existing fixed request path and `--execute`, `--attest-disk` or
+`--reconcile-disk` entry. Attestation is read-only. Execute is single-use and takes the existing
+process/shared lease; reconciliation retains partial artifacts, proves both operation-specific
+source backends are absent, publishes only completely verified data, and atomically retires only
+its own lock. It never repeats the dump or TOC. Keep the original full-restore backup and the new
+fresh backup. Service activation and live restoration remain separate operations.
+
+## Canonical predecessor fresh dump
+
+Only V5 accepts `PHUB_TIMEWEB_BACKUP_CANONICAL_BETA122_PRIOR_RESTORE_V1`, with distinct plan
+`PHUB_TIMEWEB_CANONICAL_FRESH_DUMP_PLAN_V1` and receipt
+`PHUB_TIMEWEB_CANONICAL_FRESH_DUMP_PRIOR_RESTORE_V1`. It uses the existing full exported-snapshot
+PG16 dump, zstd cap, TOC validation, shared lease and no-replay reconciler. The fresh bytes are
+**not restored**: `freshDumpRestored:false` remains explicit. The owner's prior full-restore waiver
+never becomes a new restorability claim, disk purchase or deletion authority.
+
+The exact canonical baseline binds the completed 4b8 V4 rollout and its historical backup. A dedicated
+`RETAINED_V4_ROLLOUT_BOUNDED_HISTORICAL_FRESH_TERMINAL_V1` proof validates the retained closure, its
+pinned historical helper and original Git/install custody, dump/receipt/snapshot/seal/journal,
+publication and retired lock. The unmodified historical `validate_prior_restore` recursively checks
+the original 857 full restore. `oldFreshTerminalValidatorRerun:false` means the old full _fresh
+terminal_ function is not called; its publication/seal and original full-restore validators are called.
+
+Exactly two historical predicates differ from calling the old fresh-terminal function: the completed
+V4 directory has its closed 18-file inventory including legitimate rollout audit files, and the global
+lease may be ABSENT before execution or exactly OWNED_NEW after the new producer acquires it.
+Unknown files, foreign leases, changed retired-lock inode/marker, pending old lock or altered old
+artifacts fail closed. No old receipt, timestamp, dump, filesystem view or legacy identity is rewritten.
+
+A full read-set binds hashes and filesystem identities across the old V4 and original 857 closures,
+both retained helper/install receipts and the installed 4b8 descriptor and original `artifact/canonical-artifact.zip`. It must match the
+operation's preimage before validation and remain identical afterward. After acquiring its own lease,
+the producer performs live canonical admission **once**, including runtime secrets, verifies the
+unchanged historical read-set again and durably records `CANONICAL_LINEAGE_SEALED` before
+`DUMP_INTENT`. Foreign activity or read-set drift stops before the dump. The terminal proof binds
+that seal to the published prior-reference bytes. Attestation/reconciliation read retained proofs;
+they never recapture the predecessor runtime, replay the dump/TOC or repeat the physical restore.
+
+The canonical predecessor release retains exactly `installed-components.env` and
+`artifact/canonical-artifact.zip`. The manifest and checksum are read from that ZIP in memory,
+never from a standalone manifest file. Admission binds the archive to the hash-bound V4 operation,
+checks the exact two-entry ZIP inventory, checksum and canonical source/publication metadata, and
+includes the ZIP itself in the historical filesystem read-set. A missing or changed ZIP fails
+closed; do not create extracted files in the old release directory to satisfy admission.
+
+The bounded historical ZIP reader belongs to the upgrade controller. Keep the deployed renderer
+byte-identical when this is the only archive-reading change: modifying its exports or imports is
+a protected runtime-definition transition. Before publication, test the complete Git delta from
+the installed API and Web source through `validateRuntimeUpgrade`, in addition to testing the PR
+delta. Do not add a runtime bridge or remove the renderer from protected paths to admit this reader.

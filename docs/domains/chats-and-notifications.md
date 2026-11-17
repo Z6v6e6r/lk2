@@ -454,6 +454,15 @@ notification UUID, безопасный preview и deep-link route; полный
 badge, вибрацией и `renotify`, но баннер, его приоритет, звук и режим «Не беспокоить» определяет
 операционная система пользователя, а не PadlHub.
 
+Android-доставка остаётся data-only: FCM несёт идентификаторы и два PII-free текста для экрана
+блокировки — статический заголовок шаблона (только если title_template не содержит подстановок
+{{…}}) и короткую строку категории: BOOKING — «Не пропусти занятие», GAME — «Не пропусти игру»,
+MESSAGING — «Новое сообщение в чате», FRIENDSHIP — «Новая заявка в друзья», ADMIN_MESSAGE —
+«Оповещение ПадлХАБ». Рендеренный body, имя игрока, корт, адрес и текст сообщения на экран
+блокировки не попадают: их показывает приложение после авторизации. Native service санитизирует
+строки (control characters, лимиты 120/160 символов) и при отсутствии полей показывает безопасные
+«ПадлхАБ» / «У вас новое уведомление».
+
 Иконка и badge — брендовые артефакты, а не placeholder: `phub-notification-icon-{192,512}.png`
 содержат белый lock-up логотипа PadlHub на фирменном градиенте (полный логотип, потому что часть
 платформ обрезает аватар по кругу), `phub-notification-badge-72.png` — монохромный силуэт ракетки на
@@ -614,6 +623,37 @@ gates; остальной список — целевая карта.
 - moderation: удалить сообщение, ограничить участника, получить audit trail по разрешению.
 - external control: список signals/cases, назначение, PadlHub decision, срок временного ограничения,
   appeal/reopen и безопасное отключение конкретного provider account.
+
+#### Делегирование ЦУП вместо второй операторской сессии
+
+ЦУП-оператор уже аутентифицирован своим контуром, поэтому блок «Уведомления» больше не требует
+отдельного PadlHub-логина. При включённом `CUP_ADMIN_DELEGATION_ENABLED` ЦУП вызывает
+`notifications/**` (и `locations**`, см. [locations](locations.md)) server-to-server с
+`Authorization: Bearer cupv1.<issuedAtMs>.<hmac>` и заголовком `X-App-Platform: cup-admin`;
+браузер эти данные не получает.
+
+- Ассерция — HMAC-SHA256 от `cupv1\n{tenantKey}\n{issuedAtMs}` на ключе
+  `CUP_ADMIN_DELEGATION_TOKEN`. Секрет не передаётся; ассерция привязана к tenant и к времени и
+  принимается только внутри окна `CUP_ADMIN_DELEGATION_MAX_AGE_SECONDS` (по умолчанию 120 с), так
+  что перехваченный запрос бесполезен вне окна и не переносится на другую организацию. Сравнение идёт
+  по двум digest фиксированной длины, без length-oracle.
+- Credential принимается только этими двумя группами маршрутов и только для tenant keys из
+  `CUP_ADMIN_DELEGATION_TENANT_KEYS`; остальные admin-маршруты по-прежнему требуют `phub-admin` JWT.
+- Делегированный principal получает ровно `notifications.manage`, `locations.read`,
+  `locations.manage`, `locations.publish` и роли `admin`; его `sub` — пользователь из
+  `CUP_ADMIN_DELEGATION_ACTOR_ID`, под которым пишется аудит (`actor_user_id` имеет FK на
+  `identity.users`). Нужен реальный аккаунт; для разделения «человек против консоли» в аудите
+  предпочтителен отдельный нечеловеческий оператор, а не личный аккаунт владельца.
+- Сессионная проверка `resolveTenant` для делегированного запроса не выполняется: у ЦУПа нет
+  PadlHub-сессии, а tenant-скоуп уже проверен по allowlist. Обычные JWT-запросы сохраняют и проверку
+  claims, и проверку активной сессии.
+- Включение без token, actor или tenant keys отклоняется на старте API, а при выключенном флаге
+  credential не принимается вообще — конфигурация может лишь отказать, но не расширить доступ.
+  Поддерживается ровно один tenant key: один actor id не может существовать в двух организациях, а
+  каждая аудируемая запись несёт составной FK на `identity.users`.
+- Ротация: заменить `CUP_ADMIN_DELEGATION_TOKEN` (и тот же секрет в ЦУПе) и перезапустить оба
+  сервиса — после этого ни одна ранее выданная ассерция не пройдёт проверку. Env-ключи объявлены в
+  `deploy/timeweb/runtime-environment.contract.json` (`services.api.allowed`) и `.env.example`.
 
 Connector webhook ingress — отдельная проверяемая machine boundary без user/admin JWT. Для каждого
 провайдера обязательны signature verification, replay protection, allowlisted content types,

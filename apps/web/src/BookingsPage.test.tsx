@@ -40,6 +40,51 @@ afterEach(() => {
 });
 
 describe('BookingsPage', () => {
+  it('prefers the explicit game association while keeping training and tournament links intact', () => {
+    render(
+      <BookingsPage
+        bookings={{
+          ...bookings,
+          items: [
+            {
+              ...bookings.items[0]!,
+              gameId: '11111111-1111-4111-8111-111111111111',
+              route: '/games?event=legacy',
+            },
+            {
+              ...bookings.items[0]!,
+              id: 'training',
+              kind: 'training',
+              title: 'Тренировка',
+              route: '/trainings?event=training',
+            },
+            {
+              ...bookings.items[0]!,
+              id: 'tournament',
+              kind: 'tournament',
+              title: 'Турнир',
+              route: '/tournaments?event=tournament',
+            },
+          ],
+        }}
+        tenantName="ПадлхАБ"
+        loadHistory={vi.fn()}
+        loadRecommendations={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('link', { name: /Утренняя игра/ })).toHaveAttribute(
+      'href',
+      '/games/11111111-1111-4111-8111-111111111111',
+    );
+    expect(screen.getByRole('link', { name: /Тренировка/ })).toHaveAttribute(
+      'href',
+      '/trainings?event=training',
+    );
+    expect(screen.getByRole('link', { name: /Турнир/ })).toHaveAttribute(
+      'href',
+      '/tournaments?event=tournament',
+    );
+  });
   it('keeps history and recommendations lazy while showing truthful upcoming records', async () => {
     const loadHistory = vi.fn().mockResolvedValue({ items: [], nextCursor: null });
     const loadRecommendations = vi.fn().mockResolvedValue(recommendations);

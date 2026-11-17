@@ -224,8 +224,9 @@ function activityItem(
   item: StoredActivityHistoryItem,
   tenantId: string,
   deliveryIds: ReadonlyMap<string, string>,
+  liveGame?: unknown,
 ) {
-  const game = item.details.game;
+  const game = liveGame ?? item.details.game;
   const tournamentResult =
     item.kind === 'TOURNAMENT' ? readTournamentResult(item.details) : undefined;
   return {
@@ -256,6 +257,55 @@ function activityItem(
       ? { game: stabilizeGameCardProfilePhotos(game, tenantId, deliveryIds) }
       : {}),
   };
+}
+
+/**
+ * The stored activity item keeps the game card snapshot taken at sync time, so a result submitted
+ * later stays invisible in history. The current viewer card replaces that snapshot when the games
+ * read can supply it; an unavailable read keeps the stored copy instead of failing the page.
+ */
+async function liveViewerGames(
+  reader:
+    | ((input: {
+        readonly tenantId: string;
+        readonly userId: string;
+        readonly gameIds: readonly string[];
+      }) => Promise<ReadonlyMap<string, unknown>>)
+    | undefined,
+  current: { readonly tenantId: string; readonly userId: string },
+  items: readonly StoredActivityHistoryItem[],
+): Promise<ReadonlyMap<string, unknown>> {
+  if (!reader) return new Map();
+  const gameIds = [
+    ...new Set(
+      items.flatMap((item) =>
+        item.kind === 'GAME' && item.gameId !== null && item.gameId !== undefined
+          ? [item.gameId]
+          : [],
+      ),
+    ),
+  ];
+  if (gameIds.length === 0) return new Map();
+  try {
+    return await reader({
+      tenantId: current.tenantId,
+      userId: current.userId,
+      gameIds,
+    });
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * A game history item is keyed by its game id, so the live read is matched back on that id only.
+ */
+function liveGameFor(
+  item: StoredActivityHistoryItem,
+  liveGames: ReadonlyMap<string, unknown>,
+): unknown {
+  if (item.kind !== 'GAME' || item.gameId === null || item.gameId === undefined) return undefined;
+  return liveGames.get(item.gameId);
 }
 
 function parseQuery(request: FastifyRequest, reply: FastifyReply) {
@@ -299,6 +349,12 @@ export function registerActivityHistoryRoutes(
     readonly projector?: ActivityHistoryProjectionService;
     readonly providerPageSize?: number;
     readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'>;
+    /** Supplies the current viewer card for history games, replacing the sync-time snapshot. */
+    readonly viewerGameCards?: (input: {
+      readonly tenantId: string;
+      readonly userId: string;
+      readonly gameIds: readonly string[];
+    }) => Promise<ReadonlyMap<string, unknown>>;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
@@ -698,11 +754,12 @@ export function registerActivityHistoryRoutes(
       }
 
       const lastItem = page.items.at(-1);
+      const liveGames = await liveViewerGames(options.viewerGameCards, current, page.items);
       const deliveryIds = options.photoRepository
         ? await options.photoRepository.getPhotoDeliveryIds(
             current.tenantId,
             page.items.flatMap((item) => [
-              ...gameCardProfilePhotoUserIds(item.details.game),
+              ...gameCardProfilePhotoUserIds(liveGameFor(item, liveGames) ?? item.details.game),
               ...tournamentResultProfilePhotoUserIds(item.details),
             ]),
           )
@@ -715,7 +772,9 @@ export function registerActivityHistoryRoutes(
             ? encodeCursor({ type: 'COVERAGE' })
             : null;
       return {
-        items: page.items.map((item) => activityItem(item, current.tenantId, deliveryIds)),
+        items: page.items.map((item) =>
+          activityItem(item, current.tenantId, deliveryIds, liveGameFor(item, liveGames)),
+        ),
         nextCursor,
         freshness: state.freshness === 'FRESH' ? 'FRESH' : 'STALE',
         coverage: state.coverageStatus === 'COMPLETE' ? 'COMPLETE' : 'PARTIAL',

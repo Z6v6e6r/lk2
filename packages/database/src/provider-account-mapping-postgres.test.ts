@@ -185,4 +185,125 @@ const url = ci();
     );
     expect(rows.rowCount).toBe(0);
   });
+
+  it('serializes actual attestation writers against exact-recovery exclusion under non-owner grants', async () => {
+    const owner = await user(),
+      other = await user(unbound),
+      clientId = randomUUID();
+    await withTenantTransaction(admin, unbound, (c) =>
+      c.query(
+        "insert into integration.identity_provider_bindings(tenant_id,provider,provider_tenant_key) values($1,'VIVA','iSkq6G')",
+        [unbound],
+      ),
+    );
+    const lease = await pool.connect();
+    try {
+      await lease.query('begin');
+      await lease.query("set local statement_timeout='10000'");
+      // Fixture setup waits for unrelated CI tenants; the production operation itself is NOWAIT.
+      await lease.query('lock table integration.external_entity_map in exclusive mode');
+      await lease.query('lock table integration.external_entity_map in exclusive mode nowait');
+      let requested = 0,
+        ready!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      const instrumented = {
+        connect: async () => {
+          const c = await pool.connect();
+          return {
+            release: () => c.release(),
+            query: (sql: string, values?: unknown[]) => {
+              if (
+                sql.includes('from integration.external_entity_map') &&
+                sql.includes('for update')
+              ) {
+                if (++requested === 3) ready();
+              }
+              return c.query(sql, values);
+            },
+          };
+        },
+      };
+      const writer = createProviderAccountMappingRepository(instrumented as unknown as Pool);
+      let completed = 0;
+      const results = Promise.allSettled(
+        [
+          writer.recordAttestation({ ...attestation(owner, clientId), subscriptions: [] }),
+          writer.recordAttestation({ ...attestation(owner, randomUUID()), subscriptions: [] }),
+          writer.recordAttestation({
+            ...attestation(other, randomUUID(), unbound),
+            subscriptions: [],
+          }),
+        ].map((p) =>
+          p.finally(() => {
+            completed++;
+          }),
+        ),
+      );
+      await waiting;
+      expect(completed).toBe(0);
+      expect(
+        (
+          await withTenantTransaction(admin, tenantId, (c) =>
+            c.query('select 1 from integration.external_entity_map limit 1'),
+          )
+        ).rows,
+      ).toBeDefined();
+      await lease.query('rollback');
+      const settled = await results;
+      expect(settled.slice(0, 2).filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(settled[2]!.status).toBe('fulfilled');
+
+      // Reverse ordering: an actual attestation already holds ROW SHARE. Recovery's exact
+      // NOWAIT statement stops before any roster writer could be reached, and releases its tx.
+      let entered!: () => void, release!: () => void;
+      const enteredPromise = new Promise<void>((resolve) => {
+          entered = resolve;
+        }),
+        resume = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      const paused = {
+        connect: async () => {
+          const c = await pool.connect();
+          return {
+            release: () => c.release(),
+            query: async (sql: string, values?: unknown[]) => {
+              const result = await c.query(sql, values);
+              if (
+                sql.includes('from integration.external_entity_map') &&
+                sql.includes('for update')
+              ) {
+                entered();
+                await resume;
+              }
+              return result;
+            },
+          };
+        },
+      };
+      const userId = await user();
+      const pending = createProviderAccountMappingRepository(
+        paused as unknown as Pool,
+      ).recordAttestation({ ...attestation(userId, randomUUID()), subscriptions: [] });
+      await enteredPromise;
+      try {
+        await lease.query('begin');
+        await expect(
+          lease.query('lock table integration.external_entity_map in exclusive mode nowait'),
+        ).rejects.toMatchObject({ code: '55P03' });
+        await lease.query('rollback');
+      } finally {
+        release();
+      }
+      await pending;
+    } finally {
+      await lease.query('rollback');
+      lease.release();
+      await withTenantTransaction(admin, unbound, (c) =>
+        c.query('delete from integration.identity_provider_bindings where tenant_id=$1', [unbound]),
+      );
+    }
+  });
 });

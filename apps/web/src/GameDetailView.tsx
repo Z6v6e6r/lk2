@@ -5,6 +5,7 @@ import {
 } from './GameJoinConditionsPanel.js';
 
 import { GameResultEditor } from './GameResultEditor.js';
+import { GameInviteButton } from './GameInviteButton.js';
 import { GameJoinFlowPanel } from './GameJoinFlowPanel.js';
 import { gameJoinBlockedLabel, type GameJoinFlowState } from './game-join-flow.js';
 import type { GameJoinPriceConsent } from './game-join-attempt.js';
@@ -310,6 +311,8 @@ function GameSummary({ game }: { readonly game: GameCard }): React.JSX.Element {
 }
 
 function GameTab(props: {
+  readonly readOnly?: boolean;
+  readonly publicGameOrigin?: string | null;
   readonly busy: boolean;
   readonly game: GameCard;
   readonly viewerUserId?: string;
@@ -346,11 +349,12 @@ function GameTab(props: {
     onJoinConsentCancel,
     onJoinStatusCheck,
     onJoinRetry,
+    readOnly = false,
   } = props;
   const [lineupPicker, setLineupPicker] = useState<LineupPickerState | null>(null);
   const gameConversation = game.conversation;
-  const chatEntry = gameChatEntry(game);
-  const primaryAction = gamePrimaryAction(game);
+  const chatEntry = readOnly ? 'NONE' : gameChatEntry(game);
+  const primaryAction = readOnly ? undefined : gamePrimaryAction(game);
   const primaryLabel =
     primaryAction && RESULT_ACTIONS.has(primaryAction) && primaryAction !== 'SUBMIT_RESULT'
       ? 'Посмотреть результат'
@@ -375,6 +379,11 @@ function GameTab(props: {
     : availableParticipants;
   const activePairLabel =
     lineupPicker === null ? null : `Пара ${String.fromCharCode(65 + lineupPicker.pairIndex)}`;
+  const canInvite =
+    game.visibility === 'PUBLIC' &&
+    game.capacity.open > 0 &&
+    (game.rosterState === 'OPEN' || game.rosterState === 'LAST_SPOT') &&
+    (game.displayState === 'FINDING_PLAYERS' || game.displayState === 'ONE_SPOT_LEFT');
 
   return (
     <div className="game-detail-panel" role="tabpanel" id="game-detail-panel-game">
@@ -447,7 +456,8 @@ function GameTab(props: {
               </a>
               {participant.role === 'ORGANIZER' ? (
                 <span className="game-detail-player__badge">Организатор</span>
-              ) : participant.userId === viewerUserId &&
+              ) : !readOnly &&
+                participant.userId === viewerUserId &&
                 game.viewerRelation === 'PARTICIPANT' &&
                 game.allowedActions.includes('LEAVE') ? (
                 <button
@@ -471,6 +481,16 @@ function GameTab(props: {
             </div>
           ))}
         </div>
+        {canInvite ? (
+          <GameInviteButton
+            key={game.id}
+            game={game}
+            busy={busy}
+            {...(props.publicGameOrigin === undefined
+              ? {}
+              : { publicGameOrigin: props.publicGameOrigin })}
+          />
+        ) : null}
       </section>
 
       <section className="game-detail-card game-detail-format" aria-labelledby="game-format-title">
@@ -496,10 +516,13 @@ function GameTab(props: {
                     level: participant.level,
                     levelValue: participantLevelValue(participant),
                   }))}
-                  onParticipantClick={(participant) =>
-                    setLineupPicker({ pairIndex: index, participantId: participant.key })
-                  }
-                  {...(availableParticipants.length > 0
+                  {...(!readOnly
+                    ? {
+                        onParticipantClick: (participant: { key: string }) =>
+                          setLineupPicker({ pairIndex: index, participantId: participant.key }),
+                      }
+                    : {})}
+                  {...(!readOnly && availableParticipants.length > 0
                     ? { onOpenSlotClick: () => setLineupPicker({ pairIndex: index }) }
                     : {})}
                 />
@@ -597,7 +620,7 @@ function GameTab(props: {
         ) : null}
       </section>
 
-      {joinFlow ? (
+      {!readOnly && joinFlow ? (
         <GameJoinFlowPanel
           flow={joinFlow}
           busy={busy || joinFlowBusy}
@@ -662,6 +685,7 @@ function GameTab(props: {
 }
 
 function ResultTab(props: {
+  readonly readOnly?: boolean;
   readonly busy: boolean;
   readonly game: GameCard;
   readonly initialPairings: readonly (readonly string[])[];
@@ -669,7 +693,7 @@ function ResultTab(props: {
   readonly onSubmit: (input: SubmitGameResultRequest) => Promise<void>;
 }): React.JSX.Element {
   const { busy, game, initialPairings, onAction, onSubmit } = props;
-  const canSubmit = game.allowedActions.includes('SUBMIT_RESULT');
+  const canSubmit = !props.readOnly && game.allowedActions.includes('SUBMIT_RESULT');
   const sets = game.resultSummary?.sets ?? [];
   const submitter = game.participants.find(
     (participant) => participant.userId === game.resultSummary?.submittedByUserId,
@@ -748,7 +772,7 @@ function ResultTab(props: {
         ) : null}
       </section>
 
-      {game.allowedActions.includes('CONFIRM_RESULT') ? (
+      {!props.readOnly && game.allowedActions.includes('CONFIRM_RESULT') ? (
         <button
           className="game-detail-primary"
           type="button"
@@ -758,7 +782,7 @@ function ResultTab(props: {
           {busy ? 'Согласовываем…' : 'Подтвердить результат'}
         </button>
       ) : null}
-      {game.allowedActions.includes('DISPUTE_RESULT') ? (
+      {!props.readOnly && game.allowedActions.includes('DISPUTE_RESULT') ? (
         <button
           className="game-detail-secondary"
           type="button"
@@ -773,6 +797,9 @@ function ResultTab(props: {
 }
 
 export function GameDetailView(props: {
+  /** Native command owners remain mounted outside this presentation. */
+  readonly readOnly?: boolean;
+  readonly publicGameOrigin?: string | null;
   readonly joinConditionsClient?: GameJoinConditionsClient;
   readonly subscriptionInstanceId?: string;
   readonly joinFlow?: GameJoinFlowState;
@@ -873,7 +900,7 @@ export function GameDetailView(props: {
           </button>
         </div>
 
-        {activeTab === 'GAME' && props.joinConditionsClient ? (
+        {activeTab === 'GAME' && !props.readOnly && props.joinConditionsClient ? (
           <GameJoinConditionsPanel
             gameId={game.id}
             revision={game.revision}
@@ -886,6 +913,10 @@ export function GameDetailView(props: {
 
         {activeTab === 'GAME' ? (
           <GameTab
+            readOnly={props.readOnly ?? false}
+            {...(props.publicGameOrigin === undefined
+              ? {}
+              : { publicGameOrigin: props.publicGameOrigin })}
             busy={busy}
             game={game}
             {...(props.viewerUserId ? { viewerUserId: props.viewerUserId } : {})}
@@ -908,6 +939,7 @@ export function GameDetailView(props: {
           />
         ) : (
           <ResultTab
+            readOnly={props.readOnly ?? false}
             busy={busy}
             game={game}
             initialPairings={lineupUserIdsByPair}

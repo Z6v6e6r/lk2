@@ -33,6 +33,11 @@ only PadlHub Location and Home APIs and never select or merge a station source.
 - Create and update commands require a dedicated admin JWT, CUP platform, administrative
   permission, `Idempotency-Key`, correlation ID and audit record. Reusing a key with another payload
   is a stable conflict.
+- The CUP operator console may instead present the server-side delegation credential described in
+  [chats-and-notifications](chats-and-notifications.md): with `CUP_ADMIN_DELEGATION_ENABLED` the
+  `locations**` and `location-media` routes accept it for the configured tenant keys, carry
+  `locations.read/manage/publish`, and audit under `CUP_ADMIN_DELEGATION_ACTOR_ID`. The browser never
+  holds that credential; the CUP backend adds it.
 - User reads return only `PUBLISHED` profiles. `ARCHIVED` and `DRAFT` data never reaches user clients.
 
 ## API and presentation

@@ -395,6 +395,8 @@ describe('notification domain contracts', () => {
       'game.participation.confirmed.v1',
       'game.participation.left.v1',
       'game.cancelled.v1',
+      'game.finished.v1',
+      'game.result.submitted.v1',
     ]);
     expect(GAME_NOTIFICATION_REQUEST_HASH).toMatch(/^[0-9a-f]{64}$/u);
 

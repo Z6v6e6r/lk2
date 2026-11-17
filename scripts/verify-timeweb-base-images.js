@@ -2,16 +2,28 @@
 import { createHash } from 'node:crypto';
 import { appendFileSync, lstatSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 import { parseStrictJson, StrictJsonError } from './strict-json.js';
 
 export class BaseImageContractError extends Error {
-  constructor(reason) {
+  constructor(reason, redirectHostname) {
     super(reason);
     this.name = 'BaseImageContractError';
     this.reason = reason;
+    if (safeDnsHostname(redirectHostname)) this.redirectHostname = redirectHostname;
   }
+}
+
+function safeDnsHostname(value) {
+  if (typeof value !== 'string' || value.length > 253 || /^\d+(?:\.\d+){3}$/u.test(value))
+    return false;
+  const labels = value.split('.');
+  return (
+    labels.length >= 2 &&
+    labels.every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label))
+  );
 }
 
 const SCHEMA = 'PHUB_TIMEWEB_BASE_IMAGES_V2';
@@ -30,6 +42,10 @@ const NORMAL_LAYER_MEDIA_TYPES = new Set([
   'application/vnd.oci.image.layer.v1.tar+zstd',
   'application/vnd.docker.image.rootfs.diff.tar',
   'application/vnd.docker.image.rootfs.diff.tar.gzip',
+]);
+const CONFIG_REDIRECT_HOSTS = new Set([
+  'production.cloudfront.docker.com',
+  'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com',
 ]);
 const REGISTRY_TIMEOUT_MS = 20_000;
 const TOKEN_MAX_BYTES = 1024 * 1024;
@@ -337,28 +353,77 @@ async function boundedResponseBytes(response, maximumBytes) {
   return Buffer.concat(chunks, total);
 }
 
+// Docker's blob URL can resolve through a different CDN. Refresh only the same
+// registry GET when its well-formed redirect host is not approved; never visit that host.
+export function validateConfigRedirect(location, reference) {
+  if (
+    typeof location !== 'string' ||
+    location.length > 16384 ||
+    /[\\\u0000-\u0020\u007f]/u.test(location) ||
+    !DIGEST.test(reference)
+  )
+    reject('registry_redirect');
+  let url;
+  try {
+    url = new URL(location);
+  } catch {
+    reject('registry_redirect');
+  }
+  const digest = reference.slice('sha256:'.length);
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.hash ||
+    location.includes('#') ||
+    url.pathname !==
+      `/registry-v2/docker/registry/v2/blobs/sha256/${digest.slice(0, 2)}/${digest}/data`
+  )
+    reject('registry_redirect');
+  if (!safeDnsHostname(url.hostname)) reject('registry_redirect');
+  if (!CONFIG_REDIRECT_HOSTS.has(url.hostname))
+    throw new BaseImageContractError('registry_redirect_host', url.hostname);
+  return url;
+}
+
 async function registryBytes(repository, reference, token, accept, blob = false) {
   const url = new URL(
     `https://registry-1.docker.io/v2/${repository}/${blob ? 'blobs' : 'manifests'}/${reference}`,
   );
-  const response = await registryFetch(url, {
-    headers: { Accept: accept, Authorization: `Bearer ${token}` },
-    redirect: 'manual',
-  });
   const maximumBytes = blob ? CONFIG_MAX_BYTES : MANIFEST_MAX_BYTES;
-  if (response.ok && response.url === url.href) return boundedResponseBytes(response, maximumBytes);
-  if (!blob || ![301, 302, 307, 308].includes(response.status)) reject('registry_read');
-  const location = response.headers.get('location');
-  if (!location) reject('registry_redirect');
-  const redirect = new URL(location);
-  if (redirect.protocol !== 'https:' || redirect.hostname !== 'production.cloudfront.docker.com')
-    reject('registry_redirect');
-  const redirected = await registryFetch(redirect, { redirect: 'error' });
-  if (!redirected.ok) reject('registry_read');
-  return boundedResponseBytes(redirected, maximumBytes);
+  for (let attempt = 0; attempt < (blob ? 3 : 1); attempt++) {
+    const response = await registryFetch(url, {
+      headers: { Accept: accept, Authorization: `Bearer ${token}` },
+      redirect: 'manual',
+    });
+    if (response.status === 200 && response.url === url.href)
+      return boundedResponseBytes(response, maximumBytes);
+    if (!blob || ![302, 307].includes(response.status)) reject('registry_read');
+    await response.body?.cancel();
+    let redirect;
+    try {
+      redirect = validateConfigRedirect(response.headers.get('location'), reference);
+    } catch (error) {
+      if (
+        error instanceof BaseImageContractError &&
+        error.reason === 'registry_redirect_host' &&
+        attempt < 2
+      ) {
+        await delay(250);
+        continue;
+      }
+      throw error;
+    }
+    // No registry Authorization, cookies or proxy credentials cross the CDN boundary.
+    const redirected = await registryFetch(redirect, { redirect: 'error' });
+    if (redirected.status !== 200 || redirected.url !== redirect.href) reject('registry_read');
+    return boundedResponseBytes(redirected, maximumBytes);
+  }
+  reject('registry_read');
 }
 
-async function verifyRegistry(lock) {
+export async function verifyRegistry(lock) {
   const accept = [
     'application/vnd.oci.image.index.v1+json',
     'application/vnd.docker.distribution.manifest.list.v2+json',
@@ -466,7 +531,11 @@ async function main() {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   main().catch((error) => {
     const reason = error instanceof BaseImageContractError ? error.reason : 'verification_error';
-    process.stderr.write(`TIMEWEB_BASE_IMAGES_FAILED|reason=${reason}\n`);
+    const redirect =
+      error instanceof BaseImageContractError && error.redirectHostname
+        ? `|redirect_host=${error.redirectHostname}`
+        : '';
+    process.stderr.write(`TIMEWEB_BASE_IMAGES_FAILED|reason=${reason}${redirect}\n`);
     process.exit(1);
   });
 }

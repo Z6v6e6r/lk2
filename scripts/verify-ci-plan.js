@@ -22,6 +22,7 @@ export function parseAndValidateCiPlan(text) {
     'docsQuality',
     'webQuality',
     'fullQuality',
+    'releaseToolingTests',
     'deploymentContract',
     'provenanceProbe',
     'policyValidation',
@@ -57,6 +58,9 @@ export function parseAndValidateCiPlan(text) {
   }
   if (plan.profile === 'leaf-web' && plan.dockerServices.length !== 0) {
     throw new Error('Presentation or safe-Web profile does not rebuild the release image in PR CI');
+  }
+  if (plan.releaseToolingTests && !plan.fullQuality) {
+    throw new Error('Release tooling tests run only inside the full profile');
   }
   if (plan.provenanceProbe && !plan.deploymentContract) {
     throw new Error('Provenance probe requires deployment contract');

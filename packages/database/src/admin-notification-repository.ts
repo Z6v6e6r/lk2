@@ -48,6 +48,12 @@ export interface AdminWebPushSubscriberPage {
   readonly nextCursor?: string;
 }
 
+/** Registered native devices, independent of whether campaign sending is enabled. No token data. */
+export interface AdminNativePushSubscriberPage {
+  readonly items: readonly Omit<AdminWebPushSubscriber, 'endpoints'>[];
+  readonly nextCursor?: string;
+}
+
 export interface AdminNotificationDeliveryStatsInput {
   readonly tenantId: string;
   readonly since: Date;
@@ -170,6 +176,14 @@ export interface AdminNotificationRepository {
     readonly limit: number;
     readonly cursor?: string;
   }): Promise<AdminWebPushSubscriberPage>;
+  listNativePushSubscribers(input: {
+    readonly tenantId: string;
+    readonly platform: 'ANDROID' | 'IOS';
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+    readonly limit: number;
+    readonly cursor?: string;
+  }): Promise<AdminNativePushSubscriberPage>;
   /**
    * Delivery outcomes, campaign counters, failure codes and endpoint health for one window. Read-only:
    * the CUP uses it to see what actually happened to a campaign instead of only what was queued.
@@ -829,6 +843,55 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
               const encryptionKeyId = row.encryption_key_ids?.[index];
               return encryptionKeyId === undefined ? [] : [{ ciphertext, encryptionKeyId }];
             }),
+          })),
+          ...(result.rows.length > input.limit && last ? { nextCursor: last.user_id } : {}),
+        };
+      });
+    },
+
+    listNativePushSubscribers(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const result = await client.query<SubscriberRow>(
+          `select u.id as user_id, p.display_name, p.phone_e164,
+                  count(e.id)::integer as endpoint_count,
+                  max(e.last_confirmed_at) as last_confirmed_at
+             from integration.notification_endpoints e
+             join integration.notification_provider_accounts a
+               on a.tenant_id = e.tenant_id and a.id = e.provider_account_id
+             join identity.users u
+               on u.tenant_id = e.tenant_id and u.id = e.user_id
+             join profile.user_summaries p
+               on p.tenant_id = u.tenant_id and p.user_id = u.id
+            where e.tenant_id = $1 and e.channel = 'PUSH' and e.status = 'ACTIVE'
+              and a.channel = 'PUSH' and a.status = 'ACTIVE'
+              and a.platform = $2 and a.provider = $3
+              and a.app_id = $4 and a.environment = $5
+              and u.status = 'ACTIVE'
+              and ($6::uuid is null or u.id > $6::uuid)
+            group by u.id, p.display_name, p.phone_e164
+            order by u.id
+            limit $7`,
+          [
+            input.tenantId,
+            input.platform,
+            input.platform === 'ANDROID' ? 'FCM' : 'APNS',
+            input.appId,
+            input.environment,
+            input.cursor ?? null,
+            input.limit + 1,
+          ],
+        );
+        const page = result.rows.slice(0, input.limit);
+        const last = page[page.length - 1];
+        return {
+          items: page.map((row) => ({
+            userId: row.user_id,
+            displayName: row.display_name,
+            ...(row.phone_e164 ? { phoneMasked: maskPhone(row.phone_e164) } : {}),
+            endpointCount: row.endpoint_count,
+            ...(row.last_confirmed_at
+              ? { lastConfirmedAt: row.last_confirmed_at.toISOString() }
+              : {}),
           })),
           ...(result.rows.length > input.limit && last ? { nextCursor: last.user_id } : {}),
         };

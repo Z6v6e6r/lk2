@@ -24,6 +24,59 @@ const validEnvironment = {
 } as const;
 
 describe('loadConfig', () => {
+  it('refuses an auto-confirm duration that diverges from the shared 12-hour deadline', () => {
+    expect(loadConfig(validEnvironment).GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS).toBe(12);
+    expect(() =>
+      loadConfig({ ...validEnvironment, GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS: '24' }),
+    ).toThrow();
+  });
+
+  it('keeps the ЦУП delegation off by default and refuses half of it at boot', () => {
+    expect(loadConfig(validEnvironment).CUP_ADMIN_DELEGATION_ENABLED).toBe(false);
+    const enabled = {
+      ...validEnvironment,
+      CUP_ADMIN_DELEGATION_ENABLED: 'true',
+      CUP_ADMIN_DELEGATION_TOKEN: 'cup-admin-delegation-token-at-least-32-chars',
+      CUP_ADMIN_DELEGATION_ACTOR_ID: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      CUP_ADMIN_DELEGATION_TENANT_KEYS: 'local-padel',
+    };
+    expect(loadConfig(enabled).CUP_ADMIN_DELEGATION_MAX_AGE_SECONDS).toBe(120);
+    // Each partial configuration must fail at boot instead of starting an API that cannot serve the
+    // only operator console or that would accept an unscoped credential.
+    expect(() => loadConfig({ ...enabled, CUP_ADMIN_DELEGATION_TOKEN: undefined })).toThrow(
+      'CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_TOKEN',
+    );
+    expect(() => loadConfig({ ...enabled, CUP_ADMIN_DELEGATION_ACTOR_ID: undefined })).toThrow(
+      'CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_ACTOR_ID',
+    );
+    expect(() => loadConfig({ ...enabled, CUP_ADMIN_DELEGATION_TENANT_KEYS: ' , ' })).toThrow(
+      'CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_TENANT_KEYS',
+    );
+    // One actor id cannot live in two tenants: the audited write carries a composite FK.
+    expect(() =>
+      loadConfig({ ...enabled, CUP_ADMIN_DELEGATION_TENANT_KEYS: 'local-padel,second-padel' }),
+    ).toThrow('supports exactly one CUP_ADMIN_DELEGATION_TENANT_KEYS entry');
+  });
+
+  it('keeps the Viva subscription mapping sync off and requires Admin credentials to enable it', () => {
+    expect(loadConfig(validEnvironment).VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED).toBe(false);
+    const enabled = { ...validEnvironment, VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED: 'true' };
+    expect(() => loadConfig({ ...enabled, VIVA_MODE: 'mock' })).toThrow(
+      'VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED requires VIVA_MODE=sandbox or production',
+    );
+    expect(() => loadConfig({ ...enabled, VIVA_MODE: 'sandbox' })).toThrow(
+      'VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED requires VIVA_API_URL and VIVA_API_KEY',
+    );
+    expect(
+      loadConfig({
+        ...enabled,
+        VIVA_MODE: 'sandbox',
+        VIVA_API_URL: 'https://api.vivacrm.example',
+        VIVA_API_KEY: 'synthetic-admin-key',
+      }).VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED,
+    ).toBe(true);
+  });
+
   it('keeps CREATE binding off and requires dedicated references only for its worker', () => {
     expect(loadWorkerConfig(validEnvironment).GAME_CREATE_LOCATION_BINDING_SYNC_ENABLED).toBe(
       false,
@@ -102,6 +155,7 @@ describe('loadConfig', () => {
       SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS: 30,
       GAMES_RESULTS_WRITE_MODE: 'disabled',
       CUP_RATING_CONSUMER_ENABLED: false,
+      LK1_RESULT_BRIDGE_ENABLED: false,
       CUP_PLAYER_LEVEL_PROJECTION_ENABLED: false,
       PARTICIPATION_COMMANDS_ENABLED: false,
       PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS: 300,
@@ -683,6 +737,13 @@ describe('loadConfig', () => {
         CUP_RATING_API_URL: 'https://cup.internal',
       }),
     ).toThrow('requires CUP_RATING_API_URL and CUP_RATING_SERVICE_TOKEN');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        LK1_RESULT_BRIDGE_ENABLED: 'true',
+        LK1_RESULT_BRIDGE_URL: 'https://padlhub.su',
+      }),
+    ).toThrow('requires LK1_RESULT_BRIDGE_URL and LK1_RESULT_BRIDGE_TOKEN');
     expect(
       loadConfig({
         ...validEnvironment,
@@ -1993,4 +2054,26 @@ it('keeps residency product configuration explicit and never enables a mock fall
     'VIVA_RESIDENCY_PRODUCT_ID requires VIVA_API_URL and VIVA_API_KEY',
   );
   expect(() => loadConfig({ ...configured, VIVA_RESIDENCY_PRODUCT_ID: 'invented-id' })).toThrow();
+});
+
+describe('profile native read configuration', () => {
+  it('keeps the Android profile read disabled by default with a bounded freshness window', () => {
+    const parsed = loadConfig(validEnvironment);
+    expect(parsed.PROFILE_NATIVE_READ_ENABLED).toBe(false);
+    expect(parsed.PROFILE_OBSERVATION_MAX_AGE_SECONDS).toBe(900);
+
+    expect(
+      loadConfig({ ...validEnvironment, PROFILE_NATIVE_READ_ENABLED: 'true' })
+        .PROFILE_NATIVE_READ_ENABLED,
+    ).toBe(true);
+    expect(
+      loadConfig({ ...validEnvironment, PROFILE_OBSERVATION_MAX_AGE_SECONDS: '60' })
+        .PROFILE_OBSERVATION_MAX_AGE_SECONDS,
+    ).toBe(60);
+    for (const invalid of ['29', '3601', 'not-a-number']) {
+      expect(() =>
+        loadConfig({ ...validEnvironment, PROFILE_OBSERVATION_MAX_AGE_SECONDS: invalid }),
+      ).toThrow();
+    }
+  });
 });

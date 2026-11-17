@@ -504,6 +504,96 @@ describe('admin notification repository', () => {
     });
   });
 
+  it.each([
+    ['ANDROID', 'FCM'],
+    ['IOS', 'APNS'],
+  ] as const)(
+    'scopes %s subscribers to active tenant/app/environment and masks phones',
+    async (platform, provider) => {
+      const { repository, query } = repositoryWithQuery((text) => {
+        if (text.includes('from integration.notification_endpoints e'))
+          return {
+            rows: [
+              {
+                user_id: userOneId,
+                display_name: 'Игрок',
+                phone_e164: '79990000001',
+                endpoint_count: 2,
+                last_confirmed_at: new Date('2026-11-11T00:00:00Z'),
+                address_ciphertext: 'not-returned',
+              },
+              { user_id: userTwoId },
+            ],
+            rowCount: 2,
+          };
+        throw new Error(`Unexpected query: ${text}`);
+      });
+      await expect(
+        repository.listNativePushSubscribers({
+          tenantId,
+          platform,
+          appId: 'native-test',
+          environment: 'PRODUCTION',
+          limit: 1,
+          cursor: actorUserId,
+        }),
+      ).resolves.toEqual({
+        items: [
+          {
+            userId: userOneId,
+            displayName: 'Игрок',
+            phoneMasked: '•••• 0001',
+            endpointCount: 2,
+            lastConfirmedAt: '2026-11-11T00:00:00.000Z',
+          },
+        ],
+        nextCursor: userOneId,
+      });
+      const call = query.mock.calls.find(([text]) =>
+        text.includes('from integration.notification_endpoints e'),
+      )!;
+      expect(call[1]).toEqual([
+        tenantId,
+        platform,
+        provider,
+        'native-test',
+        'PRODUCTION',
+        actorUserId,
+        2,
+      ]);
+      for (const predicate of [
+        'e.tenant_id = $1',
+        'a.tenant_id = e.tenant_id',
+        'u.tenant_id = e.tenant_id',
+        'p.tenant_id = u.tenant_id',
+        "e.status = 'ACTIVE'",
+        "a.status = 'ACTIVE'",
+        "u.status = 'ACTIVE'",
+        'a.platform = $2',
+        'a.provider = $3',
+        'a.app_id = $4',
+        'a.environment = $5',
+        'u.id > $6::uuid',
+      ]) {
+        expect(call[0]).toContain(predicate);
+      }
+      expect(call[0]).not.toContain('address_ciphertext');
+    },
+  );
+
+  it('returns an empty last native page without a cursor', async () => {
+    const { repository } = repositoryWithQuery(() => ({ rows: [], rowCount: 0 }));
+    await expect(
+      repository.listNativePushSubscribers({
+        tenantId,
+        platform: 'IOS',
+        appId: 'native-test',
+        environment: 'SANDBOX',
+        limit: 20,
+      }),
+    ).resolves.toEqual({ items: [] });
+  });
+
   it('creates in-app and web-push projections while recording suppressed preferences', async () => {
     const { repository, query } = repositoryWithQuery(
       campaignProjectionHandler({

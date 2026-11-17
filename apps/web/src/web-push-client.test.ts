@@ -117,6 +117,8 @@ describe('Web Push browser lifecycle', () => {
         gateway,
         publicKey: VAPID_PUBLIC_KEY,
         serviceWorkerUrl: '/phub-notification-sw.js',
+        source: 'korp-sport-2026',
+        community: 'community_1794221739126_корпспорт-падлхаб-2026',
       }),
     ).resolves.toBeUndefined();
 
@@ -131,6 +133,8 @@ describe('Web Push browser lifecycle', () => {
     expect(registerWebPushEndpoint).toHaveBeenCalledTimes(1);
     const registration = registerWebPushEndpoint.mock.calls[0]?.[0] as {
       readonly installationId: string;
+      readonly source?: string;
+      readonly community?: string;
       readonly subscription: {
         readonly endpoint: string;
         readonly expirationTime: null;
@@ -145,6 +149,8 @@ describe('Web Push browser lifecycle', () => {
       expirationTime: null,
       keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) },
     });
+    expect(registration.source).toBe('korp-sport-2026');
+    expect(registration.community).toBe('community_1794221739126_корпспорт-падлхаб-2026');
     expect(localStorage.getItem(INSTALLATION_STORAGE_KEY)).toBe(registration.installationId);
   });
 

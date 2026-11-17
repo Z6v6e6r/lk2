@@ -176,13 +176,13 @@ const subscriptionSchema = z.object({
   expirationDate: z.string().date().optional(),
 });
 
-const LEVEL_FIELD_IDS = [
+export const LEVEL_FIELD_IDS = [
   'eabfe27b-3f72-4496-9185-1a2ec6e6465e',
   '9018d922-6427-41a6-9ac0-4a2c0440eb8a',
   'f9790818-25fd-4b73-a781-79c02720727d',
 ] as const;
 
-function levelLabel(value: number): string {
+export function levelLabel(value: number): string {
   if (value < 2) return 'D';
   if (value < 3) return 'D+';
   if (value < 3.5) return 'C';

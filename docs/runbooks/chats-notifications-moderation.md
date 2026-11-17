@@ -1113,6 +1113,12 @@ PADLHUB_NOTIFICATION_TENANT_KEY=local-padel
 ADVERTISING_ENGAGEMENT_SECRET=<same 32+ character value as PadlHub PROMOTIONS_ENGAGEMENT_SECRET>
 ```
 
+The same CUP contract serves the `lk2.padlhub.su` advertisement engagement egress: that contour
+admits the matching value through `PROMOTIONS_ENGAGEMENT_SECRET` in `deploy/timeweb/runtime-environment.contract.json`
+and posts to `POST /api/advertising/engagements` on the `padlhub.su` CUP. See the
+[LK2 Timeweb beta runbook](timeweb-lk2-beta.md) for the allow-list, the 503 fallback and the
+verification steps; enabling it on either contour requires the same value on both sides.
+
 Caddy sends only `/user/api/*`, `/admin/api/*` and `/public/api/*` on the CUP host to PadlHub API;
 all other paths stay on the CUP showcase. The browser therefore calls PadlHub through a same-origin
 PadlHub-controlled route and no system credential enters the bundle. Before the presentation,

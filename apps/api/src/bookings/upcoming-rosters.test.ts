@@ -94,7 +94,7 @@ function repository(value = projection(snapshot())) {
   return {
     getCardProjection: vi.fn(),
     listPublicCardProjections: vi.fn(),
-    listViewerCardProjections: vi.fn(),
+    listViewerCardProjections: vi.fn().mockResolvedValue({ items: [] }),
     getCardProjections: vi.fn((tenant: string) =>
       Promise.resolve(new Map(tenant === tenantId ? [[gameId, value]] : [])),
     ),
@@ -141,6 +141,33 @@ describe('upcoming roster snapshots', () => {
       expect(result.items[0]?.openSlots).toBeUndefined();
     },
   );
+  it('uses fresh source verification for an unchanged day-old card, preserving its original revision', async () => {
+    const value = {
+      ...projection(snapshot()),
+      projectedAt: '2026-07-16T20:00:00.000Z',
+      rosterVerifiedAt: now,
+    };
+    const result = await attachUpcomingRosters(booking, { repository: repository(value), now });
+    expect(result.items[0]).toMatchObject({
+      roster: { state: 'READY', generatedAt: now, revision: 3 },
+      participants: [{ displayName: 'Алексей' }, { displayName: 'Мария' }],
+    });
+  });
+  it('does not expose a quarantined or revision-mismatched card even if it was projected just now', async () => {
+    const value = { ...projection(snapshot()), projectedAt: now, rosterVerifiedAt: null };
+    const result = await attachUpcomingRosters(booking, { repository: repository(value), now });
+    expect(result.items[0]?.roster?.state).toBe('UNAVAILABLE');
+    expect(result.items[0]?.participants).toBeUndefined();
+  });
+  it('does not replace expired source verification with a recent projection timestamp', async () => {
+    const value = {
+      ...projection(snapshot()),
+      projectedAt: now,
+      rosterVerifiedAt: '2026-07-16T20:00:00.000Z',
+    };
+    const result = await attachUpcomingRosters(booking, { repository: repository(value), now });
+    expect(result.items[0]?.roster?.state).toBe('UNAVAILABLE');
+  });
   it('labels an old projection stale instead of refreshing its timestamp', async () => {
     const result = await attachUpcomingRosters(booking, {
       repository: repository(),
@@ -160,4 +187,95 @@ describe('upcoming roster snapshots', () => {
     expect(result.items[0]?.participants).toBeUndefined();
     expect(result.items[0]?.openSlots).toBeUndefined();
   });
+  it.each(['AWAITING_SUBMISSION', 'PENDING_CONFIRMATION', 'DISPUTED'] as const)(
+    'retains elapsed %s games absent from provider upcoming',
+    async (state) => {
+      const value = projection(
+        snapshot({
+          lifecycleState: 'FINISHED',
+          startsAt: '2026-07-17T18:00:00.000Z',
+          endsAt: '2026-07-17T19:00:00.000Z',
+          result:
+            state === 'AWAITING_SUBMISSION'
+              ? { state, requiredConfirmationUserIds: [], confirmedByUserIds: [] }
+              : {
+                  state,
+                  submittedByUserId: userId,
+                  requiredConfirmationUserIds: [playerId],
+                  confirmedByUserIds: [],
+                  sets: [{ teamA: 6, teamB: 4 }],
+                },
+        }),
+      );
+      const repo = repository(value);
+      repo.listViewerCardProjections.mockResolvedValue({ items: [value] });
+      const result = await attachUpcomingRosters(
+        { ...booking, items: [] },
+        { repository: repo, now },
+      );
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toMatchObject({
+        gameId,
+        route: `/games/${gameId}`,
+        participants: [{ displayName: 'Алексей' }, { displayName: 'Мария' }],
+      });
+      const expired = await attachUpcomingRosters(
+        { ...booking, items: [] },
+        { repository: repo, now: '2026-07-18T07:00:00.000Z' },
+      );
+      expect(expired.items).toHaveLength(0);
+    },
+  );
+  it('removes an elapsed game on early confirmation even from a stale provider list', async () => {
+    const value = projection(
+      snapshot({
+        lifecycleState: 'FINISHED',
+        startsAt: '2026-07-17T18:00:00.000Z',
+        endsAt: '2026-07-17T19:00:00.000Z',
+        result: {
+          state: 'CONFIRMED',
+          submittedByUserId: userId,
+          requiredConfirmationUserIds: [playerId],
+          confirmedByUserIds: [playerId],
+          sets: [{ teamA: 6, teamB: 4 }],
+        },
+      }),
+    );
+    const result = await attachUpcomingRosters(booking, { repository: repository(value), now });
+    expect(result.items).toHaveLength(0);
+  });
+  it.each([false, true])(
+    'keeps verified final roster stale while preserving quarantine=%s',
+    async (quarantine) => {
+      const verifiedAt = '2026-07-17T19:00:00.000Z';
+      const value = {
+        ...projection(
+          snapshot({
+            lifecycleState: 'FINISHED',
+            startsAt: '2026-07-17T18:00:00.000Z',
+            endsAt: verifiedAt,
+            result: {
+              state: 'AWAITING_SUBMISSION',
+              requiredConfirmationUserIds: [],
+              confirmedByUserIds: [],
+            },
+          }),
+        ),
+        rosterVerifiedAt: quarantine ? null : verifiedAt,
+      };
+      const repo = repository(value);
+      repo.listViewerCardProjections.mockResolvedValue({ items: [value] });
+      const result = await attachUpcomingRosters(
+        { ...booking, items: [] },
+        { repository: repo, now },
+      );
+      if (quarantine) {
+        expect(result.items[0]?.roster?.state).toBe('UNAVAILABLE');
+        expect(result.items[0]?.participants).toBeUndefined();
+      } else {
+        expect(result.items[0]?.roster).toMatchObject({ state: 'STALE', generatedAt: verifiedAt });
+        expect(result.items[0]?.participants).toHaveLength(2);
+      }
+    },
+  );
 });

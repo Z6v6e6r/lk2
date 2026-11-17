@@ -18,7 +18,15 @@ export const MESSAGING_NOTIFICATION_PROJECTOR_QUEUE =
 export const FRIENDSHIP_NOTIFICATION_PROJECTOR_QUEUE =
   'phub.friendship-notification-intent-projector.v1';
 export const NOTIFICATION_SOURCE_ROUTING_KEYS = BOOKING_NOTIFICATION_EVENT_TYPES;
-export const GAME_NOTIFICATION_SOURCE_ROUTING_KEYS = GAME_NOTIFICATION_EVENT_TYPES;
+export const GAME_RESULT_NOTIFICATION_PROJECTOR_QUEUE =
+  'phub.game-result-notification-intent-projector.v1';
+export const GAME_RESULT_NOTIFICATION_SOURCE_ROUTING_KEYS = [
+  'game.finished.v1',
+  'game.result.submitted.v1',
+] as const;
+export const GAME_NOTIFICATION_SOURCE_ROUTING_KEYS = GAME_NOTIFICATION_EVENT_TYPES.filter(
+  (type) => type !== 'game.finished.v1' && type !== 'game.result.submitted.v1',
+);
 export const MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS = MESSAGING_NOTIFICATION_EVENT_TYPES;
 export const FRIENDSHIP_NOTIFICATION_SOURCE_ROUTING_KEYS = FRIENDSHIP_NOTIFICATION_EVENT_TYPES;
 
@@ -147,6 +155,15 @@ export async function registerNotificationProjectorConsumer(options: {
   for (const routingKey of NOTIFICATION_SOURCE_ROUTING_KEYS) {
     await options.channel.bindQueue(NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', routingKey);
   }
+  // Isolate new score contracts from mixed-version workers using the legacy roster queue.
+  await options.channel.assertQueue(GAME_RESULT_NOTIFICATION_PROJECTOR_QUEUE, queueOptions);
+  for (const routingKey of GAME_RESULT_NOTIFICATION_SOURCE_ROUTING_KEYS) {
+    await options.channel.bindQueue(
+      GAME_RESULT_NOTIFICATION_PROJECTOR_QUEUE,
+      'phub.events',
+      routingKey,
+    );
+  }
   await options.channel.assertQueue(GAME_NOTIFICATION_PROJECTOR_QUEUE, queueOptions);
   for (const routingKey of GAME_NOTIFICATION_SOURCE_ROUTING_KEYS) {
     await options.channel.bindQueue(GAME_NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', routingKey);
@@ -177,6 +194,13 @@ export async function registerNotificationProjectorConsumer(options: {
   await options.channel.prefetch(10);
   const bookingConsumer = await options.channel.consume(
     NOTIFICATION_PROJECTOR_QUEUE,
+    (message) => {
+      if (message) void handleMessage({ ...options, message });
+    },
+    { noAck: false },
+  );
+  await options.channel.consume(
+    GAME_RESULT_NOTIFICATION_PROJECTOR_QUEUE,
     (message) => {
       if (message) void handleMessage({ ...options, message });
     },

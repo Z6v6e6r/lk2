@@ -1,14 +1,16 @@
-"""Mock-only regression scenarios; no Docker, provider or database is contacted."""
+"""Mock regression scenarios and owned process checks; no Docker/provider/database calls."""
 import base64
 from contextlib import ExitStack
 import copy
 import importlib.util
 import io
+import zipfile
 import re
 import shutil
 import json
 import os
 import socket
+import signal
 import time
 from pathlib import Path
 import stat
@@ -858,6 +860,7 @@ class PureTests(unittest.TestCase):
 class Scenario:
     def __init__(self, directory, fault=None, operation=OP, ledger=LEDGER):
         self.runtime_api=copy.deepcopy(operation['expectedApi']);self.root=Path(directory);self.fault=fault;self.calls=[];self.container='e'*64
+        self.runtime_pg=copy.deepcopy(operation['expectedPostgres'])
         self.ledger=ledger
         self.created=False;self.running=False;self.query_count=0;self.api_reads=0
         for path in ['operator','standard','backups','standard/source','standard/source/.git']:(self.root/path).mkdir(parents=True,exist_ok=True)
@@ -882,7 +885,7 @@ class Scenario:
         raise AssertionError('unmocked command: '+repr(args))
 
     def service_row(self,api):
-        v=self.runtime_api if api else PG
+        v=self.runtime_api if api else self.runtime_pg
         return {'Id':v['id'],'Image':v['imageId'],'Config':{'Image':v['image'],'Labels':{'phub.release-id':v['releaseId'],'org.opencontainers.image.revision':v['revision'],'com.docker.compose.project':'phub-timeweb-beta' if api else 'phub-timeweb-beta-dependencies','com.docker.compose.service':'api' if api else 'postgres'}},'RestartCount':v['restarts'],'State':{'Status':'running','StartedAt':v['startedAt'],'Health':{'Status':'healthy'}}}
 
     def docker(self,args,code='DOCKER_READ',**kwargs):
@@ -894,14 +897,15 @@ class Scenario:
             if '--filter' in args:
                 filters=' '.join(args)
                 if 'migrator' in filters:return b'a'*64 if self.fault=='migrator' else b''
-                return self.runtime_api['id'].encode() if 'service=api' in filters else m.PG_ID.encode()
-            return ('\n'.join([self.runtime_api['id'],m.PG_ID]+([self.container]if self.created else []))).encode()
+                return self.runtime_api['id'].encode() if 'service=api' in filters else self.runtime_pg['id'].encode()
+            return ('\n'.join([self.runtime_api['id'],self.runtime_pg['id']]+([self.container]if self.created else []))).encode()
         if args[0]=='inspect':
             target=args[-1]
             self.assert_no_environment(args)
             if target==self.container:
                 row=restore_row(self.container,m.digest(m.encoded(self.op)),self.tmpfs,'running' if self.running else 'created')
                 if not self.running and any(a[1]=='stop' for a in self.calls if len(a)>1):row['State']['Status']='exited'
+                if self.fault=='foreign-restore':row['Config']['Labels']['phub.backup-operation']='f'*64
             else:
                 row=self.service_row(target==self.runtime_api['id'])
                 if target==self.runtime_api['id']:
@@ -914,8 +918,21 @@ class Scenario:
         if args[0]=='stop':self.running=False;return b''
         if args[0]=='rm':self.created=False;return b''
         if args[0]=='exec':
-            if m.SOURCE_DUMP in args:
+            if 'pg_stat_activity' in args[-1] and 'phub_lk2_cutover_' in args[-1]:
+                assert args[1]==self.runtime_pg['id']
+                return b'1' if self.fault=='dump-still-active' else b'0'
+            if m.SOURCE_CUTOVER_TARGET in args:
+                assert args[1]==self.runtime_pg['id']
+                return m.encoded({**m.LOCATION_PHOTO_DATABASE_TARGET,'inRecovery':False})
+            if m.SOURCE_CUTOVER_ACCOUNTS in args:
+                assert args[1]==self.runtime_pg['id']
+                return m.encoded(['a'*32,'b'*32])
+            if '--command='+m.CUTOVER_ACCOUNTS_SQL in args:
+                assert args[1]==self.container
+                return m.encoded(['c'*32,'d'*32] if self.fault=='restore-accounts-mismatch' else ['a'*32,'b'*32])
+            if m.SOURCE_DUMP in args or m.cutover_dump_shell(m.digest(m.encoded(self.op))) in args:
                 assert kwargs['file_limit']==2048+256*1024**2
+                if m.SOURCE_DUMP not in args:assert kwargs['timeout']==620
                 kwargs['stdout'].write(b'PGDMP synthetic fixture only')
                 return b''
             if m.SOURCE_SIZE in args:return b'1024\n'
@@ -934,11 +951,23 @@ class Scenario:
     def assert_no_environment(self,args):
         assert '.Config.Env' not in args[args.index('--format')+1]
 
-    def invoke(self):
+    def invoke(self,reconcile=False):
         real_read_text=Path.read_text
+        original_exclusive=m.exclusive
+        def exclusive(path,raw):
+            if self.fault=='cutover-before-capsule' and Path(path).name=='backup-operation.json':raise m.Stop('CRASH')
+            original_exclusive(path,raw)
+            if self.fault=='cutover-after-pending-marker' and Path(path).parent.name=='pending-lock':raise m.Stop('CRASH')
+        def rename(source,destination):
+            retiring=Path(destination).name=='retired-lock'
+            if self.fault=='cutover-before-retire' and retiring:raise m.Stop('CRASH')
+            assert not Path(destination).exists()
+            os.rename(source,destination)
+            if self.fault==('cutover-after-retire' if retiring else 'cutover-after-publish'):raise m.Stop('CRASH')
         def read_text(path,*args,**kwargs):
             return 'MemAvailable: 10000000 kB\n' if str(path)=='/proc/meminfo' else real_read_text(path,*args,**kwargs)
-        with patch.object(m,'ROOT',self.root),patch.object(m,'REQUEST',self.request),patch.object(m,'LOCK',self.root/'standard/active'),patch.object(m,'secure',side_effect=lambda path,*args,**kwargs:Path(path).lstat()),patch.object(m,'read_secure',side_effect=self.read),patch.object(m,'docker',side_effect=self.docker),patch.object(m,'command',side_effect=self.command),patch.object(m,'tool_custody',return_value=b'validated-installation'),patch.object(m,'v2_migration_proof',return_value=None),patch.object(m.time,'time',return_value=NOW),patch.object(m.os,'statvfs',return_value=SimpleNamespace(f_bavail=50*1024**3,f_frsize=1)),patch.object(Path,'read_text',new=read_text):
+        with patch.object(m,'ROOT',self.root),patch.object(m,'REQUEST',self.request),patch.object(m,'LOCK',self.root/'standard/active'),patch.object(m,'secure',side_effect=lambda path,*args,**kwargs:Path(path).lstat()),patch.object(m,'read_secure',side_effect=self.read),patch.object(m,'docker',side_effect=self.docker),patch.object(m,'command',side_effect=self.command),patch.object(m,'tool_custody',return_value=b'validated-installation'),patch.object(m,'v2_migration_proof',return_value=None),patch.object(m.time,'time',return_value=NOW),patch.object(m.os,'statvfs',return_value=SimpleNamespace(f_bavail=50*1024**3,f_frsize=1)),patch.object(Path,'read_text',new=read_text),patch.object(m,'rename_noreplace',side_effect=rename),patch.object(m,'exclusive',side_effect=exclusive):
+            if reconcile:return m.execute_tmpfs(copy.deepcopy(self.op),m.encoded(self.op),'2'*64,reconcile=True)
             return m.execute(copy.deepcopy(self.op),m.encoded(self.op),'2'*64)
 
 
@@ -1005,6 +1034,137 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(any(args[0]=='/usr/bin/docker' and args[1] in ['create','start','stop','rm'] for args in scenario.calls))
 
 
+def cutover_backup_operation():
+    op=copy.deepcopy(OP)
+    op.update(schema=m.CUTOVER_BACKUP_SCHEMA,profile='production',toolCommit=OP['controllerSha'],
+              candidateSha=OP['controllerSha'],publicationRunId='500000001',
+              releaseId=OP['controllerSha']+'-500000001-1',
+              expectedLedgerSha256=m.digest(m.encoded(CUTOVER_LEDGER)),
+              expectedDatabaseTarget=copy.deepcopy(m.LOCATION_PHOTO_DATABASE_TARGET),
+              predecessorAttestationSha256='9'*64,
+              confirmation='BACKUP_RESTORE_ATTESTED_BETA122_'+'3'*12+'_FROM_LK2_BETA_759083E37B40')
+    op['expectedApi'].update(image='ghcr.io/z6v6e6r/phub-api@sha256:'+'a'*64,
+                            imageId='sha256:'+'a'*64,releaseId='lk2-beta-759083e37b40',revision=None)
+    op['expectedPostgres']['id']='b'*64
+    return op
+
+
+CUTOVER_LEDGER=[[f'{n:04d}_synthetic.sql','c'*64] for n in range(1,123)]
+
+
+class ProductionCutoverBackupTests(unittest.TestCase):
+    def test_exact_profile_is_production_only_tmpfs_and_uses_truthful_legacy_predecessor(self):
+        op=cutover_backup_operation()
+        self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+        self.assertEqual(m.operation_mode(op),('api-web',op['releaseId']))
+        self.assertFalse(m.is_disk_operation(op));self.assertFalse(m.is_namespace_operation(op))
+        self.assertEqual(m.backup_baseline(op),'lk2-beta-759083e37b40')
+        for change in [lambda v:v.update(profile='beta'),lambda v:v.update(candidateSha='f'*40),
+                       lambda v:v.update(expectedLedgerSha256='bad'),lambda v:v.update(predecessorAttestationSha256='bad'),
+                       lambda v:v['expectedApi'].update(revision='f'*40),lambda v:v['expectedApi'].update(releaseId='other'),
+                       lambda v:v['expectedApi'].update(imageId='sha256:'+'f'*64),
+                       lambda v:v['expectedPostgres'].update(revision='f'*40),
+                       lambda v:v['expectedDatabaseTarget'].update(systemIdentifier='1'),
+                       lambda v:v.update(confirmation='yes'),lambda v:v.update(extra=True)]:
+            bad=copy.deepcopy(op);change(bad)
+            with self.subTest(change=change),self.assertRaises(m.Stop):m.validate_operation(bad,NOW,'2'*64)
+
+    def test_isolated_restore_binds_ledger_accounts_and_attestation_and_uses_request_pg(self):
+        with tempfile.TemporaryDirectory(prefix='phub-cutover-backup-') as directory:
+            scenario=Scenario(directory,operation=cutover_backup_operation(),ledger=CUTOVER_LEDGER)
+            result=scenario.invoke()
+            receipt=json.loads((scenario.root/'backups'/(scenario.op['releaseId']+'-api-web')/'database-backup-receipt.json').read_bytes())
+            self.assertEqual(receipt['schema'],'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V1')
+            self.assertEqual(receipt['baselineReleaseId'],'lk2-beta-759083e37b40')
+            self.assertEqual(receipt['predecessorAttestationSha256'],scenario.op['predecessorAttestationSha256'])
+            self.assertEqual(receipt['operationSha256'],m.digest(m.encoded(scenario.op)))
+            self.assertEqual(receipt['sourceAccountsSha256'],receipt['restoredAccountsSha256'])
+            self.assertEqual(receipt['sourceLedgerSha256'],scenario.op['expectedLedgerSha256'])
+            self.assertFalse(result['authorizesDeploy']);self.assertFalse((scenario.root/'standard/active').exists())
+            source_execs=[c for c in scenario.calls if c[:2]==['/usr/bin/docker','exec'] and any(q in c for q in [m.SOURCE_DUMP,m.SOURCE_SIZE,m.SOURCE_LEDGER,m.SOURCE_CUTOVER_TARGET,m.SOURCE_CUTOVER_ACCOUNTS])]
+            self.assertTrue(source_execs);self.assertTrue(all(c[2]==scenario.op['expectedPostgres']['id'] for c in source_execs))
+
+    def test_wrong_ledger_or_restore_accounts_never_publishes_success(self):
+        for fault,ledger in [(None,CUTOVER_LEDGER[:-1]),('restore-accounts-mismatch',CUTOVER_LEDGER)]:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory(prefix='phub-cutover-backup-') as directory:
+                scenario=Scenario(directory,fault=fault,operation=cutover_backup_operation(),ledger=ledger)
+                with self.assertRaises(m.Stop):scenario.invoke()
+                transaction=scenario.root/'backups'/(scenario.op['releaseId']+'-api-web')
+                self.assertFalse((transaction/'database-backup-receipt.json').exists())
+                self.assertTrue((scenario.root/'standard/active').is_dir())
+
+    def test_failed_cutover_can_cleanup_only_owned_tmpfs_without_replaying_dump(self):
+        for fault in ['DUMP','RESTORE_CREATE','RESTORE_START','DUMP_TOC','RESTORE','restore-accounts-mismatch','RESTORE_STOP','RESTORE_REMOVE','dump-still-active']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory(prefix='phub-cutover-reconcile-') as directory:
+                scenario=Scenario(directory,fault=fault,operation=cutover_backup_operation(),ledger=CUTOVER_LEDGER)
+                with self.assertRaises(m.Stop):scenario.invoke()
+                scenario.fault=None;before=len(scenario.calls)
+                result=scenario.invoke(reconcile=True)
+                self.assertEqual(result['status'],'CUTOVER_BACKUP_RECONCILED')
+                self.assertFalse(result['authorizesDeploy']);self.assertFalse(result['replayAllowed'])
+                self.assertFalse(scenario.created);self.assertFalse(scenario.running)
+                self.assertFalse((scenario.root/'standard/active').exists())
+                new=scenario.calls[before:]
+                self.assertFalse(any(c[:2]==['/usr/bin/docker','create'] or m.SOURCE_DUMP in c or m.cutover_dump_shell(m.digest(m.encoded(scenario.op))) in c for c in new))
+                self.assertEqual(scenario.invoke(reconcile=True)['status'],'CUTOVER_BACKUP_RECONCILED')
+
+    def test_cutover_cleanup_refuses_foreign_restore_lock_and_live_dump(self):
+        for fault in ['foreign-restore','foreign-lock','dump-still-active','RESTORE_STOP','RESTORE_REMOVE']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory(prefix='phub-cutover-foreign-') as directory:
+                scenario=Scenario(directory,fault='RESTORE',operation=cutover_backup_operation(),ledger=CUTOVER_LEDGER)
+                with self.assertRaises(m.Stop):scenario.invoke()
+                scenario.fault=fault
+                lock=scenario.root/'standard/active'
+                if fault=='foreign-lock':
+                    value=json.loads((lock/'backup-restore.json').read_bytes());value['operationSha256']='f'*64
+                    (lock/'backup-restore.json').write_bytes(m.encoded(value))
+                before=len(scenario.calls)
+                with self.assertRaises(m.Stop):scenario.invoke(reconcile=True)
+                self.assertTrue(lock.is_dir())
+                self.assertFalse((scenario.root/'backups'/(scenario.op['releaseId']+'-api-web')/'CUTOVER_RECONCILED.json').exists())
+                if fault in ['foreign-restore','foreign-lock','dump-still-active']:
+                    self.assertFalse(any(c[:2] in [['/usr/bin/docker','stop'],['/usr/bin/docker','rm']] for c in scenario.calls[before:]))
+
+    def test_cutover_dump_is_named_and_bounded_inside_container(self):
+        sha='a'*64;shell=m.cutover_dump_shell(sha)
+        self.assertIn('PGAPPNAME=phub_lk2_cutover_'+sha[:40],shell)
+        self.assertIn('exec /usr/bin/timeout -s TERM -k 10 580 pg_dump',shell)
+        self.assertIn('--serializable-deferrable',shell)
+        self.assertNotIn('--table',shell)
+
+    @unittest.skipUnless(sys.platform=='linux' and Path('/usr/bin/timeout').exists(), 'requires Linux timeout/procfs')
+    def test_in_container_timeout_kills_term_ignoring_serial_dump(self):
+        with tempfile.TemporaryDirectory(prefix='phub-cutover-timeout-') as directory:
+            root=Path(directory);script=root/'dump-fixture.py'
+            script.write_text('#!/usr/bin/python3\nimport signal,time,os,pathlib\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\npathlib.Path(os.environ["PID_DIR"],"parent").write_text(str(os.getpid()))\nwhile True: time.sleep(1)\n')
+            script.chmod(0o700)
+            shell=m.cutover_dump_shell('a'*64).split(' pg_dump ',1)[0]+' '+m.shlex.quote(str(script))
+            shell=shell.replace('-k 10 580 ','-k 0.3 0.3 ')
+            process=subprocess.Popen(['/bin/sh','-eu','-c',shell],env={'PATH':'/usr/bin:/bin','PID_DIR':directory},stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+            try:
+                self.assertNotEqual(process.wait(timeout=5),0)
+                pids=[int((root/name).read_text()) for name in ('parent',)]
+                for pid in pids:
+                    path=Path(f'/proc/{pid}/stat')
+                    if path.exists():self.assertIn(path.read_text().rsplit(')',1)[1].split()[0],('Z','X'))
+            finally:
+                try:os.killpg(process.pid,signal.SIGKILL)
+                except ProcessLookupError:pass
+                process.wait(timeout=5)
+
+    def test_cutover_lock_is_never_published_empty_and_retirement_survives_lost_ack(self):
+        for fault in ['cutover-before-capsule','cutover-after-pending-marker','cutover-after-publish','cutover-before-retire','cutover-after-retire']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory(prefix='phub-cutover-lock-crash-') as directory:
+                scenario=Scenario(directory,fault=fault,operation=cutover_backup_operation(),ledger=CUTOVER_LEDGER)
+                with self.assertRaisesRegex(m.Stop,'CRASH'):scenario.invoke()
+                lock=scenario.root/'standard/active'
+                if lock.exists():self.assertTrue((lock/'backup-restore.json').is_file())
+                scenario.fault=None
+                result=scenario.invoke(reconcile=True)
+                self.assertEqual(result['status'],'CUTOVER_PREPARATION_NOT_STARTED' if fault=='cutover-before-capsule' else 'CUTOVER_BACKUP_RECONCILED')
+                self.assertFalse(lock.exists());self.assertFalse(scenario.created)
+
+
 class SourceWitnessTests(unittest.TestCase):
     def test_local_git_proof_roundtrip_refuses_dirty_and_overridden_sources(self):
         import subprocess
@@ -1044,7 +1204,7 @@ def disk_operation(post=False):
 
 def disk_restore_row(plan, container='e'*64, state='running'):
     row = restore_row(container, plan['operationSha256'], 512*1024**2, state)
-    row['Config'].update(Env=['PGDATA=/var/lib/postgresql/data/phub-restore','POSTGRES_USER=phub_restore','POSTGRES_DB=phub_restore','POSTGRES_HOST_AUTH_METHOD=trust'], Cmd=['postgres'], Entrypoint=['docker-entrypoint.sh'])
+    row['Config'].update(Env=['PGDATA=/var/lib/postgresql/data/phub-restore','POSTGRES_USER=phub_restore','POSTGRES_DB=phub_restore','POSTGRES_HOST_AUTH_METHOD=trust'], Cmd=m.cutover_restore_command() if plan['schema']==m.CUTOVER_DISK_PLAN else ['postgres'], Entrypoint=['docker-entrypoint.sh'])
     row['HostConfig']['LogConfig'] = {'Type':'none','Config':{}}
     row['HostConfig']['Tmpfs'] = m.DISK_COMMON_TMPFS.copy()
     row['HostConfig']['Memory'] = row['HostConfig']['MemorySwap'] = m.DISK_MEMORY
@@ -1381,6 +1541,710 @@ class DiskScenario(Scenario):
             original_lexists=m.os.path.lexists
             stack.enter_context(patch.object(m.os.path,'lexists',side_effect=lambda p:bool(self.mapper)if str(p)==self.plan['mapperPath'] else original_lexists(p)))
             return m.reconcile_disk(copy.deepcopy(self.op),m.encoded(self.op),'2'*64)if reconcile else m.execute(copy.deepcopy(self.op),m.encoded(self.op),'2'*64)
+
+
+class CutoverDiskScenario(DiskScenario):
+    def __init__(self,directory,fault=None):
+        op=cutover_backup_operation()
+        op.update(schema=m.CUTOVER_DISK_SCHEMA,confirmation='BACKUP_RESTORE_BOUNDED_DISK_BETA122_'+op['candidateSha'][:12].upper()+'_FROM_LK2_BETA_759083E37B40')
+        Scenario.__init__(self,directory,None,op,CUTOVER_LEDGER)
+        self.fault=fault;self.loop=None;self.mapper=None;self.mounted=False;self.stopped=False
+        with patch.object(m,'ROOT',self.root):
+            self.plan=m.disk_plan(self.op,m.encoded(self.op),m.cutover_disk_sizing(1024,10**12,50*1024**3))
+        self.secret=b'!'*64
+
+    def docker(self,args,code='DOCKER_READ',**kwargs):
+        if code=='CUTOVER_SOURCE_ACTIVITY':
+            self.calls.append(['/usr/bin/docker']+args)
+            return b'1' if self.fault=='source-active' else b'0'
+        if code=='CUTOVER_RESTORE_SETTINGS':return m.encoded(['minimal','0','0','off','on','on','on'])
+        if code=='CUTOVER_RESTORED_ACCOUNTS' and self.fault=='restore-accounts-mismatch':return m.encoded(['c'*32,'d'*32])
+        return super().docker(args,code,**kwargs)
+
+    def invoke(self,reconcile=False):
+        from contextlib import contextmanager
+        @contextmanager
+        def snapshot(op,sha):
+            accounts=m.digest(m.encoded(['a'*32,'b'*32]))
+            yield {'token':'00000001-00000002-1','ledger':m.encoded(CUTOVER_LEDGER),'accountsSha256':accounts,
+                   'witness':{'schema':'PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1','operationSha256':sha,
+                              'sourcePostgres':op['expectedPostgres'],'capturedAt':m.now_iso(),
+                              'snapshotIdSha256':'a'*64,'databaseTarget':op['expectedDatabaseTarget'],
+                              'ledgerSha256':op['expectedLedgerSha256'],'accountsSha256':accounts}}
+        def blocking(args,code,**kwargs):
+            self.trip(code)
+            if code=='DUMP':
+                self.calls.append(['/usr/bin/docker']+args)
+                assert '--compress=zstd:level=3' in args[-1] and '--snapshot=' in args[-1]
+                assert '--serializable-deferrable' not in args[-1]
+                kwargs['stdout'].write(b'PGDMP synthetic bounded fixture')
+            else:self.docker(args,code,**kwargs)
+            self.trip(code,True)
+        with patch.object(m,'cutover_source_snapshot',side_effect=snapshot),patch.object(m,'cutover_blocking_docker',side_effect=blocking),patch.object(m,'cutover_allocate',side_effect=lambda fd,size:os.ftruncate(fd,size)):
+            return super().invoke(reconcile)
+
+
+class FreshDumpScenario(CutoverDiskScenario):
+    def __init__(self,directory,fault=None):
+        super().__init__(directory,fault)
+        self.clockAt='2026-11-15T20:10:00.000Z'
+        self.op.update(schema=m.FRESH_SCHEMA,predecessorRuntimeSha256='a'*64,expiresAt='2026-11-15T21:00:00.000Z',
+                       confirmation='FRESH_DUMP_PRIOR_RESTORE_BETA122_'+self.op['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS',
+                       priorRestore={'releaseId':'857b6bd5af828319caa557f0304ec06f3580c4ed-43708464531-1',
+                        'operationSha256':'06e07622c3e1a819a279c19311fedaa50c0bee7dad15600e53f4ced28f29a310',
+                        'receiptSha256':'dd8db10375e2883e27390a676b69ec4a5c5893bdd7de689a029870ae4d929a3a',
+                        'toolFileSha256':'81fc9dd660d6206939b8d8384ba3a032b75691e67b5a73d6670c940ce656e519',
+                        'abortOperationSha256':'a72aaf2374907da77f7b3e853b602280be3927681ad92efe0bb85b2c24f49d5f',
+                        **{k:'a'*64 for k in ['terminalSha256','dumpSha256','witnessSha256','abortMarkerSha256','legacyReleaseEnvSha256','legacyAttestationSha256']}})
+        self.op['ownerRestoreDecision']={'schema':'PHUB_TIMEWEB_OWNER_PROCEDURE_DECISION_V1',
+           'authority':'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1','scope':'REPEAT_PHYSICAL_RESTORE_ONLY',
+           'status':'NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED','messageSha256':m.digest(m.RESTORE_OWNER_MESSAGE.encode()),
+           'scopeSha256':m.fresh_owner_scope(self.op),
+           'reference':'codex-thread:00000000-0000-4000-8000-000000000000/message:00000000-0000-4000-8000-000000000001',
+           'receivedAt':'2026-11-15T15:00:00.000Z'}
+        self.request.write_bytes(m.encoded(self.op))
+        with patch.object(m,'ROOT',self.root):self.plan=m.fresh_plan(self.op,m.encoded(self.op),1024)
+        self.prior={**self.op['priorRestore'],'schema':'PHUB_TIMEWEB_EXACT_PRIOR_RESTORE_REFERENCE_V1',
+                    'completedAt':'2026-11-15T14:15:58.688Z','terminalAt':'2026-11-15T14:16:03.044Z',
+                    'laterPreparationAbortAt':'2026-11-15T14:37:32.106Z','databaseTarget':self.op['expectedDatabaseTarget'],
+                    'ledgerSha256':self.op['expectedLedgerSha256'],'postgresImage':m.PG_IMAGE,
+                    'predecessorAttestationSha256':self.op['predecessorAttestationSha256']}
+
+    def docker(self,args,code='DOCKER_READ',**kwargs):
+        if code=='CUTOVER_SOURCE_ACTIVITY':
+            self.calls.append(['/usr/bin/docker']+args)
+            return b'1' if self.fault=='source-active' else b'0'
+        return Scenario.docker(self,args,code,**kwargs)
+
+    def invoke(self,reconcile=False,attest=False):
+        from contextlib import contextmanager
+        @contextmanager
+        def snapshot(op,sha):
+            accounts=m.digest(m.encoded(['a'*32,'b'*32]))
+            witness={'schema':'PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1','operationSha256':sha,
+                'sourcePostgres':op['expectedPostgres'],'capturedAt':m.now_iso(),'snapshotIdSha256':'a'*64,
+                'databaseTarget':op['expectedDatabaseTarget'],'ledgerSha256':op['expectedLedgerSha256'],'accountsSha256':accounts}
+            yield {'token':'00000001-00000002-1','witness':witness,'accountsSha256':accounts}
+        def blocking(args,code,**kwargs):
+            self.calls.append(['/usr/bin/docker']+args);self.trip(code)
+            if code=='DUMP':kwargs['stdout'].write(b'PGDMP complete synthetic snapshot')
+            elif code=='FRESH_DUMP_TOC':
+                assert args==['exec','-i',self.op['expectedPostgres']['id'],'pg_restore','--list']
+                assert kwargs['stdin'].read()==b'PGDMP complete synthetic snapshot'
+            else:raise AssertionError('unexpected write '+str(args))
+            self.trip(code,True)
+        def clock():
+            if self.fault=='terminal-expiry' and (Path(self.plan['publication'])/'database-backup-receipt.json').exists():return '2026-11-15T21:01:00.000Z'
+            return self.clockAt
+        original_add=m.DiskJournal.add
+        def phase(journal,phase,**metadata):
+            self.trip('PHASE_'+phase);result=original_add(journal,phase,**metadata);self.trip('PHASE_'+phase,True);return result
+        with ExitStack() as stack:
+            for name,val in [('ROOT',self.root),('REQUEST',self.request),('LOCK',self.root/'standard/active')]:stack.enter_context(patch.object(m,name,val))
+            for name,fn in [('secure',lambda p,*a,**kw:Path(p).lstat()),('read_secure',self.read),('docker',self.docker),('command',self.command),
+                            ('tool_custody',lambda op:b'validated-installation'),('v2_migration_proof',lambda *a:None),
+                            ('disk_daemon_namespace',lambda:{'pid':44,'startTicks':'123','namespace':11}),('disk_daemon_guard',lambda j:None),
+                            ('disk_free',lambda:50*1024**3),('validate_prior_restore',lambda op:self.prior),
+                            ('cutover_source_snapshot',snapshot),('cutover_blocking_docker',blocking),
+                            ('rename_noreplace',lambda src,dst:os.rename(src,dst)),('now_iso',clock)]:
+                stack.enter_context(patch.object(m,name,side_effect=fn))
+            stack.enter_context(patch.object(m.time,'time',return_value=m.utc(self.clockAt)))
+            stack.enter_context(patch.object(m.DiskJournal,'add',new=phase))
+            return m.fresh_dump(copy.deepcopy(self.op),m.encoded(self.op),self.op['toolFileSha256'],reconcile=reconcile,attest=attest)
+
+
+def canonical_backup_baseline():
+    images={
+        'api':'f589eadccc4beeb0c629c029354acbf4d5f427517bce9d81c71fe07c4053f0e3', # gitleaks:allow -- public immutable OCI digest
+        'worker':'010cc45bff9633efee72979356c7534d400becd379e86d2069307d5a39726c8b',
+        'web':'3dd7c4846c3e4d65830e66b7c57de41d5a60b147b72709e70d68888b937d0f69',
+        'realtime':'7e4f30ab2b8e871f459fd103a2856a801cf2796d2fe24910d9e931fda8301fed'}
+    b={'schema':'PHUB_TIMEWEB_INSTALLED_CANONICAL_ROSTER_RUNTIME_V1','capturedAt':'2026-11-15T20:00:00.000Z',
+       'installedReleaseId':m.CANONICAL_PRIOR_RELEASE,'sourceSha':m.CANONICAL_PRIOR_SOURCE,
+       'sourceTree':'8907550c2386aaddc97b3fbda186dced43db00bd','sourceCiRunId':'43749601790',
+       'publicationRunId':'43751306581','artifactId':'14176493246',
+       'manifestSha256':'15465f17d7d4384ea2392fda664ff438a340389b3c5df29d2bd14d4e5ee82672',
+       **{k:'a'*64 for k in ['installedDescriptorSha256','operationSha256','planSha256','receiptSha256',
+           'observationSha256','backupOperationSha256','backupReceiptSha256','excludedSha256']},
+       'secretSetReleaseId':'b'*40+'-10-1',
+       'secretHashes':{k:'c'*64 for k in ['.release-identity.json','api.env','worker.env','realtime.env','migrator.env']},
+       'containers':{},'databaseTarget':copy.deepcopy(m.LOCATION_PHOTO_DATABASE_TARGET),
+       'ledgerSha256':'4dab86cb18f7e3db7a0598cd657eaebc86f07d5af497dc0eea2e33900b6526c1'}
+    for i,(service,image) in enumerate(images.items()):
+        b['containers'][service]={'id':str(i+1)*64,'image':f'ghcr.io/z6v6e6r/phub-{service}@sha256:{image}',
+            'imageId':'sha256:'+image,'releaseId':m.CANONICAL_PRIOR_RELEASE if service in ('api','web') else None,
+            'revision':None if service=='realtime' else m.CANONICAL_PRIOR_SOURCE,
+            'restarts':0,'startedAt':'2026-11-15T19:00:00.000Z'}
+    return b
+
+
+class CanonicalFreshDumpScenario(FreshDumpScenario):
+    def __init__(self,directory,fault=None):
+        super().__init__(directory,fault)
+        b=canonical_backup_baseline()
+        self.op.update(schema=m.CANONICAL_FRESH_SCHEMA,canonicalBaseline=b,historicalReadSetSha256='d'*64,
+            expectedApi=copy.deepcopy(b['containers']['api']),predecessorAttestationSha256=m.canonical_baseline_hash(b),
+            expectedLedgerSha256=b['ledgerSha256'],
+            predecessorRuntimeSha256=m.legacy_runtime_hash(b),
+            confirmation='FRESH_DUMP_CANONICAL_PRIOR_RESTORE_BETA122_'+self.op['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS')
+        self.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(self.op)
+        self.runtime_api=copy.deepcopy(self.op['expectedApi'])
+        self.ledger=[[p.name,m.digest(p.read_bytes())] for p in sorted(Path(__file__).parent.parent.joinpath('packages/database/migrations').glob('*.sql'))]
+        assert m.digest(m.encoded(self.ledger))==b['ledgerSha256']
+        self.op['expectedBoundarySha256']=m.digest(m.encoded(sorted([self.service_row(True),self.service_row(False)],key=lambda r:r['Id'])))
+        self.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(self.op)
+        self.request.write_bytes(m.encoded(self.op))
+        with patch.object(m,'ROOT',self.root):self.plan=m.fresh_plan(self.op,m.encoded(self.op),1024)
+        self.prior={'schema':m.CANONICAL_HISTORY_SCHEMA,'canonicalBaselineSha256':self.op['predecessorAttestationSha256'],
+            'forwardOriginalValidationBoundByRolloutReceiptSha256':b['receiptSha256'],
+            'priorRolloutObservedAt':'2026-11-15T19:30:00.000Z','historicalReadSetSha256':'d'*64,
+            'files':[],'originalFullRestore':self.prior,'oldFreshTerminalValidatorRerun':False}
+        self.admissions=0
+
+    def invoke(self,reconcile=False,attest=False):
+        def admission(op):
+            self.admissions+=1
+            self.trip('CANONICAL_ADMISSION')
+            self.assert_lease=bool((self.root/'standard/active/backup-restore.json').exists())
+            assert self.assert_lease
+        def history(op):
+            if self.fault=='history-race':raise m.Stop('CANONICAL_HISTORY_RACE')
+            return self.prior
+        with patch.object(m,'canonical_live_admission',side_effect=admission),patch.object(m,'validate_canonical_prior_restore',side_effect=history):
+            return super().invoke(reconcile,attest)
+
+
+class CanonicalFreshDumpTests(unittest.TestCase):
+    def test_closed_operation_and_legacy_mutual_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);now=m.utc(s.clockAt)
+            self.assertEqual(m.validate_operation(s.op,now,'2'*64),s.op)
+            for field in ['schema','historicalReadSetSha256','predecessorRuntimeSha256','predecessorAttestationSha256','confirmation']:
+                bad=copy.deepcopy(s.op);bad[field]=m.FRESH_SCHEMA if field=='schema' else 'foreign'
+                with self.subTest(field=field),self.assertRaises(m.Stop):m.validate_operation(bad,now,'2'*64)
+            for field in ['sourceSha','sourceTree','sourceCiRunId','publicationRunId','artifactId','manifestSha256','receiptSha256','excludedSha256']:
+                bad=copy.deepcopy(s.op);bad['canonicalBaseline'][field]='foreign'
+                with self.subTest(field=field),self.assertRaises(m.Stop):m.validate_operation(bad,now,'2'*64)
+            old=FreshDumpScenario(directory);old.op['schema']=m.CANONICAL_FRESH_SCHEMA
+            with self.assertRaises(m.Stop):m.validate_operation(old.op,now,'2'*64)
+
+    def test_distinct_truthful_receipt_and_seal_before_dump_no_live_recapture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);s.invoke();self.assertEqual(s.admissions,1)
+            r=json.loads((Path(s.plan['canonical'])/'database-backup-receipt.json').read_bytes())
+            self.assertEqual(r['schema'],m.CANONICAL_FRESH_RECEIPT)
+            self.assertEqual(s.plan['schema'],m.CANONICAL_FRESH_PLAN)
+            self.assertFalse(r['freshDumpRestored'])
+            with patch.object(m,'ROOT',s.root),patch.object(m,'read_secure',side_effect=s.read):
+                phases=[e['phase'] for e in m.DiskJournal(Path(s.plan['work']),m.digest(m.encoded(s.op))).events]
+            self.assertLess(phases.index('CANONICAL_LINEAGE_SEALED'),phases.index('DUMP_INTENT'))
+            s.invoke(attest=True);s.invoke(reconcile=True);self.assertEqual(s.admissions,1)
+            self.assertFalse(any('luks' in str(c) or 'losetup' in str(c) for c in s.calls))
+
+    def test_crashes_never_recapture_live_predecessor_or_replay_dump(self):
+        for fault in ['after:PHASE_LOCKED','before:CANONICAL_ADMISSION','after:PHASE_CANONICAL_LINEAGE_SEALED',
+                      'before:DUMP','after:PHASE_DUMP_VERIFIED','after:PHASE_PUBLISH_READY','after:PHASE_PUBLISHED']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                s=CanonicalFreshDumpScenario(directory,fault)
+                with self.assertRaises(m.Stop):s.invoke()
+                before=len(s.calls);admissions=s.admissions;s.fault=None
+                s.invoke(reconcile=True);s.invoke(reconcile=True)
+                self.assertEqual(s.admissions,admissions)
+                self.assertFalse(any('--snapshot=' in str(c) or 'pg_restore' in c for c in s.calls[before:]))
+                self.assertFalse((s.root/'standard/active').exists())
+
+    def test_history_change_and_seal_tamper_stop_without_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory,'history-race')
+            with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_RACE'):s.invoke()
+            self.assertFalse(any('--snapshot=' in str(c) for c in s.calls))
+            s.fault=None;s.invoke(reconcile=True)
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);s.invoke()
+            (Path(s.plan['work'])/'canonical-prior-lineage.json').write_bytes(b'{}')
+            with self.assertRaisesRegex(m.Stop,'CANONICAL_LINEAGE_SEAL'):s.invoke(attest=True)
+
+
+class CanonicalHistoryTests(unittest.TestCase):
+    def test_actual_pinned_old_tool_publication_custody_journal_and_retirement(self):
+        # Real Git objects authenticate the historical helper; only OS ownership and
+        # the innermost 857 restore boundary are simulated. No provider/Docker calls.
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);commit=m.CANONICAL_PRIOR_SOURCE
+            def git(*args):return subprocess.check_output(['git',*args],cwd=Path(__file__).parent.parent)
+            tool_bytes=git('show',commit+':scripts/control-timeweb-database-backup.py')
+            self.assertEqual(m.digest(tool_bytes),'d927f5a75f3656f7284980bf1524edb54631cbdfc0066bd351652214dcec4379')
+            tool=s.root/'operator/tools'/commit/'control-timeweb-database-backup.py';tool.parent.mkdir(parents=True)
+            tool.write_bytes(tool_bytes);tool.chmod(0o755)
+            proof={'schema':'PHUB_TIMEWEB_BACKUP_SOURCE_PROOF_V1','repository':{'name':'Z6v6e6r/lk2','id':1297548073},
+                   'path':'scripts/control-timeweb-database-backup.py'}
+            for key,kind,ref in [('commit','commit',commit),('rootTree','tree',commit+'^{tree}'),('scriptsTree','tree',commit+':scripts')]:
+                oid=git('rev-parse',ref).decode().strip();raw=git('cat-file',kind,oid)
+                proof[key]={'oid':oid,'sha256':m.digest(raw),'base64':base64.b64encode(raw).decode()}
+            proof['blob']={'oid':m.git_oid('blob',tool_bytes),'sha256':m.digest(tool_bytes)}
+            info=tool.lstat();installation=m.encoded({'schema':'PHUB_TIMEWEB_BACKUP_INSTALLATION_V1','sourceProof':proof,
+                'installedPath':str(tool),'installedAt':'2026-11-15T19:00:00.000Z','installationPlanSha256':'f'*64,
+                'metadata':{k:getattr(info,'st_'+k) for k in ['dev','ino','uid','gid','mode','nlink','size']}})
+            (tool.parent/'installation-receipt.json').write_bytes(installation)
+            s.op.update(candidateSha=commit,controllerSha=commit,toolCommit=commit,controllerTree='8907550c2386aaddc97b3fbda186dced43db00bd',
+                toolFileSha256=m.digest(tool_bytes),toolProofSha256=m.digest(m.encoded(proof)),toolInstallationSha256=m.digest(installation),
+                publicationRunId='43751306581',releaseId=m.CANONICAL_PRIOR_RELEASE,
+                confirmation='FRESH_DUMP_PRIOR_RESTORE_BETA122_'+commit[:12].upper()+'_KEEP_DATA_AND_ACCOUNTS')
+            s.config=m.encoded({'controllerSha':commit,'enabled':True});s.op['controllerConfigSha256']=m.digest(s.config)
+            s.ledger=[[p.name,m.digest(p.read_bytes())] for p in sorted(Path(__file__).parent.parent.joinpath('packages/database/migrations').glob('*.sql'))]
+            s.op['expectedLedgerSha256']=m.digest(m.encoded(s.ledger))
+            s.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(s.op)
+            s.prior['ledgerSha256']=s.op['expectedLedgerSha256']
+            s.request.write_bytes(m.encoded(s.op))
+            with patch.object(m,'ROOT',s.root):s.plan=m.fresh_plan(s.op,m.encoded(s.op),1024)
+            s.invoke();current=Path(s.plan['canonical'])
+            for name in set(m.CANONICAL_V4_FINAL_FILES)-set(m.FRESH_FILES):(current/name).write_bytes(m.encoded({'synthetic':name}))
+            b=canonical_backup_baseline();b['backupOperationSha256']=m.digest(m.encoded(s.op))
+            b['backupReceiptSha256']=m.digest((current/'database-backup-receipt.json').read_bytes())
+            outer_op={'schema':'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4','candidateSha':commit,'backupOperationSha256':b['backupOperationSha256']}
+            outer_plan={'operationSha256':m.digest(m.encoded(outer_op)),'backup':{'operationSha256':b['backupOperationSha256']}}
+            observation={'samplesPerService':61,'windowSeconds':900,'elapsedSeconds':901,'serverErrors':0}
+            descriptor=b'synthetic installed descriptor';release=s.root/'releases'/m.CANONICAL_PRIOR_RELEASE;release.mkdir(parents=True)
+            (release/'installed-components.env').write_bytes(descriptor);(release/'artifact').mkdir()
+            manifest=Path(__file__).with_name('fixtures').joinpath('timeweb-release-manifest-4b8dbaa1.json').read_bytes()
+            with zipfile.ZipFile(release/'artifact/canonical-artifact.zip','w') as z:
+                z.writestr('release-manifest.json',manifest);z.writestr('release-manifest.sha256',m.digest(manifest)+'  release-manifest.json\n')
+            outer_op.update(candidateTree=b['sourceTree'],sourceCiRunId=b['sourceCiRunId'],publicationRunId=b['publicationRunId'],artifactId=b['artifactId'],manifestSha256=b['manifestSha256'],artifactDigest='sha256:'+m.digest((release/'artifact/canonical-artifact.zip').read_bytes()))
+            outer_plan['operationSha256']=m.digest(m.encoded(outer_op))
+            receipt={'schema':'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_RECEIPT_V4','status':'RECONCILED','reconciledStatus':'SUCCESS',
+                'planSha256':m.digest(m.encoded(outer_plan)),'installedBaselineSha256':m.digest(descriptor),
+                'observationSha256':m.digest(m.encoded(observation)),'observedAt':'2026-11-15T20:30:00.000Z'}
+            for name,value in [('operation.json',outer_op),('plan.json',outer_plan),('observation.json',observation),('rollout-receipt.json',receipt)]:
+                (current/name).write_bytes(m.encoded(value))
+            (current/'backup.complete').write_bytes((receipt['planSha256']+'\n').encode())
+            for name,key in [('operation.json','operationSha256'),('plan.json','planSha256'),('rollout-receipt.json','receiptSha256'),('observation.json','observationSha256')]:b[key]=m.digest((current/name).read_bytes())
+            b['installedDescriptorSha256']=m.digest(descriptor)
+            op=CanonicalFreshDumpScenario(directory).op
+            op.update(canonicalBaseline=b,expectedPostgres=s.op['expectedPostgres'],priorRestore=s.op['priorRestore'])
+            real_module_from_spec=importlib.util.module_from_spec;loaded=[]
+            def module_from_spec(spec):
+                module=real_module_from_spec(spec);execute=spec.loader.exec_module
+                def configured(value):
+                    execute(value);value.ROOT=s.root;value.LOCK=s.root/'standard/active'
+                    value.secure=lambda p,*a,**kw:Path(p).lstat();value.read_secure=s.read
+                    value.validate_prior_restore=unittest.mock.Mock(return_value=s.prior);loaded.append(value)
+                spec.loader.exec_module=configured;return module
+            def outer(*args,**kwargs):
+                self.assertEqual(args[1],'CANONICAL_HISTORY_OUTER')
+                return m.encoded({'schema':'PHUB_TIMEWEB_CANONICAL_HISTORY_OUTER_VALIDATION_V1','rolloutReceiptSha256':b['receiptSha256'],'runtimeConsulted':False})
+            with patch.object(m,'ROOT',s.root),patch.object(m,'LOCK',s.root/'standard/active'),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()),patch.object(m,'read_secure',side_effect=s.read),patch.object(importlib.util,'module_from_spec',side_effect=module_from_spec),patch.object(m,'canonical_node_source_guard',return_value=s.root/'standard/source'),patch.object(m,'command',side_effect=outer):
+                context=m.canonical_history_context(op)
+                self.assertEqual(m.validate_canonical_history_predicates(op,context),s.prior)
+                self.assertEqual(loaded[-1].validate_prior_restore.call_count,2)
+                for call in loaded[-1].validate_prior_restore.call_args_list:self.assertEqual(call.args,(s.op,))
+                for path in [current/'database.pgcustom',current/'database-backup-receipt.json',current/'FRESH_DUMP_INTEGRITY_VERIFIED.json',
+                             Path(s.plan['work'])/'retired-lock/backup-restore.json',Path(s.plan['work'])/'disk-event-0006.json',tool]:
+                    before=path.read_bytes();path.write_bytes(b'changed')
+                    with self.subTest(path=path.name),self.assertRaisesRegex(Exception,'CANONICAL_|FRESH_|DISK_|TOOL_|INVALID_JSON|SOURCE_'):
+                        c=m.canonical_history_context(op);m.validate_canonical_history_predicates(op,c)
+                    path.write_bytes(before)
+                extra=current/'foreign.json';extra.write_bytes(b'{}')
+                with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_INVENTORY'):m.canonical_history_context(op)
+                extra.unlink()
+
+    def test_absent_owned_and_foreign_leases_are_distinct(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory,'before:DUMP')
+            with patch.object(m,'ROOT',s.root),patch.object(m,'LOCK',s.root/'standard/active'),patch.object(m,'read_secure',side_effect=s.read),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()):
+                self.assertEqual(m.canonical_own_lock(s.op),'ABSENT')
+                with self.assertRaises(m.Stop):s.invoke()
+                self.assertEqual(m.canonical_own_lock(s.op),'OWNED_NEW')
+                marker=s.root/'standard/active/backup-restore.json';raw=marker.read_bytes()
+                changed=json.loads(raw);changed['operationSha256']='f'*64;marker.write_bytes(m.encoded(changed))
+                with self.assertRaises((m.Stop,FileNotFoundError)):m.canonical_own_lock(s.op)
+                self.assertEqual(marker.read_bytes(),m.encoded(changed))
+                marker.write_bytes(raw)
+                capsule=Path(s.plan['work'])/'backup-operation.json';capsule.write_bytes(b'{}')
+                with self.assertRaisesRegex(m.Stop,'CANONICAL_FOREIGN_LOCK'):m.canonical_own_lock(s.op)
+
+    def test_historical_read_set_binds_all_retained_files_and_original_restore_closure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);ref=s.op['priorRestore']
+            current=s.root/'backups'/(m.CANONICAL_PRIOR_RELEASE+'-api-web');current.mkdir()
+            work=s.root/'backups'/'.old-fresh';work.mkdir();(work/'retired-lock').mkdir()
+            original=s.root/'backups'/(ref['releaseId']+'-api-web');original.mkdir()
+            original_work=s.root/'backups'/('.disk-restore-'+ref['operationSha256']);original_work.mkdir()
+            original_commit='e'*40;old_commit='f'*40
+            for path in [*[current/n for n in m.CANONICAL_V4_FINAL_FILES],work/'disk-plan.json',work/'retired-lock/backup-restore.json',
+                         original/'database.pgcustom',original_work/'disk-event-0000.json',
+                         s.root/'releases'/m.CANONICAL_PRIOR_RELEASE/'installed-components.env',
+                         s.root/'releases'/m.CANONICAL_PRIOR_RELEASE/'artifact/canonical-artifact.zip',
+                         *[s.root/'operator/tools'/c/n for c in [original_commit,old_commit] for n in ['control-timeweb-database-backup.py','installation-receipt.json']]]:
+                path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'synthetic retained bytes')
+            (original/'backup-operation.json').write_bytes(m.encoded({'toolCommit':original_commit}))
+            context={'directory':current,'work':work,'prior':{'priorRestore':ref,'toolCommit':old_commit}}
+            with patch.object(m,'ROOT',s.root),patch.object(m,'read_secure',side_effect=s.read),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()):
+                before=m.canonical_history_read_set(context)
+                paths={r['path'] for r in before}
+                self.assertIn(str((original/'database.pgcustom').relative_to(s.root)),paths)
+                self.assertIn(str((work/'retired-lock/backup-restore.json').relative_to(s.root)),paths)
+                for row in before:
+                    path=s.root/row['path'];raw=path.read_bytes()
+                    fresh=m.canonical_history_read_set(context)
+                    path.write_bytes(raw+b'changed')
+                    # The original operation must remain parseable to enumerate its fixed tool.
+                    if path==original/'backup-operation.json':path.write_bytes(m.encoded({'toolCommit':original_commit,'changed':True}))
+                    with self.subTest(path=row['path']):self.assertNotEqual(next(r for r in m.canonical_history_read_set(context) if r['path']==row['path']),next(r for r in fresh if r['path']==row['path']))
+                    path.write_bytes(raw)
+
+    def test_lineage_requires_matching_preimage_and_post_validation_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=CanonicalFreshDumpScenario(directory);rows=[{'path':'synthetic','sha256':'a'*64,'identity':[1,2,3]}]
+            s.op['historicalReadSetSha256']=m.digest(m.encoded(rows));s.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(s.op)
+            current=s.root/'history';current.mkdir();(current/'rollout-receipt.json').write_bytes(m.encoded({'observedAt':'2026-11-15T19:30:00.000Z'}))
+            context={'baseline':s.op['canonicalBaseline'],'directory':current}
+            with patch.object(m,'canonical_history_context',return_value=context),patch.object(m,'canonical_history_read_set',return_value=rows),patch.object(m,'read_secure',side_effect=s.read),patch.object(m,'validate_canonical_history_predicates',return_value={'original':'verified'}) as predicates:
+                r=m.validate_canonical_prior_restore(s.op)
+                self.assertFalse(r['oldFreshTerminalValidatorRerun']);self.assertEqual(r['originalFullRestore'],{'original':'verified'})
+                self.assertEqual(predicates.call_count,1)
+                with patch.object(m,'canonical_history_read_set',side_effect=[rows,[{**rows[0],'sha256':'b'*64}]]):
+                    with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_RACE'):m.validate_canonical_prior_restore(s.op)
+                with patch.object(m,'canonical_history_read_set',return_value=[]):
+                    with self.assertRaisesRegex(m.Stop,'CANONICAL_HISTORY_PREIMAGE'):m.validate_canonical_prior_restore(s.op)
+
+
+class CanonicalArchiveTests(unittest.TestCase):
+    def fixture(self,directory,entries=None):
+        root=Path(directory);b=canonical_backup_baseline();release=root/'releases'/b['installedReleaseId'];artifact=release/'artifact';artifact.mkdir(parents=True)
+        (release/'installed-components.env').write_bytes(b'preserved descriptor')
+        tx=root/'backups'/(b['installedReleaseId']+'-api-web');tx.mkdir(parents=True)
+        manifest=Path(__file__).with_name('fixtures').joinpath('timeweb-release-manifest-4b8dbaa1.json').read_bytes()
+        if entries is None:entries=[('release-manifest.json',manifest),('release-manifest.sha256',(m.digest(manifest)+'  release-manifest.json\n').encode())]
+        path=artifact/'canonical-artifact.zip'
+        with zipfile.ZipFile(path,'w',zipfile.ZIP_DEFLATED) as z:
+            for name,data in entries:z.writestr(name,data)
+        operation={'schema':'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4','candidateSha':b['sourceSha'],
+                   'candidateTree':b['sourceTree'],'publicationRunId':b['publicationRunId'],'artifactId':b['artifactId'],
+                   'manifestSha256':b['manifestSha256'],'artifactDigest':'sha256:'+m.digest(path.read_bytes())}
+        (tx/'operation.json').write_bytes(m.encoded(operation));b['operationSha256']=m.digest(m.encoded(operation))
+        return root,{'baseline':b,'directory':tx},path,manifest
+
+    def test_real_retained_layout_is_read_only_and_repeatable(self):
+        with tempfile.TemporaryDirectory() as td:
+            root,c,path,manifest=self.fixture(td)
+            before={str(p):[p.read_bytes(),m.identity(p.lstat())] for p in root.rglob('*') if p.is_file()}
+            with patch.object(m,'ROOT',root),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()):
+                for _ in range(2):self.assertEqual(m.canonical_prior_manifest(c),(path.read_bytes(),manifest))
+            self.assertFalse((path.parent.parent/'release-manifest.json').exists())
+            self.assertEqual(before,{str(p):[p.read_bytes(),m.identity(p.lstat())] for p in root.rglob('*') if p.is_file()})
+
+    def test_missing_changed_foreign_duplicate_traversal_checksum_source_and_race_stop(self):
+        for case in ['missing','changed','foreign-root','standalone-only','extra','duplicate','traversal','checksum','manifest','source','operation','custody','race']:
+            with self.subTest(case=case),tempfile.TemporaryDirectory() as td:
+                root,c,path,manifest=self.fixture(td)
+                if case in ['extra','duplicate','traversal','checksum','manifest','source']:
+                    checksum=(m.digest(manifest)+'  release-manifest.json\n').encode()
+                    entries=[('release-manifest.json',manifest),('release-manifest.sha256',checksum)]
+                    if case in ['extra','duplicate','traversal']:entries.append(({'extra':'foreign','duplicate':'release-manifest.json','traversal':'../release-manifest.json'}[case],b'x'))
+                    if case=='checksum':entries[1]=('release-manifest.sha256',b'wrong')
+                    if case=='manifest':entries[0]=('release-manifest.json',b'{}')
+                    if case=='source':
+                        v=json.loads(manifest);v['publication']['runId']='999';manifest=m.encoded(v);entries=[('release-manifest.json',manifest),('release-manifest.sha256',(m.digest(manifest)+'  release-manifest.json\n').encode())]
+                    with zipfile.ZipFile(path,'w') as z:
+                        for name,data in entries:z.writestr(name,data)
+                    operation=m.strict((c['directory']/'operation.json').read_bytes());operation['artifactDigest']='sha256:'+m.digest(path.read_bytes())
+                    if case=='source':operation['manifestSha256']=c['baseline']['manifestSha256']=m.digest(manifest)
+                    raw=m.encoded(operation);(c['directory']/'operation.json').write_bytes(raw);c['baseline']['operationSha256']=m.digest(raw)
+                if case in ['missing','standalone-only']:
+                    path.unlink()
+                    if case=='standalone-only':(path.parent.parent/'release-manifest.json').write_bytes(manifest)
+                if case=='changed':path.write_bytes(path.read_bytes()+b'changed')
+                if case=='foreign-root':(path.parent.parent/'foreign').write_bytes(b'x')
+                if case=='operation':(c['directory']/'operation.json').write_bytes(b'{}')
+                calls=0
+                def secure(p,*a,**k):
+                    if case=='custody' and Path(p)==path:raise m.Stop('CANONICAL_TEST_CUSTODY')
+                    return Path(p).lstat()
+                def read(p,*a,**k):
+                    nonlocal calls
+                    raw=Path(p).read_bytes()
+                    if Path(p)==path:
+                        calls+=1
+                        if case=='race' and calls==2:return raw+b'changed'
+                    return raw
+                with patch.object(m,'ROOT',root),patch.object(m,'secure',side_effect=secure),patch.object(m,'read_secure',side_effect=read):
+                    with self.assertRaises((m.Stop,FileNotFoundError)):m.canonical_prior_manifest(c)
+
+
+class FreshDumpTests(unittest.TestCase):
+    def test_owner_scope_closed_schema_and_no_cross_admission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);op=s.op
+            self.assertEqual(m.validate_operation(op,m.utc('2026-11-15T20:10:00.000Z'),'2'*64),op)
+            for key in ['schema','target','candidateSha','controllerTree','priorRestore','expectedBoundarySha256','expiresAt']:
+                bad=copy.deepcopy(op);bad[key]='foreign'
+                with self.subTest(key=key),self.assertRaises((m.Stop,KeyError,TypeError)):m.validate_operation(bad,NOW,'2'*64)
+            for schema in [m.CUTOVER_DISK_SCHEMA,m.CUTOVER_BACKUP_SCHEMA]:
+                bad=copy.deepcopy(op);bad['schema']=schema
+                with self.assertRaises(m.Stop):m.validate_operation(bad,NOW,'2'*64)
+            for field in op['ownerRestoreDecision']:
+                bad=copy.deepcopy(op);bad['ownerRestoreDecision'][field]='PASS'
+                with self.subTest(field=field),self.assertRaises(m.Stop):m.validate_fresh_owner(bad)
+
+    def test_complete_fresh_dump_is_truthful_and_never_creates_restore_storage_or_replays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);result=s.invoke()
+            self.assertEqual(result['status'],'FRESH_DUMP_INTEGRITY_VERIFIED')
+            canonical=Path(s.plan['canonical']);r=json.loads((canonical/'database-backup-receipt.json').read_bytes())
+            self.assertFalse(r['freshDumpRestored']);self.assertNotIn('restoreVerified',r);self.assertNotIn('restoredAccountsSha256',r)
+            self.assertEqual(r['freshDumpIntegrityStatus'],'PG16_TOC_PARSE_VERIFIED')
+            self.assertEqual(sorted(p.name for p in canonical.iterdir()),sorted(m.FRESH_FILES))
+            self.assertFalse((s.root/'standard/active').exists())
+            self.assertFalse(any(c[:2] in (['/usr/bin/docker','create'],['/usr/bin/docker','start'],['/usr/bin/docker','rm']) for c in s.calls))
+            self.assertFalse(any('luks' in str(c) or 'losetup' in str(c) for c in s.calls))
+            s.invoke(attest=True)
+            with self.assertRaisesRegex(m.Stop,'EXISTING_STATE'):s.invoke()
+            s.invoke(reconcile=True)
+            for field,value in [('freshDumpRestored',True),('schema',m.CUTOVER_DISK_RECEIPT),('sourceAccountsSha256','f'*64),('priorReferenceSha256','f'*64)]:
+                original=(canonical/'database-backup-receipt.json').read_bytes()
+                (canonical/'database-backup-receipt.json').write_bytes(m.encoded({**r,field:value}))
+                with self.subTest(field=field),self.assertRaises(m.Stop):s.invoke(attest=True)
+                (canonical/'database-backup-receipt.json').write_bytes(original)
+
+    def test_crash_reconciles_owned_metadata_without_repeating_dump_or_toc(self):
+        for fault in ['before:DUMP','before:FRESH_DUMP_TOC','after:PHASE_DUMP_VERIFIED','after:PHASE_TOC_VERIFIED','after:PHASE_PUBLISH_READY','after:PHASE_PUBLISHED','after:PHASE_UNLOCK_INTENT','before:PHASE_RECONCILED']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                s=FreshDumpScenario(directory,fault)
+                with self.assertRaises(m.Stop):s.invoke()
+                s.fault=None;before=len(s.calls);s.invoke(reconcile=True)
+                self.assertFalse((s.root/'standard/active').exists())
+                self.assertFalse(any('--snapshot=' in str(c) or 'pg_restore' in c for c in s.calls[before:]))
+                s.invoke(reconcile=True)
+
+    def test_expiry_between_receipt_and_terminal_is_never_published_by_reconciliation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory,'terminal-expiry')
+            with self.assertRaisesRegex(m.Stop,'FRESH_TERMINAL'):s.invoke()
+            self.assertFalse(Path(s.plan['canonical']).exists())
+            s.fault=None;s.clockAt='2026-11-15T21:10:00.000Z'
+            s.invoke(reconcile=True)
+            self.assertFalse(Path(s.plan['canonical']).exists())
+            self.assertFalse((s.root/'standard/active').exists())
+            self.assertTrue((Path(s.plan['publication'])/'database.pgcustom').exists())
+
+    def test_retirement_publication_inventory_dump_and_witness_tamper_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);s.invoke();canonical=Path(s.plan['canonical'])
+            for path in [canonical/'database.pgcustom',canonical/'snapshot-witness.json',
+                         canonical/'prior-full-restore-reference.json',Path(s.plan['work'])/'retired-lock'/'backup-restore.json']:
+                before=path.read_bytes();path.write_bytes(b'foreign')
+                with self.subTest(path=path.name),self.assertRaises((m.Stop,ValueError)):s.invoke(attest=True)
+                path.write_bytes(before)
+            extra=canonical/'unexpected.json';extra.write_text('{}')
+            with self.assertRaisesRegex(m.Stop,'FRESH_PUBLICATION_INVENTORY'):s.invoke(attest=True)
+            extra.unlink();s.invoke(attest=True)
+            retired=Path(s.plan['work'])/'retired-lock';saved=retired.with_name('retired-lock-original');retired.rename(saved)
+            retired.mkdir();(retired/'backup-restore.json').write_bytes((saved/'backup-restore.json').read_bytes())
+            with self.assertRaisesRegex(m.Stop,'FRESH_RETIRED_LOCK'):s.invoke(attest=True)
+
+    def test_earliest_crash_layouts_are_readonly_classified_and_never_replayed(self):
+        for entries in [None,{}, {'.disk-write-'+('a'*32)+'.tmp':b'partial JSON'}, {'backup-operation.json':None}]:
+            with self.subTest(entries=entries),tempfile.TemporaryDirectory() as directory:
+                s=FreshDumpScenario(directory);work=Path(s.plan['work'])
+                if entries is not None:
+                    work.mkdir()
+                    for name,value in entries.items():(work/name).write_bytes(m.encoded(s.op) if value is None else value)
+                before={str(p):p.read_bytes() for p in work.iterdir()} if work.exists() else {}
+                for _ in range(2):
+                    r=s.invoke(reconcile=True);self.assertFalse(r['replayAllowed']);self.assertFalse(r['authorizesDeploy'])
+                after={str(p):p.read_bytes() for p in work.iterdir()} if work.exists() else {}
+                self.assertEqual(before,after);self.assertFalse(any('--snapshot=' in str(c) or 'pg_restore' in c for c in s.calls))
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);work=Path(s.plan['work']);work.mkdir();(work/'foreign').write_text('keep')
+            with self.assertRaisesRegex(m.Stop,'FRESH_EARLY_INVENTORY'):s.invoke(reconcile=True)
+            self.assertEqual((work/'foreign').read_text(),'keep')
+
+    def test_prelock_faults_never_replay_dump_and_foreign_lock_is_retained(self):
+        for fault in ['after:PHASE_PREPARED','after:PHASE_DAEMON_NAMESPACE','after:PHASE_LOCK_PREPARED','after:PHASE_LOCK_PUBLISH_INTENT','after:PHASE_LOCKED']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                s=FreshDumpScenario(directory,fault)
+                with self.assertRaises(m.Stop):s.invoke()
+                s.fault=None;s.invoke(reconcile=True)
+                self.assertFalse(any('--snapshot=' in str(c) for c in s.calls))
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory,'before:DUMP')
+            with self.assertRaises(m.Stop):s.invoke()
+            lock=s.root/'standard/active';marker=lock/'backup-restore.json';marker.write_text('{}')
+            s.fault=None
+            with self.assertRaisesRegex(m.Stop,'DISK_LOCK_DRIFT'):s.invoke(reconcile=True)
+            self.assertEqual(marker.read_text(),'{}')
+
+    def test_foreign_lock_source_activity_and_capacity_stop_without_external_mutation(self):
+        for fault in ['source-active','runtime-drift','migrator','source-ledger-drift']:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                s=FreshDumpScenario(directory,fault)
+                with self.assertRaises(m.Stop):s.invoke()
+        with tempfile.TemporaryDirectory() as directory:
+            s=FreshDumpScenario(directory);lock=s.root/'standard/active';lock.mkdir();(lock/'foreign').write_text('retained')
+            with self.assertRaisesRegex(m.Stop,'EXISTING_STATE'):s.invoke()
+            self.assertEqual((lock/'foreign').read_text(),'retained')
+
+
+class CutoverProcessTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform=='linux','posix_fallocate is a Linux producer prerequisite')
+    def test_allocation_real_child_preserves_fd_and_allocates_only_owned_file(self):
+        with tempfile.TemporaryFile() as stream,patch.object(m,'cutover_disk_reserve'):
+            m.cutover_allocate(stream.fileno(),1024**2)
+            self.assertEqual(os.fstat(stream.fileno()).st_size,1024**2)
+
+    @unittest.skipUnless(sys.platform=='linux','Linux PDEATHSIG custody')
+    def test_allocation_parent_death_binding_kills_owned_child(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile=Path(directory)/'child.pid'
+            program="import importlib.util,os,subprocess,sys,time;spec=importlib.util.spec_from_file_location('m',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);parent=os.getpid();child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],preexec_fn=lambda:m.namespace_client_death(parent));open(sys.argv[2],'w').write(str(child.pid));time.sleep(60)"
+            parent=subprocess.Popen([sys.executable,'-I','-S','-B','-c',program,str(Path(m.__file__).resolve()),str(pidfile)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            child=None
+            try:
+                deadline=time.monotonic()+5
+                while not pidfile.exists() and time.monotonic()<deadline:time.sleep(.02)
+                self.assertTrue(pidfile.exists());child=int(pidfile.read_text())
+                parent.kill();parent.wait(timeout=5)
+                deadline=time.monotonic()+5
+                while time.monotonic()<deadline:
+                    status=Path('/proc')/str(child)/'stat'
+                    if not status.exists() or status.read_text().split()[2]=='Z':break
+                    time.sleep(.02)
+                else:self.fail('owned child survived controller death')
+            finally:
+                if parent.poll() is None:parent.kill();parent.wait(timeout=5)
+                if child is not None:
+                    try:os.kill(child,9)
+                    except ProcessLookupError:pass
+
+    def test_reserve_drop_kills_and_reaps_only_allocation_child(self):
+        import subprocess
+        real=subprocess.Popen;children=[]
+        def child(args,**kwargs):
+            process=real([sys.executable,'-I','-S','-B','-c','import time;time.sleep(60)'],**kwargs);children.append(process);return process
+        with tempfile.TemporaryFile() as stream,patch.object(m.subprocess,'Popen',side_effect=child),patch.object(m,'cutover_disk_reserve',side_effect=m.Stop('CUTOVER_DISK_RESERVE')):
+            with self.assertRaisesRegex(m.Stop,'CUTOVER_DISK_RESERVE'):m.cutover_allocate(stream.fileno(),1024**2)
+        self.assertIsNotNone(children[0].poll())
+
+    def test_reserve_drop_reaps_docker_client_without_unjournaled_container_stop(self):
+        import subprocess
+        real=subprocess.Popen;children=[]
+        def child(args,**kwargs):
+            self.assertEqual(kwargs['stderr'],subprocess.DEVNULL)
+            process=real([sys.executable,'-I','-S','-B','-c','import time;time.sleep(60)'],**kwargs);children.append(process);return process
+        with patch.object(m.subprocess,'Popen',side_effect=child),patch.object(m,'cutover_disk_reserve',side_effect=m.Stop('CUTOVER_DISK_RESERVE')),patch.object(m,'docker') as docker:
+            with self.assertRaisesRegex(m.Stop,'CUTOVER_DISK_RESERVE'):m.cutover_blocking_docker(['exec','owned','pg_restore'],'RESTORE')
+            docker.assert_not_called()
+        self.assertIsNotNone(children[0].poll())
+        for limit in (True,0,-1,m.CUTOVER_DUMP_LIMIT+1):
+            with self.assertRaisesRegex(m.Stop,'CUTOVER_FILE_LIMIT'):m.cutover_blocking_docker([], 'DUMP',file_limit=limit)
+
+    def test_exporter_normal_rollback_and_nonzero_exit_are_distinguished(self):
+        import subprocess
+        real=subprocess.Popen;op=cutover_backup_operation()
+        responses=['00000001-00000002-1',json.dumps({**op['expectedDatabaseTarget'],'inRecovery':False}),json.dumps(CUTOVER_LEDGER),json.dumps(['fixture-hash'])]
+        for exit_code in (0,3):
+            children=[]
+            program="import sys,json;responses=json.loads(sys.argv[1]);\nfor reply in responses:\n sys.stdin.readline();print(reply,flush=True)\nfor line in sys.stdin:\n if line.startswith('ROLLBACK'):break\nsys.exit(int(sys.argv[2]))"
+            def child(args,**kwargs):
+                self.assertIn('idle_in_transaction_session_timeout=1400000',args[-1])
+                self.assertIn('-k 10 1500 psql',args[-1])
+                process=real([sys.executable,'-I','-S','-B','-c',program,json.dumps(responses),str(exit_code)],**kwargs);children.append(process);return process
+            with patch.object(m.subprocess,'Popen',side_effect=child),patch.object(m,'cutover_disk_reserve'),patch.object(m,'cutover_disk_source_stopped') as stopped:
+                if exit_code:
+                    with self.assertRaisesRegex(m.Stop,'CUTOVER_SNAPSHOT_EXIT'):
+                        with m.cutover_source_snapshot(op,'a'*64):pass
+                else:
+                    with m.cutover_source_snapshot(op,'a'*64) as snapshot:
+                        self.assertEqual(snapshot['token'],responses[0])
+                        self.assertNotIn(snapshot['token'],m.encoded(snapshot['witness']).decode())
+                self.assertEqual(stopped.call_count,2)
+            self.assertIsNotNone(children[0].poll())
+
+
+class CutoverDiskTests(unittest.TestCase):
+    def scenario(self,fault=None):
+        tmp=tempfile.TemporaryDirectory(prefix='phub-cutover-disk-');self.addCleanup(tmp.cleanup)
+        return CutoverDiskScenario(tmp.name,fault)
+
+    def test_closed_caps_and_combined_capacity(self):
+        op=self.scenario().op
+        self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+        self.assertTrue(m.is_disk_operation(op));self.assertFalse(m.is_namespace_operation(op))
+        required=m.CUTOVER_DUMP_LIMIT+m.CUTOVER_IMAGE_BYTES+m.DISK_HEADROOM+m.CUTOVER_CONTROL_BYTES
+        sizing=m.cutover_disk_sizing(m.CUTOVER_DATABASE_LIMIT,4*1024**3,required)
+        self.assertEqual(sizing['dumpLimitBytes'],13*1024**3//2)
+        self.assertEqual(m.CUTOVER_DATABASE_LIMIT,19_327_352_832)
+        self.assertEqual(sizing['imageBytes'],19*1024**3)
+        self.assertEqual(sizing['diskReserveBytes'],5*1024**3+256*1024**2)
+        self.assertEqual(required,33_017_561_088)
+        current=m.cutover_disk_sizing(18_317_433_879,4*1024**3,required)
+        self.assertEqual(current['restoreDataBytes'],18_317_433_879+256*1024**2)
+        self.assertEqual(m.cutover_disk_sizing(m.CUTOVER_DATABASE_LIMIT,4*1024**3,required-m.CUTOVER_DUMP_LIMIT,True),sizing)
+        for db,mem,free in [(m.CUTOVER_DATABASE_LIMIT+1,10**12,10**12),(True,10**12,10**12),(0,10**12,10**12),(1024,4*1024**3-1,10**12),(1024,10**12,required-1)]:
+            with self.assertRaises(m.Stop):m.cutover_disk_sizing(db,mem,free)
+        with self.assertRaisesRegex(m.Stop,'CUTOVER_DISK_CAPACITY'):
+            m.cutover_disk_sizing(m.CUTOVER_DATABASE_LIMIT,4*1024**3,required-m.CUTOVER_DUMP_LIMIT-1,True)
+        self.assertEqual(m.disk_container_args(m.disk_plan(op,m.encoded(op),sizing))[-9:],m.cutover_restore_command())
+
+    def test_snapshot_command_is_serial_read_only_and_compressed(self):
+        shell=m.cutover_snapshot_dump_shell('a'*64,'00000001-00000002-1')
+        self.assertIn('default_transaction_read_only=on',shell)
+        self.assertIn('/usr/bin/timeout -s TERM -k 10 1200',shell)
+        self.assertIn('--compress=zstd:level=3',shell)
+        self.assertNotIn('--serializable-deferrable',shell)
+        self.assertNotIn('--jobs',shell)
+        with self.assertRaises(m.Stop):m.cutover_snapshot_dump_shell('a'*64,"';touch /tmp/x")
+
+    def test_full_pipeline_snapshot_accounts_cleanup_and_terminal(self):
+        s=self.scenario();result=s.invoke();canonical=Path(s.plan['canonical'])
+        receipt=json.loads((canonical/'database-backup-receipt.json').read_bytes())
+        self.assertEqual(receipt['schema'],m.CUTOVER_DISK_RECEIPT)
+        self.assertEqual(receipt['dumpCompression'],'zstd:3')
+        self.assertEqual(receipt['sourceAccountsSha256'],receipt['restoredAccountsSha256'])
+        self.assertTrue((canonical/'SUCCESS_CLEANUP_VERIFIED.json').exists())
+        self.assertFalse((s.root/'standard/active').exists())
+        self.assertFalse(s.created or s.loop or s.mapper or s.mounted)
+        self.assertFalse(result['authorizesDeploy'])
+        s.invoke(True)
+        with patch.object(m,'ROOT',s.root),patch.object(m,'read_secure',side_effect=s.read),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()):
+            m.validate_cutover_disk_terminal(s.op,m.encoded(s.op))
+            terminal=canonical/'SUCCESS_CLEANUP_VERIFIED.json';value=json.loads(terminal.read_bytes());value['observedAt']='2026-10-01T00:00:00.000Z';terminal.write_bytes(m.encoded(value))
+            with self.assertRaisesRegex(m.Stop,'CUTOVER_TERMINAL_DRIFT'):m.validate_cutover_disk_terminal(s.op,m.encoded(s.op))
+
+    def test_failure_reconciles_without_dump_or_restore_replay(self):
+        for fault in ['before:DUMP','after:DUMP','before:RESTORE','after:RESTORE','after:PHASE_PUBLISH_READY','after:PHASE_STORAGE_CLEANUP_VERIFIED','after:PHASE_PUBLISH_INTENT','after:PHASE_PUBLISHED','after:PHASE_UNLOCK_INTENT']:
+            with self.subTest(fault=fault):
+                s=self.scenario(fault)
+                with self.assertRaises(m.Stop):s.invoke()
+                old=len(s.calls);s.fault=None;s.invoke(True)
+                self.assertFalse((s.root/'standard/active').exists())
+                self.assertFalse(any('pg_restore' in a or 'pg_dump' in ' '.join(a) or (len(a)>1 and a[1] in ('create','start')) for a in s.calls[old:]))
+
+    def test_account_mismatch_never_publishes(self):
+        s=self.scenario('restore-accounts-mismatch')
+        with self.assertRaisesRegex(m.Stop,'CUTOVER_ACCOUNTS_MISMATCH'):s.invoke()
+        self.assertFalse(Path(s.plan['canonical']).exists())
+        s.fault=None;s.invoke(True)
+        self.assertIsNotNone(s.journal().find('ABORTED'))
+
+    def test_source_backend_prevents_reconcile_unlock(self):
+        s=self.scenario('before:DUMP')
+        with self.assertRaises(m.Stop):s.invoke()
+        s.fault='source-active'
+        with self.assertRaisesRegex(m.Stop,'CUTOVER_SOURCE_STILL_ACTIVE'):s.invoke(True)
+        self.assertTrue((s.root/'standard/active').exists())
+
+    def test_closed_receipt_and_witness_reject_edits(self):
+        s=self.scenario();s.invoke();canonical=Path(s.plan['canonical'])
+        receipt_path=canonical/'database-backup-receipt.json';raw=receipt_path.read_bytes();receipt=json.loads(raw)
+        for key,value in [('dumpCompression','gzip:9'),('dumpBytes',receipt['dumpBytes']+1),('sourceAccountsSha256','0'*64),('dumpLimitBytes',m.CUTOVER_DUMP_LIMIT+1)]:
+            changed={**receipt,key:value};receipt_path.write_bytes(m.encoded(changed))
+            with self.assertRaises(m.Stop):s.invoke(True)
+        receipt_path.write_bytes(raw)
+        witness=Path(s.plan['work'])/'snapshot-witness.json';w=json.loads(witness.read_bytes());w['unexpected']='raw-identity'
+        witness.write_bytes(m.encoded(w))
+        with self.assertRaises(m.Stop):s.invoke(True)
 
 
 class DiskPipelineTests(unittest.TestCase):

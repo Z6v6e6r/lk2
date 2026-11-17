@@ -37,6 +37,25 @@ partners and opponents only need to be stable inside one set.
    `shadow_compare` is reserved for read-only comparison and still rejects new writes;
    `local_primary` enables only the canonical PadlHub result repository. No mode performs dual-write
    to legacy LK.
+8. Score entry, corrected resubmission, review and automatic confirmation share one deadline:
+   `games.games.ends_at + 12 hours`. Submission never starts or extends a window. API decisions use
+   the database clock after taking the game lock. At the exact deadline manual score commands are
+   closed. The worker automatically confirms only `PENDING_CONFIRMATION`; `DISPUTED` never becomes
+   confirmed without a corrected submission and review. Existing idempotent command replays retain
+   their original outcome. Automatic commands use the `auto-confirm:end-window:` identity to avoid
+   reusing receipts under the retired submission-relative policy.
+9. A finished unresolved game (`AWAITING_SUBMISSION`, `PENDING_CONFIRMATION`, `DISPUTED`) remains in
+   My Games and Home until confirmed or the deadline is reached. History excludes it before cursor
+   pagination using canonical tenant-scoped Games state, including imported Viva history. At expiry
+   a missing or disputed score moves to history without inventing a confirmed result or rating.
+10. The `game.ru-ru.v2` notification ruleset adds optional `GAME_RESULT` in-app and push notices:
+    `game.finished.v1` asks all active participants for the score; `game.result.submitted.v1` informs
+    the submitter and all reviewers of the same absolute deadline. Notifications contain an internal
+    game link and no scores or participant names. A dedicated score-event queue isolates mixed worker
+    versions. Inbox deduplication, canonical-state checks and provider-dispatch revalidation suppress
+    duplicates, superseded submissions and expired prompts. Category opt-outs and quiet hours apply.
+    Ruleset provisioning remains an explicit audited admin operation; deployment alone does not
+    create rules, enable runtime gates or replay historical events.
 
 ## Consequences
 

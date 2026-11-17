@@ -1,6 +1,26 @@
 import { PROFILE_PHOTO_DELIVERY_PATH_PATTERN } from '@phub/domain';
 import { z } from 'zod';
 
+export const GAME_RESULT_WINDOW_HOURS = 12;
+
+/** One deadline for score entry, review and automatic confirmation. */
+export function gameResultWindowOpen(endsAt: string, now: string): boolean {
+  return Date.parse(now) < Date.parse(endsAt) + GAME_RESULT_WINDOW_HOURS * 60 * 60_000;
+}
+
+export function retainFinishedGame(input: {
+  readonly lifecycleState: string;
+  readonly resultState: string;
+  readonly endsAt: string;
+  readonly now: string;
+}): boolean {
+  return (
+    input.lifecycleState === 'FINISHED' &&
+    ['AWAITING_SUBMISSION', 'PENDING_CONFIRMATION', 'DISPUTED'].includes(input.resultState) &&
+    gameResultWindowOpen(input.endsAt, input.now)
+  );
+}
+
 export const GAME_LIFECYCLE_STATES = [
   'DRAFT',
   'PROVISIONING',
@@ -281,6 +301,7 @@ const resultSchema = z
     submittedAt: dateTime.optional(),
     requiredConfirmationUserIds: z.array(uuid).max(4).default([]),
     confirmedByUserIds: z.array(uuid).max(4).default([]),
+    autoConfirmed: z.boolean().optional(),
     confirmationQuorum: z.number().int().min(1).max(3).optional(),
     sets: z
       .array(
@@ -478,16 +499,23 @@ export const gameCardProjectionInputSchema = z
           message: 'A pending result requires enough eligible reviewers for its quorum',
         });
       }
-      if (
-        result.state === 'CONFIRMED' &&
-        result.submissionId !== undefined &&
-        result.confirmedByUserIds.length < (result.confirmationQuorum ?? 1)
-      ) {
-        context.addIssue({
-          code: 'custom',
-          path: ['result', 'confirmedByUserIds'],
-          message: 'A confirmed result must satisfy its confirmation quorum',
-        });
+      if (result.state === 'CONFIRMED' && result.submissionId !== undefined) {
+        const confirmationQuorum = result.confirmationQuorum ?? 1;
+        if (result.autoConfirmed === true) {
+          if (result.confirmedByUserIds.length > 0) {
+            context.addIssue({
+              code: 'custom',
+              path: ['result', 'confirmedByUserIds'],
+              message: 'An automatically confirmed result cannot name confirming users',
+            });
+          }
+        } else if (result.confirmedByUserIds.length < confirmationQuorum) {
+          context.addIssue({
+            code: 'custom',
+            path: ['result', 'confirmedByUserIds'],
+            message: 'A confirmed result must satisfy its confirmation quorum',
+          });
+        }
       }
     }
 
@@ -846,16 +874,20 @@ function deriveAllowedActions(input: {
   ) {
     actions.add('SUBMIT_RESULT');
   }
-  // A dispute reopens entry of a corrected score. The result command accepts a resubmission in
-  // DISPUTED without the AWAITING_SUBMISSION window, so the card offers it the same way.
+  // Corrected submissions share the original game deadline.
   if (
     game.lifecycleState === 'FINISHED' &&
     resultState === 'DISPUTED' &&
+    gameResultWindowOpen(game.endsAt, input.now) &&
     (viewerRelation === 'ORGANIZER' || viewerRelation === 'PARTICIPANT')
   ) {
     actions.add('SUBMIT_RESULT');
   }
-  if (game.lifecycleState === 'FINISHED' && resultState === 'PENDING_CONFIRMATION') {
+  if (
+    game.lifecycleState === 'FINISHED' &&
+    resultState === 'PENDING_CONFIRMATION' &&
+    gameResultWindowOpen(game.endsAt, input.now)
+  ) {
     const viewerUserId = input.viewerUserId;
     if (
       viewerUserId &&
@@ -894,7 +926,8 @@ export function projectGameCard(
   const input = parseProjectionInput(rawInput);
   const nowMs = parseInstant(context.now, 'now');
   const startingSoonMinutes = context.startingSoonMinutes ?? 180;
-  const resultSubmissionWindowHours = context.resultSubmissionWindowHours ?? 48;
+  const resultSubmissionWindowHours =
+    context.resultSubmissionWindowHours ?? GAME_RESULT_WINDOW_HOURS;
   if (
     !Number.isInteger(startingSoonMinutes) ||
     startingSoonMinutes < 0 ||
@@ -907,12 +940,11 @@ export function projectGameCard(
   }
   if (
     !Number.isInteger(resultSubmissionWindowHours) ||
-    resultSubmissionWindowHours < 1 ||
-    resultSubmissionWindowHours > 168
+    resultSubmissionWindowHours !== GAME_RESULT_WINDOW_HOURS
   ) {
     throw new GameDomainError(
       'GAME_SNAPSHOT_INVALID',
-      'resultSubmissionWindowHours must be an integer between 1 and 168',
+      'resultSubmissionWindowHours must be 12 hours from game end',
     );
   }
 

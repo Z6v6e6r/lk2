@@ -26,9 +26,11 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
     private volatile boolean callbackStorageFailed;
     /** Does not touch credentials or the queue; it only makes an active refresh result unusable. */
     private volatile long upcomingRefreshEpoch;
+    private volatile long profileRefreshEpoch;
     private final AndroidUpcomingBookingsRefresh.Circuits upcomingCircuits = new AndroidUpcomingBookingsRefresh.Circuits();
+    private final AndroidProfileRefresh.Circuits profileCircuits = new AndroidProfileRefresh.Circuits();
     // One active + one pending redacted batch; rejected telemetry never blocks a product read.
-    private final java.util.concurrent.ThreadPoolExecutor upcomingMetrics = new java.util.concurrent.ThreadPoolExecutor(
+    private final java.util.concurrent.ThreadPoolExecutor nativeMetrics = new java.util.concurrent.ThreadPoolExecutor(
         1, 1, 30, java.util.concurrent.TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(1),
         new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private String failedCallback;
@@ -107,6 +109,7 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
                 if ("DELETE".equals(method) && (policy.authRoot + "/session").equals(path)) {
                     // Cancel a long native-only refresh before it reaches the serial queue.
                     upcomingRefreshEpoch++;
+                    profileRefreshEpoch++;
                     new AndroidPushState(getContext(), policy).suspend();
                 }
                 queue.execute(() -> {
@@ -153,11 +156,36 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
                     try {
                         if (oauth == null || callbackStorageFailed) throw new Failure("NATIVE_STORAGE_UNAVAILABLE");
                         AndroidSessionEngine.NativeAccess access = engine.nativeAccess();
-                        new AndroidUpcomingBookingsRefresh(policy, engine, sender, upcomingCircuits, upcomingMetrics).run(access, () -> {
+                        new AndroidUpcomingBookingsRefresh(policy, engine, sender, upcomingCircuits, nativeMetrics).run(access, () -> {
                             if (epoch != upcomingRefreshEpoch) throw new Failure("NATIVE_OPERATION_CANCELLED");
                         });
                         getActivity().runOnUiThread(() -> {
                             if (trustedPage() && epoch == upcomingRefreshEpoch) call.resolve(new JSObject().put("state", "refreshed"));
+                            else call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
+                        });
+                    } catch (Failure error) { call.reject("Native refresh unavailable", error.code); }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException ignored) { call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED"); }
+        });
+    }
+
+    @PluginMethod public void refreshProfile(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!trustedPage() || policy == null || engine == null || sender == null || call.getData().length() != 0) {
+                call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
+                return;
+            }
+            try {
+                final long epoch = profileRefreshEpoch;
+                queue.execute(() -> {
+                    try {
+                        if (oauth == null || callbackStorageFailed) throw new Failure("NATIVE_STORAGE_UNAVAILABLE");
+                        AndroidSessionEngine.NativeAccess access = engine.nativeAccess();
+                        new AndroidProfileRefresh(policy, engine, sender, profileCircuits, nativeMetrics).run(access, () -> {
+                            if (epoch != profileRefreshEpoch) throw new Failure("NATIVE_OPERATION_CANCELLED");
+                        });
+                        getActivity().runOnUiThread(() -> {
+                            if (trustedPage() && epoch == profileRefreshEpoch) call.resolve(new JSObject().put("state", "refreshed"));
                             else call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
                         });
                     } catch (Failure error) { call.reject("Native refresh unavailable", error.code); }
@@ -268,8 +296,9 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
 
     @Override protected void handleOnDestroy() {
         upcomingRefreshEpoch++;
+        profileRefreshEpoch++;
         queue.shutdownNow();
-        upcomingMetrics.shutdownNow();
+        nativeMetrics.shutdownNow();
         if (sender != null) sender.close();
     }
 }
