@@ -19,14 +19,14 @@ export function createGameJoinConditionsOwner(options: {
   readonly readOwnedSubscription: (input: {
     readonly accessToken: string;
     readonly accessTokenExpiresAt: string;
-    /** ADR 0028: actor and exercise let the LK1 owner attest ownership from its own egress. */
+    /** ADR 0028: actor and LK1 game alias let the owner attest ownership from its own egress. */
     readonly actor: {
       readonly tenantId: string;
       readonly userId: string;
       readonly sessionId: string;
       readonly tenantKey: string;
     };
-    readonly providerExerciseId: string | null;
+    readonly legacyGameId: string;
     readonly providerClientId: string;
     readonly providerSubscriptionId: string;
     readonly startsAt: string;
@@ -80,7 +80,7 @@ export function createGameJoinConditionsOwner(options: {
           sessionId: actor.sessionId,
           tenantKey: actor.tenantKey,
         },
-        providerExerciseId: context.providerExerciseId,
+        legacyGameId: context.legacyGameId,
         providerClientId: context.providerClientId,
         providerSubscriptionId: context.providerSubscriptionId,
         startsAt: context.startsAt,

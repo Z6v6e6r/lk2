@@ -13,7 +13,7 @@ const input = {
     sessionId: '33333333-3333-4333-8333-333333333333',
     tenantKey: 'local-padel',
   },
-  providerExerciseId: 'ex-77',
+  legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666',
   providerClientId: clientId,
   providerSubscriptionId: subscriptionId,
   startsAt: '2026-11-09T13:00:00+03:00',
@@ -38,7 +38,7 @@ function setup(patch: Record<string, unknown> = {}, proof: Record<string, unknow
         subscriptions: [],
         attestedAt: '2026-11-08T10:00:00.000Z',
         targetProof: {
-          exerciseId: 'ex-77',
+          legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666',
           startsAt: '2026-11-09T10:00:00.000Z',
           durationMinutes: 60,
           ownedClientSubscriptionIds: [subscriptionId],
@@ -57,7 +57,7 @@ describe('createLk1OwnedSubscriptionReader', () => {
     const { issuer, client, read } = setup();
     const result = await read(input);
     const issued = issuer.issueProviderAccountAttestation.mock.calls[0]![0] as {
-      request: { operationId: string; target: { exerciseId: string } };
+      request: { operationId: string; target: { legacyGameId: string } };
       actorToken: string;
     };
     const [request, envelope] = client.attest.mock.calls[0] as unknown as [
@@ -65,7 +65,9 @@ describe('createLk1OwnedSubscriptionReader', () => {
       { actorDelegation: string; actorToken: { token: string } },
     ];
     expect(issued.request).toBe(request);
-    expect(issued.request.target).toEqual({ exerciseId: 'ex-77' });
+    expect(issued.request.target).toEqual({
+      legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666',
+    });
     expect(issued.actorToken).toBe(input.accessToken);
     expect((issued as unknown as { tenantKey: string }).tenantKey).toBe('iSkq6G');
     expect(envelope.actorToken.token).toBe(input.accessToken);
@@ -75,9 +77,15 @@ describe('createLk1OwnedSubscriptionReader', () => {
     expect((await read(input)).fingerprint).toBe(result.fingerprint);
   });
 
-  it('fails closed without a mapped exercise and never calls LK1', async () => {
+  it.each([
+    ['the pseudonymous hash alias', 'a'.repeat(64)],
+    ['an empty alias', ''],
+    ['a non-pay alias', 'game_79c6fd04-1111-4222-8333-444455556666'],
+    ['an uppercase alias', 'pay_79C6FD04-1111-4222-8333-444455556666'],
+    ['a non-RFC uuid alias', 'pay_79c6fd04-1111-9222-8333-444455556666'],
+  ])('fails closed for %s and never calls LK1', async (_name, legacyGameId) => {
     const { client, read } = setup();
-    await expect(read({ ...input, providerExerciseId: null })).rejects.toMatchObject({
+    await expect(read({ ...input, legacyGameId })).rejects.toMatchObject({
       code: 'GAME_JOIN_CONDITIONS_MAPPING_UNAVAILABLE',
     });
     expect(client.attest).not.toHaveBeenCalled();

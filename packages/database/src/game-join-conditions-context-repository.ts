@@ -15,8 +15,6 @@ export interface GameJoinConditionsContext {
   readonly legacyGameId: string;
   readonly providerClientId: string;
   readonly providerSubscriptionId: string;
-  /** Viva exercise id of this game, or null when no synced mapping exists (ADR 0028 target). */
-  readonly providerExerciseId: string | null;
   readonly startsAt: string;
   readonly durationMinutes: 60 | 90;
 }
@@ -26,7 +24,6 @@ interface ContextRow {
   readonly provider_tenant_key: string;
   readonly provider_client_id: string;
   readonly provider_subscription_id: string;
-  readonly provider_exercise_id?: string | null;
   readonly starts_at: Date | string;
   readonly ends_at: Date | string;
   readonly aliases: readonly {
@@ -60,12 +57,6 @@ export function createGameJoinConditionsContextRepository(
                  profile.external_id as provider_client_id, binding.provider_tenant_key,
                  subscription.external_id as provider_subscription_id,
                  game.starts_at, game.ends_at,
-                 (select exercise.external_id
-                    from integration.external_entity_map exercise
-                   where exercise.tenant_id = game.tenant_id and exercise.internal_id = game.id
-                     and exercise.external_system = 'VIVA' and exercise.entity_type = 'exercise'
-                     and exercise.sync_status = 'synced' and exercise.sync_error_code is null
-                   limit 1) as provider_exercise_id,
                  (select jsonb_agg(jsonb_build_object('id', alias.external_id,
                           'version', alias.external_version, 'status', alias.sync_status,
                           'error', alias.sync_error_code, 'syncedAt', alias.last_synced_at) order by alias.external_id)
@@ -170,11 +161,6 @@ export function createGameJoinConditionsContextRepository(
           legacyGameId: candidates[0]!.id,
           providerClientId: row.provider_client_id,
           providerSubscriptionId: row.provider_subscription_id,
-          providerExerciseId:
-            typeof row.provider_exercise_id === 'string' &&
-            /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(row.provider_exercise_id)
-              ? row.provider_exercise_id
-              : null,
           startsAt,
           durationMinutes,
         };

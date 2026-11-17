@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
+  isLegacyGameId,
   PROVIDER_ACCOUNT_TENANT_KEY,
   type ProviderAccountAttestation,
   type ProviderAccountAttestationRequest,
@@ -71,7 +72,8 @@ export function createLk1OwnedSubscriptionReader(options: {
       readonly sessionId: string;
       readonly tenantKey: string;
     };
-    readonly providerExerciseId: string | null;
+    /** LK1 game alias from the join context (`pay_<uuid>`). */
+    readonly legacyGameId: string;
     readonly providerClientId: string;
     readonly providerSubscriptionId: string;
     readonly startsAt: string;
@@ -79,14 +81,14 @@ export function createLk1OwnedSubscriptionReader(options: {
     readonly signal: AbortSignal;
     readonly correlationId: string;
   }): Promise<{ readonly fingerprint: string }> => {
-    if (!input.providerExerciseId)
+    if (!isLegacyGameId(input.legacyGameId))
       throw toJoinConditionsError(
         new Lk1OwnedSubscriptionError('JOIN_SELECTION_TARGET_UNAVAILABLE'),
       );
     const request: ProviderAccountAttestationRequest = {
       contractVersion: 1,
       operationId: randomUUID(),
-      target: { exerciseId: input.providerExerciseId },
+      target: { legacyGameId: input.legacyGameId },
     };
     const actorDelegation = await options.issuer.issueProviderAccountAttestation({
       tenantId: input.actor.tenantId,
@@ -131,7 +133,7 @@ export function createLk1OwnedSubscriptionReader(options: {
           JSON.stringify([
             'lk1-attest:v1',
             result.providerClientId.toLowerCase(),
-            proof.exerciseId,
+            proof.legacyGameId,
             Date.parse(proof.startsAt),
             proof.durationMinutes,
             selected,

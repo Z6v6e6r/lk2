@@ -223,7 +223,7 @@ describe('SubscriptionRuntimeActorDelegationIssuer', () => {
     const request = {
       contractVersion: 1 as const,
       operationId: '55555555-5555-4555-8555-555555555555',
-      target: { exerciseId: 'ex-77' },
+      target: { legacyGameId: 'pay_79c6fd04-1111-4222-8333-444455556666' },
     };
     const actorTokenExpiresAt = new Date(Date.now() + 120_000).toISOString();
     const base = {
