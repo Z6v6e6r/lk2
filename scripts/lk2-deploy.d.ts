@@ -60,7 +60,7 @@ export declare const CONFIRMATION_PREFIX: string;
 
 export declare function sha256(value: Buffer | string): string;
 export declare function hashFile(path: string): string;
-export declare function readJson(path: string): Record<string, any>;
+export declare function readJson(path: string): Record<string, unknown>;
 export declare function releaseId(sha: string, runId: string | number): string;
 export declare function toolDir(sha: string): string;
 export declare function confirmationFor(candidateSha: string, baselineHash: string): string;
@@ -94,11 +94,11 @@ export declare function mountCheck(backupsPath?: string): MountLeaks;
 export declare function commandApply(
   input: { readonly sha: string; readonly confirmation: string },
   env?: Record<string, unknown>,
-): Record<string, any>;
+): Record<string, unknown>;
 export declare function commandPrepareFull(input: {
   readonly sha: string;
   readonly run: string;
   readonly artifact: string;
   readonly artifactId: string;
   readonly sourceCiRunId: string;
-}): Promise<Record<string, any>>;
+}): Promise<Record<string, unknown>>;
