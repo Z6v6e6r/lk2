@@ -8,7 +8,9 @@ export interface AuthCallbackError {
 const AUTH_ERROR_FRAGMENT_KEY = 'viva_auth_error';
 const CORRELATION_ID_FRAGMENT_KEY = 'viva_correlation_id';
 const SUPPORTED_AUTH_ERRORS: readonly string[] = ['AUTH_IDENTITY_CONFLICT'];
-const CORRELATION_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
+// Same shape the API accepts for X-Correlation-ID (apps/api/src/app.ts), so a legitimately
+// forwarded identifier is never dropped.
+const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
 function markerFragment(hash: string): URLSearchParams {
   return new URLSearchParams(hash.replace(/^#/, ''));

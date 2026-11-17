@@ -2563,6 +2563,28 @@ describe('PadlHub web authentication', () => {
     expect(gateway.logout).not.toHaveBeenCalled();
   });
 
+  it('keeps the identity conflict screen when there is no session to restore', async () => {
+    window.history.replaceState({}, '', '/#viva_auth_error=AUTH_IDENTITY_CONFLICT');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(null) });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Выйти из аккаунта?' })).toBeVisible();
+    expect(window.location.hash).toBe('');
+    expect(gateway.logout).not.toHaveBeenCalled();
+  });
+
+  it('prefers a restored session over a stale identity conflict marker', async () => {
+    window.history.replaceState({}, '', '/#viva_auth_error=AUTH_IDENTITY_CONFLICT');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Выйти из аккаунта?' })).not.toBeInTheDocument();
+    expect(window.location.hash).toBe('');
+  });
+
   it('keeps the OTP screen accessible and explains a rejected code', async () => {
     const gateway = createGateway({
       verifyCode: vi.fn().mockRejectedValue({ code: 'AUTH_CODE_INVALID' }),

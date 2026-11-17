@@ -952,11 +952,12 @@ export function App({
     // conflict; the marker leaves the URL once in the effect below.
     callbackError: typeof window === 'undefined' ? null : readAuthCallbackError(window.location),
   }));
-  const callbackError = state.callbackError;
   useEffect(() => {
-    if (!callbackError || typeof window === 'undefined') return;
+    // The marker is one-shot for the URL, not for the session: clear it even when a restored
+    // session supersedes the conflict screen. The call is a no-op without the marker.
+    if (typeof window === 'undefined') return;
     clearAuthCallbackError(window.location, window.history);
-  }, [callbackError]);
+  }, []);
   const communityRealtimeTransport = useMemo(() => {
     if (!realtimeUrl || typeof WebSocket === 'undefined') return undefined;
     return createCommunityRealtimeTransport({
@@ -3680,10 +3681,10 @@ export function App({
               <h1 id="auth-title">Выйти из аккаунта?</h1>
               <p className="form-lead" role="alert">
                 Профиль Viva, под которым вы пытаетесь войти, уже связан с другим аккаунтом ПадлхАБ.
-                Завершите текущую сессию, чтобы вернуться на экран входа и войти снова.
+                Выйдите из аккаунта и попробуйте войти под другим аккаунтом.
               </p>
               {state.callbackError.correlationId ? (
-                <p className="field-help">
+                <p className="field-help" id="auth-conflict-support">
                   Если ошибка повторится, обратитесь в поддержку и укажите код обращения{' '}
                   {state.callbackError.correlationId}.
                 </p>
