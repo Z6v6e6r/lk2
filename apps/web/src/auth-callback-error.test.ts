@@ -1,76 +1,67 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { consumeAuthCallbackError } from './auth-callback-error.js';
+import { clearAuthCallbackError, readAuthCallbackError } from './auth-callback-error.js';
 
-function locationWith(hash: string, search = '') {
-  return { pathname: '/', search, hash };
-}
-
-describe('consumeAuthCallbackError', () => {
-  it('reads a supported callback failure and removes the one-shot marker from the URL', () => {
-    const replaceState = vi.fn();
-    const error = consumeAuthCallbackError(
-      locationWith(
-        '#viva_auth_error=AUTH_IDENTITY_CONFLICT&viva_correlation_id=73408883-7e73-4ce1-b899-5bc73b42f7f9',
-      ),
-      { state: { test: true }, replaceState },
-    );
-
-    expect(error).toEqual({
+describe('readAuthCallbackError', () => {
+  it('reads a supported callback failure without touching the URL', () => {
+    expect(
+      readAuthCallbackError({
+        hash: '#viva_auth_error=AUTH_IDENTITY_CONFLICT&viva_correlation_id=73408883-7e73-4ce1-b899-5bc73b42f7f9',
+      }),
+    ).toEqual({
       code: 'AUTH_IDENTITY_CONFLICT',
       correlationId: '73408883-7e73-4ce1-b899-5bc73b42f7f9',
     });
-    expect(replaceState).toHaveBeenCalledWith({ test: true }, '', '/');
-  });
-
-  it('keeps unrelated fragment values while removing the marker', () => {
-    const replaceState = vi.fn();
-
-    consumeAuthCallbackError(
-      locationWith(
-        '#viva_handoff=one-time-code&viva_auth_error=AUTH_IDENTITY_CONFLICT',
-        '?from=viva',
-      ),
-      { state: null, replaceState },
-    );
-
-    expect(replaceState).toHaveBeenCalledWith(null, '', '/?from=viva#viva_handoff=one-time-code');
   });
 
   it('stays silent when the callback did not report a failure', () => {
-    const replaceState = vi.fn();
-
-    expect(
-      consumeAuthCallbackError(locationWith('#viva_handoff=one-time-code'), {
-        state: null,
-        replaceState,
-      }),
-    ).toBeNull();
-    expect(replaceState).not.toHaveBeenCalled();
+    expect(readAuthCallbackError({ hash: '#viva_handoff=one-time-code' })).toBeNull();
+    expect(readAuthCallbackError({ hash: '' })).toBeNull();
   });
 
-  it('drops codes the client cannot explain and still clears the marker', () => {
-    const replaceState = vi.fn();
-
+  it('drops codes the client cannot explain', () => {
     expect(
-      consumeAuthCallbackError(locationWith('#viva_auth_error=AUTH_PROVIDER_UNAVAILABLE'), {
-        state: null,
-        replaceState,
-      }),
+      readAuthCallbackError({ hash: '#viva_auth_error=AUTH_PROVIDER_UNAVAILABLE' }),
     ).toBeNull();
-    expect(replaceState).toHaveBeenCalledWith(null, '', '/');
   });
 
   it('never surfaces a correlation ID that is not a plain identifier', () => {
+    expect(
+      readAuthCallbackError({
+        hash: `#viva_auth_error=AUTH_IDENTITY_CONFLICT&viva_correlation_id=${'<b>'.repeat(60)}`,
+      }),
+    ).toEqual({ code: 'AUTH_IDENTITY_CONFLICT' });
+  });
+});
+
+describe('clearAuthCallbackError', () => {
+  it('removes the marker while preserving unrelated query and fragment values', () => {
     const replaceState = vi.fn();
 
-    const error = consumeAuthCallbackError(
-      locationWith(
-        `#viva_auth_error=AUTH_IDENTITY_CONFLICT&viva_correlation_id=${'<b>'.repeat(60)}`,
-      ),
+    clearAuthCallbackError(
+      {
+        pathname: '/',
+        search: '?from=viva',
+        hash: '#viva_handoff=one-time-code&viva_auth_error=AUTH_IDENTITY_CONFLICT&viva_correlation_id=abc-1',
+      },
+      { state: { test: true }, replaceState },
+    );
+
+    expect(replaceState).toHaveBeenCalledWith(
+      { test: true },
+      '',
+      '/?from=viva#viva_handoff=one-time-code',
+    );
+  });
+
+  it('does not rewrite history when there is no marker', () => {
+    const replaceState = vi.fn();
+
+    clearAuthCallbackError(
+      { pathname: '/profile', search: '', hash: '#viva_handoff=one-time-code' },
       { state: null, replaceState },
     );
 
-    expect(error).toEqual({ code: 'AUTH_IDENTITY_CONFLICT' });
+    expect(replaceState).not.toHaveBeenCalled();
   });
 });

@@ -23,7 +23,11 @@ import yandexIconUrl from './assets/yandex-auth.svg';
 import { connectChatRealtime } from './chat-realtime-client.js';
 import type { ChatRealtimeConnectionState } from './chat-realtime-client.js';
 import type { ChatRealtimeUiState, ChatUiError, PendingChatMessage } from './ChatsPage.js';
-import { consumeAuthCallbackError, type AuthCallbackError } from './auth-callback-error.js';
+import {
+  clearAuthCallbackError,
+  readAuthCallbackError,
+  type AuthCallbackError,
+} from './auth-callback-error.js';
 import { consumeCommunityInviteToken } from './community-invite-token.js';
 import {
   clearGameChatNavigation,
@@ -944,11 +948,15 @@ export function App({
 }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState, (base) => ({
     ...base,
-    callbackError:
-      typeof window === 'undefined'
-        ? null
-        : consumeAuthCallbackError(window.location, window.history),
+    // Reading the callback marker is pure, so StrictMode's repeated initializer keeps the same
+    // conflict; the marker leaves the URL once in the effect below.
+    callbackError: typeof window === 'undefined' ? null : readAuthCallbackError(window.location),
   }));
+  const callbackError = state.callbackError;
+  useEffect(() => {
+    if (!callbackError || typeof window === 'undefined') return;
+    clearAuthCallbackError(window.location, window.history);
+  }, [callbackError]);
   const communityRealtimeTransport = useMemo(() => {
     if (!realtimeUrl || typeof WebSocket === 'undefined') return undefined;
     return createCommunityRealtimeTransport({
