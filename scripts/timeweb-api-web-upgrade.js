@@ -2535,7 +2535,7 @@ export function validateCanonicalHistoricalArtifacts(baseline, files) {
     receipt.status !== 'RECONCILED' ||
     receipt.reconciledStatus !== 'SUCCESS' ||
     receipt.installedBaselineSha256 !== hash(descriptor) ||
-    values.PHUB_COMPONENT_ROLLOUT_KIND !== OWNER_KIND ||
+    ![OWNER_KIND, CANONICAL_KIND].includes(values.PHUB_COMPONENT_ROLLOUT_KIND) ||
     values.PHUB_RELEASE_ID !== b.installedReleaseId
   )
     fail('canonical_history_identity');
