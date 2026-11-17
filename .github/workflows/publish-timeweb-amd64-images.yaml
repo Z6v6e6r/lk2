@@ -435,6 +435,10 @@ jobs:
           done < "publication-evidence/$SERVICE-attestation-layers.tsv"
           unset registry_token
           jq -s -e --arg runtimeSha "${runtime_digest#sha256:}" '
+            (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
+            (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) as $provenance |
+            (($provenance | type) == "object") and
+            (($sbom | type) == "object") and
             length == 2 and
             ([.[].predicateType] | sort | unique) == [
               "https://slsa.dev/provenance/v1",
@@ -446,7 +450,6 @@ jobs:
               (.subject[0].digest | keys) == ["sha256"] and
               .subject[0].digest.sha256 == $runtimeSha
             ) and
-            (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
             $sbom.SPDXID == "SPDXRef-DOCUMENT" and
             ($sbom.packages | type == "array" and length > 0)
           ' publication-evidence/"$SERVICE"-attestation-statements/*.json >/dev/null
