@@ -238,18 +238,18 @@ export function parseBookedOperationV3Quote(value: unknown): BookedOperationV3Qu
   )
     invalidResult();
   return {
-    quoteId: value.quoteId as string,
-    operationId: value.operationId as string,
+    quoteId: value.quoteId,
+    operationId: value.operationId,
     basis: value.basis as BookedOperationV3Basis,
     durationMinutes: Number(value.durationMinutes) as BookedOperationV3Duration,
-    startsAt: value.startsAt as string,
-    endsAt: value.endsAt as string,
+    startsAt: value.startsAt,
+    endsAt: value.endsAt,
     amountMinor: Number(value.amountMinor),
     currency: 'RUB',
     coveredMinutes: Number(value.coveredMinutes),
     surchargeMinor: Number(value.surchargeMinor),
-    expiresAt: value.expiresAt as string,
-    policyVersion: value.policyVersion as string,
+    expiresAt: value.expiresAt,
+    policyVersion: value.policyVersion,
     priceDigest: value.priceDigest as string,
   };
 }
@@ -272,8 +272,8 @@ export function parseBookedOperationV3Settlement(value: unknown): BookedOperatio
     mode: value.mode,
     currency: 'RUB',
     toPayMinor: Number(value.toPayMinor),
-    checkoutUrl: value.checkoutUrl as string | null,
-    expiresAt: value.expiresAt as string | null,
+    checkoutUrl: value.checkoutUrl,
+    expiresAt: value.expiresAt,
     state: value.state as BookedOperationV3PaymentState,
   };
 }
@@ -359,24 +359,22 @@ export function parseBookedOperationV3ReadOutcome(value: unknown): BookedOperati
     contractVersion: 3,
     operationId: value.operationId,
     status: value.status as BookedOperationV3ReadOutcome['status'],
-    asOf: value.asOf as string | null,
+    asOf: value.asOf,
     payment: {
       state: value.payment.state as BookedOperationV3PaymentState,
       toPayMinor: Number(value.payment.toPayMinor),
       paidMinor: Number(value.payment.paidMinor),
-      checkoutUrl: value.payment.checkoutUrl as string | null,
+      checkoutUrl: value.payment.checkoutUrl,
     },
     booking: {
       state: value.booking.state as BookedOperationV3BookingState,
-      ...(value.booking.bookingRef === undefined
-        ? {}
-        : { bookingRef: value.booking.bookingRef as string }),
+      ...(value.booking.bookingRef === undefined ? {} : { bookingRef: value.booking.bookingRef }),
     },
     visit: {
       state: value.visit.state as BookedOperationV3VisitState,
-      ...(value.visit.usageRef === undefined ? {} : { usageRef: value.visit.usageRef as string }),
+      ...(value.visit.usageRef === undefined ? {} : { usageRef: value.visit.usageRef }),
     },
-    reason: value.reason as string | null,
+    reason: value.reason,
   };
 }
 

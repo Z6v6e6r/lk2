@@ -15,7 +15,11 @@ const envelope = {
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
   },
 };
-const { actorToken: _actorToken, ...envelopeWithoutToken } = envelope;
+const envelopeWithoutToken = {
+  actorDelegation: envelope.actorDelegation,
+  correlationId: envelope.correlationId,
+  operationId: envelope.operationId,
+};
 const target = { kind: 'GAME' as const, id: id(1), expectedRevision: 7 };
 const preflight = {
   contractVersion: 3 as const,
@@ -49,12 +53,15 @@ const settlement = {
 
 function client(response: unknown, status = 200) {
   const calls: Array<{ url: string; init?: RequestInit | undefined }> = [];
-  const fetchImplementation = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    return new Response(JSON.stringify(response), {
-      status,
-      headers: { 'Content-Type': 'application/json' },
-    });
+  const fetchImplementation = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+    const href = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    calls.push({ url: href, init });
+    return Promise.resolve(
+      new Response(JSON.stringify(response), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
   }) as unknown as typeof fetch;
   return {
     calls,
@@ -86,7 +93,8 @@ describe('booked operation v3 client', () => {
     const headers = new Headers(call.init?.headers);
     expect(headers.get('X-Subscription-Actor-Delegation')).toBe('delegation-token');
     expect(headers.get('X-Subscription-Actor-Token')).toBe('actor-token-1234567890');
-    expect(JSON.parse(String(call.init?.body))).toEqual(preflight);
+    const body = call.init?.body;
+    expect(JSON.parse(typeof body === 'string' ? body : '')).toEqual(preflight);
   });
 
   it('reads the original operation without an actor token', async () => {
