@@ -16,6 +16,9 @@ const url = process.argv[2] ?? 'http://127.0.0.1:4173/';
 const runsArg = process.argv.find((arg) => arg.startsWith('--runs='));
 const runs = runsArg ? Number(runsArg.split('=')[1]) : 5;
 const throttle = !process.argv.includes('--no-throttle');
+// `--cold-every-run` clears the HTTP cache before every navigation, so every sample is a first
+// visit. Without it the first run is cold and the rest reuse the cache (a repeat app open).
+const coldEveryRun = process.argv.includes('--cold-every-run');
 const chromePath =
   process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
@@ -171,10 +174,10 @@ async function runOnce(cdp, sessionId, warm) {
 }
 
 function stats(values) {
-  if (!values.length) return { p50: 0, p95: 0 };
+  if (!values.length) return { runs: 0, p50: 0, p95: 0 };
   const sorted = [...values].sort((a, b) => a - b);
   const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
-  return { p50: Math.round(at(0.5)), p95: Math.round(at(0.95) ?? at(1)) };
+  return { runs: values.length, p50: Math.round(at(0.5)), p95: Math.round(at(0.95)) };
 }
 
 const profileDir = mkdtempSync(join(tmpdir(), 'phub-perf-'));
@@ -214,11 +217,11 @@ try {
   for (let i = 0; i < runs; i += 1) {
     // Cache disabled in the browser process would simulate a first visit; warm runs reuse the
     // on-disk HTTP cache created by the previous navigation.
-    samples.push(await runOnce(cdp, undefined, i > 0));
+    samples.push(await runOnce(cdp, undefined, coldEveryRun ? false : i > 0));
   }
 
-  const cold = samples.slice(0, 1);
-  const warm = samples.slice(1);
+  const cold = coldEveryRun ? samples : samples.slice(0, 1);
+  const warm = coldEveryRun ? [] : samples.slice(1);
   const summarize = (list) => ({
     runs: list.length,
     firstScreenMs: stats(list.filter((s) => s.firstScreen).map((s) => s.firstScreen.at)),
@@ -235,6 +238,7 @@ try {
       {
         url,
         mode: throttle ? '4G 1.6Mbps/150ms RTT, CPU 4x slowdown' : 'no network/CPU throttling',
+        cache: coldEveryRun ? 'cold every run' : 'cold first run, warm after',
         evidence: 'LOCAL (synthetic shell timing, no PadlHub API)',
         cold: summarize(cold),
         warm: summarize(warm),
