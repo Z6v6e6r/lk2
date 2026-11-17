@@ -75,9 +75,18 @@ standard browser-cache behaviour; no first-party client sets the header manually
    (`scripts/timeweb-api-web-upgrade.js`) classifies it as a protected runtime-definition change.
    Evidence: the release window `4b8dbaa1..origin/main` contains **0** paths matching
    `contracts/`, `packages/database/migrations/`, `openapi.yaml` or the protected deploy scripts;
-   this head contains **1** (`contracts/openapi/public/v1/openapi.yaml`). The guard is not weakened and the
-   historical check is not edited. Publication therefore needs the release owner's path / owner
-   approval, and `quality-full` is expected to be red for that single, isolated reason.
+   this head contains **1** (`contracts/openapi/public/v1/openapi.yaml`).
+
+   On CI, `quality-full` passed on this head: the release-tooling tests stay paused unless the
+   change also touches their activation inputs (`scripts/**`, `vitest.config.ts`), and this branch
+   touches neither. Running the validator test directly on this head **fails** with
+   `callback_runtime_bridge` (`npx vitest run scripts/timeweb-api-web-upgrade.test.ts`: 1 failed,
+   77 passed), and it fails the same way in a linked worktree of pristine `origin/main` once the
+   contracts path enters the window. A green CI therefore does **not** mean the release validator
+   accepted the contract delta: publication needs the release owner's decision on how a doc-only,
+   add-only contract change is admitted. The guard is not weakened and no historical check was
+   edited.
+
 3. **Order of deployment:** API first (the 304 originates there), Web/Android later are unaffected.
    No migration, no schema change, no backfill, no cache purge needed.
 4. **Observation after deployment:** share of `304` versus `200` on the two media routes, error rate
