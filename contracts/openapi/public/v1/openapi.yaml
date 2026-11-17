@@ -40,6 +40,12 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: If-None-Match
+        in: header
+        required: false
+        description: ETag of the copy already held by the client. A matching tag returns bodyless 304.
+        schema:
+          type: string
     get:
       tags: [communities]
       operationId: getPublicCommunityLogo
@@ -55,6 +61,17 @@ paths:
               schema:
                 type: string
                 contentEncoding: binary
+        '304':
+          description: The stored logo still matches If-None-Match; no image body is sent.
+          headers:
+            ETag:
+              description: Tag of the unchanged stored object.
+              schema:
+                type: string
+            Cache-Control:
+              description: Same cache policy as the 200 response.
+              schema:
+                type: string
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '503':
@@ -74,6 +91,12 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: If-None-Match
+        in: header
+        required: false
+        description: ETag of the copy already held by the client. A matching tag returns bodyless 304.
+        schema:
+          type: string
     get:
       tags: [profiles]
       operationId: getPublicProfilePhoto
@@ -89,6 +112,17 @@ paths:
               schema:
                 type: string
                 contentEncoding: binary
+        '304':
+          description: The stored photo still matches If-None-Match; no image body is sent.
+          headers:
+            ETag:
+              description: Tag of the unchanged stored object.
+              schema:
+                type: string
+            Cache-Control:
+              description: Same cache policy as the 200 response.
+              schema:
+                type: string
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '503':

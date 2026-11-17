@@ -2,6 +2,7 @@ import type { CommunityLogoMediaRepository } from '@phub/database';
 import type { FastifyInstance } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
+import { ifNoneMatchMatches } from '../media/conditional-media-get.js';
 import {
   ProfilePhotoMediaNotFoundError,
   type ProfilePhotoMediaStore,
@@ -57,9 +58,12 @@ export function registerCommunityLogoMediaRoutes(
       const object = await options.store.read(objectKey);
       reply.header('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
       reply.header('Cross-Origin-Resource-Policy', 'cross-origin');
+      if (object.etag) reply.header('ETag', object.etag);
+      if (ifNoneMatchMatches(request.headers['if-none-match'], object.etag)) {
+        return reply.status(304).send();
+      }
       reply.type('image/webp');
       if (object.contentLength !== undefined) reply.header('Content-Length', object.contentLength);
-      if (object.etag) reply.header('ETag', object.etag);
       return reply.send(object.body);
     } catch (error) {
       if (error instanceof ProfilePhotoMediaNotFoundError) {
