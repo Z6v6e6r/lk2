@@ -163,6 +163,10 @@ const subscriberQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
 });
 
+const nativeSubscriberQuerySchema = subscriberQuerySchema.extend({
+  platform: z.enum(['ANDROID', 'IOS']),
+});
+
 function idempotencyKey(request: FastifyRequest): string {
   return request.headers['idempotency-key'] as string;
 }
@@ -210,6 +214,7 @@ export function registerAdminNotificationRoutes(
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
     readonly androidPush?: AdminAndroidPushRuntime;
+    readonly iosPush?: { readonly appId: string; readonly environment: 'SANDBOX' | 'PRODUCTION' };
     /** Required to report the push service behind a subscription; the report omits it without a keyring. */
     readonly endpointCipher?: NotificationEndpointCipher;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
@@ -317,6 +322,45 @@ export function registerAdminNotificationRoutes(
             ...(present.length > 0 ? { platforms: present } : {}),
           };
         }),
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      };
+    },
+  );
+
+  app.get(
+    '/admin/api/v1/:tenantKey/notifications/native-push-subscribers',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      if (!options.repository || !request.tenantId) return repositoryUnavailable(request, reply);
+      const parsed = nativeSubscriberQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          'Укажите платформу ANDROID или IOS, курсор UUID и размер страницы от 1 до 50.',
+        );
+      }
+      const selector = parsed.data.platform === 'ANDROID' ? options.androidPush : options.iosPush;
+      if (!selector) return repositoryUnavailable(request, reply);
+      const page = await options.repository.listNativePushSubscribers({
+        tenantId: request.tenantId,
+        platform: parsed.data.platform,
+        appId: selector.appId,
+        environment: selector.environment,
+        limit: parsed.data.limit ?? 20,
+        ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}),
+      });
+      return {
+        items: page.items.map((item) => ({
+          userId: item.userId,
+          displayName: item.displayName,
+          ...(item.phoneMasked ? { phoneMasked: item.phoneMasked } : {}),
+          endpointCount: item.endpointCount,
+          ...(item.lastConfirmedAt ? { lastConfirmedAt: item.lastConfirmedAt } : {}),
+        })),
         ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
       };
     },

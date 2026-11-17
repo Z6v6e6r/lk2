@@ -1,5 +1,6 @@
 export class BaseImageContractError extends Error {
   readonly reason: string;
+  readonly redirectHostname?: string;
 }
 
 export interface BaseImageConsumer {
@@ -47,3 +48,6 @@ export function validateRegistryProof(
   proof: { indexBytes: Buffer; childBytes: Buffer; configBytes: Buffer },
 ): void;
 export function baseImageEvidence(lock: BaseImageLock, rawBytes: Buffer): BaseImageEvidence;
+
+export function validateConfigRedirect(location: string | null, reference: string): URL;
+export function verifyRegistry(lock: BaseImageLock): Promise<void>;

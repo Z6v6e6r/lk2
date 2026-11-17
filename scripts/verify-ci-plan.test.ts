@@ -9,6 +9,7 @@ const basePlan = {
   docsQuality: true,
   webQuality: false,
   fullQuality: false,
+  releaseToolingTests: false,
   deploymentContract: false,
   provenanceProbe: false,
   policyValidation: true,
@@ -99,6 +100,41 @@ describe('CI plan and aggregate verifier', () => {
       ).not.toBe(0);
     },
   );
+
+  it('accepts the paused release-tooling flag only as a boolean inside the full profile', () => {
+    const fullPlan = {
+      ...basePlan,
+      profile: 'full',
+      docsQuality: false,
+      fullQuality: true,
+      policyValidation: false,
+      dockerServices: ['web', 'api', 'worker', 'realtime', 'migrator'],
+    };
+    const results = {
+      DOCS_RESULT: 'skipped',
+      WEB_RESULT: 'skipped',
+      SOURCE_RESULT: 'success',
+      FULL_RESULT: 'success',
+    };
+    const quality = (plan: object, environment: Record<string, string> = results) =>
+      run(['quality'], { PLAN_JSON: JSON.stringify(plan), ...environment }).status;
+
+    expect(quality({ ...fullPlan, releaseToolingTests: true })).toBe(0);
+    expect(quality({ ...fullPlan, releaseToolingTests: false })).toBe(0);
+    expect(quality({ ...fullPlan, releaseToolingTests: 'false' })).not.toBe(0);
+    expect(quality({ ...fullPlan, releaseToolingTests: undefined })).not.toBe(0);
+    expect(
+      quality(
+        { ...basePlan, releaseToolingTests: true },
+        {
+          DOCS_RESULT: 'success',
+          WEB_RESULT: 'skipped',
+          SOURCE_RESULT: 'skipped',
+          FULL_RESULT: 'skipped',
+        },
+      ),
+    ).not.toBe(0);
+  });
 
   it.each(['failure', 'cancelled', 'skipped', ''])(
     'final gate rejects %s stable result',

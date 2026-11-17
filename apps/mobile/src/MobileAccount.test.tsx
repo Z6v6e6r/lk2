@@ -103,7 +103,9 @@ it.each([
     expect(account).toHaveTextContent('540');
     if (unavailableDashboard) {
       const subscriptions = screen.getByRole('region', { name: 'Подписки и абонементы' });
-      expect(await within(subscriptions).findByRole('alert')).toBeVisible();
+      // A failed Home pickup stays quiet: no error copy and no placeholder that never resolves.
+      expect(within(subscriptions).queryByRole('alert')).toBeNull();
+      expect(within(subscriptions).queryByRole('status')).toBeNull();
       expect(within(subscriptions).queryByText('Лето · Падел · Спорт')).toBeNull();
     } else expect(await screen.findByText('Лето · Падел · Спорт')).toBeVisible();
     expect(screen.queryByRole('link', { name: 'продлить' })).toBeNull();

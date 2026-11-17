@@ -7,6 +7,7 @@ import type {
 } from '@phub/notifications';
 import { z } from 'zod';
 import { readNotificationCredentialFile } from './notification-provider-credentials.js';
+import { LOCK_SCREEN_TYPE_TEXT, lockScreenTypeText } from './lock-screen-notification.js';
 
 const credentials = z
   .object({
@@ -110,10 +111,31 @@ export class ApnsDeliveryAdapter implements NotificationPushDeliveryPort {
         errorCode: 'APNS_TOKEN_INVALID',
         invalidate: true,
       });
+    const eventType = request.data?.gameResultNotificationType;
+    const resultBody = lockScreenTypeText('GAME_RESULT', {
+      eventType,
+      deadlineAt: request.data?.resultDeadlineAt,
+    });
+    // Rebuild the score alert from allowlisted facts, never from rendered titles or bodies.
+    const gameLink = request.notification.deepLink;
+    const scoreAlert =
+      resultBody !== LOCK_SCREEN_TYPE_TEXT.GAME_RESULT &&
+      typeof gameLink === 'string' &&
+      /^\/games\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        gameLink,
+      );
     const payload = JSON.stringify({
-      aps: { alert: { title: 'ПадлхАБ', body: 'Новое уведомление' }, sound: 'default' },
+      aps: {
+        alert: scoreAlert
+          ? {
+              title: eventType === 'game.finished.v1' ? 'Внесите счёт игры' : 'Счёт игры внесён',
+              body: resultBody,
+            }
+          : { title: 'ПадлхАБ', body: 'Новое уведомление' },
+        sound: 'default',
+      },
       notificationId: request.notification.id,
-      deepLink: '/notifications',
+      deepLink: scoreAlert ? gameLink : '/notifications',
     });
     const origin =
       this.options.environment === 'SANDBOX'

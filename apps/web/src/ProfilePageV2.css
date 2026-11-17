@@ -823,43 +823,6 @@
   letter-spacing: 0.02em;
 }
 
-.profile-page--v2 .fh-bottom-nav {
-  border-radius: 24px 24px 0 0;
-  background: rgb(255 255 255 / 97%);
-  box-shadow: 0 -4px 26px rgb(36 58 80 / 5%);
-}
-
-.profile-page--v2 .fh-bottom-nav > a {
-  color: #171e37;
-  text-decoration: none;
-}
-
-.profile-page.profile-page--v2 .fh-bottom-nav > a[aria-current='page'] {
-  color: #ff603c;
-}
-
-.profile-page--v2 .fh-bottom-nav .fh-create {
-  width: 56px;
-  height: 56px;
-  flex: 0 0 56px;
-  border-radius: 19px;
-  color: #fff;
-  background: #ff603c;
-  box-shadow: 0 4px 12px rgb(255 96 60 / 20%);
-}
-
-.profile-page--v2 .fh-create svg,
-.profile-page--v2 .fh-create-button {
-  display: none;
-}
-
-.profile-page--v2 .fh-create::after {
-  content: '+';
-  font-size: 39px;
-  font-weight: 300;
-  line-height: 1;
-}
-
 .profile-page--v2 :is(a, button, summary, select):focus-visible {
   outline: 2px solid #35466e;
   outline-offset: 3px;
@@ -899,10 +862,4 @@
   .profile-page--v2 .profile-settings-overview strong {
     font-size: 14px;
   }
-}
-
-.profile-page--v2 .profile-subscriptions-note {
-  margin: 0 0 10px;
-  color: #536078;
-  font-size: 12px;
 }

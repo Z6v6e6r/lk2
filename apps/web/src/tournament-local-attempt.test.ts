@@ -52,6 +52,28 @@ function fixture() {
   };
 }
 describe('tournament browser original request custody', () => {
+  it('a server level refusal keeps custody so the retry reuses the original key', async () => {
+    const f = fixture();
+    f.gateway.commandTournament.mockRejectedValueOnce(
+      Object.assign(new Error('level'), { status: 409, code: 'PLAYER_LEVEL_REQUIRED' }),
+    );
+    await expect(f.controller().submit(id, { action: 'JOIN' })).rejects.toMatchObject({
+      code: 'PLAYER_LEVEL_REQUIRED',
+    });
+    // A concurrent same-key request may still have created the attempt; keep it recoverable.
+    expect(f.controller().load(id)).not.toBeNull();
+    await f.controller().submit(id, { action: 'JOIN' });
+    const calls = f.gateway.commandTournament.mock.calls as unknown as [string, unknown, string][];
+    expect(calls[1]![2]).toBe(calls[0]![2]);
+  });
+  it('an unavailable level check keeps custody of the original key', async () => {
+    const f = fixture();
+    f.gateway.commandTournament.mockRejectedValueOnce(
+      Object.assign(new Error('level'), { status: 503, code: 'PARTICIPATION_LEVEL_UNAVAILABLE' }),
+    );
+    await expect(f.controller().submit(id, { action: 'JOIN' })).rejects.toThrow();
+    expect(f.controller().load(id)).not.toBeNull();
+  });
   it('reload and offline retry retain key, read404/null never erase custody', async () => {
     const f = fixture();
     f.gateway.commandTournament.mockRejectedValueOnce(new TypeError('offline'));

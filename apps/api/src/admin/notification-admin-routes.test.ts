@@ -94,6 +94,20 @@ function repository() {
     ],
     nextCursor: 'd938caf6-4eca-49d3-8f78-c7ab1b967a41',
   });
+  const listNativePushSubscribers = vi.fn().mockResolvedValue({
+    items: [
+      {
+        userId,
+        displayName: 'Тестовый игрок',
+        phoneMasked: '•••• 0001',
+        endpointCount: 2,
+        lastConfirmedAt: '2026-11-11T00:00:00.000Z',
+        token: 'must-not-leak',
+        endpoints: ['must-not-leak'],
+      },
+    ],
+    nextCursor: userId,
+  });
   const getDeliveryStats = vi.fn().mockResolvedValue({
     since: '2026-09-13T00:00:00.000Z',
     channels: [
@@ -157,12 +171,14 @@ function repository() {
       getCapabilities,
       resolveRecipients,
       listWebPushSubscribers,
+      listNativePushSubscribers,
       getDeliveryStats,
       createCampaign,
     } satisfies AdminNotificationRepository,
     getCapabilities,
     resolveRecipients,
     listWebPushSubscribers,
+    listNativePushSubscribers,
     getDeliveryStats,
     createCampaign,
   };
@@ -743,6 +759,93 @@ describe('admin notification routes', () => {
       nextCursor: 'd938caf6-4eca-49d3-8f78-c7ab1b967a41',
     });
     expect(response.body).not.toContain('+79104303190');
+  });
+
+  it.each(['ANDROID', 'IOS'] as const)(
+    'lists registered %s devices without exposing token data or requiring sending enabled',
+    async (platform) => {
+      const adminRepository = repository();
+      const app = await buildApp({
+        config,
+        logger: createLogger('native-list-test', 'silent'),
+        pool: fakePool(),
+        adminNotificationRepository: adminRepository.value,
+      });
+      apps.push(app);
+      const response = await app.inject({
+        method: 'GET',
+        url: `/admin/api/v1/local-padel/notifications/native-push-subscribers?platform=${platform}&limit=10&cursor=${userId}`,
+        headers: { authorization: `Bearer ${await token()}`, 'x-app-platform': 'cup-admin' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(adminRepository.listNativePushSubscribers).toHaveBeenCalledWith({
+        tenantId,
+        platform,
+        appId: 'ru.padlhub.app',
+        environment: 'SANDBOX',
+        limit: 10,
+        cursor: userId,
+      });
+      expect(response.json()).toEqual({
+        items: [
+          {
+            userId,
+            displayName: 'Тестовый игрок',
+            phoneMasked: '•••• 0001',
+            endpointCount: 2,
+            lastConfirmedAt: '2026-11-11T00:00:00.000Z',
+          },
+        ],
+        nextCursor: userId,
+      });
+      expect(response.body).not.toContain('must-not-leak');
+    },
+  );
+
+  it('validates native pagination and denies unauthorized reads before querying recipients', async () => {
+    const adminRepository = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('native-list-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+    });
+    apps.push(app);
+    const path = '/admin/api/v1/local-padel/notifications/native-push-subscribers';
+    const headers = { authorization: `Bearer ${await token()}`, 'x-app-platform': 'cup-admin' };
+    for (const query of [
+      '',
+      'platform=WEB',
+      'platform=ANDROID&limit=0',
+      'platform=IOS&limit=51',
+      'platform=IOS&cursor=invalid',
+      'platform=IOS&platform=ANDROID',
+    ]) {
+      const response = await app.inject({ method: 'GET', url: `${path}?${query}`, headers });
+      expect(response.statusCode).toBe(400);
+    }
+    for (const auth of [
+      undefined,
+      await token({ permissions: [] }),
+      await token({ audience: config.JWT_AUDIENCE }),
+    ]) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `${path}?platform=IOS`,
+        headers: {
+          'x-app-platform': 'cup-admin',
+          ...(auth ? { authorization: `Bearer ${auth}` } : {}),
+        },
+      });
+      expect([401, 403]).toContain(response.statusCode);
+    }
+    expect(adminRepository.listNativePushSubscribers).not.toHaveBeenCalled();
+    const empty = await app.inject({ method: 'GET', url: `${path}?platform=ANDROID`, headers });
+    expect(empty.statusCode).toBe(200);
+    expect(adminRepository.listNativePushSubscribers).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 20 }),
+    );
   });
 
   it('defaults the page size and rejects a malformed page or cursor', async () => {

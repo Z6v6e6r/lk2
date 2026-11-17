@@ -15,6 +15,8 @@ import {
   FRIENDSHIP_NOTIFICATION_PROJECTOR_QUEUE,
   FRIENDSHIP_NOTIFICATION_SOURCE_ROUTING_KEYS,
   GAME_NOTIFICATION_PROJECTOR_QUEUE,
+  GAME_RESULT_NOTIFICATION_PROJECTOR_QUEUE,
+  GAME_RESULT_NOTIFICATION_SOURCE_ROUTING_KEYS,
   GAME_NOTIFICATION_SOURCE_ROUTING_KEYS,
   MESSAGING_NOTIFICATION_PROJECTOR_QUEUE,
   MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS,
@@ -74,6 +76,24 @@ describe('notification projector topology', () => {
           aggregateRevision: '4',
           participantUserIds: [userId],
           reasonCode: 'ORGANIZER_REQUEST',
+        },
+      },
+      {
+        ...base,
+        id: '71111111-1111-4111-8111-111111111111',
+        type: 'game.finished.v1',
+        payload: { ...payloadBase, aggregateRevision: '5', participantUserIds: [userId] },
+      },
+      {
+        ...base,
+        id: '81111111-1111-4111-8111-111111111111',
+        type: 'game.result.submitted.v1',
+        payload: {
+          ...payloadBase,
+          aggregateRevision: '6',
+          submissionId: '91111111-1111-4111-8111-111111111111',
+          submittedByUserId: userId,
+          requiredConfirmationUserIds: [],
         },
       },
     ] as const;
@@ -175,6 +195,9 @@ describe('notification projector topology', () => {
     expect(timeline).toEqual([
       ...NOTIFICATION_SOURCE_ROUTING_KEYS.map(
         (routingKey) => `bind:${NOTIFICATION_PROJECTOR_QUEUE}:${routingKey}`,
+      ),
+      ...GAME_RESULT_NOTIFICATION_SOURCE_ROUTING_KEYS.map(
+        (routingKey) => `bind:${GAME_RESULT_NOTIFICATION_PROJECTOR_QUEUE}:${routingKey}`,
       ),
       ...GAME_NOTIFICATION_SOURCE_ROUTING_KEYS.map(
         (routingKey) => `bind:${GAME_NOTIFICATION_PROJECTOR_QUEUE}:${routingKey}`,

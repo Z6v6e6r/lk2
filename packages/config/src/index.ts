@@ -42,6 +42,15 @@ const environmentSchema = z.object({
   OUTBOX_FAILURE_BACKOFF_MS: z.coerce.number().int().min(1_000).max(60_000).default(5_000),
   BOOKING_REMINDER_SCHEDULER_ENABLED: booleanFromEnvironment,
   BOOKING_REMINDER_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
+  GAME_RESULT_AUTO_CONFIRM_ENABLED: booleanFromEnvironment,
+  GAME_RESULT_AUTO_CONFIRM_POLL_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .default(300_000),
+  GAME_RESULT_AUTO_CONFIRM_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS: z.coerce.number().pipe(z.literal(12)).default(12),
   BOOKING_REMINDER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   BOOKING_REMINDER_CLAIM_TTL_MS: z.coerce.number().int().min(10_000).max(300_000).default(60_000),
   BOOKING_REMINDER_DATABASE_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
@@ -78,6 +87,13 @@ const environmentSchema = z.object({
   PROFILE_PHOTO_ALLOWED_HOSTS: z.string().min(1).default('.selcdn.ru,.selstorage.ru'),
   PROFILE_PHOTO_CLIENT_SYNC_ENABLED: booleanFromEnvironment,
   PROFILE_PHOTO_MAINTENANCE_ENABLED: booleanFromEnvironment,
+  /**
+   * Android profile.read endpoint exception (ADR-0023/0020). The flag gates only creation of the
+   * short-lived provider-read job; an already accepted observation keeps being republished for a
+   * bounded freshness window so disabling the flag never invents data.
+   */
+  PROFILE_NATIVE_READ_ENABLED: booleanFromEnvironment,
+  PROFILE_OBSERVATION_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(3_600).default(900),
   PROFILE_PHOTO_MAX_BYTES: z.coerce
     .number()
     .int()
@@ -95,6 +111,24 @@ const environmentSchema = z.object({
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REALTIME_SECRET: z.string().min(32).optional(),
   JWT_REFRESH_SECRET: z.string().min(32),
+  /**
+   * ЦУП operator delegation for the notification and station-card admin APIs.
+   *
+   * The CUP console (`ph-admin`) authenticates its own operator and calls those two admin route
+   * groups server-to-server with this credential instead of asking for a separate PadlHub operator
+   * session. Scope stays narrow on purpose: only the notification/location admin routes accept it,
+   * only for the tenant keys listed here, and only while the switch is on. Off by default.
+   */
+  CUP_ADMIN_DELEGATION_ENABLED: booleanFromEnvironment,
+  CUP_ADMIN_DELEGATION_TOKEN: z.string().min(32).optional(),
+  CUP_ADMIN_DELEGATION_ACTOR_ID: z.string().uuid().optional(),
+  CUP_ADMIN_DELEGATION_TENANT_KEYS: z.string().default(''),
+  /**
+   * Replay window for the ЦУП delegation assertion. The console signs the current timestamp with
+   * `CUP_ADMIN_DELEGATION_TOKEN`; anything older (or further in the future) than this is refused, so a
+   * captured request stops working almost immediately instead of living as long as the secret.
+   */
+  CUP_ADMIN_DELEGATION_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(900).default(120),
   AUTH_ACCESS_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
   AUTH_REFRESH_TTL_SECONDS: z.coerce.number().int().min(3600).max(5_184_000).default(2_592_000),
   AUTH_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
@@ -139,6 +173,22 @@ const environmentSchema = z.object({
    * proof for payment, participation or activity-history guards.
    */
   CUP_IDENTITY_PROFILE_LINK_ENABLED: booleanFromEnvironment,
+  /**
+   * ADR 0029 D5: after a successful Viva OTP login, an unmapped user gets the canonical
+   * `VIVA/viva_profile` mapping from a server Viva Admin lookup by the verified phone (exactly one
+   * active exact match). Owner: LK2 product owner. Purpose: paid JOIN/CREATE and server Viva reads
+   * need the mapping that OTP login never wrote. Activation: test-stand readback of one MATCHED
+   * login. Review: 2027-02-09, or remove once every active user is mapped.
+   */
+  VIVA_PROFILE_PHONE_LINK_ENABLED: booleanFromEnvironment,
+  /**
+   * ADR 0029 D5: after a Viva OTP login of a user with a synced `VIVA/viva_profile` mapping, write
+   * `VIVA/subscription` mappings bound to that user from one complete server Viva Admin read of the
+   * client's subscriptions. Owner: LK2 product owner. Purpose: paid JOIN by subscription needs the
+   * mapping that lk2 never had. Activation: test-stand readback of one synced login after
+   * `VIVA_PROFILE_PHONE_LINK_ENABLED`. Review: 2027-02-09, or replace with the D2 projection refresh.
+   */
+  VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED: booleanFromEnvironment,
   /**
    * Accepts the provider-asserted viewer phone from our own client, which reads the provider profile
    * over the only transport the provider certifies for end users. The value is linked in integration
@@ -214,6 +264,14 @@ const environmentSchema = z.object({
   CUP_RATING_API_URL: z.string().url().optional(),
   CUP_RATING_SERVICE_TOKEN: z.string().min(32).optional(),
   CUP_RATING_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  /**
+   * Publishes a confirmed LK2 result to LK1 for imported games, so the legacy cabinet shows the
+   * score and recalculates its own rating. Disabled by default: it writes to another live system.
+   */
+  LK1_RESULT_BRIDGE_ENABLED: booleanFromEnvironment,
+  LK1_RESULT_BRIDGE_URL: z.string().url().optional(),
+  LK1_RESULT_BRIDGE_TOKEN: z.string().min(32).optional(),
+  LK1_RESULT_BRIDGE_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(8_000),
   CUP_PLAYER_LEVEL_PROJECTION_ENABLED: booleanFromEnvironment,
   CUP_PLAYER_LEVEL_PROJECTION_TOKEN: z.string().min(32).optional(),
   CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY: z
@@ -684,6 +742,22 @@ export interface RuntimeContourAttestation {
   readonly rabbitmq?: string;
 }
 
+/**
+ * Normalized allowlist of tenant keys the ЦУП operators' delegation credential may act for. An empty
+ * list means the credential can act for no tenant at all; the loader treats that as a
+ * misconfiguration while the switch is on, so a typo can only fail closed.
+ */
+export function cupAdminDelegationTenantKeys(raw: string | undefined): readonly string[] {
+  return Array.from(
+    new Set(
+      String(raw ?? '')
+        .split(',')
+        .map((part) => part.trim())
+        .filter((part) => /^[a-z0-9][a-z0-9-]{1,62}$/.test(part)),
+    ),
+  );
+}
+
 export function runtimeContourTargetFingerprint(value: string): string {
   const url = new URL(value);
   if (url.search.length > 0 || url.hash.length > 0) {
@@ -818,6 +892,11 @@ export function loadConfig(
       'CUP_RATING_SERVICE_TOKEN',
       'CUP_RATING_SERVICE_TOKEN_FILE',
     ),
+    LK1_RESULT_BRIDGE_TOKEN: materializeFileSecret(
+      environment,
+      'LK1_RESULT_BRIDGE_TOKEN',
+      'LK1_RESULT_BRIDGE_TOKEN_FILE',
+    ),
     CUP_PLAYER_LEVEL_PROJECTION_TOKEN: materializeFileSecret(
       environment,
       'CUP_PLAYER_LEVEL_PROJECTION_TOKEN',
@@ -865,6 +944,29 @@ export function loadConfig(
     throw new Error(
       'REALTIME_DATABASE_POOL_WARM_CONNECTIONS must not exceed REALTIME_DATABASE_POOL_MAX',
     );
+  }
+  if (parsed.data.CUP_ADMIN_DELEGATION_ENABLED) {
+    // Fail closed at boot: a half-configured delegation switch must never start an API that
+    // silently answers 401 to the only operator console, or accepts an unscoped credential.
+    if (!parsed.data.CUP_ADMIN_DELEGATION_TOKEN?.trim()) {
+      throw new Error('CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_TOKEN');
+    }
+    if (!parsed.data.CUP_ADMIN_DELEGATION_ACTOR_ID) {
+      throw new Error('CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_ACTOR_ID');
+    }
+    const delegationTenantKeys = cupAdminDelegationTenantKeys(
+      parsed.data.CUP_ADMIN_DELEGATION_TENANT_KEYS,
+    );
+    if (delegationTenantKeys.length === 0) {
+      throw new Error('CUP_ADMIN_DELEGATION_ENABLED requires CUP_ADMIN_DELEGATION_TENANT_KEYS');
+    }
+    if (delegationTenantKeys.length > 1) {
+      // One actor id cannot exist in two tenants (`identity.users` is tenant-scoped and every audited
+      // write carries the composite FK), so a multi-tenant credential could only fail at write time.
+      throw new Error(
+        'CUP_ADMIN_DELEGATION_ENABLED supports exactly one CUP_ADMIN_DELEGATION_TENANT_KEYS entry',
+      );
+    }
   }
 
   if (
@@ -1157,6 +1259,14 @@ export function loadConfig(
   ) {
     throw new Error(
       'CUP_RATING_CONSUMER_ENABLED requires CUP_RATING_API_URL and CUP_RATING_SERVICE_TOKEN',
+    );
+  }
+  if (
+    parsed.data.LK1_RESULT_BRIDGE_ENABLED &&
+    (!parsed.data.LK1_RESULT_BRIDGE_URL || !parsed.data.LK1_RESULT_BRIDGE_TOKEN)
+  ) {
+    throw new Error(
+      'LK1_RESULT_BRIDGE_ENABLED requires LK1_RESULT_BRIDGE_URL and LK1_RESULT_BRIDGE_TOKEN',
     );
   }
   if (
@@ -1580,6 +1690,26 @@ export function loadConfig(
   }
   if (parsed.data.VIVA_DIRECT_READ_ENABLED && !parsed.data.VIVA_OAUTH_ENABLED) {
     throw new Error('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  }
+  if (parsed.data.VIVA_PROFILE_PHONE_LINK_ENABLED) {
+    if (parsed.data.VIVA_MODE !== 'sandbox' && parsed.data.VIVA_MODE !== 'production') {
+      throw new Error('VIVA_PROFILE_PHONE_LINK_ENABLED requires VIVA_MODE=sandbox or production');
+    }
+    if (!parsed.data.VIVA_API_URL || !parsed.data.VIVA_API_KEY) {
+      throw new Error('VIVA_PROFILE_PHONE_LINK_ENABLED requires VIVA_API_URL and VIVA_API_KEY');
+    }
+  }
+  if (parsed.data.VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED) {
+    if (parsed.data.VIVA_MODE !== 'sandbox' && parsed.data.VIVA_MODE !== 'production') {
+      throw new Error(
+        'VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED requires VIVA_MODE=sandbox or production',
+      );
+    }
+    if (!parsed.data.VIVA_API_URL || !parsed.data.VIVA_API_KEY) {
+      throw new Error(
+        'VIVA_SUBSCRIPTION_MAPPING_SYNC_ENABLED requires VIVA_API_URL and VIVA_API_KEY',
+      );
+    }
   }
   if (parsed.data.VIVA_RESIDENCY_PRODUCT_ID) {
     if (parsed.data.VIVA_MODE !== 'sandbox' && parsed.data.VIVA_MODE !== 'production') {

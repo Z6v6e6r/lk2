@@ -275,7 +275,14 @@ const exported: Record<string, Record<string, { prepared: Point; cleaned: Point 
               stage = await mkdtemp(resolve(tmpdir(), 'r1-prefix119-'));
             const sourceRoot = process.cwd();
             try {
-              await symlink(source, resolve(stage, 'migrations'), 'dir');
+              // Exercise the frozen R1 package, not the expanded current directory: later
+              // additive migrations must not change this historical custody rehearsal.
+              await mkdir(resolve(stage, 'migrations'));
+              for (const row of R1_TAIL.inventory)
+                await symlink(
+                  resolve(source, row.filename),
+                  resolve(stage, 'migrations', row.filename),
+                );
               for (const profile of ['game_start_0103', 'subject_link_0104'] as const) {
                 const before = (
                   await client.query<{ acl: ClosedApplicationAclRow[] }>(

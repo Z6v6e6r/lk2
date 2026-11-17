@@ -5,12 +5,10 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { BookingActivityCard } from './BookingRecommendations.js';
 import { GameCard, type GameCardAction, type GameCardModel } from './GameCard.js';
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
+import { UpcomingGameDetailView } from './UpcomingGameDetailView.js';
+import { handleGameDetailBack } from './game-detail-navigation.js';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
-import {
-  MainBottomNavigation,
-  UpcomingBookingCard,
-  type HomeUpcomingItem,
-} from './HomeDashboardPage.js';
+import { MainBottomNavigation, type HomeUpcomingItem } from './HomeDashboardPage.js';
 import { TournamentSummaryCard } from './TournamentSummaryCard.js';
 import {
   rememberGameChatNavigation,
@@ -881,9 +879,19 @@ function GamesPageContent({
           if (!active) return;
           const selected = bookings.items.find((item) => {
             if (item.kind !== 'game') return false;
+            if (item.id === eventId) return true;
             const query = item.route.split('?')[1];
             return query ? new URLSearchParams(query).get('event') === eventId : false;
           });
+          if (selected?.gameId) {
+            window.history.replaceState(
+              window.history.state,
+              '',
+              `/games/${encodeURIComponent(selected.gameId)}`,
+            );
+            window.dispatchEvent(new PopStateEvent('popstate'));
+            return;
+          }
           setEventBooking(selected ?? null);
           setError(selected ? null : 'Карточка этой игры пока недоступна.');
           setLoading(false);
@@ -935,6 +943,21 @@ function GamesPageContent({
       active = false;
     };
   }, [eventId, gameId, gateway, reloadToken, tab]);
+
+  useEffect(() => {
+    if (gameId || eventId || tab !== 'UPCOMING' || busyGameId) return;
+    const refresh = (): void => {
+      if (document.visibilityState === 'visible') setReloadToken((token) => token + 1);
+    };
+    const interval = window.setInterval(refresh, 30_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [gameId, eventId, tab, busyGameId]);
 
   // Recovery on mount/navigation: custody from a previous tab, reload or lost response is read back
   // by its original key. It never starts a new purchase.
@@ -2356,6 +2379,11 @@ function GamesPageContent({
     }
   }
 
+  /**
+   * The detail screen's chat entry: a roster member can open the game conversation before anybody
+   * created the thread, so the messaging command creates or reads it back, then the browser moves
+   * to the returned conversation.
+   */
   async function openGameChat(game: ViewerGameCard): Promise<void> {
     if (busyGameId) return;
     setBusyGameId(game.id);
@@ -2389,26 +2417,11 @@ function GamesPageContent({
     });
   }
 
-  /** Viewer cards carry the conversation field; a public catalogue card never does. */
-  function isViewerGame(game: GameCardModel): game is ViewerGameCard {
-    return 'conversation' in game;
-  }
-
-  /**
-   * A roster member can reach the game chat from the list before anybody opened the thread, exactly
-   * like the detail screen: the messaging command creates or reads it back, then the browser moves
-   * to the returned conversation.
-   */
-  function requestGameChat(game: GameCardModel): void {
-    if (!isViewerGame(game)) return;
-    void openGameChat(game);
-  }
-
   if (gameId) {
     return (
       <main className="games-page games-page--detail">
         <header className="games-header">
-          <a className="games-back" href="/games" aria-label="Назад к играм">
+          <a className="games-back" href="/" aria-label="Назад" onClick={handleGameDetailBack}>
             <span aria-hidden="true">←</span>
             Назад
           </a>
@@ -2513,12 +2526,12 @@ function GamesPageContent({
     return (
       <main className="games-page games-page--detail games-page--booking-detail">
         <header className="games-header">
-          <a className="games-back" href="/" aria-label="Назад к моим записям">
+          <a className="games-back" href="/" aria-label="Назад" onClick={handleGameDetailBack}>
             <span aria-hidden="true">←</span>
             Назад
           </a>
           <div>
-            <h1>Карточка игры</h1>
+            <h1>Детали матча</h1>
           </div>
         </header>
         {loading ? (
@@ -2531,11 +2544,7 @@ function GamesPageContent({
             {error}
           </p>
         ) : null}
-        {eventBooking ? (
-          <section className="game-booking-detail" aria-label="Выбранная игра">
-            <UpcomingBookingCard item={eventBooking} showAction={false} />
-          </section>
-        ) : null}
+        {eventBooking ? <UpcomingGameDetailView item={eventBooking} /> : null}
         <MainBottomNavigation active="games" gamesDestination="games" />
         {renderLevelRecoveryDialog()}
       </main>
@@ -2926,7 +2935,6 @@ function GamesPageContent({
               onChatOpen={(selectedGame, conversationId) =>
                 rememberCardGameChat(selectedGame, conversationId)
               }
-              onChatRequest={requestGameChat}
               onParticipantProfileRequest={(selectedGame, participant, participantIndex) =>
                 void handleParticipantProfileRequest(selectedGame, participant, participantIndex)
               }

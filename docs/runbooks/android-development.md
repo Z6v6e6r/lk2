@@ -52,6 +52,46 @@ one delegation refresh and one replay of that GET. Other provider failures have 
 fallback; result/complete lost responses may replay only the same payload and idempotency key.
 Partial failure never completes a projection or returns an invented empty result.
 
+### Profile provider observation
+
+The same owner-approved ADR 0023 exception model covers exactly one more fixed Android read,
+`profile.read`. When the routing plan exposes `profile.read` as `DIRECT_VIVA` and
+`PROFILE_NATIVE_READ_ENABLED` is set, the app validates the current plan, obtains the short-lived
+delegated access token, performs one bounded `GET /v1/{providerTenantKey}/profile` on the approved
+provider origin and relays the bounded body to one 120-second PadlHub job. The API validates the job,
+principal, expiry and command, derives only the normalized assessed level and observed balance (no
+provider identifier, URL or token) and writes one monotonic `profile.provider_observations` row.
+The ordinary `GET /profile` local-slice response then carries those fields while the observation is
+inside `PROFILE_OBSERVATION_MAX_AGE_SECONDS`; a complete Home projection wins over it and another
+viewer never receives it. The bridge returns only a closed acknowledgement and the UI rereads the
+canonical profile, so an unavailable provider or disabled flag simply keeps the documented placeholders.
+Rollback is `PROFILE_NATIVE_READ_ENABLED=false`: it stops both new jobs and the local-slice merge,
+so the app falls back immediately without waiting for the freshness window. Removing the plan
+operation alone only stops new jobs. The expand-only migration stays applied and the stored row is
+unreadable while the flag is off.
+
+The relay body transits the API only to be strictly parsed: no API log, row or error message keeps
+it, and the device wipes its buffers. Only the normalized level and balance are stored. The trust
+model is self-only presentation data (never eligibility or money authority), and the internal
+idempotency token is the `(jobId, commandId)` pair; the transport `Idempotency-Key` is only a
+correlation key for this internal contract.
+
+Freshness compares the server-recorded `observed_at`, so API instances must run NTP and stay inside
+the 60-second forward tolerance; larger clock drift hides a fresh observation on other instances.
+Rollout evidence: redacted `profile provider read job/result/completion` log outcomes on the API,
+plus a provider readback that API/worker containers send no `/end-user/api/` traffic.
+
+Version 1.14/code15 ships this transport; the installed 1.13/code14 build predates it and cannot
+observe provider fields.
+
+Version 1.15/code16 fixes two notification defects: Android's HTTPS stack adds
+`application/x-www-form-urlencoded` to every empty POST/DELETE, which Fastify rejected with 415, so a
+bodyless command (notification-endpoint revoke, session refresh/logout, self-leave) could never
+succeed from the native transport; the sender now labels every bodyless non-GET request
+`text/plain`. The push controller also treats a stale endpoint revoke as best-effort bookkeeping, so
+a pending revoke left by an older installation cannot block enabling push (after that fix a stale
+revoke is retried on session refresh, focus or logout instead of failing the enable action).
+
 Version 1.10/code11 corrects a 1.9 contract mismatch: delegated Viva access tokens are opaque,
 not necessarily JWTs with a `tenant_key` claim. Native code accepts only bounded Bearer-safe token
 bytes from the authenticated endpoint and keeps the fixed plan tenant/host and current user lease.
@@ -170,9 +210,12 @@ changed by development.
 The checked-in `apps/web/public/.well-known/assetlinks.json` delegates the host to `ru.padlhub.app`
 with the **existing controlled-test debug certificate** SHA-256
 `22:07:BD:6E:B9:0A:EF:E4:4D:BD:04:3A:9C:FA:CD:17:54:13:13:BE:C3:A5:95:8D:05:1B:E8:07:E0:0B:EF:93`.
-It contains no signing key. A debug APK signed by another developer/CI key will not verify.
-Before store/release distribution, replace this association with the approved release certificate
-and remove the debug fingerprint; do not publish a release-signed APK under this test association.
+It also lists the owner's release **upload certificate** (created 2026-11-08, alias `upload`)
+SHA-256 `8C:59:A9:D1:96:23:97:66:D5:03:F5:52:0B:F0:CB:89:91:C8:63:08:9A:6D:F6:18:FB:18:E4:7A:E4:02:70:1E`,
+so controlled testers can use release-signed APKs during the test phase while older debug builds
+keep working. It contains no signing key. An APK signed by any other developer/CI key will not
+verify. Before store distribution, remove the debug fingerprint and add Google Play's app-signing
+certificate if Play App Signing is used (the upload certificate is not what Play distributes).
 
 The exact callback path `/android/oauth/yandex` must return the static fallback HTML directly
 with HTTPS 200 and no `Location` header. nginx must select its `index.html` explicitly: directory

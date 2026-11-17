@@ -175,3 +175,44 @@ fewer than five complete images cannot enter reconciliation or satisfy canonical
 Publication evidence never authorizes deployment. Transfer of runtime secrets, database bootstrap,
 migration, routing changes, application activation and Jetson retirement remain separate approvals
 with their own backup, rollback and post-deploy checks.
+
+## November 15 registry redirect incident
+
+Publication `43697184813` from `92b3d7c222cdc644f7f1b184cb05fe81305262a1` stopped before Web GHCR
+login at `registry_redirect`. It is incomplete and non-authorizing; retain its sibling image outputs
+as incident evidence. Never rerun, reconcile, combine or deploy this run. A new reviewed source,
+first-attempt current-main CI and separate explicit publication approval are required.
+
+The failed host was not retained. Current independent reads from the workstation and VPS returned
+the documented CloudFront endpoint, so the fix does not add a guessed CDN host. Config redirects
+must be HTTPS/default port, contain no userinfo/fragment, and bind their path to the requested digest.
+Only 302/307 and final exact-URL 200 are accepted. A structurally valid unapproved-host response can
+make at most three total GETs to the same fixed Docker Hub blob URL (initial plus two retries),
+with at most two 250 ms delays; each request retains its existing 20-second timeout. The
+unapproved host is never requested. Exhaustion logs only a validated hostname and fixed reason,
+never the signed URL/query or token. The CDN request still carries no registry auth, refuses a second
+hop, and retains the existing timeout, byte cap and locked SHA-256/content proof.
+
+### Observed S3 config redirect
+
+Publication `43737178954` from `758299d5a1835785f806613de1b7a8f58a8e6b12` stopped before Realtime
+and migrator registry login with `registry_redirect_host`. Web, API and Worker published, but no
+canonical manifest was produced. This partial run remains non-authorizing and must not be rerun,
+reconciled, mixed with another run or deployed.
+
+Docker Hub returned `docker-images-prod.s3.dualstack.us-east-1.amazonaws.com` for the existing
+locked config path. The reader accepts exactly that hostname and `production.cloudfront.docker.com`.
+The S3 endpoint was observed in the failed registry flow; it is not inferred from a wildcard or
+claimed to be present in Docker's current firewall allowlist. Distribution documents
+[pre-signed S3 blob redirects and dual-stack support](https://github.com/distribution/distribution/blob/main/docs/content/storage-drivers/s3.md).
+The digest-derived path, HTTPS/default port, credential-free single hop, final exact-URL 200,
+20-second timeout, byte limits and SHA-256 proof are unchanged. Alternate buckets, regions,
+subdomains and suffix hosts remain rejected. A new publication requires a new reviewed source and
+its own successful current-main CI; the old partial outputs stay isolated.
+
+The first PR #659 CI run (`43739391426`) finished 941 suites (930 passed, 11 skipped), with no failures,
+but its 720-second watchdog fired before the final coverage/reporting completed. The suite ledger
+closed at approximately 741 seconds; the process was terminated after the 30-second grace period.
+The owning CI step now allows 800 seconds inside a 15-minute Actions limit, retaining 70 seconds
+for bounded finalization. Test selection, coverage thresholds and the 30-second kill grace remain
+unchanged. A new exact-head CI run must produce its own complete final result.

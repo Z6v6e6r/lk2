@@ -39,4 +39,32 @@ describe('original tournament dated feed association', () => {
     await adapter.readDate('2026-11-02');
     await expect(adapter.resolveRegistrationDate(s!.id)).rejects.toThrow();
   });
+  it('captures the level range from the fresh registration read, not the first cached page', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(() => Promise.resolve(Response.json([source])))
+      .mockImplementationOnce(() =>
+        Promise.resolve(Response.json([{ ...source, accessLevels: [3, 3.5, 4] }])),
+      );
+    const adapter = new LegacyTournamentSummaryAdapter({ fetchImplementation });
+    expect(adapter.registrationLevelRange('synthetic-unknown')).toBeUndefined();
+    const [summary] = await adapter.readDate('2026-11-01');
+    expect(adapter.registrationLevelRange(summary!.id)).toBeNull();
+    await adapter.resolveRegistrationDate(summary!.id);
+    expect(adapter.registrationLevelRange(summary!.id)).toEqual({ from: 'C', to: 'B' });
+  });
+  it('marks a level selection with a gap as invalid instead of widening it', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() =>
+        Promise.resolve(Response.json([{ ...source, accessLevels: [2, 4] }])),
+      );
+    const adapter = new LegacyTournamentSummaryAdapter({ fetchImplementation });
+    const [summary] = await adapter.readDate('2026-11-01');
+    expect(adapter.registrationLevelRange(summary!.id)).toEqual({
+      from: 'D+',
+      to: 'B',
+      dataQuality: 'INVALID',
+    });
+  });
 });

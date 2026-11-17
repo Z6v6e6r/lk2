@@ -66,9 +66,9 @@ export const BOOKING_NOTIFICATION_CANONICAL_CONTRACT = {
 } as const;
 
 export const GAME_NOTIFICATION_CANONICAL_CONTRACT = {
-  rulesetVersion: 'game.ru-ru.v1',
+  rulesetVersion: 'game.ru-ru.v2',
   template: {
-    version: 1,
+    version: 2,
     locale: 'ru-RU',
     category: 'GAME',
     deepLink: '/games/{{gameId}}',
@@ -90,6 +90,8 @@ export const GAME_NOTIFICATION_CANONICAL_CONTRACT = {
         type: 'EVENT_USER',
         field: 'userId',
       },
+      category: 'GAME',
+      channels: ['IN_APP'],
       mandatory: true,
     },
     {
@@ -101,6 +103,8 @@ export const GAME_NOTIFICATION_CANONICAL_CONTRACT = {
         type: 'EVENT_USERS',
         field: 'participantUserIds',
       },
+      category: 'GAME',
+      channels: ['IN_APP'],
       mandatory: true,
     },
     {
@@ -112,7 +116,29 @@ export const GAME_NOTIFICATION_CANONICAL_CONTRACT = {
         type: 'EVENT_USER',
         field: 'userId',
       },
+      category: 'GAME',
+      channels: ['IN_APP'],
       mandatory: true,
+    },
+    {
+      key: 'game.finished',
+      sourceEventType: 'game.finished.v1',
+      title: 'Внесите счёт игры',
+      body: 'Игра завершена. Внесите счёт до {{resultDeadline}}. Общий срок — 12 часов от окончания игры.',
+      audienceSelector: { type: 'EVENT_USERS', field: 'participantUserIds' },
+      category: 'GAME_RESULT',
+      channels: ['IN_APP', 'PUSH'],
+      mandatory: false,
+    },
+    {
+      key: 'game.result.submitted',
+      sourceEventType: 'game.result.submitted.v1',
+      title: 'Счёт игры внесён',
+      body: 'Согласуйте или оспорьте счёт до {{resultDeadline}} — 12 часов от окончания игры. Внесение счёта не продлевает срок.',
+      audienceSelector: { type: 'EVENT_USERS', field: 'participantUserIds' },
+      category: 'GAME_RESULT',
+      channels: ['IN_APP', 'PUSH'],
+      mandatory: false,
     },
   ],
 } as const;
@@ -340,6 +366,8 @@ export const GAME_NOTIFICATION_EVENT_TYPES = [
   'game.participation.confirmed.v1',
   'game.participation.left.v1',
   'game.cancelled.v1',
+  'game.finished.v1',
+  'game.result.submitted.v1',
 ] as const;
 
 export const MESSAGING_NOTIFICATION_EVENT_TYPES = [
@@ -438,6 +466,30 @@ const gameParticipantUserIdsSchema = z
 
 export const gameNotificationSourceEventSchema = z
   .discriminatedUnion('type', [
+    bookingEventEnvelopeBase
+      .extend({
+        type: z.literal('game.finished.v1'),
+        payload: z
+          .object({
+            ...gameNotificationEventPayloadBase,
+            participantUserIds: gameParticipantUserIdsSchema,
+          })
+          .strict(),
+      })
+      .strict(),
+    bookingEventEnvelopeBase
+      .extend({
+        type: z.literal('game.result.submitted.v1'),
+        payload: z
+          .object({
+            ...gameNotificationEventPayloadBase,
+            submissionId: uuid,
+            submittedByUserId: uuid,
+            requiredConfirmationUserIds: gameParticipantUserIdsSchema,
+          })
+          .strict(),
+      })
+      .strict(),
     bookingEventEnvelopeBase
       .extend({
         type: z.literal('game.participation.confirmed.v1'),
@@ -545,7 +597,15 @@ export function resolveNotificationRecipients(
   event: NotificationSourceEvent,
   selector: NotificationAudienceSelector,
 ): readonly string[] {
-  const recipient = (event.payload as Readonly<Record<string, unknown>>)[selector.field];
+  const recipient =
+    event.type === 'game.result.submitted.v1' && selector.field === 'participantUserIds'
+      ? [
+          event.payload.submittedByUserId,
+          ...(Array.isArray(event.payload.requiredConfirmationUserIds)
+            ? (event.payload.requiredConfirmationUserIds as readonly unknown[])
+            : []),
+        ]
+      : (event.payload as Readonly<Record<string, unknown>>)[selector.field];
   if (selector.type === 'EVENT_USER') {
     return typeof recipient === 'string' && uuid.safeParse(recipient).success ? [recipient] : [];
   }

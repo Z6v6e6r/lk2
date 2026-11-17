@@ -403,7 +403,7 @@ permissions are preserved, an account without a row gets one, and the change is 
 becomes reachable as soon as they open the app or refresh their session; until that happens the refusal
 is the correct description of their grant. The switch has two operational consequences: turning it off
 stops the automatic convergence, so the durable grants must then be maintained with the operator
-backfill, and while it is on, narrowing one of the seven beta permissions with
+backfill, and while it is on, narrowing one of the eight beta permissions with
 `scripts/set-user-access.ts` is undone on that account's next client token issuance, because the stored
 profile is what every chat and communities gate reads. The operator backfill
 `npm run user:access:beta-full` (`--confirm=APPLY_USER_ACCESS` after a dry run) remains the way to
@@ -1112,6 +1112,12 @@ PADLHUB_NOTIFICATION_API_BASE_URL=https://cup.nano.padlhub.su
 PADLHUB_NOTIFICATION_TENANT_KEY=local-padel
 ADVERTISING_ENGAGEMENT_SECRET=<same 32+ character value as PadlHub PROMOTIONS_ENGAGEMENT_SECRET>
 ```
+
+The same CUP contract serves the `lk2.padlhub.su` advertisement engagement egress: that contour
+admits the matching value through `PROMOTIONS_ENGAGEMENT_SECRET` in `deploy/timeweb/runtime-environment.contract.json`
+and posts to `POST /api/advertising/engagements` on the `padlhub.su` CUP. See the
+[LK2 Timeweb beta runbook](timeweb-lk2-beta.md) for the allow-list, the 503 fallback and the
+verification steps; enabling it on either contour requires the same value on both sides.
 
 Caddy sends only `/user/api/*`, `/admin/api/*` and `/public/api/*` on the CUP host to PadlHub API;
 all other paths stay on the CUP showcase. The browser therefore calls PadlHub through a same-origin

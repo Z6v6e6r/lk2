@@ -27,6 +27,7 @@ import type { TournamentLocalResult, TournamentLocalInput } from '@phub/api-cont
 import { consumeCommunityInviteToken } from './community-invite-token.js';
 import { prepareCreateGameAttempt } from './create-game-attempt.js';
 import { rememberGameChatNavigation } from './game-chat-navigation.js';
+import { rememberAuthContinuation } from './push-opt-in.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
@@ -909,6 +910,38 @@ describe('PadlHub web authentication', () => {
     expect(getHomeBase).toHaveBeenCalledTimes(7);
   });
 
+  it('offers device push after authenticated Home loads, without enabling it automatically', async () => {
+    Object.defineProperties(HTMLDialogElement.prototype, {
+      showModal: {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.setAttribute('open', '');
+        },
+      },
+      close: {
+        configurable: true,
+        value: function (this: HTMLDialogElement) {
+          this.removeAttribute('open');
+        },
+      },
+    });
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+    const enable = vi.fn();
+    render(
+      <App
+        gateway={gateway}
+        tenantKey="padlhub"
+        clientPlatform="android"
+        devicePush={{ enabled: true, state: 'ready', busy: false, enable, disable: vi.fn() }}
+      />,
+    );
+    expect(await screen.findByRole('dialog', { name: 'Включите уведомления' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeInTheDocument();
+    expect(enable).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Включить уведомления' }));
+    expect(enable).toHaveBeenCalledOnce();
+  });
+
   it('restores an HttpOnly-cookie-backed session before showing protected home', async () => {
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 
@@ -1385,9 +1418,7 @@ describe('PadlHub web authentication', () => {
       await screen.findByRole('link', { name: 'Открыть подписку: Лето · Падел · Спорт' }),
     ).toBeVisible();
     expect(
-      screen.queryByText(
-        'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
-      ),
+      within(screen.getByRole('region', { name: 'Подписки и абонементы' })).queryByRole('alert'),
     ).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Мои абонементы' })).toHaveAttribute(
       'href',
@@ -1738,10 +1769,40 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Карточка игры' })).toBeVisible();
-    expect(await screen.findByRole('article', { name: 'Открытая игра' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Детали матча' })).toBeVisible();
+    const card = await screen.findByRole('region', { name: 'Карточка игры' });
+    expect(within(card).getByRole('heading', { name: 'Открытая игра' })).toBeVisible();
+    expect(within(card).getByRole('region', { name: 'Участники игры' })).toBeVisible();
     expect(gateway.listEventCatalog).not.toHaveBeenCalled();
   });
+
+  it.each(['web', 'android'] as const)(
+    'replaces a linked legacy booking URL with the canonical card in %s without a game command',
+    async (clientPlatform) => {
+      const { game } = await import('../../mobile/src/ios/testing/cabinet-fixtures.js');
+      const eventId = '8a830ad0-a8c7-479b-a239-5b434c42148f';
+      window.history.replaceState({ fromMyBookings: true }, '', `/games?event=${eventId}`);
+      const gateway = createGateway({
+        restoreSession: vi.fn().mockResolvedValue(session),
+        quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
+        getUpcomingBookings: vi.fn().mockResolvedValue({
+          ...upcomingBookings,
+          items: [
+            { ...upcomingBookings.items[0]!, gameId: game.id, route: `/games?event=${eventId}` },
+          ],
+        }),
+        getGame: vi.fn().mockResolvedValue({ ...game, resultSummary: null, conversation: null }),
+      });
+      render(<App gateway={gateway} tenantKey="padlhub" clientPlatform={clientPlatform} />);
+      expect(await screen.findByRole('heading', { name: 'Стартовый состав' })).toBeVisible();
+      expect(gateway.getGame).toHaveBeenCalledWith(game.id);
+      expect(window.location.pathname).toBe(`/games/${game.id}`);
+      expect(window.history.state).toEqual({ fromMyBookings: true });
+      expect(gateway.listEventCatalog).not.toHaveBeenCalled();
+      expect(gateway.joinGame).not.toHaveBeenCalled();
+      expect(gateway.leaveGame).not.toHaveBeenCalled();
+    },
+  );
 
   it('loads and continues the communities directory without requesting Home', async () => {
     window.history.replaceState({}, '', '/communities');
@@ -3828,14 +3889,19 @@ it('native game detail exposes only reviewed participation controls', async () =
   const gateway = createGateway({
     restoreSession: vi.fn().mockResolvedValue(session),
     quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
-    getGame: vi.fn().mockResolvedValue(game),
+    getGame: vi.fn().mockResolvedValue({
+      ...game,
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index + 1}`,
+      })),
+      resultSummary: null,
+      conversation: null,
+    }),
   });
   render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
   await waitFor(() => expect(gateway.getGame).toHaveBeenCalledWith(game.id));
-  expect(await screen.findByRole('link', { name: 'К списку игр' })).toHaveAttribute(
-    'href',
-    '/games',
-  );
+  expect(await screen.findByRole('link', { name: 'Назад' })).toHaveAttribute('href', '/');
   expect(screen.queryByRole('button', { name: /Вступить|Отменить игру/ })).not.toBeInTheDocument();
   expect(gateway.joinGame).not.toHaveBeenCalled();
 });
@@ -3941,5 +4007,77 @@ describe('Android concrete tournament navigation and custody', () => {
     } finally {
       stop();
     }
+  });
+});
+
+describe('Exhibition push opt-in', () => {
+  const communityReturn = 'https://padlhub.ru/lk_new?authMode=viva&openCommunity=community_1';
+
+  it('opens the push opt-in page with the validated community return link', async () => {
+    window.history.replaceState({}, '', '/push?returnTo=' + encodeURIComponent(communityReturn));
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getWebPushConfiguration: vi.fn().mockResolvedValue({
+        enabled: true,
+        publicKey: 'public-vapid-key-value',
+      }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Уведомления о результатах' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Вернуться в сообщество' })).toHaveAttribute(
+      'href',
+      communityReturn,
+    );
+    expect(gateway.getWebPushConfiguration).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an outside return URL and keeps a safe in-app destination', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/push?returnTo=' + encodeURIComponent('https://evil.example/community'),
+    );
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getWebPushConfiguration: vi.fn().mockResolvedValue({
+        enabled: true,
+        publicKey: 'public-vapid-key-value',
+      }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Уведомления о результатах' })).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'Вернуться в сообщество' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Перейти к уведомлениям' })).toHaveAttribute(
+      'href',
+      '/notifications',
+    );
+  });
+
+  it('restores the push opt-in deep link after the Viva OAuth root redirect', async () => {
+    rememberAuthContinuation(
+      'https://lk2.padlhub.su/push?returnTo=' + encodeURIComponent(communityReturn),
+      window.sessionStorage,
+    );
+    window.history.replaceState({}, '', '/');
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getWebPushConfiguration: vi.fn().mockResolvedValue({
+        enabled: true,
+        publicKey: 'public-vapid-key-value',
+      }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Уведомления о результатах' })).toBeVisible();
+    expect(window.location.pathname).toBe('/push');
+    expect(screen.getByRole('link', { name: 'Вернуться в сообщество' })).toHaveAttribute(
+      'href',
+      communityReturn,
+    );
   });
 });

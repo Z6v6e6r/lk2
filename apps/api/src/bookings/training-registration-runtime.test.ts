@@ -535,3 +535,60 @@ it('claim-time INTENT identity is rechecked when another lease pins after the in
   expect(t.client.admit).not.toHaveBeenCalled();
   expect(t.repository.settlePreparation).not.toHaveBeenCalled();
 });
+it('level refusal stops a new training attempt before any local row, token or owner call', async () => {
+  const h = await setup();
+  const levelCheck = vi.fn(async () =>
+    Promise.resolve({ code: 'PLAYER_LEVEL_REQUIRED' as const, status: 409 as const }),
+  );
+  const gated = createTrainingRegistrationRuntime({
+    enabled: true,
+    repository: h.repository,
+    client: h.client,
+    issuer: h.issuer,
+    token: h.token,
+    levelCheck,
+  });
+  await expect(gated.execute(actor, input)).rejects.toMatchObject({
+    code: 'PLAYER_LEVEL_REQUIRED',
+    status: 409,
+  });
+  expect(levelCheck).toHaveBeenCalledWith(actor, input.trainingId, input.dateHint);
+  expect(h.repository.begin).not.toHaveBeenCalled();
+  expect(h.token).not.toHaveBeenCalled();
+  expect(h.client.prepare).not.toHaveBeenCalled();
+});
+it('eligible level continues and an existing attempt is never re-gated', async () => {
+  const h = await setup();
+  const levelCheck = vi.fn(async () => Promise.resolve(null));
+  const gated = createTrainingRegistrationRuntime({
+    enabled: true,
+    repository: h.repository,
+    client: h.client,
+    issuer: h.issuer,
+    token: h.token,
+    levelCheck,
+  });
+  expect((await gated.execute(actor, input)).operation.status).toBe('CONFIRMED');
+  await gated.execute(actor, input);
+  expect(levelCheck).toHaveBeenCalledTimes(1);
+});
+it('a refusal racing a same-key attempt that began meanwhile returns the stored attempt', async () => {
+  const h = await setup();
+  await h.seedPrepared();
+  const prepared = h.row();
+  h.setRow(null);
+  const gated = createTrainingRegistrationRuntime({
+    enabled: true,
+    repository: h.repository,
+    client: h.client,
+    issuer: h.issuer,
+    token: h.token,
+    levelCheck: vi.fn(async () => {
+      h.setRow(prepared);
+      return Promise.resolve({ code: 'LEVEL_NOT_ALLOWED' as const, status: 409 as const });
+    }),
+  });
+  const r = await gated.execute(actor, input);
+  expect(r.operation.id).toBe(prepared!.id);
+  expect(h.repository.begin).not.toHaveBeenCalled();
+});

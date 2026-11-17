@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.28.0
+  version: 1.29.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -402,6 +402,43 @@ paths:
           description: Game/selection revision changed or quote expired; refresh conditions.
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/subscriptions/joinable:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [subscriptions]
+      operationId: listJoinableSubscriptions
+      summary: List the actor's subscriptions from a fresh LK1 owner attestation
+      description: |
+        ADR 0028. Requires an authenticated active PadlHub session, games.play and tenant
+        membership. Each call obtains one fresh read-only LK1 attestation of the actor's own Viva
+        account, signed for the same session as the actor token, and records the server-owned
+        identity and subscription mappings. Only PadlHub UUIDs are returned; no Viva identifier,
+        phone or name is exposed. state and remainingUnits are display-only: every command is
+        re-verified by the owner. Returns 503 until the owner contour is composed, and 409 when the
+        Viva account is already bound to another PadlHub user.
+      responses:
+        '200':
+          description: Display-only list; no booking, payment or entitlement authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: 'private, no-store' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JoinableSubscriptions' }
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          description: The Viva account is bound to another PadlHub user; support reconciliation.
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '502':
+          description: The owner returned an invalid attestation.
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/subscription-runtime/quote:
@@ -1763,6 +1800,12 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/provider-read-jobs:
+    $ref: ./profile-provider-read-jobs.yaml#/paths/~1{tenantKey}~1profile~1provider-read-jobs
+  /{tenantKey}/profile/provider-read-jobs/{jobId}/results/{commandId}:
+    $ref: ./profile-provider-read-jobs.yaml#/paths/~1{tenantKey}~1profile~1provider-read-jobs~1{jobId}~1results~1{commandId}
+  /{tenantKey}/profile/provider-read-jobs/{jobId}/complete:
+    $ref: ./profile-provider-read-jobs.yaml#/paths/~1{tenantKey}~1profile~1provider-read-jobs~1{jobId}~1complete
   /{tenantKey}/profile/privacy:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -4232,11 +4275,14 @@ paths:
     get:
       tags: [games]
       operationId: listGameTestCourts
-      summary: List the two beta courts available to an explicitly granted tester
+      summary: List the two beta courts available to a signed-in beta tester
       description: |
         Returns internal PadlHub identities only. Disabled beta or missing stored games.test-courts
-        permission returns an empty list. Broad beta client access and admin roles do not grant it.
-        Creation on these courts requires PRIVATE, FRIENDLY and NO_PAYMENT; it makes no Viva booking.
+        permission returns an empty list. The check reads identity.user_access_profiles; while
+        BETA_FULL_CLIENT_ACCESS_ENABLED=true the beta client catalog converges that permission at
+        client token issuance, so every signed-in beta phone number can test the two courts.
+        Admin roles and JWT claims alone do not grant it. Creation on these courts requires PRIVATE,
+        FRIENDLY and NO_PAYMENT; it makes no Viva booking.
       responses:
         '200':
           description: Tester-scoped catalogue, never cached.
@@ -6197,6 +6243,25 @@ components:
             status: { type: string, enum: [UNKNOWN, CONFIRMED] }
             asOf: { type: [string, 'null'], format: date-time }
         reason: { type: [string, 'null'] }
+    JoinableSubscriptions:
+      type: object
+      additionalProperties: false
+      required: [attestedAt, items]
+      properties:
+        attestedAt: { type: string, format: date-time }
+        items:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, title, state, remainingUnits, validUntil]
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: [string, 'null'], maxLength: 120 }
+              state: { type: string, enum: [ACTIVE, NOT_ACTIVATED, PAUSED, FINISHED] }
+              remainingUnits: { type: [integer, 'null'], minimum: 0 }
+              validUntil: { type: [string, 'null'], format: date-time }
     GameJoinConditions:
       type: object
       additionalProperties: false
@@ -7859,9 +7924,11 @@ components:
       required: [userId, displayName]
       description: |
         Profile aggregate. `balanceMinor`, `currency` and `level` are provider-owned
-        and optional: they are omitted when the section-scoped local read cannot
-        observe them, and clients must render a placeholder instead of assuming
-        zero balance, RUB or an unassessed level.
+        and optional: they are omitted when the read cannot observe them, and clients
+        must render a placeholder instead of assuming zero balance, RUB or an
+        unassessed level. On the local-slice fallback the Android provider-observation
+        exception (ADR 0023) may publish a fresh normalized `level` and `balanceMinor`;
+        a complete Home projection still takes precedence over that observation.
       properties:
         userId:
           type: string
@@ -9645,6 +9712,15 @@ components:
           format: uuid
         subscription:
           $ref: '#/components/schemas/WebPushSubscription'
+        source:
+          type: string
+          maxLength: 80
+          pattern: '^[a-z0-9][a-z0-9._-]*$'
+          description: Optional community attribution from the referring LK1 hand-off.
+        community:
+          type: string
+          maxLength: 200
+          description: Optional community identifier from the referring LK1 hand-off.
     WebPushSubscription:
       type: object
       additionalProperties: false

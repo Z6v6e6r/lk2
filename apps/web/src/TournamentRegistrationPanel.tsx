@@ -3,6 +3,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'reac
 import type { TournamentLocalResult } from '@phub/api-contracts';
 import type { AuthGateway } from './auth-gateway.js';
 import { TournamentLocalAttempts } from './tournament-local-attempt.js';
+import {
+  PARTICIPATION_LEVEL_UNAVAILABLE_MESSAGE,
+  canPickParticipationLevel,
+  participationLevelRefusal,
+  participationLevelUnavailable,
+} from './participation-level.js';
+import { ParticipationLevelPicker } from './ParticipationLevelPicker.js';
 class Lifetime {
   constructor(
     readonly key: string,
@@ -23,7 +30,12 @@ export function TournamentRegistrationPanel({
 }: {
   gateway: Pick<
     AuthGateway,
-    'tournamentPrincipal' | 'commandTournament' | 'retryTournament' | 'getTournamentRegistration'
+    | 'tournamentPrincipal'
+    | 'commandTournament'
+    | 'retryTournament'
+    | 'getTournamentRegistration'
+    | 'getOwnPlayerLevel'
+    | 'setOwnPlayerLevel'
   >;
   principal: { tenantId: string; userId: string };
   tournamentId: string;
@@ -64,7 +76,8 @@ export function TournamentRegistrationPanel({
     [busy, setBusy] = useState(true),
     [error, setError] = useState<string | null>(null),
     [pending, setPending] = useState(false),
-    [commandsEnabled, setCommandsEnabled] = useState(false);
+    [commandsEnabled, setCommandsEnabled] = useState(false),
+    [levelSetup, setLevelSetup] = useState(false);
   const hasCustody = useCallback(() => {
     try {
       return Boolean(attempts.load(tournamentId));
@@ -74,6 +87,16 @@ export function TournamentRegistrationPanel({
   }, [attempts, tournamentId]);
   const failure = useCallback((e: unknown) => {
     const code = e && typeof e === 'object' && 'code' in e ? String(e.code) : '';
+    const level = participationLevelRefusal(e);
+    if (level) {
+      setError(level.message);
+      setLevelSetup(level.needsLevel);
+      return;
+    }
+    if (participationLevelUnavailable(e)) {
+      setError(PARTICIPATION_LEVEL_UNAVAILABLE_MESSAGE);
+      return;
+    }
     setError(
       code === 'TOURNAMENT_LOCAL_DISABLED'
         ? 'Запись на этот турнир пока недоступна.'
@@ -112,6 +135,8 @@ export function TournamentRegistrationPanel({
   async function run(kind: 'join' | 'leave' | 'retry' | 'read') {
     setBusy(true);
     setError(null);
+    setLevelSetup(false);
+    let levelRefused = false;
     try {
       if (kind === 'read') {
         const r = await attempts.read(tournamentId);
@@ -135,11 +160,14 @@ export function TournamentRegistrationPanel({
     } catch (e) {
       if (life.active) {
         if (kind === 'read') setCommandsEnabled(false);
+        levelRefused = participationLevelRefusal(e) !== null;
         failure(e);
       }
     } finally {
       if (life.active) {
-        setPending(hasCustody());
+        // A level refusal keeps custody of the key (a racing same-key attempt stays recoverable),
+        // but nothing is awaiting confirmation: JOIN stays available and resubmits that key.
+        setPending(!levelRefused && hasCustody());
         setBusy(false);
       }
     }
@@ -152,6 +180,13 @@ export function TournamentRegistrationPanel({
   return (
     <div className="tournament-registration" aria-live="polite">
       {error ? <p role="alert">{error}</p> : null}
+      {levelSetup && canPickParticipationLevel(gateway) ? (
+        <ParticipationLevelPicker
+          gateway={gateway}
+          onSaved={() => void run('join')}
+          onCancel={() => setLevelSetup(false)}
+        />
+      ) : null}
       {!busy && !commandsEnabled && !error ? (
         <p>Запись сейчас недоступна. Можно проверить сохранённую операцию.</p>
       ) : null}

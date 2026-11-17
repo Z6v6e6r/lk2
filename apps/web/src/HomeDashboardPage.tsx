@@ -6,6 +6,7 @@ import {
   useHomeDateRecommendations,
 } from './useHomeDateRecommendations.js';
 import { TrainingPeopleIcon } from './TrainingPeopleIcon.js';
+import { upcomingBookingDetailsRoute } from './upcoming-booking-route.js';
 
 import type {
   ActivityHistoryPage,
@@ -1037,9 +1038,8 @@ function EventParticipants({
   ) {
     return (
       <span className="fh-event__roster-placeholder">
-        <span className="sr-only">Состав временно недоступен</span>
-        <span aria-hidden="true">
-          <ParticipantAvatarStack participants={[]} capacity={4} />
+        <span className="fh-event__roster-status" role="status">
+          Состав временно недоступен
         </span>
       </span>
     );
@@ -1076,7 +1076,8 @@ export function UpcomingBookingCard({
 }): React.JSX.Element {
   const startsAt = new Date(item.startsAt);
   const hasParticipants = (item.participants?.length ?? 0) + (item.openSlots ?? 0) > 0;
-  const detailsHref = isImplementedMvpRoute(item.route) ? item.route : '/bookings';
+  const route = upcomingBookingDetailsRoute(item);
+  const detailsHref = isImplementedMvpRoute(route) ? route : '/bookings';
   const gameType = item.game?.type;
   const stationTitle = item.game?.station?.title ?? item.venue.split(' · ')[0];
   const endsAt = item.endsAt ? new Date(item.endsAt) : null;

@@ -29,3 +29,11 @@ f9dadb20ccfd34d60167d823fb453bd8813015bb:apps/api/src/games/game-commercial-join
 2474214463d14c9374a0515448e582fc869afd05:apps/migrator/src/closed-single-migration.test.ts:generic-api-key:20
 # Public migration filenames in the immutable-catalog fixture; reviewed exact commit only.
 23e4af4c234e28c1fbbcadd4e0651db108439677:apps/migrator/src/closed-single-migration.test.ts:generic-api-key:20
+
+# Fixed Timeweb probe UUID in an exact-URL regression test, not an API credential.
+# Only the original immutable commit/rule/line is excluded; current names are explicit.
+13f96971e04c14ad0b8cd7a2cea301999d06f814:scripts/timeweb-native-batch.test.ts:generic-api-key:324
+
+# Public installed 4b8 API OCI digest, pinned by the immutable release manifest fixture.
+# Current literal is explicitly marked; exclude only this original commit/rule/line.
+8b0de6199016880f5163dfa63bde52a146bb4065:scripts/test-timeweb-database-backup.py:generic-api-key:1657

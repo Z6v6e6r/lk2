@@ -184,7 +184,7 @@ final class AndroidPushState {
     }
 
     static String route(String value) {
-        return value != null && value.matches("/chats/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}")
+        return value != null && value.matches("/(?:chats|games)/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}")
             ? value : "/notifications";
     }
 

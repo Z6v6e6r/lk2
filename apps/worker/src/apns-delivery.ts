@@ -1,3 +1,5 @@
+import { GAME_RESULT_PUSH_ELIGIBILITY_SQL } from './game-result-notification-policy.js';
+import { lockScreenTitle, lockScreenTypeText } from './lock-screen-notification.js';
 import { withTenantTransaction } from '@phub/database';
 import {
   quietHoursActive,
@@ -46,6 +48,12 @@ interface DispatchRow {
   quiet_until: string | null;
   timezone: string | null;
   database_now: Date;
+  category?: string | null;
+  result_deadline_at?: string | null;
+  result_event_type?: string | null;
+  rendered_title?: string | null;
+  title_template?: string | null;
+  deep_link?: string | null;
 }
 interface Options {
   pool: Pool;
@@ -156,7 +164,12 @@ async function fence(
   options: Options,
   job: Claim,
 ): Promise<
-  | { address: string; endpoint: NonNullable<ClaimedNotificationDelivery['dispatchedEndpoint']> }
+  | {
+      address: string;
+      endpoint: NonNullable<ClaimedNotificationDelivery['dispatchedEndpoint']>;
+      notification: { title: string; preview: string; deepLink: string };
+      data?: Readonly<Record<string, string>>;
+    }
   | { result: PushDeliveryResult }
   | undefined
 > {
@@ -172,7 +185,10 @@ async function fence(
          a.provider,a.platform,a.channel provider_channel,a.app_id,a.environment,a.credential_ref,a.status provider_status,
          u.status user_status,r.ios_push_enabled,tr.active rule_active,t.active template_active,tr.mandatory,
          p.enabled preference_enabled,left(p.quiet_from::text,5) quiet_from,left(p.quiet_until::text,5) quiet_until,p.timezone,
-         clock_timestamp() database_now
+         clock_timestamp() database_now, t.category,
+         i.render_data->>'resultDeadlineAt' result_deadline_at,
+         i.render_data->>'gameResultNotificationType' result_event_type,
+         i.rendered_title, t.title_template, i.rendered_deep_link deep_link
        from notifications.deliveries d
        join notifications.intents i on i.tenant_id=d.tenant_id and i.id=d.intent_id
        join notifications.templates t on t.tenant_id=i.tenant_id and t.id=i.template_id
@@ -192,6 +208,18 @@ async function fence(
     );
     const row = result.rows[0];
     if (!row) return undefined;
+    // Evaluate score state and deadline in a new statement after delivery/endpoint lock waits.
+    const scoreEligible =
+      row.category !== 'GAME_RESULT' ||
+      (
+        await client.query<{ eligible: boolean }>(
+          `select ${GAME_RESULT_PUSH_ELIGIBILITY_SQL} as eligible
+         from notifications.intents i
+         join notifications.templates t on t.tenant_id=i.tenant_id and t.id=i.template_id
+         where i.tenant_id=$1 and i.id=$2`,
+          [options.tenantId, job.intent_id],
+        )
+      ).rows[0]?.eligible === true;
     let reason =
       row.provider_account_id !== job.provider_account_id ||
       row.endpoint_user_id !== row.recipient_user_id ||
@@ -205,6 +233,7 @@ async function fence(
       row.credential_ref !== options.credentialRef ||
       row.provider_status !== 'ACTIVE' ||
       row.user_status !== 'ACTIVE' ||
+      !scoreEligible ||
       row.ios_push_enabled !== true ||
       !row.rule_active ||
       !row.template_active
@@ -254,6 +283,35 @@ async function fence(
     return dispatched.rowCount === 1
       ? {
           address,
+          ...(row.category === 'GAME_RESULT' && row.result_deadline_at && row.result_event_type
+            ? {
+                data: {
+                  resultDeadlineAt: row.result_deadline_at,
+                  gameResultNotificationType: row.result_event_type,
+                },
+              }
+            : {}),
+          notification:
+            row.category === 'GAME_RESULT'
+              ? {
+                  title:
+                    lockScreenTitle({
+                      titleTemplate: row.title_template,
+                      renderedTitle: row.rendered_title,
+                    }) ?? 'ПадлхАБ',
+                  preview: lockScreenTypeText(row.category, {
+                    deadlineAt: row.result_deadline_at,
+                    eventType: row.result_event_type,
+                  }),
+                  deepLink:
+                    row.deep_link &&
+                    /^\/games\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+                      row.deep_link,
+                    )
+                      ? row.deep_link
+                      : '/notifications',
+                }
+              : { title: 'ПадлхАБ', preview: 'Новое уведомление', deepLink: '/notifications' },
           endpoint: {
             ciphertext: row.address_ciphertext,
             encryptionKeyId: row.encryption_key_id,
@@ -284,10 +342,9 @@ export async function runApnsDeliveryBatch(options: Options): Promise<number> {
         endpoint: dispatch.address,
         notification: {
           id: job.intent_id,
-          title: 'ПадлхАБ',
-          preview: 'Новое уведомление',
-          deepLink: '/notifications',
+          ...dispatch.notification,
         },
+        ...(dispatch.data ? { data: dispatch.data } : {}),
         providerIdempotencyKey: `apns:${job.id}`,
       });
     } catch {

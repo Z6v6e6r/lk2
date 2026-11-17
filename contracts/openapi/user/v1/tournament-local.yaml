@@ -118,7 +118,7 @@ components:
         }
   responses:
     Conflict:
-      description: Conflicting original request, unsupported owner or pinned generation.
+      description: Conflicting original request, unsupported owner, pinned generation or a level-policy refusal of a new JOIN (canonical level reason code such as LEVEL_NOT_ALLOWED or PLAYER_LEVEL_REQUIRED; no attempt is created).
       content:
         application/json:
           schema: { $ref: ../../common/components.yaml#/components/schemas/ApiError }

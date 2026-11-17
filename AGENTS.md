@@ -38,13 +38,14 @@ precedence over conflicting release text below and in `docs/release/**`.
   exact head being merged. A PR that touches any CRITICAL boundary still needs the owner's approval
   in the PR. This covers merging only; it grants no image publication, workflow dispatch or deploy
   beyond the automatic test-stand deploy above.
-- **lk2.padlhub.su has no real users yet (owner, 2026-11-06).** Until real users or real personal
-  data arrive there, treat it as the disposable `beta` lane of ADR-0026, not as production: its data
-  is synthetic/disposable and production custody evidence (backup ledger, enrollment, manifests) is
-  not required for it. The executable path is still the existing Timeweb workflow, so each promotion
-  to lk2 needs the owner's approval until the `beta` lane automation is implemented and reviewed as
-  a CRITICAL deploy-mechanism change. When real users are onboarded, this bullet must be removed and
-  lk2 returns to the `production` lane.
+- **lk2.padlhub.su contains personal data (verified 2026-11-13).** The earlier synthetic-only
+  assumption no longer applies. Use the `production` lane, preserve all accounts, sessions and
+  provider delegations, and never run disposable beta promotion/reset/ACL normalization on this
+  target. The owner requested the production-baseline repair and deployment on 2026-11-13.
+  The one-shot transition uses the existing strict API/Web controller with an explicitly attested
+  noncanonical predecessor; canonical publication, independently restored backup, unchanged secrets,
+  production monitoring and exact image rollback remain mandatory. See
+  [production cutover](docs/runbooks/timeweb-standard-delivery.md#production-cutover-from-the-retired-beta-lane).
 
 ## Task intent and authority
 

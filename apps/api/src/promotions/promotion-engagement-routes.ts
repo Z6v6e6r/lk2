@@ -20,6 +20,16 @@ export function registerPromotionEngagementRoutes(
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
+  if (!options.repository || !options.sink) {
+    // The command answers a stable 503 while the CUP delivery backend is not configured, so the
+    // process must say so once at startup: a silent 503 leaves an operator with no clue whether the
+    // route, the secret or the CUP itself is missing. Per-request logging is deliberately absent
+    // here because a rotating ad block calls this command repeatedly.
+    app.log.warn(
+      { code: 'PROMOTION_ENGAGEMENT_BACKEND_MISSING' },
+      'promotion engagement backend is not configured; ad engagement statistics stay disabled',
+    );
+  }
   app.post(
     '/user/api/v1/:tenantKey/promotions/:promotionId/engagements',
     {
@@ -84,7 +94,17 @@ export function registerPromotionEngagementRoutes(
         });
         reply.status(202);
         return { accepted: true };
-      } catch {
+      } catch (error: unknown) {
+        // Only a fixed engagement code may reach the log: the sink and the repository can throw
+        // messages that carry caller or profile data, so anything else stays behind a stable code.
+        const failure = error instanceof Error ? error.message : '';
+        const code = /^PROMOTION_ENGAGEMENT_[A-Z0-9_]{1,40}$/u.test(failure)
+          ? failure
+          : 'PROMOTION_ENGAGEMENT_RECORD_FAILED';
+        request.log.warn(
+          { code, correlationId: request.id },
+          'promotion engagement recording failed',
+        );
         return sendApiError(
           request,
           reply,

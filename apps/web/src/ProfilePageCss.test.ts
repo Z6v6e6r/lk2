@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+const profileV2Styles = readFileSync(new URL('./ProfilePageV2.css', import.meta.url), 'utf8');
 
 function ruleBody(selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -18,6 +19,16 @@ describe('Profile page background', () => {
     expect(backgroundRule).toMatch(/background-image:\s*var\(--profile-level-background\)\s*;/);
     expect(backgroundRule).toMatch(/opacity:\s*0\.8\s*;/);
     expect(backgroundRule).toMatch(/z-index:\s*-2\s*;/);
+  });
+});
+
+describe('Profile bottom navigation', () => {
+  it('keeps the shared bottom navigation instead of restyling it on the profile', () => {
+    // The profile renders the shared MainBottomNavigation, so any profile-scoped nav rule
+    // would make this bar drift from the Home bar it is meant to match.
+    expect(styles).not.toMatch(/\.profile-page\s+\.fh-bottom-nav\s*\{/);
+    expect(profileV2Styles).not.toMatch(/\.profile-page--v2[^{}]*\.fh-bottom-nav[^{}]*\{/);
+    expect(profileV2Styles).not.toMatch(/\.profile-page--v2[^{}]*\.fh-create[^{}]*\{/);
   });
 });
 

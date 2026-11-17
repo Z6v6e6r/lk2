@@ -3,6 +3,7 @@ import { createTournamentLocalRuntime } from './tournament-local-runtime.js';
 import { TournamentLocalError, type TournamentOwnerReceipt } from '@phub/domain';
 import type { TournamentAttempt, TournamentLocalRepository } from '@phub/database';
 import type { TournamentLocalOwnerClient } from '@phub/legacy-games-adapter';
+import type { ExternalLevelCheck } from '../eligibility/external-level-check.js';
 const id = '11111111-1111-4111-a111-111111111111',
   op = '22222222-2222-4222-a222-222222222222';
 const actor = {
@@ -12,7 +13,7 @@ const actor = {
   sessionId: id,
   correlationId: 'synthetic',
 };
-function fixture() {
+function fixture(levelCheck?: ExternalLevelCheck) {
   const identity = { providerClientId: '7', providerMappingId: id, providerTenantKey: 'tenant' };
   let row: TournamentAttempt | null = null;
   const receipt: TournamentOwnerReceipt = {
@@ -70,7 +71,14 @@ function fixture() {
   };
   const date = vi.fn(async () => await Promise.resolve('2026-11-01')),
     token = vi.fn(async () => await Promise.resolve('synthetic'));
-  const runtime = createTournamentLocalRuntime({ enabled: true, repository, client, date, token });
+  const runtime = createTournamentLocalRuntime({
+    enabled: true,
+    repository,
+    client,
+    date,
+    token,
+    ...(levelCheck ? { levelCheck } : {}),
+  });
   return {
     runtime,
     repository,
@@ -85,6 +93,55 @@ function fixture() {
   };
 }
 describe('concrete tournament runtime', () => {
+  it('refuses a level-ineligible JOIN before any CUP preparation or local attempt', async () => {
+    const levelCheck = vi.fn<ExternalLevelCheck>(async () =>
+      Promise.resolve({ code: 'LEVEL_NOT_ALLOWED', status: 409 }),
+    );
+    const f = fixture(levelCheck);
+    await expect(
+      f.runtime.execute(actor, id, 'original-command-key', { action: 'JOIN' }),
+    ).rejects.toMatchObject({ code: 'LEVEL_NOT_ALLOWED', status: 409 });
+    expect(levelCheck).toHaveBeenCalledWith(actor, id);
+    expect(f.date).toHaveBeenCalledTimes(1);
+    expect(f.client.prepare).not.toHaveBeenCalled();
+    expect(f.repository.begin).not.toHaveBeenCalled();
+    expect(f.client.command).not.toHaveBeenCalled();
+  });
+  it('a refusal racing a same-key attempt that began meanwhile follows the stored attempt', async () => {
+    const f: ReturnType<typeof fixture> = fixture(
+      vi.fn<ExternalLevelCheck>(async () => {
+        // A concurrent same-key request passed the check and began while this one was refused.
+        await f.repository.begin(actor, id, 'hash', { action: 'JOIN' }, {} as never, '2026-11-01');
+        f.repository.begin.mockClear();
+        return { code: 'LEVEL_NOT_ALLOWED', status: 409 };
+      }),
+    );
+    const r = await f.runtime.execute(actor, id, 'original-command-key', { action: 'JOIN' });
+    expect(r.operation.id).toBe(op);
+    expect(f.repository.begin).not.toHaveBeenCalled();
+    expect(f.client.prepare).not.toHaveBeenCalled();
+  });
+  it('fails closed when the level constraint cannot be confirmed', async () => {
+    const f = fixture(
+      vi.fn<ExternalLevelCheck>(async () =>
+        Promise.resolve({ code: 'PARTICIPATION_LEVEL_UNAVAILABLE', status: 503 }),
+      ),
+    );
+    await expect(
+      f.runtime.execute(actor, id, 'original-command-key', { action: 'JOIN' }),
+    ).rejects.toMatchObject({ code: 'PARTICIPATION_LEVEL_UNAVAILABLE', status: 503 });
+    expect(f.client.prepare).not.toHaveBeenCalled();
+  });
+  it('dispatches an eligible JOIN and never re-checks level for a stored attempt', async () => {
+    const levelCheck = vi.fn<ExternalLevelCheck>(async () => Promise.resolve(null));
+    const f = fixture(levelCheck);
+    expect(
+      (await f.runtime.execute(actor, id, 'original-command-key', { action: 'JOIN' })).operation
+        .status,
+    ).toBe('REGISTERED');
+    await f.runtime.execute(actor, id, 'original-command-key', { action: 'JOIN' });
+    expect(levelCheck).toHaveBeenCalledTimes(1);
+  });
   it('pins date and actor before dispatch then separates fresh read', async () => {
     const f = fixture();
     const r = await f.runtime.execute(actor, id, 'original-command-key', { action: 'JOIN' });

@@ -216,10 +216,16 @@ describe('Android push controller', () => {
     expect(safeNotificationRoute('/chats/22222222-2222-4222-8222-222222222222')).toBe(
       '/chats/22222222-2222-4222-8222-222222222222',
     );
+    expect(safeNotificationRoute('/games/22222222-2222-4222-8222-222222222222')).toBe(
+      '/games/22222222-2222-4222-8222-222222222222',
+    );
     for (const route of [
       'https://evil.test',
       '//evil.test',
       '/chats/../notifications',
+      '/games/../notifications',
+      '/games/22222222-2222-4222-8222-222222222222?token=synthetic',
+      '/games/22222222-2222-4222-8222-222222222222/cancel',
       '/notifications?next=https://evil.test',
     ]) {
       expect(safeNotificationRoute(route)).toBe('/notifications');
@@ -265,32 +271,35 @@ describe('Android push controller', () => {
     expect(removes.every((remove) => remove.mock.calls.length === 1)).toBe(true);
   });
 
-  it('defers a cold-start tap route until navigation and the restored session are ready', async () => {
-    const auth = gateway();
-    const { transport } = plugin({
-      takeOpened: vi
-        .fn()
-        .mockResolvedValue({ route: '/chats/22222222-2222-4222-8222-222222222222' }),
-    });
-    const controller = createAndroidPushController(auth, vi.fn(), transport);
-    const cleanup = controller.mount();
-    await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
-    expect(windowStub.history.pushState).not.toHaveBeenCalled();
+  it.each(['chats', 'games'])(
+    'defers a cold-start %s tap until navigation and session are ready',
+    async (kind) => {
+      const auth = gateway();
+      const { transport } = plugin({
+        takeOpened: vi
+          .fn()
+          .mockResolvedValue({ route: `/${kind}/22222222-2222-4222-8222-222222222222` }),
+      });
+      const controller = createAndroidPushController(auth, vi.fn(), transport);
+      const cleanup = controller.mount();
+      await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
+      expect(windowStub.history.pushState).not.toHaveBeenCalled();
 
-    controller.navigationReady();
-    expect(windowStub.history.pushState).not.toHaveBeenCalled();
+      controller.navigationReady();
+      expect(windowStub.history.pushState).not.toHaveBeenCalled();
 
-    controller.sessionReady();
-    await vi.waitFor(() =>
-      expect(windowStub.history.pushState).toHaveBeenCalledWith(
-        {},
-        '',
-        '/chats/22222222-2222-4222-8222-222222222222',
-      ),
-    );
-    expect(windowStub.history.pushState).toHaveBeenCalledTimes(1);
-    cleanup();
-  });
+      controller.sessionReady();
+      await vi.waitFor(() =>
+        expect(windowStub.history.pushState).toHaveBeenCalledWith(
+          {},
+          '',
+          `/${kind}/22222222-2222-4222-8222-222222222222`,
+        ),
+      );
+      expect(windowStub.history.pushState).toHaveBeenCalledTimes(1);
+      cleanup();
+    },
+  );
 
   it('applies a warm notification tap route immediately once ready', async () => {
     const auth = gateway();
@@ -407,3 +416,56 @@ it.each(['accepted', 'rejected'] as const)(
     });
   },
 );
+
+it('enables push even when a stale endpoint revoke fails', async () => {
+  const revokeAndroidPushEndpoint = vi.fn().mockRejectedValue(new Error('unsupported media type'));
+  const api = gateway({ revokeAndroidPushEndpoint });
+  const publish = vi.fn();
+  const native = plugin({
+    status: vi.fn().mockResolvedValue({
+      configured: true,
+      state: 'prompt',
+      installationId: 'install-1',
+      pendingRevoke: true,
+      idempotencyKey: 'revoke-key-1',
+    }),
+  });
+  const controller = createAndroidPushController(api, publish, native.transport);
+
+  await controller.enable();
+
+  expect(revokeAndroidPushEndpoint).toHaveBeenCalledWith('install-1', 'revoke-key-1');
+  expect(native.transport.registration).toHaveBeenCalledWith({ requestPermission: true });
+  expect(api.registerAndroidPushEndpoint).toHaveBeenCalledWith(
+    { installationId: 'install-1', token: 'fcm-token' },
+    'native-key-1',
+  );
+  expect(native.transport.activate).toHaveBeenCalled();
+  expect(publish).toHaveBeenLastCalledWith(
+    expect.objectContaining({ enabled: true, state: 'subscribed', busy: false }),
+  );
+});
+
+it('keeps the notification screen usable when a stale endpoint revoke fails on refresh', async () => {
+  const revokeAndroidPushEndpoint = vi.fn().mockRejectedValue(new Error('network down'));
+  const api = gateway({ revokeAndroidPushEndpoint });
+  const publish = vi.fn();
+  const native = plugin({
+    status: vi.fn().mockResolvedValue({
+      configured: true,
+      state: 'prompt',
+      installationId: 'install-1',
+      pendingRevoke: true,
+      idempotencyKey: 'revoke-key-1',
+    }),
+  });
+  const controller = createAndroidPushController(api, publish, native.transport);
+
+  await controller.refresh();
+
+  expect(revokeAndroidPushEndpoint).toHaveBeenCalledWith('install-1', 'revoke-key-1');
+  expect(publish).toHaveBeenLastCalledWith(
+    expect.objectContaining({ enabled: true, state: 'ready', error: undefined }),
+  );
+  expect(native.transport.registration).not.toHaveBeenCalled();
+});

@@ -275,8 +275,15 @@ describe('GamesPage discovery', () => {
 
     render(<GamesPage gateway={api} eventId={eventId} />);
 
-    expect(await screen.findByRole('heading', { name: 'Карточка игры' })).toBeVisible();
-    const card = await screen.findByRole('article', { name: 'Открытая игра' });
+    expect(await screen.findByRole('heading', { name: 'Детали матча' })).toBeVisible();
+    const card = await screen.findByRole('region', { name: 'Карточка игры' });
+    expect(within(card).getByRole('region', { name: 'Участники игры' })).toBeVisible();
+    expect(within(card).getByRole('tab', { name: 'Игра' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await userEvent.click(within(card).getByRole('tab', { name: 'Результат' }));
+    expect(within(card).getByText('Результат пока недоступен')).toBeVisible();
     expect(within(card).getByText('Сочи')).toBeVisible();
     expect(within(card).queryByRole('link', { name: 'Открыть' })).not.toBeInTheDocument();
     expect(api.getUpcomingBookings).toHaveBeenCalledOnce();
@@ -631,7 +638,7 @@ describe('GamesPage discovery', () => {
     });
   });
 
-  it('creates the game chat from a roster card that has no conversation yet', async () => {
+  it('keeps the games list card free of a chat-create control for a roster card without a conversation', async () => {
     const viewerGame: ViewerGameCard = {
       ...game,
       surface: 'MY_UPCOMING',
@@ -661,13 +668,12 @@ describe('GamesPage discovery', () => {
 
     const tabs = await screen.findByRole('navigation', { name: 'Разделы игр' });
     await user.click(within(tabs).getByRole('button', { name: 'Для меня' }));
-    await user.click(await screen.findByRole('button', { name: 'Открыть чат игры' }));
 
-    await waitFor(() => expect(getOrCreateGameConversation).toHaveBeenCalledWith(viewerGame.id));
-    expect(getOrCreateGameConversation).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Не удалось выполнить действие. Проверьте связь и повторите.',
-    );
+    // The thread is created from the game detail screen, never from a bare card action.
+    expect(await screen.findByText(viewerGame.title)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Открыть чат игры' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
+    expect(getOrCreateGameConversation).not.toHaveBeenCalled();
   });
 
   it('uses the shared main navigation and exposes the MVP create-game call to action', async () => {
@@ -2549,4 +2555,42 @@ describe('GamesPage managed SELF leave recovery', () => {
       ).not.toBeInTheDocument(),
     );
   });
+});
+
+it('refreshes My Games on return to the window so confirmed or expired cards disappear', async () => {
+  const viewerGame: ViewerGameCard = {
+    ...game,
+    surface: 'MY_UPCOMING',
+    displayState: 'RESULT_REQUIRED',
+    levelRange: game.levelRange ?? null,
+    capacity: { ...game.capacity, total: 4 },
+    priceSummary: game.priceSummary ?? null,
+    participants: game.participants.map((p, index) => ({
+      ...p,
+      userId: `00000000-0000-4000-8000-00000000000${index}`,
+    })),
+    viewerRelation: 'PARTICIPANT',
+    viewerPaymentState: 'PAID',
+    resultSummary: null,
+    allowedActions: ['OPEN_DETAILS', 'SUBMIT_RESULT'],
+    conversation: null,
+  };
+  const api: AuthGateway = {
+    ...gateway(),
+    listMyGames: vi
+      .fn()
+      .mockResolvedValueOnce({ items: [viewerGame], nextCursor: null })
+      .mockResolvedValue({ items: [], nextCursor: null }),
+  };
+  render(<GamesPage gateway={api} />);
+  const tabs = await screen.findByRole('navigation', { name: 'Разделы игр' });
+  await userEvent.click(within(tabs).getByRole('button', { name: 'Для меня' }));
+  await screen.findByRole('button', { name: 'Внести результат' });
+  act(() => {
+    window.dispatchEvent(new Event('focus'));
+  });
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: 'Внести результат' })).not.toBeInTheDocument(),
+  );
+  expect(api.listMyGames).toHaveBeenCalledTimes(2);
 });

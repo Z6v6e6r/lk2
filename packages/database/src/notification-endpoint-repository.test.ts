@@ -219,6 +219,8 @@ describe('notification endpoint repository', () => {
         ciphertext: Buffer.from('rotated-encrypted-endpoint'),
         addressHash,
         encryptionKeyId: 'v1',
+        attributionSource: 'korp-sport-2026',
+        attributionCommunity: 'community_1794221739126_корпспорт-падлхаб-2026',
         endpointsPerUserMax: 5,
         requestHash: 'e'.repeat(64),
         idempotencyKey: 'endpoint-register-merge-0001',
@@ -237,6 +239,12 @@ describe('notification endpoint repository', () => {
           (values as readonly unknown[])[2] === oldInstallationEndpointId,
       ),
     ).toBe(true);
+    const attributionUpdate = query.mock.calls.find(([text]) =>
+      String(text).includes('coalesce($8, attribution_source)'),
+    );
+    expect(attributionUpdate).toBeDefined();
+    expect(attributionUpdate?.[1]?.[7]).toBe('korp-sport-2026');
+    expect(attributionUpdate?.[1]?.[8]).toBe('community_1794221739126_корпспорт-падлхаб-2026');
   });
 
   it('revokes a different owner and creates a target-owned endpoint without leaking delivery ownership', async () => {

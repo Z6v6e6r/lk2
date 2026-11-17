@@ -288,3 +288,20 @@ describe('FCM pre-dispatch gate contention', () => {
     },
   );
 });
+
+describe('game score push decision-time policy', () => {
+  it.each(['FCM', 'WEB_PUSH'] as const)(
+    'suppresses stale score notification on %s before provider dispatch',
+    async (provider) => {
+      const h = harness(provider, { category: 'GAME_RESULT', game_result_eligible: false });
+      await h.run();
+      expect(h.send).not.toHaveBeenCalled();
+      expect(
+        h.queries.some(
+          (q) => q.sql.includes('game_result_eligible') && q.sql.includes("interval '12 hours'"),
+        ),
+      ).toBe(true);
+      expect(h.queries.some((q) => q.sql.includes("state='SUPPRESSED'"))).toBe(true);
+    },
+  );
+});

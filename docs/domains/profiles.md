@@ -14,9 +14,17 @@ The two reads intentionally serve different purposes:
 
 Android and iOS read the canonical authenticated-self profile through their native session
 transports. They preserve optional first/last name, avatar, assessed level and observed account
-fields; an absent balance remains unknown. Both resolve relative media fields against the bundled
-PadlHub API origin while keeping application routes relative. Native profile and Home responses
-must match the active account, and pending reads are discarded as soon as logout starts.
+fields; an absent balance remains unknown. The Android client may additionally run the bounded
+`profile.read` exception from ADR 0023: after one device-side provider read and a validated relay,
+the API derives only the normalized assessed level and observed balance and stores them as a
+monotonic, short-lived `profile.provider_observations` row. The local-slice `/profile` response
+includes those fields while the observation is inside `PROFILE_OBSERVATION_MAX_AGE_SECONDS`; a
+complete Home projection always wins over it, another viewer never receives it, and it is not money
+or entitlement authority. The device relays the provider profile body only in transit: the API
+parses it without logging, persisting or returning it, and keeps only the normalized level and
+balance (an explicit scoped exception to the one-aggregate-one-source rule). Both platforms resolve relative media fields against the bundled PadlHub
+API origin while keeping application routes relative. Native profile and Home responses must match
+the active account, and pending reads are discarded as soon as logout starts.
 The Android profile's subscriptions block reads the existing Home dashboard independently of the
 profile, as iOS does; a failed dashboard read leaves the remaining profile usable.
 

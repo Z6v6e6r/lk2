@@ -54,7 +54,12 @@ export const GAME_TEST_COURT_PUBLIC_FILTER = /* @__PURE__ */ (() =>
   `not (tenant_id = '${GAME_TEST_COURT_SCOPE.tenantId}'::uuid
   and coalesce(base_payload #>> '{court,id}', '') in (${GAME_TEST_COURT_SCOPE.courts.map((court) => `'${court.id}'`).join(', ')}))`)();
 
-/** Reads the explicit stored grant; broad beta client permissions and admin roles do not grant it. */
+/**
+ * Reads the stored grant. While `BETA_FULL_CLIENT_ACCESS_ENABLED=true` the beta client catalog
+ * (which includes `games.test-courts`) is converged into `identity.user_access_profiles` on every
+ * client token issuance, so any beta sign-in can test the two courts; admin roles and JWT claims
+ * alone never grant it.
+ */
 export async function hasGameTestCourtAccess(
   client: PoolClient,
   tenantId: string,
@@ -228,6 +233,8 @@ export interface StoredGame {
 export interface StoredGameCardProjection {
   /** Private, same-statement/revision canonical evidence; never a public payment heuristic. */
   readonly localCancellationOrganizerUserId?: string | null;
+  /** Private evidence from the current aggregate/source reconciliation, never card creation age. */
+  readonly rosterVerifiedAt?: string | null;
   readonly gameId: string;
   readonly aggregateRevision: number;
   readonly projectionRevision: number;
@@ -427,6 +434,7 @@ export interface GameRepository {
     readonly tenantId: string;
     readonly viewerUserId: string;
     readonly scope: 'UPCOMING' | 'HISTORY';
+    readonly retainedResultsOnly?: boolean;
     readonly limit: number;
     readonly after?: { readonly startsAt: string; readonly gameId: string };
   }): Promise<StoredGameCardProjectionPage>;
@@ -519,6 +527,7 @@ interface CanonicalGameLevelRow extends QueryResultRow {
 
 interface ProjectionRow extends QueryResultRow {
   readonly local_cancellation_organizer_user_id?: string | null;
+  readonly roster_verified_at?: Date | string | null;
   readonly game_id: string;
   readonly aggregate_revision: string | number;
   readonly projection_revision: string | number;
@@ -674,6 +683,12 @@ function localCancellationOrganizerSql(projection: 'games.card_projections' | 'p
 function mapProjection(row: ProjectionRow): StoredGameCardProjection {
   return {
     localCancellationOrganizerUserId: row.local_cancellation_organizer_user_id ?? null,
+    ...(row.roster_verified_at !== undefined
+      ? {
+          rosterVerifiedAt:
+            row.roster_verified_at === null ? null : timestamp(row.roster_verified_at),
+        }
+      : {}),
     gameId: row.game_id,
     aggregateRevision: positiveInteger(row.aggregate_revision),
     projectionRevision: positiveInteger(row.projection_revision),
@@ -1504,7 +1519,28 @@ export function createGameRepository(
         const result = await client.query<ProjectionRow & { requested_id: string }>(
           `select requested.id as requested_id, p.game_id, p.aggregate_revision, p.projection_revision, p.lifecycle_state,
                   p.visibility, p.starts_at, p.ends_at, p.base_payload, p.projected_at,
-                  ${localCancellationOrganizerSql('p')}
+                  ${localCancellationOrganizerSql('p')},
+                  (select case
+                     when g.revision = p.aggregate_revision
+                       and g.lifecycle_state = p.lifecycle_state and g.visibility = p.visibility
+                     then case when exists (
+                       select 1 from integration.external_entity_map origin
+                        where origin.tenant_id = g.tenant_id and origin.internal_id = g.id
+                          and origin.external_system = 'LK_LEGACY_SNAPSHOT' and origin.entity_type = 'game'
+                     ) then (
+                       select s.last_synced_at from integration.legacy_game_roster_sync_state s
+                        where s.tenant_id = g.tenant_id and s.game_id = g.id and s.mode = 'MIRROR' and s.conflict_code is null
+                          and s.last_synced_game_revision = p.aggregate_revision
+                          and exists (
+                            select 1 from integration.external_entity_map verified
+                             where verified.tenant_id = g.tenant_id and verified.internal_id = g.id
+                               and verified.external_system = 'LK_LEGACY_SNAPSHOT' and verified.entity_type = 'game'
+                               and verified.external_version = s.source_external_version
+                               and verified.sync_status = 'synced' and verified.sync_error_code is null
+                          )
+                     ) else p.projected_at end else null end
+                     from games.games g where g.tenant_id = p.tenant_id and g.id = p.game_id
+                  ) as roster_verified_at
              from unnest($2::uuid[]) as requested(id)
              left join integration.legacy_game_merge_redirects r
                on r.tenant_id = $1 and r.source_game_id = requested.id
@@ -1539,9 +1575,15 @@ export function createGameRepository(
     listViewerCardProjections(input) {
       const limit = Math.max(1, Math.min(input.limit, 100));
       const history = input.scope === 'HISTORY';
+      const retained = `exists (select 1 from games.games canonical
+        where canonical.tenant_id = games.card_projections.tenant_id
+          and canonical.id = games.card_projections.game_id
+          and canonical.lifecycle_state = 'FINISHED'
+          and canonical.result_state in ('AWAITING_SUBMISSION', 'PENDING_CONFIRMATION', 'DISPUTED')
+          and canonical.ends_at + interval '12 hours' > now())`;
       const lifecyclePredicate = history
-        ? "lifecycle_state in ('FINISHED', 'CANCELLED')"
-        : "lifecycle_state in ('SCHEDULED', 'IN_PROGRESS')";
+        ? `(lifecycle_state in ('FINISHED', 'CANCELLED') and not ${retained})`
+        : `(lifecycle_state in ('SCHEDULED', 'IN_PROGRESS') or ${retained})`;
       const cursorPredicate = history
         ? 'or (starts_at, game_id) < ($3::timestamptz, $4::uuid)'
         : 'or (starts_at, game_id) > ($3::timestamptz, $4::uuid)';
@@ -1563,6 +1605,7 @@ export function createGameRepository(
                    and redirect.source_game_id = games.card_projections.game_id
               )
               and ${lifecyclePredicate}
+              ${input.retainedResultsOnly ? `and ${retained}` : ''}
               and (${GAME_TEST_COURT_PUBLIC_FILTER} or $6::boolean)
               and (
                 base_payload ->> 'organizerUserId' = $2
@@ -1833,6 +1876,19 @@ export function createGameRepository(
             );
             const sets = scoreSets(submission.score_payload);
             if (!Array.isArray(sets)) return finish('dependency_missing');
+            const confirmedResult = await queryOne<{ confirmed_by_user_id: string | null }>(
+              client,
+              `select confirmed_by_user_id
+                 from games.results
+                where tenant_id = $1 and game_id = $2 and state = 'CONFIRMED'
+                order by revision desc, id desc
+                limit 1`,
+              [input.tenantId, input.gameId],
+            );
+            const autoConfirmed =
+              game.resultState === 'CONFIRMED' &&
+              confirmedResult !== undefined &&
+              confirmedResult.confirmed_by_user_id === null;
             result = {
               state: game.resultState,
               submissionId: submission.id,
@@ -1844,6 +1900,7 @@ export function createGameRepository(
               confirmedByUserIds: reviews.rows
                 .filter((row) => row.decision === 'CONFIRMED')
                 .map((row) => row.reviewer_user_id),
+              ...(autoConfirmed ? { autoConfirmed: true } : {}),
               confirmationQuorum: submission.confirmation_quorum,
               sets: sets as GameResultSetInput[],
             };
@@ -2111,6 +2168,14 @@ export function createGameRepository(
         );
         if (!updated) throw new Error('GAME_LIFECYCLE_COMMAND_REVISION_CONFLICT');
         const nextRevision = positiveInteger(updated.revision);
+        // Native lifecycle transitions do not change the verified roster. Carry its exact
+        // revision fence forward without claiming a new provider read or clearing quarantine.
+        await client.query(
+          `update integration.legacy_game_roster_sync_state set last_synced_game_revision = $4
+            where tenant_id = $1 and game_id = $2 and mode = 'MIRROR' and conflict_code is null
+              and last_synced_game_revision = $3`,
+          [input.tenantId, game.id, revision, nextRevision],
+        );
 
         const participants = await client.query<{ readonly user_id: string } & QueryResultRow>(
           `select user_id

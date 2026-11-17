@@ -1643,3 +1643,296 @@ Re-running verifies the recorded request/receipt/descriptor and returns the same
 container or GitHub reads; if only the receipt was lost after the descriptor write, the same verified
 evidence completes it. Any drift, partial write or conflict fails closed for manual reconciliation:
 do not delete custody artifacts or hand-edit the descriptor. Production never uses this route.
+
+## Production cutover from the retired beta lane
+
+The November 13 owner request authorizes repairing the production baseline and deploying LK2 while
+preserving all data and accounts. The observed predecessor is `lk2-beta-759083e37b40`, built by Test
+stand run `43202079490` from main `759083e37b4026f9690a3775a391f59f68f716a5` after successful first-attempt
+main CI `43199615483`. This predecessor has no OCI revision labels. It is not a canonical production
+publication and must never be relabeled or passed to the ordinary baseline reader.
+
+Use the existing `--critical-api-web` entry with operation schema
+`PHUB_TIMEWEB_API_WEB_PRODUCTION_CUTOVER_V1`, `profile: production`, and identical current-main
+candidate/controller SHA. The new candidate still needs the canonical five-image publication and
+first-attempt source CI. The cutover admits only the named historical predecessor. It never runs
+migrations, restores the live database, normalizes ACLs, changes keys, restarts Worker/Realtime,
+or changes ingress/provider configuration.
+
+`legacyBaseline` is a private `LEGACY_TEST_STAND_RUNTIME_V1` snapshot: exact four container IDs,
+immutable image refs/image IDs, real labels, null revisions, start times and zero restarts; source
+SHA/tree and successful CI/Test-stand runs; all five build records with artifact ID/name/archive
+SHA-256 and result digest; exact lane current/history/env hashes; fixed runtime paths; secret-set
+identity and hashes of all five existing secret files; database target/ledger hash; and the excluded
+container boundary. The actual Actions build records for this run are gzip OCI archives despite the
+`/zip` endpoint. Validate their GitHub archive digest, OCI blob hashes, exact builder/source/Dockerfile
+and result digest without extracting files. Mutable tags are not evidence.
+
+Before activation:
+
+1. Install/enroll the reviewed clean controller through the existing root-owned source process.
+   Keep the old source/configuration as recovery evidence. This is control-plane installation;
+   no application or runtime-secret change follows from it.
+2. Read the target and runtime afresh. Stage only the five authenticated legacy build archives at
+   `legacy-baselines/<legacy-source-sha>/build-<component>.tar.gz`, root-owned `0600` under `0700`
+   directories. Capture the private predecessor snapshot from the actual trusted inspect helpers.
+3. Select the existing backup producer's tmpfs
+   `PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_API_WEB_V1` profile, or explicitly choose the bounded Disk V1
+   `PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2` profile described in
+   [prerequisite producers](timeweb-prerequisite-producers.md#bounded-disk-profile-for-the-legacy-cutover).
+   A failed capacity gate never chooses another profile automatically. Its candidate release ID uses the new
+   canonical publication run; `baselineReleaseId` stays the actual legacy label. Independently
+   restore the complete dump with `pg_restore --exit-on-error` and verify the unchanged 122-row
+   ledger plus aggregate account/profile/session/delegation identity witnesses. No raw identity,
+   phone, token or ciphertext is printed. The bounded disk profile binds witnesses and dump to one
+   exported snapshot; the older tmpfs profile can safely abort on concurrent identity/session changes.
+   On failure retain the journal and use the exact profile's reconciler, never replay.
+4. Bind the retained `backup-operation.json` SHA-256 into `backupOperationSha256` of the cutover
+   request. Admission verifies the exact producer profile, tool Git-object/installation custody,
+   current API/PostgreSQL identities, candidate release, target, ledger, attestation, fresh receipt,
+   terminal cleanup and securely streamed dump hash.
+5. Refresh production monitoring and alert-delivery evidence. The snapshot must be current at
+   admission, with the existing required healthy rounds, Email/Telegram delivery, owner observation
+   and recovery. Notification drills need explicit owner authority. Do not retimestamp old evidence
+   or use a beta/direct-observation override. Seal these readbacks for the transaction; direct
+   private/public probes and unchanged-state checks continue for all 61 rounds over 900 seconds.
+6. Set a fresh expiry and exact confirmation
+   `CUTOVER_PRODUCTION_<CANDIDATE12>_FROM_<ATTESTATION12>_KEEP_DATA_AND_ACCOUNTS`.
+   The controller atomically journals the operation, predecessor attestation, overlays and plan.
+   It pulls canonical digests and activates API first, then Web, using `--no-deps`.
+
+On failure, restore Web then API using the sealed predecessor digests, original beta label, null
+revision and exact image IDs. Container IDs/start times necessarily change after recreation; the
+new runtime must still match the recorded image/label/revision/health and zero-restart expectation.
+Binary rollback never restores the database. Preserve failed-operation evidence and use the existing
+recovery/reconciliation entry; never delete a foreign lock or repeat an uncertain command.
+Loss of the dump or rotation of monitoring readbacks blocks forward admission and success, but
+does not block verification/reconciliation of `ABORTED` or `ROLLED_BACK`. Predecessor/configuration,
+secret and excluded-container custody still apply during recovery. A retained predecessor
+attestation from interrupted preparation is reused only when its bytes match exactly; it is
+checked before acquiring the rollout lock.
+
+Success emits an ordinary canonical `API_WEB` installed descriptor and a distinct
+`PHUB_TIMEWEB_API_WEB_CUTOVER_RECEIPT_V1`. `PHUB_LEGACY_PREDECESSOR_*` binds the retained noncanonical
+attestation; rollback mode is `attested-previous-runtime`, not a fabricated canonical previous
+release. The installed reader verifies this lineage before a subsequent ordinary release. A later
+successful release removes those one-shot predecessor fields and uses its own canonical predecessor.
+
+### Worker-aware roster cutover
+
+For an approved roster synchronization repair requiring the candidate Worker, select
+`PHUB_TIMEWEB_API_WORKER_WEB_PRODUCTION_CUTOVER_V2` through the **same** `--critical-api-web`
+entry, request path, shared lock and retained transaction. V1 remains API/Web-only. V2 additionally
+requires `expectedWorker` with the exact legacy Worker ID, digest and truthful `releaseId: null`.
+Use confirmation
+`CUTOVER_PRODUCTION_API_WORKER_WEB_<CANDIDATE12>_FROM_<ATTESTATION12>_KEEP_DATA_AND_ACCOUNTS`.
+The five-image canonical publication, full backup/restore, account witnesses, fresh monitoring,
+unchanged secrets and no-migrator gates above still apply.
+
+Before approving this package, review the complete Worker dependency delta and read back the
+existing enabled job/provider channels. Preserve the exact `worker.env` bytes and mounted credentials;
+do not enable a channel or infer that the Android FCM gate holds APNS, Web Push, SMTP or provider
+writes. An API/Web-only approval does not authorize Worker activation. The exact three-service
+package must explicitly cover resuming its existing channels; any new side effect needs separate
+scope and evidence. V2 grants no configuration, provider, migration or identity-change authority.
+
+The sealed V2 plan contains all three previous and candidate identities and only Realtime in
+`unchangedServiceImages`. Candidate Worker has OCI revision equal to the candidate SHA and no
+`phub.release-id` label, matching the existing Compose definition. Offline smoke uses no network and
+checks both Worker `main.js` and `repair-legacy-game-rosters.js` without executing their business logic.
+
+After preflight/pull/smoke, the controller journals `WORKER_STOP_INTENT`, stops only a recognized
+previous/candidate Worker and verifies it exited, then records `WORKER_STOPPED`. API activates first,
+then Worker under the existing background profile with `--no-deps`, then Web. Durable
+`WORKER_INTENT`/`WORKER_ACTIVE` phases fence the ambiguous Worker activation. All 61 observation
+rounds check Worker immutable identity, zero restarts and private readiness in addition to the
+existing API/Web private/public probes and unchanged Realtime/secrets. `BASELINE_INTENT` precedes
+the distinct `API_WORKER_WEB_PRODUCTION_CUTOVER` installed descriptor. The receipt schema is
+`PHUB_TIMEWEB_API_WORKER_WEB_CUTOVER_RECEIPT_V2`; never label the result `API_WEB`.
+
+After any activation intent, recovery contains a recognized Worker before restoring Web, API and
+Worker from the sealed predecessor images. It attempts independent component restores even after
+one fails after successful containment; a containment failure prevents every component restore. Any partial failure retains
+`ROLLBACK_FAILED` and the lock. Recovery verifies old Worker null labels/revision and exact image ID;
+it does not restore the live database. Pre-intent abort attests all three original containers.
+Use the existing recovery/reconciliation entry with the retained exact operation, never chain the
+historical API/Worker and API/Web executors.
+V2 retains the shared lock after `SUCCESS`, `ROLLED_BACK` or `ABORTED`; only exact terminal
+reconciliation verifies all three services and releases it. A successful installed reader also
+checks the distinct kind/receipt, Worker identity and real 61-sample, at-least-900-second observation.
+
+Only after rollout and successful reconciliation, perform each separately authorized exact roster
+repair using the [existing repair command](games-legacy-server-migration.md). Run one canonical Game
+UUID per operation in the exact verified Worker container, inspect its read-only plan, and apply
+only that plan hash. Seal operator identity/approval, protected roster preimage and compensating
+rollback before apply. No blanket conflict clearing, alias reassignment, user creation or direct SQL
+is part of this route. Verify canonical participants, projection and the authenticated Web/Android
+view separately before claiming recovery.
+
+### Owner-authorized cutover without an induced alert drill (November 15)
+
+The owner explicitly requested completing this LK2 deployment without the declined alert test,
+while preserving all data and accounts. This authorizes no monitor setting, recipient, provider,
+notification, secret, ACL, migration, reset or database-restore change on the live database.
+
+Select only `PHUB_TIMEWEB_API_WORKER_WEB_PRODUCTION_CUTOVER_ALERT_WAIVER_V3` through the existing
+`--critical-api-web` entry. Ordinary V1/V2, JOIN, beta and direct-observation routes retain their
+existing checks. V3 has distinct plan/receipt schemas and installed kind. It can consume only the
+already attested legacy predecessor; a successful canonical transition prevents its reuse as a
+standing waiver for later releases.
+
+The exact nested `alertWaiver` binds the target/server/project, controller/candidate/tree, source CI,
+publication/artifact/manifest, legacy baseline, full backup operation and outer expiry. Its scope is
+`INDUCED_ALERT_DRILL_ONLY`; status is `NOT_TESTED_OWNER_DECLINED`. It binds a canonical root-only
+`PHUB_TIMEWEB_OWNER_MESSAGE_RECEIPT_V1` carrying the original message digest, original received time
+and actual chat/message reference. Its `scopeSha256` binds the exact operation authorization fields
+(excluding the receipt hash to avoid a cycle); the same retained receipt cannot authorize a later source,
+publication, backup or expiry. This is honestly root-operator-attested owner authority, not a
+cryptographic claim of chat origin. Private references and original message bytes stay outside Git.
+Use the distinct confirmation:
+
+`CUTOVER_PRODUCTION_API_WORKER_WEB_WITHOUT_INDUCED_ALERT_KEEP_OTHER_GATES_<CANDIDATE12>_FROM_<LEGACY12>_KEEP_DATA_AND_ACCOUNTS`.
+
+Fresh first-attempt main CI, immutable five-image publication, complete dump/unfiltered isolated
+restore, ledger/account/session/delegation witnesses, unchanged secrets and Realtime, exact legacy
+rollback images, no migrator, Worker containment, 61 rounds over at least 900 seconds and retained
+terminal reconciliation remain mandatory. The restore image is 19 GiB with an 18 GiB database
+admission cap; dump cap, memory and 5 GiB plus 256 MiB host reserve are unchanged. Recheck actual
+capacity immediately before the backup. Do not reduce the full restore or witnesses to fit a disk.
+
+V3 consumes real native Timeweb configuration, complete statistics and complete incident inventories
+for both existing monitors through the versioned pure native adapter/review validators. Provider
+success is truthfully `HTTP_2XX`; application private/public probes continue to require exact 200.
+It never synthesizes V1 `expectedStatus: 200`, an alert readback or a delivered/PASS result.
+
+After final source freeze/enrollment, prepare the exact operation and all expensive prerequisites.
+The existing controller acquires its own lease, emits `PHUB_NATIVE_INPUT_REQUIRED` and waits up to
+120 seconds for one root-owned `0600` canonical `operator/native-monitor-inputs.json` under `0700`
+parents. This bounded wait does not widen the initial 30-second capture freshness requirement.
+Stage one complete `PHUB_TIMEWEB_NATIVE_INPUT_ENVELOPE_V1` atomically, never file-by-file inputs:
+
+- `operationSha256` is the hash of the exact operation bytes;
+- `files` contains the exact canonical UTF-8 strings for `native-monitor-capture.json`,
+  `native-monitor-review.json`, `native-monitor-public-trace.json`, and `owner-alert-waiver.json`;
+- envelope maximum is 16 MiB; each embedded canonical file is at most 4 MiB;
+- the capture has the exact final producer SHA, source-pinned redactor and five actual GET requests;
+- the independent review binds the complete actual public I/O projection and exact source hashes.
+  Redact configured Authorization inside the collector before emitting or persisting it. No value
+  or digest of the credential is retained. Internal framework metadata is intentionally excluded;
+  this is approved collector/root-input custody, not provider-origin authentication.
+
+The original `PHUB_TIMEWEB_NATIVE_MONITOR_CAPTURE_V1` keeps five distinct actual CUA call IDs.
+For one bounded call use `PHUB_TIMEWEB_NATIVE_MONITOR_CAPTURE_BATCH_V2`,
+`PHUB_TIMEWEB_NATIVE_CAPTURE_BATCH_REVIEW_V2` and
+`PHUB_TIMEWEB_NATIVE_CUA_BATCH_PUBLIC_TRACE_V2`. The pure source function
+`nativeBatchCuaArguments()` returns the exact approved CUA code, title and timeout. Prepare the
+existing authenticated opaque client as `phubNativeTimewebClient` and CDP session as
+`phubNativeMonitorCdp` before starting capture; never extract credentials. The function performs
+only the five fixed GETs concurrently with an 8-second timeout each. It redacts configuration
+inside the browser realm and emits one `PHUB_TIMEWEB_NATIVE_CUA_BATCH_RESULT_V1` only after all
+requests succeed. Any error emits no partial evidence and exposes only a fixed failure code.
+
+Retain exactly one actual public request/response pair, with its original arguments string and
+output. All five ordered captures truthfully share that one actual call ID and retain five
+unique native response IDs. The independent reviewer must compare the actual request against
+`nativeBatchCuaArguments()` and map every output field; copying one call into five invented
+trace entries is forbidden. The batch changes no 30-second capture/query freshness, 120-second
+controller wait, provider health, credential, independent review or aborted-operation gate.
+The original V1 path and schema checks remain supported. A source change needs a new candidate
+and canonical publication; it cannot replay a previously preparation-aborted release identity.
+
+One FD snapshot verifies ownership, mode, single link, no symlink and unchanged inode/content.
+The controller validates those exact Buffers under its existing lease and durably retains the four
+inputs, envelope and derived readback before sealing its plan and issuing any activation intent.
+After sealing it never rereads operator inputs. A missing, stale, substituted, unreviewed or
+credential-contaminated input stops before activation. Incomplete preparation is retained for exact
+recovery; a preparation-aborted V3 transaction cannot be replayed under the same release identity.
+
+The plan binds the admission version/policy, actual admission/readAt times, operation/source/tree/CI,
+adapter/review-validator hashes, all retained-byte hashes and waiver hash. Forward rechecks use the
+sealed admission time without retimestamping; direct readiness continues throughout observation.
+SUCCESS and RECONCILED/SUCCESS receipts retain explicit native admission hashes and
+`NOT_TESTED_OWNER_DECLINED`, never V1 provider/alert hashes.
+
+Installed V3 readback verifies the successful receipt, operation/plan lineage and every retained
+byte hash as historical admission. It does not call the current redactor, current clock or current
+Git/config to reconstruct an old admission. This permits a later approved controller enrollment
+without making its predecessor unreadable. It grants no freshness or authority to another rollout;
+new forward admission still needs its own fresh source-bound native capture. Runtime secret,
+Worker identity, observation, backup and rollback checks remain separate. Recovery and non-success
+reconciliation do not depend on fresh monitoring inputs or an unexpired waiver.
+
+### Owner-directed legacy roster cutover V4 (November 15)
+
+For the explicitly authorized LK2 legacy cutover, the owner removed the Timeweb provider
+monitoring check from the mandatory pre-switch procedure and declined another induced alert
+exercise. The owner separately instructed that the already successful full trial restore must
+not be repeated. Use `PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4` for these decisions.
+V1/V2/V3 retain their existing contracts; do not manufacture their missing evidence.
+
+The V4 operation contains three closed `ownerDecisions` receipts: `alertDrill`,
+`providerMonitoring`, and `repeatedRestore`. Each is root-operator attested, identifies the exact
+original human message and timestamp, and binds the current target/server/project, source/tree,
+source CI, publication/artifact/manifest, backup operation, legacy baseline and expiry through
+`ownerDirectedScopeSha256`. This is operator-attested owner authority, not provider evidence.
+The monitoring choice cites the exact answer “Проверку мониторинга перед переключением”; the
+restore choice cites the complete original instruction including its trailing newline.
+
+No Timeweb monitor capture, native input envelope, provider readback, alert exercise or monitoring
+inbox wait is required or performed by V4. SUCCESS/installed/reconcile receipts state
+`providerMonitoringStatus=NOT_CHECKED_OWNER_SKIPPED` and
+`alertTestStatus=NOT_TESTED_OWNER_DECLINED`; neither means PASS. They separately record
+`restoreAdmissionPolicy=EXACT_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1` and
+`repeatRestoreStatus=NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED`.
+
+V4 still requires the same successful exact-main CI, one canonical first-attempt immutable
+five-image publication, verified predecessor/rollback images, fresh complete dump and integrity
+receipt, 122-row schema ledger, account/session/delegation witnesses, unchanged secrets/settings,
+Worker containment, API/Worker/Web private readiness and API/Web public exact-200 checks. The
+61-round observation must last at least 900 seconds and retain latency/restart/error thresholds.
+No migration, account reset, result replay, LK1 bridge change or provider write is authorized by
+these procedural choices. Whole-five notification provisioning follows SUCCESS plus terminal
+reconciliation and its own existing authority.
+
+The fresh dump policy is described in [prerequisite producers](timeweb-prerequisite-producers.md#fresh-dump-with-the-exact-prior-full-restore).
+Freeze one source containing this procedure, Docker Hub redirect correction and CI finalization
+budget; publish and enroll that same source. Never mix the failed partial 758 publication with
+new images, replay the aborted 857 transaction, retimestamp its backup receipt, or relabel the
+fresh dump as restored. A failed or uncertain new transaction uses its own reconciliation entry.
+
+### Canonical predecessor roster upgrade V5
+
+`PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_UPGRADE_V5` is the single-operation successor for the
+installed canonical `4b8dbaa12c1e…-43751306581-1` API/Worker/Web release. It reuses this controller's
+three-service phase machine, immutable publisher, backup entry and rollback. It does not admit an
+arbitrary predecessor or relabel the canonical release as legacy 759. V1–V4 keep their original
+schemas, policy binding and validation. A new exact source package needs its own owner approval;
+merge of the product fix alone is not approval of changed controller source.
+
+V5 binds a closed `canonicalBaseline`: exact source/tree, CI/publication/artifact/manifest,
+installed descriptor and completed V4 operation/plan/receipt/observation/backup hashes, all four
+runtime identities, excluded containers, secret-set hashes, database system identity and unchanged
+122-row ledger. Forward admission validates the actual installed 4b8 terminal closure and running
+API/Worker/Web/Realtime. Its API/Worker/Web OCI revisions are non-null. No secrets, migrations,
+account creation, payment state, provider writes or Realtime transition are part of this profile.
+
+The outer plan and receipt use `PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_PLAN_V5` and
+`PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_RECEIPT_V5`. The installed descriptor records
+`API_WORKER_WEB_CANONICAL_UPGRADE`, `PHUB_CANONICAL_PREDECESSOR_SHA256`, release ID and the exact
+retained attestation pointer. The owner-policy binding is V2; it records skipped provider monitoring
+and declined alert drill truthfully, without a PASS claim. Existing source-bound owner decisions are
+carried into the new package and expire with it. The canonical prior-restore policy is
+`EXACT_CANONICAL_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1`.
+
+Retain `canonical-predecessor.env` and `canonical-predecessor-attestation.json` before activation.
+Recovery and terminal reconciliation validate those retained bytes rather than the old live 4b8
+runtime. Canonical rollback contains the Worker first and restores all three recorded images through
+the same engine; no manual Worker update is allowed. A completed V5 transaction can be reconciled
+again without a shared lease, but only from its exact retained RECONCILED operation and receipt.
+Foreign or changed predecessor bytes, receipt/pointer/schema mismatches and failed identity checks
+retain the lock/evidence and stop. Reconciliation never restarts deployment or repeats a dump.
+
+The existing 61-round, at least 900-second observation, private readiness, public exact-200 checks,
+image entrypoint smoke, zero unexpected restarts, unchanged excluded services and tested rollback
+remain required. See the [canonical fresh backup profile](timeweb-prerequisite-producers.md#canonical-predecessor-fresh-dump)
+for historical restore custody. Keep LOCAL, CI, publication and PRODUCTION proof distinct.

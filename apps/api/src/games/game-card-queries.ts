@@ -13,6 +13,7 @@ import {
   GAME_PLAYER_LEVELS,
   projectGameCard,
   projectPublicGameCard,
+  retainFinishedGame,
   type GameCardView,
   type GameCardProjectionInput,
   type GameKind,
@@ -416,7 +417,14 @@ export async function getViewerGameCard(input: {
   )
     return undefined;
   const history =
-    projection.lifecycleState === 'FINISHED' || projection.lifecycleState === 'CANCELLED';
+    (projection.lifecycleState === 'FINISHED' &&
+      !retainFinishedGame({
+        lifecycleState: projection.lifecycleState,
+        resultState: projection.basePayload.result?.state ?? 'NOT_AVAILABLE',
+        endsAt: projection.endsAt,
+        now: input.now,
+      })) ||
+    projection.lifecycleState === 'CANCELLED';
   const profileData = await profileDataForProjections({
     ...(input.photoRepository ? { repository: input.photoRepository } : {}),
     tenantId: input.tenantId,
@@ -469,7 +477,16 @@ export async function getViewerGameCardBatch(input: {
   readonly viewerUserId: string;
   readonly gameIds: readonly string[];
   readonly now: string;
-}): Promise<ReadonlyMap<string, { card: ViewerGameCard; generatedAt: string }>> {
+}): Promise<
+  ReadonlyMap<
+    string,
+    {
+      card: ViewerGameCard;
+      generatedAt: string | null;
+      lifecycleState: StoredGameCardProjection['lifecycleState'];
+    }
+  >
+> {
   const ids = [...new Set(input.gameIds)].slice(0, 50);
   if (ids.length === 0) return new Map();
   const projections = input.repository.getCardProjections
@@ -502,7 +519,14 @@ export async function getViewerGameCardBatch(input: {
       );
     },
   };
-  const result = new Map<string, { card: ViewerGameCard; generatedAt: string }>();
+  const result = new Map<
+    string,
+    {
+      card: ViewerGameCard;
+      generatedAt: string | null;
+      lifecycleState: StoredGameCardProjection['lifecycleState'];
+    }
+  >();
   for (const id of ids) {
     const card = await getViewerGameCard({
       repository,
@@ -512,7 +536,15 @@ export async function getViewerGameCardBatch(input: {
       now: input.now,
     });
     const projection = projections.get(id);
-    if (card && projection) result.set(id, { card, generatedAt: projection.projectedAt });
+    if (card && projection)
+      result.set(id, {
+        card,
+        lifecycleState: projection.lifecycleState,
+        generatedAt:
+          projection.rosterVerifiedAt === undefined
+            ? projection.projectedAt
+            : projection.rosterVerifiedAt,
+      });
   }
   return result;
 }

@@ -133,3 +133,122 @@ Shared server egress is removed from Viva user-data operations, matching the pro
 first-party transport. Initial social OAuth for an unknown subject can no longer rely on a server
 profile lookup; the account must first be linked by a verified phone flow or audited support
 reconciliation. Browser CORS and client-assisted contracts become explicit rollout prerequisites.
+
+## Amendment 2026-11-09: Android profile.read observation
+
+- Status: accepted; rollout pending
+
+### Context
+
+The installed Android client rendered the self-profile header from PadlHub
+`GET /{tenantKey}/profile` only. When the Home projection is absent the API serves an honest local
+slice: identity, avatar and an assessed level when PadlHub stores one, but never provider money.
+The browser fills the same header from the delegated `profile.read`, so one account showed `D+` and
+a balance in the browser and `—` placeholders in the app. ADR 0023 intentionally bars native clients
+from Viva End User traffic, so the app had no path to the provider-owned level and balance.
+
+### Decision
+
+The narrow native exception model already used for Android `MY_BOOKINGS` is extended to exactly one
+additional operation, `profile.read`, for the Android application only. The device performs the
+provider read; no API or worker process calls `/end-user/api/...`.
+
+1. `POST /user/api/v1/{tenantKey}/profile/provider-read-jobs` issues one 120-second job with a single
+   `profile.read` command. It requires an authenticated, authorized tenant session, the
+   `X-App-Platform: android` header, `PROFILE_NATIVE_READ_ENABLED=true`, and a stored server routing
+   plan for that user where `profile.read` is `DIRECT_VIVA`. Any other platform, plan or flag
+   state fails closed with a stable `PROFILE_NATIVE_READ_DISABLED` / `DIRECT_VIVA_DISABLED` error.
+   The job itself is issued from the stored plan; effective delegation readiness is enforced by the
+   existing `POST /{tenantKey}/auth/viva/access` gate, which fails closed when the delegation is
+   not ready.
+2. The device validates the routing plan, obtains the fixed delegated access token through the
+   existing `POST /{tenantKey}/auth/viva/access`, and performs exactly one bounded
+   `GET {apiBaseUrl}/v1/{providerTenantKey}/profile` on the approved provider origin. Redirects,
+   non-JSON, oversized bodies and unknown provider origins are rejected. No provider token, URL or
+   identifier crosses the JavaScript bridge.
+3. The device relays the bounded provider profile body to
+   `POST /user/api/v1/{tenantKey}/profile/provider-read-jobs/{jobId}/results/{commandId}`. The API
+   validates the job, principal, expiry and command, strictly parses the provider DTO and derives only
+   the normalized assessed level (`label`, `value`) and the observed account balance
+   (`balanceMinor`, `currency`) from the provider fields. It stores one
+   `profile.provider_observations` row per `(tenant, user)` with `observed_at`, monotonic by time; an
+   older or replayed submission never replaces a newer observation. The response contains no provider
+   identifier, URL, token or raw payload.
+4. `POST .../complete` consumes the job and confirms that the observation was accepted.
+5. `GET /{tenantKey}/profile` merges the observation only on the local-slice fallback and only while
+   `observed_at` is inside `PROFILE_OBSERVATION_MAX_AGE_SECONDS` (default 900). A complete Home
+   projection always wins over the observation. The observation is never served to another user and
+   never returned by `GET /{tenantKey}/profiles/{userId}`.
+
+### Data ownership and limits
+
+- Level and balance stay provider-owned (`VIVA_PRIMARY`) presentation values. The observation is a
+  short-lived, read-bounded cache, not a ledger, entitlement, receipt or balance authority. The
+  exception performs no provider write, creates no PadlHub business state such as a booking or
+  payment, and does not change entitlements.
+- Identity remains the authenticated PadlHub UUID. Provider profile names, phone numbers, identifiers
+  and media URLs are not persisted or returned by this path.
+- The migration is expand-only (`profile.provider_observations`); existing reads and the complete
+  projection path are unchanged.
+- Retention: one row per user, overwritten by newer observations and kept until the account is
+  deleted. It is not an audit ledger; disabling the flag makes it unreadable to the merge path
+  immediately, and an FK to `identity.users(tenant_id,id)` keeps account cleanup honest
+  (`NO ACTION`). No destructive cleanup is needed for rollback.
+- The relay body is untrusted client input, not a server observation. It transits the API only to be
+  strictly parsed; it is never written to an API log, business row or error message, the request-log
+  serializer keeps no body, and the device wipes its buffers. Only the normalized level and balance
+  survive into `profile.provider_observations`.
+- The provider payload is not signed: `X-App-Platform: android` and the payload are client assertions.
+  The trust model is bounded by making the result self-only presentation data: only the
+  authenticated owner's local-slice `/profile` fallback merges it, no eligibility, capacity,
+  payment or other-viewer read consumes it, and neither the level nor the balance becomes an
+  authority. A forged value can only mislead its own author's screen until the next real read or the
+  read-bound expiry.
+- Idempotency of this internal contract is the `(jobId, commandId)` pair, not the transport
+  `Idempotency-Key` header: the result is accepted once per command, replayed from the stored result,
+  and the job is consumed on completion. The device still sends a per-request correlation key for the
+  API transport.
+- One aggregate is read from one source: this amendment is an explicit, scoped exception for exactly
+  two provider-owned presentation fields. The complete Home projection always takes precedence, the
+  local slice merges only when the projection is absent, the window is bounded, and the fields do not
+  overlap a different owner's values.
+- Provider load is bounded: at most one device provider read per principal per 60 seconds, triggered
+  only by a profile reload that still lacks a level or balance, with an in-flight guard. Accounts
+  whose provider profile has no readable balance repeat that bounded attempt on reload; background
+  polling is prohibited.
+
+### Failure behavior
+
+Missing flag, missing plan/delegation, a non-Android platform, provider denial, invalid payload or a
+stored-observation write failure all leave the previous `/profile` response in place. The app keeps
+rendering the documented `—` placeholder instead of failing the screen, and no retry loop is created.
+
+### Rollback
+
+Set `PROFILE_NATIVE_READ_ENABLED=false`: this is the read-path kill switch as well as the job gate, so
+the merge stops immediately and the app falls back to the local slice without waiting for the
+freshness window. Removing the routing-plan `profile.read` operation only stops new jobs; it does
+not hide an already stored observation while the flag stays on. The observation row itself can stay:
+it is unreadable while the flag is off, is never an authority, and expires by read bound once the
+flag returns. The expand-only migration stays applied.
+
+### Flag lifecycle
+
+- Owner: the product owner of LK2 (first-version mode).
+- Purpose: one Android-only provider observation for the profile header while PadlHub's own profile
+  projection does not carry provider-owned level and balance.
+- Activation criterion: a signed APK 1.14/code15 or later, a stored routing plan with
+  `profile.read` = `DIRECT_VIVA`, and staging/device acceptance proving one provider 200, one accepted
+  relay and a merged `/profile` reread, plus a provider readback that API/worker containers send no
+  `/end-user/api/` traffic.
+- Review/removal condition: remove the exception (or keep it only as a recovery path) once the
+  native client can obtain provider-owned level and balance from a server-owned read; review no
+  later than 2027-02-09.
+
+### Production promotion precondition
+
+This amendment is implemented and enabled on the disposable `lk2` beta lane only. Any future
+production-lane promotion must first add a reviewed per-table runtime grant
+(`SELECT`, `INSERT`, `UPDATE`, no `DELETE`) for `profile.provider_observations` to the production
+privilege route and include it in that release's evidence; the disposable beta lane grant alone is
+not production evidence.

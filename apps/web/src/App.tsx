@@ -1,3 +1,4 @@
+import { HomePushPrompt } from './HomePushPrompt.js';
 import { MonthlyPurchasePanel } from './MonthlyPurchasePanel.js';
 import { cancelGameAndRead } from './game-cancel-readback.js';
 import type { NativeJoinRequest } from './native-game-join-attempt.js';
@@ -9,7 +10,8 @@ import { TournamentChatPage } from './TournamentChatPage.js';
 import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
 import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
 import { QuarterCreatePanel } from './QuarterCreatePanel.js';
-import { GameCard } from './GameCard.js';
+import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
+import { handleGameDetailBack } from './game-detail-navigation.js';
 import { normalizePhoneE164 } from '@phub/auth';
 import { PrimaryButton } from '@phub/ui';
 import { lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
@@ -90,6 +92,12 @@ import {
   getWebPushBrowserState,
   type WebPushBrowserState,
 } from './web-push-client.js';
+import {
+  readPushAttribution,
+  rememberAuthContinuation,
+  safeCommunityReturnTo,
+  takeAuthContinuation,
+} from './push-opt-in.js';
 
 const BookingsPage = lazy(() =>
   import('./BookingsPage.js').then((module) => ({ default: module.BookingsPage })),
@@ -135,6 +143,9 @@ const LocationsPage = lazy(() =>
 const NotificationsPage = lazy(() =>
   import('./NotificationsPage.js').then((module) => ({ default: module.NotificationsPage })),
 );
+const PushOptInPage = lazy(() =>
+  import('./PushOptInPage.js').then((module) => ({ default: module.PushOptInPage })),
+);
 const SubscriptionsPage = lazy(() =>
   import('./SubscriptionsPage.js').then((module) => ({ default: module.SubscriptionsPage })),
 );
@@ -174,6 +185,7 @@ type ProtectedRoute =
       readonly conversationId?: string;
     }
   | { readonly kind: 'notifications' }
+  | { readonly kind: 'push' }
   | { readonly kind: 'support'; readonly ticketId?: string }
   | { readonly kind: 'communities' }
   | { readonly kind: 'community'; readonly communityId: string }
@@ -223,6 +235,7 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
     return { kind: 'chats', mode: 'thread', conversationId: chatMatch[1] };
   }
   if (normalizedPath === '/notifications') return { kind: 'notifications' };
+  if (normalizedPath === '/push') return { kind: 'push' };
   if (normalizedPath === '/support') return { kind: 'support' };
   const supportMatch = normalizedPath.match(
     /^\/support\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
@@ -708,11 +721,14 @@ function NativeCreatedGame({
   gateway,
   gameId,
   scope,
+  publicGameOrigin,
 }: {
   gateway: AuthGateway;
   gameId: string;
   scope: { tenantId: string; userId: string };
+  publicGameOrigin?: string;
 }) {
+  const [detailTab, setDetailTab] = useState<GameDetailTab>('GAME');
   const joinGateway = useMemo(
     () => ({
       principal: () => gateway.quarterCreatePrincipal?.() ?? null,
@@ -826,37 +842,76 @@ function NativeCreatedGame({
     }
   }
   return (
-    <main>
-      <a href="/games">К списку игр</a>
-      <button type="button" disabled={busy} onClick={() => void run(false)}>
+    <main className="games-page games-page--detail">
+      <header className="games-header">
+        <a className="games-back" href="/" aria-label="Назад" onClick={handleGameDetailBack}>
+          <span aria-hidden="true">←</span>Назад
+        </a>
+        <div>
+          <h1>Детали матча</h1>
+        </div>
+      </header>
+      <button
+        className="game-detail-secondary"
+        type="button"
+        disabled={busy}
+        onClick={() => void run(false)}
+      >
         Обновить статус игры
       </button>
       {game ? (
         <>
-          <GameCard game={game} readOnly />
-          {game.viewerRelation === 'ORGANIZER' && game.allowedActions.includes('CANCEL') && (
-            <button type="button" disabled={busy} onClick={() => void run(true)}>
-              Отменить игру
-            </button>
-          )}
-          <NativeGameJoin
+          <GameDetailView
             game={game}
-            gateway={joinGateway}
-            scope={scope}
-            onCanonicalGame={adoptGame}
+            activeTab={detailTab}
+            onTabChange={setDetailTab}
+            busy={busy}
+            viewerUserId={scope.userId}
+            readOnly
+            publicGameOrigin={publicGameOrigin ?? null}
+            onAction={() => {
+              throw new Error('NATIVE_GAME_ACTION_REQUIRES_CONTROLLER');
+            }}
+            onChatOpen={() => {
+              throw new Error('NATIVE_GAME_CHAT_REQUIRES_CONTROLLER');
+            }}
+            onSubmit={() => Promise.reject(new Error('NATIVE_GAME_RESULT_UNAVAILABLE'))}
           />
-          <NativeSelfLeave
-            key={`${game.id}:${game.viewerRelation}`}
-            game={game}
-            gateway={leaveGateway}
-            scope={scope}
-          />
-          <NativeGameChat
-            key={game.id}
-            game={game}
-            principal={() => gateway.quarterCreatePrincipal?.() ?? null}
-            open={(id) => gateway.getOrCreateGameConversation(id)}
-          />
+          {/* Keep command owners mounted across tabs: pending attempts retain their lifetime/key. */}
+          <section
+            className="game-detail-native-actions game-detail-card"
+            aria-label="Действия игры"
+            hidden={detailTab !== 'GAME'}
+          >
+            {game.viewerRelation === 'ORGANIZER' && game.allowedActions.includes('CANCEL') && (
+              <button
+                className="game-detail-secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => void run(true)}
+              >
+                Отменить игру
+              </button>
+            )}
+            <NativeGameJoin
+              game={game}
+              gateway={joinGateway}
+              scope={scope}
+              onCanonicalGame={adoptGame}
+            />
+            <NativeSelfLeave
+              key={`${game.id}:${game.viewerRelation}`}
+              game={game}
+              gateway={leaveGateway}
+              scope={scope}
+            />
+            <NativeGameChat
+              key={game.id}
+              game={game}
+              principal={() => gateway.quarterCreatePrincipal?.() ?? null}
+              open={(id) => gateway.getOrCreateGameConversation(id)}
+            />
+          </section>
         </>
       ) : (
         <p role="status">{failed ? 'Игра пока недоступна.' : 'Загружаем игру…'}</p>
@@ -1054,7 +1109,7 @@ export function App({
   const [profileSubscriptions, setProfileSubscriptions] = useState<
     HomeDashboard['subscriptions'] | null
   >(null);
-  const [profileSubscriptionsError, setProfileSubscriptionsError] = useState<string | null>(null);
+  const [profileSubscriptionsUnavailable, setProfileSubscriptionsUnavailable] = useState(false);
   const [profileFriends, setProfileFriends] = useState<ProfileFriendPage | null>(null);
   const [profileFriendship, setProfileFriendship] = useState<ProfileFriendship | null>(null);
   const [profileFriendsBusy, setProfileFriendsBusy] = useState(false);
@@ -1182,6 +1237,14 @@ export function App({
     protectedRoute.mode === 'new' &&
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('open') === '1';
+  const pushReturnTo =
+    protectedRoute.kind === 'push' && typeof window !== 'undefined'
+      ? safeCommunityReturnTo(new URLSearchParams(window.location.search).get('returnTo'))
+      : null;
+  const pushAttribution =
+    protectedRoute.kind === 'push' && typeof window !== 'undefined'
+      ? readPushAttribution(window.location.search)
+      : {};
   const isHomeRoute =
     protectedRoute.kind === 'home' ||
     protectedRoute.kind === 'home-v2' ||
@@ -1294,6 +1357,20 @@ export function App({
     };
   }, [entryView, gateway, publicGiftRoute]);
 
+  // Viva OAuth returns to the app root, so the push opt-in deep link is restored after login
+  // instead of dropping the visitor on the home screen. The stored target is a fixed internal
+  // /push path with a short TTL (see push-opt-in.ts).
+  const [, forceRouteRender] = useReducer((value: number) => value + 1, 0);
+  useEffect(() => {
+    if (state.view !== 'home' || !state.session) return;
+    const target = takeAuthContinuation();
+    if (!target) return;
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (current === target) return;
+    window.history.replaceState(window.history.state, '', target);
+    forceRouteRender();
+  }, [state.session, state.view]);
+
   useEffect(() => {
     if (state.view !== 'home' || !state.session || !isHomeRoute) return;
     let active = true;
@@ -1369,8 +1446,17 @@ export function App({
         }
       },
     );
+    const refresh = (): void => {
+      if (document.visibilityState === 'visible') setHomeUpcomingReloadToken((token) => token + 1);
+    };
+    const interval = window.setInterval(refresh, 30_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
     return () => {
       active = false;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
     };
   }, [
     gateway,
@@ -1466,14 +1552,12 @@ export function App({
           (dashboard) => {
             if (!active) return;
             setProfileSubscriptions(dashboard.subscriptions);
-            setProfileSubscriptionsError(null);
+            setProfileSubscriptionsUnavailable(false);
           },
           () => {
             if (!active) return;
             setProfileSubscriptions(null);
-            setProfileSubscriptionsError(
-              'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
-            );
+            setProfileSubscriptionsUnavailable(true);
           },
         );
         void gateway.listProfileFriends(8).then(
@@ -1547,7 +1631,7 @@ export function App({
               setProfileCommunities(null);
               setProfileCommunitiesError(null);
               setProfileSubscriptions(null);
-              setProfileSubscriptionsError(null);
+              setProfileSubscriptionsUnavailable(false);
             }
           }
         },
@@ -1782,6 +1866,33 @@ export function App({
         setLoadedRealtimeConversationId(null);
         setChatRealtimeState(null);
         window.clearInterval(refreshInterval);
+      };
+    }
+    if (protectedRoute.kind === 'push') {
+      const serviceWorkerUrl =
+        window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
+      void Promise.allSettled([
+        clientPlatform === 'android'
+          ? Promise.resolve({ enabled: false })
+          : gateway.getWebPushConfiguration(),
+        clientPlatform === 'android'
+          ? Promise.resolve('unsupported' as const)
+          : getWebPushBrowserState(serviceWorkerUrl),
+      ]).then(([configurationResult, browserStateResult]) => {
+        if (!active) return;
+        if (configurationResult.status !== 'fulfilled') {
+          setWebPushConfiguration({ enabled: false, reason: 'RUNTIME_UNAVAILABLE' });
+          setNotificationsError('Настройки уведомлений временно недоступны.');
+          return;
+        }
+        setWebPushConfiguration(configurationResult.value);
+        setWebPushBrowserState(
+          browserStateResult.status === 'fulfilled' ? browserStateResult.value : 'unsupported',
+        );
+        setNotificationsError(null);
+      });
+      return () => {
+        active = false;
       };
     }
     if (protectedRoute.kind === 'notifications') {
@@ -2145,6 +2256,7 @@ export function App({
       });
       return;
     }
+    rememberAuthContinuation(window.location.href);
     dispatch({ type: 'oauth-started' });
     void gateway
       .startVivaOAuth({
@@ -2216,7 +2328,7 @@ export function App({
           setProfileCommunities(null);
           setProfileCommunitiesError(null);
           setProfileSubscriptions(null);
-          setProfileSubscriptionsError(null);
+          setProfileSubscriptionsUnavailable(false);
           setUpcomingBookings(null);
           setBookingsError(null);
           setConversations(null);
@@ -2571,6 +2683,7 @@ export function App({
       gateway,
       publicKey: webPushConfiguration.publicKey,
       serviceWorkerUrl: window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js',
+      ...pushAttribution,
     }).then(
       () => {
         setWebPushBrowserState('subscribed');
@@ -2921,7 +3034,7 @@ export function App({
           bookingPreferencesNotice={bookingPreferencesNotice}
           stationChoices={bookingPreferenceStations}
           subscriptions={profileSubscriptions}
-          subscriptionsError={profileSubscriptionsError}
+          subscriptionsUnavailable={profileSubscriptionsUnavailable}
           communities={profileCommunities}
           communitiesError={profileCommunitiesError}
           loadCommunityPage={gateway.listMyCommunities}
@@ -3025,6 +3138,31 @@ export function App({
               handleSetConversationNotificationPolicy(requestedConversationId, update);
             }
           }}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'push') {
+      if (!webPushConfiguration) {
+        return (
+          <main className="app-shell app-shell-loading" aria-labelledby="push-loading-title">
+            <Brand />
+            <section className="loading-card" aria-busy="true">
+              <span className="loader" aria-hidden="true" />
+              <h1 id="push-loading-title">Настраиваем уведомления</h1>
+              <p role="status">Проверяем доступность уведомлений…</p>
+            </section>
+          </main>
+        );
+      }
+      return (
+        <PushOptInPage
+          webPush={devicePush ? { enabled: devicePush.enabled } : webPushConfiguration}
+          browserState={devicePush?.state ?? webPushBrowserState}
+          busy={notificationsBusy || Boolean(devicePush?.busy)}
+          error={devicePush?.error ?? notificationsError}
+          ios={iosBrowser}
+          returnTo={pushReturnTo}
+          onEnable={devicePush?.enable ?? handleEnableWebPush}
         />
       );
     }
@@ -3212,7 +3350,11 @@ export function App({
       }
       return <LocationDetailPage location={locationDetail} />;
     }
-    if (clientPlatform === 'android' && protectedRoute.kind === 'games')
+    const bookingEventId =
+      protectedRoute.kind === 'games'
+        ? new URLSearchParams(window.location.search).get('event')
+        : null;
+    if (clientPlatform === 'android' && protectedRoute.kind === 'games' && !bookingEventId)
       return <NativeGames gateway={gateway} />;
     if (clientPlatform === 'android' && protectedRoute.kind === 'game') {
       return (
@@ -3221,21 +3363,18 @@ export function App({
           gateway={gateway}
           gameId={protectedRoute.gameId}
           scope={{ tenantId: context.tenant.id, userId: context.user.id }}
+          {...(realtimeBaseUrl ? { publicGameOrigin: realtimeBaseUrl } : {})}
         />
       );
     }
     if (protectedRoute.kind === 'games' || protectedRoute.kind === 'game') {
-      const eventId =
-        protectedRoute.kind === 'games' && typeof window !== 'undefined'
-          ? new URLSearchParams(window.location.search).get('event')
-          : null;
       return (
         <GamesPage
           gateway={gateway}
           chatNavigationScope={{ tenantKey, userId: context.user.id }}
           joinPrincipal={{ tenantId: context.tenant.id, userId: context.user.id }}
           {...(protectedRoute.kind === 'game' ? { gameId: protectedRoute.gameId } : {})}
-          {...(eventId ? { eventId } : {})}
+          {...(bookingEventId ? { eventId: bookingEventId } : {})}
         />
       );
     }
@@ -3446,45 +3585,53 @@ export function App({
       );
     }
     return (
-      <HomeDashboardPage
-        dashboard={homeBase}
-        viewerFallback={context.user}
-        viewer={homeViewer}
-        upcoming={homeUpcoming}
-        tenantName={context.tenant.name}
-        layoutVariant={
-          protectedRoute.kind === 'home-v2'
-            ? 'v2'
-            : protectedRoute.kind === 'home-v3'
-              ? 'v3'
-              : 'default'
-        }
-        recommendationDisplay={bookingPreferences?.recommendationDisplay ?? 'CARDS'}
-        notificationUnreadCount={(notifications?.unreadCount ?? 0) + friendRequests.length}
-        loadCommunityPage={gateway.listMyCommunities}
-        communityPageSize={10}
-        loadBookingRecommendations={(input) =>
-          gateway.listHomeBookingRecommendations
-            ? gateway.listHomeBookingRecommendations(input)
-            : gateway.listBookingRecommendations(input)
-        }
-        recordPromotionEngagement={(promotionId, kind) =>
-          gateway.recordPromotionEngagement(promotionId, kind)
-        }
-        loadActivityHistory={gateway.getActivityHistory}
-        logoutBusy={state.busy === 'logout'}
-        error={state.error}
-        onRetryViewer={() => {
-          setHomeViewer(null);
-          setHomeViewerReloadToken((token) => token + 1);
-        }}
-        onActivateUpcoming={() => setHomeUpcomingRequested(true)}
-        onRetryUpcoming={() => {
-          setHomeUpcoming(null);
-          setHomeUpcomingReloadToken((token) => token + 1);
-        }}
-        onLogout={handleLogout}
-      />
+      <>
+        <HomePushPrompt
+          key={`${context.tenant.id}:${context.user.id}`}
+          gateway={gateway}
+          clientPlatform={clientPlatform}
+          {...(devicePush ? { devicePush } : {})}
+        />
+        <HomeDashboardPage
+          dashboard={homeBase}
+          viewerFallback={context.user}
+          viewer={homeViewer}
+          upcoming={homeUpcoming}
+          tenantName={context.tenant.name}
+          layoutVariant={
+            protectedRoute.kind === 'home-v2'
+              ? 'v2'
+              : protectedRoute.kind === 'home-v3'
+                ? 'v3'
+                : 'default'
+          }
+          recommendationDisplay={bookingPreferences?.recommendationDisplay ?? 'CARDS'}
+          notificationUnreadCount={(notifications?.unreadCount ?? 0) + friendRequests.length}
+          loadCommunityPage={gateway.listMyCommunities}
+          communityPageSize={10}
+          loadBookingRecommendations={(input) =>
+            gateway.listHomeBookingRecommendations
+              ? gateway.listHomeBookingRecommendations(input)
+              : gateway.listBookingRecommendations(input)
+          }
+          recordPromotionEngagement={(promotionId, kind) =>
+            gateway.recordPromotionEngagement(promotionId, kind)
+          }
+          loadActivityHistory={gateway.getActivityHistory}
+          logoutBusy={state.busy === 'logout'}
+          error={state.error}
+          onRetryViewer={() => {
+            setHomeViewer(null);
+            setHomeViewerReloadToken((token) => token + 1);
+          }}
+          onActivateUpcoming={() => setHomeUpcomingRequested(true)}
+          onRetryUpcoming={() => {
+            setHomeUpcoming(null);
+            setHomeUpcomingReloadToken((token) => token + 1);
+          }}
+          onLogout={handleLogout}
+        />
+      </>
     );
   }
 

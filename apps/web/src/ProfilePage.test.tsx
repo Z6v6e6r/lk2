@@ -137,7 +137,26 @@ describe('ProfilePage', () => {
       'href',
       '/subscriptions',
     );
-    expect(screen.getByText('Неполная подборка с Главной: до 6 абонементов.')).toBeVisible();
+    expect(screen.queryByText(/Неполная подборка с Главной/)).not.toBeInTheDocument();
+  });
+
+  it('stays quiet when the Home subscription pickup is unavailable', () => {
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        logoutBusy={false}
+        communities={{ items: [] }}
+        subscriptions={null}
+        subscriptionsUnavailable
+        onLogout={() => undefined}
+      />,
+    );
+
+    const card = screen.getByRole('region', { name: 'Подписки и абонементы' });
+    expect(within(card).queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(card).queryByRole('status')).not.toBeInTheDocument();
+    expect(within(card).queryByText(/временно недоступны/)).not.toBeInTheDocument();
+    expect(within(card).getByRole('link', { name: 'Мои абонементы' })).toBeVisible();
   });
 
   it('opens recommendation preferences from the Home deep link', () => {
