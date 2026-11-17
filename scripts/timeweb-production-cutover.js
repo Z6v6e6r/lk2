@@ -164,6 +164,7 @@ export function validateCanonicalBaseline(value) {
   // V6: after a canonical upgrade the installed release is the new predecessor. Its custody is
   // attested live by attestCanonicalBaseline; this validator only enforces shape and identity.
   const derivedIdentity =
+    value.installedReleaseId !== CANONICAL_BASELINE_RELEASE &&
     /^[0-9a-f]{40}-[1-9][0-9]*-1$/u.test(value.installedReleaseId ?? '') &&
     value.sourceSha === value.installedReleaseId.slice(0, 40) &&
     typeof value.sourceTree === 'string' &&
