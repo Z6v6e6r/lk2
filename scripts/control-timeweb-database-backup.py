@@ -3438,7 +3438,7 @@ def validate_v6_prior_restore(op):
     for item in files:
         exact(item,['path','sha256','identity'])
         needle=ROOT/item['path'];secure(needle)
-        need(file_digest(needle)==item['sha256'],'V6_HISTORY_FILE')
+        need(hashlib.sha256(read_secure(needle)).hexdigest()==item['sha256'],'V6_HISTORY_FILE')
     need(encoded(ref)==raw,'V6_HISTORY_CANONICAL')
     return ref
 
