@@ -2499,6 +2499,70 @@ describe('PadlHub web authentication', () => {
     expect(window.sessionStorage.getItem('phub.game-chat-navigation.v1')).not.toBeNull();
   });
 
+  it('offers to sign out and returns to the login screen after a Viva identity conflict', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/#viva_auth_error=AUTH_IDENTITY_CONFLICT&viva_correlation_id=73408883-7e73-4ce1-b899-5bc73b42f7f9',
+    );
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockRejectedValue(new Error('AUTH_SESSION_REVOKED')),
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Выйти из аккаунта?' })).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('уже связан с другим аккаунтом');
+    expect(screen.getByText(/73408883-7e73-4ce1-b899-5bc73b42f7f9/)).toBeVisible();
+    expect(window.location.hash).toBe('');
+    expect(screen.getByRole('button', { name: 'Выйти из аккаунта' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Выйти из аккаунта' }));
+
+    expect(gateway.logout).toHaveBeenCalledOnce();
+    expect(await screen.findByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
+  });
+
+  it('keeps the identity conflict screen and explains a failed sign out', async () => {
+    window.history.replaceState({}, '', '/#viva_auth_error=AUTH_IDENTITY_CONFLICT');
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockRejectedValue(new Error('AUTH_SESSION_REVOKED')),
+      logout: vi.fn().mockRejectedValue(new Error('network unavailable')),
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Выйти из аккаунта' }));
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('alert')
+          .map((element) => element.textContent)
+          .join(' '),
+      ).toContain('сессия осталась активной'),
+    );
+    expect(screen.getByRole('heading', { name: 'Выйти из аккаунта?' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Выйти из аккаунта' })).toBeEnabled();
+  });
+
+  it('returns to the regular login form from the identity conflict screen without signing out', async () => {
+    window.history.replaceState({}, '', '/#viva_auth_error=AUTH_IDENTITY_CONFLICT');
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockRejectedValue(new Error('AUTH_SESSION_REVOKED')),
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Вернуться ко входу' }));
+
+    expect(await screen.findByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
+    expect(gateway.logout).not.toHaveBeenCalled();
+  });
+
   it('keeps the OTP screen accessible and explains a rejected code', async () => {
     const gateway = createGateway({
       verifyCode: vi.fn().mockRejectedValue({ code: 'AUTH_CODE_INVALID' }),

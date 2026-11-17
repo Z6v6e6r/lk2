@@ -7,7 +7,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandl
 import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
-import { AuthServiceError, type AuthService, type AuthSessionResult } from './auth-service.js';
+import {
+  AuthServiceError,
+  type AuthService,
+  type AuthServiceErrorCode,
+  type AuthSessionResult,
+} from './auth-service.js';
 import { normalizeLoginEmail } from './local-password.js';
 import type { PhoneSubjectLinkService } from './phone-subject-link-service.js';
 
@@ -158,6 +163,37 @@ function requireAuthIdempotency(request: FastifyRequest, reply: FastifyReply): P
 
 function idempotencyKey(request: FastifyRequest): string {
   return request.headers['idempotency-key'] as string;
+}
+
+// A canonical identity conflict ends the browser login: the callback created no session, and the raw
+// JSON error would leave the user on a dead-end API page. Return them to the SPA with a one-shot
+// fragment marker (a stable code and the correlation ID only) so it can offer to sign out and retry.
+const oauthCallbackLoginRedirectCodes: ReadonlySet<AuthServiceErrorCode> = new Set([
+  'AUTH_IDENTITY_CONFLICT',
+]);
+
+function redirectOAuthCallbackConflictToLogin(
+  error: unknown,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  config: AppConfig,
+): FastifyReply | undefined {
+  if (!(error instanceof AuthServiceError) || !oauthCallbackLoginRedirectCodes.has(error.code)) {
+    return undefined;
+  }
+  const loginUrl = config.VIVA_OAUTH_SUCCESS_REDIRECT_URL;
+  if (!loginUrl) return undefined;
+  try {
+    const target = new URL(loginUrl);
+    const fragment = new URLSearchParams(target.hash.replace(/^#/, ''));
+    fragment.set('viva_auth_error', error.code);
+    fragment.set('viva_correlation_id', request.id);
+    target.hash = fragment.toString();
+    preventCredentialCaching(reply);
+    return reply.redirect(target.toString());
+  } catch {
+    return undefined;
+  }
 }
 
 function handleAuthError(
@@ -532,6 +568,8 @@ export function registerAuthRoutes(
       if (callbackTenantKey && callbackState && shouldClearOAuthBrowserCookie) {
         clearOAuthBrowserCookie(reply, config, callbackTenantKey, callbackState);
       }
+      const conflictReply = redirectOAuthCallbackConflictToLogin(error, request, reply, config);
+      if (conflictReply) return conflictReply;
       return handleAuthError(error, request, reply);
     }
   });

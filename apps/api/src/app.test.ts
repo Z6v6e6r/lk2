@@ -658,6 +658,61 @@ describe('health endpoints', () => {
     expect(response.headers.location).toBe('https://app.example.test/');
   });
 
+  it('returns a conflicting Viva profile to the login screen instead of a JSON dead end', async () => {
+    const app = await buildApp({
+      config: {
+        ...config,
+        VIVA_OAUTH_ENABLED: true,
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      },
+      logger: createLogger('api-test', 'silent'),
+      authService: {
+        completeVivaOAuth: () => Promise.reject(new AuthServiceError('AUTH_IDENTITY_CONFLICT')),
+      } as never,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/auth/viva/callback?state=${'s'.repeat(24)}&code=oauth-code`,
+      headers: { 'x-correlation-id': '73408883-7e73-4ce1-b899-5bc73b42f7f9' },
+    });
+
+    expect(response.statusCode).toBe(302);
+    const location = new URL(response.headers.location as string);
+    expect(`${location.origin}${location.pathname}`).toBe('https://app.example.test/');
+    expect(location.search).toBe('');
+    const fragment = new URLSearchParams(location.hash.replace(/^#/, ''));
+    expect(fragment.get('viva_auth_error')).toBe('AUTH_IDENTITY_CONFLICT');
+    expect(fragment.get('viva_correlation_id')).toBe('73408883-7e73-4ce1-b899-5bc73b42f7f9');
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body).toBe('');
+  });
+
+  it('keeps the JSON error contract for callback failures that are not an identity conflict', async () => {
+    const app = await buildApp({
+      config: {
+        ...config,
+        VIVA_OAUTH_ENABLED: true,
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      },
+      logger: createLogger('api-test', 'silent'),
+      authService: {
+        completeVivaOAuth: () =>
+          Promise.reject(new AuthServiceError('AUTH_IDENTITY_LINK_REQUIRED')),
+      } as never,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/auth/viva/callback?state=${'s'.repeat(24)}&code=oauth-code`,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'AUTH_IDENTITY_LINK_REQUIRED' });
+  });
+
   it('returns one normalized PadlHub profile aggregate', async () => {
     const app = await buildApp({
       config,
