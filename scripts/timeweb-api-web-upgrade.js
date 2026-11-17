@@ -2294,7 +2294,10 @@ export function validateCanonicalPredecessorArchive(baseline, operationBytes, ar
   const op = validateProductionCutover(parseStrictJson(operationBytes));
   if (
     hash(operationBytes) !== b.operationSha256 ||
-    op.schema !== 'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4' ||
+    ![
+      'PHUB_TIMEWEB_API_WORKER_WEB_OWNER_DIRECTED_CUTOVER_V4',
+      'PHUB_TIMEWEB_API_WORKER_WEB_CANONICAL_UPGRADE_V5',
+    ].includes(op.schema) ||
     op.candidateSha !== b.sourceSha ||
     op.candidateTree !== b.sourceTree ||
     op.sourceCiRunId !== b.sourceCiRunId ||
@@ -2412,7 +2415,7 @@ export function attestCanonicalBaseline(baseline) {
   if (
     hash(installed.bytes) !== b.installedDescriptorSha256 ||
     installed.secretSetReleaseId !== b.secretSetReleaseId ||
-    installed.values.PHUB_COMPONENT_ROLLOUT_KIND !== OWNER_KIND ||
+    ![OWNER_KIND, CANONICAL_KIND].includes(installed.values.PHUB_COMPONENT_ROLLOUT_KIND) ||
     hash(readCanonicalPredecessorManifest(b)) !== b.manifestSha256 ||
     git(['rev-parse', `${b.sourceSha}^{tree}`]) !== b.sourceTree ||
     Object.entries(files).some(([k, name]) => hash(read(`${transaction}/${name}`)) !== b[k]) ||
@@ -2422,7 +2425,7 @@ export function attestCanonicalBaseline(baseline) {
     fail('canonical_predecessor_custody');
   const priorReceipt = parseStrictJson(read(`${transaction}/rollout-receipt.json`));
   if (
-    priorReceipt.schema !== OWNER_RECEIPT ||
+    ![OWNER_RECEIPT, CANONICAL_RECEIPT].includes(priorReceipt.schema) ||
     priorReceipt.status !== 'RECONCILED' ||
     priorReceipt.reconciledStatus !== 'SUCCESS'
   )
