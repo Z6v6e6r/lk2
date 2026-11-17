@@ -82,13 +82,19 @@ export interface V5Operation {
   readonly expectedApi: BaselineContainer;
   readonly expectedWeb: BaselineContainer;
   readonly expectedWorker: BaselineContainer;
-  readonly ownerDecisions: Record<string, { readonly scopeSha256?: string; readonly status?: string }>;
+  readonly ownerDecisions: Record<
+    string,
+    { readonly scopeSha256?: string; readonly status?: string }
+  >;
   readonly canonicalBaseline: unknown;
 }
 
 export declare function buildV5Request(input: V5BuildInput): V5Operation;
 export declare function mountCheck(backupsPath?: string): MountLeaks;
-export declare function commandApply(input: { readonly sha: string; readonly confirmation: string }, env?: Record<string, unknown>): Record<string, any>;
+export declare function commandApply(
+  input: { readonly sha: string; readonly confirmation: string },
+  env?: Record<string, unknown>,
+): Record<string, any>;
 export declare function commandPrepareFull(input: {
   readonly sha: string;
   readonly run: string;
