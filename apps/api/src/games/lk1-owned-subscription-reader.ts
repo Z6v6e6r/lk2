@@ -77,7 +77,7 @@ export function createLk1OwnedSubscriptionReader(options: {
     readonly providerClientId: string;
     readonly providerSubscriptionId: string;
     readonly startsAt: string;
-    readonly durationMinutes: 60 | 90;
+    readonly durationMinutes: 60 | 90 | 120;
     readonly signal: AbortSignal;
     readonly correlationId: string;
   }): Promise<{ readonly fingerprint: string }> => {

@@ -248,6 +248,48 @@ describe('commercial JOIN orchestration', () => {
     expect(owner.calls).toEqual(['execute']);
   });
 
+  it('writes the durable dispatch fence before the owner call', async () => {
+    const { repository: repo } = repository();
+    const order: string[] = [];
+    const markDispatchStarted = vi.fn(async () => {
+      order.push('fence');
+      return true;
+    });
+    const owner = ownerPort([{ status: 'PENDING' }]);
+    const execute = owner.owner.execute;
+    owner.owner.execute = () => {
+      order.push('execute');
+      return execute();
+    };
+
+    const result = await executeCommercialJoin(
+      envelope,
+      dependencies({ ...repo, markDispatchStarted }, owner.owner),
+    );
+    expect(result.kind).toBe('accepted');
+    expect(markDispatchStarted).toHaveBeenCalledWith({
+      tenantId: envelope.tenantId,
+      actorUserId: envelope.userId,
+      gameId: envelope.gameId,
+      operationId,
+    });
+    expect(order).toEqual(['fence', 'execute']);
+  });
+
+  it('never dispatches when the durable dispatch fence cannot be written', async () => {
+    const { calls, repository: repo } = repository();
+    const markDispatchStarted = vi.fn(async () => false);
+    const owner = ownerPort([{ status: 'PENDING' }]);
+
+    const result = await executeCommercialJoin(
+      envelope,
+      dependencies({ ...repo, markDispatchStarted }, owner.owner),
+    );
+    expect(result).toMatchObject({ kind: 'failed', code: 'GAME_OWNER_UNAVAILABLE' });
+    expect(owner.calls).toEqual([]);
+    expect(calls).toContain('failPaidJoinAttempt');
+  });
+
   it('never dispatches a replacement owner POST for a repeat with the same key', async () => {
     const { repository: repo } = repository({
       beginPaidJoin(): Promise<CommercialJoinBeginResult> {

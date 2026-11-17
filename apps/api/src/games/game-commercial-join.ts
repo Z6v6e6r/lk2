@@ -87,6 +87,16 @@ export type CommercialJoinAttemptState =
 /** Server-side port onto the existing write owner of the games aggregate. */
 export interface CommercialJoinRepositoryPort {
   confirmPayment?(input: ConfirmGamePaymentInput): Promise<GameRosterCommandResult>;
+  /**
+   * Durable fence written before the external owner call. When absent the attempt is still
+   * recoverable, but an expired reservation cannot be released without an owner read.
+   */
+  markDispatchStarted?(input: {
+    readonly tenantId: string;
+    readonly actorUserId: string;
+    readonly gameId: string;
+    readonly operationId: string;
+  }): Promise<boolean>;
   beginPaidJoin(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -783,7 +793,25 @@ export async function executeCommercialJoin(
         : {}),
       ...(input.invitationId === undefined ? {} : { invitationId: input.invitationId }),
       reservationTtlSeconds,
-      ...(providerBinding ? { providerBinding } : {}),
+      ...(providerBinding
+        ? {
+            actorContext: {
+              tenantKey: input.tenantKey,
+              sessionId: input.sessionId,
+              providerClientId: providerBinding.providerClientId,
+              providerMappingId: providerBinding.providerMappingId,
+              ...((resolvedProviderClientSubscriptionId ??
+              providerBinding.providerClientSubscriptionId)
+                ? {
+                    providerClientSubscriptionId:
+                      resolvedProviderClientSubscriptionId ??
+                      providerBinding.providerClientSubscriptionId,
+                  }
+                : {}),
+            },
+            providerBinding,
+          }
+        : {}),
       ...(stationMembership ? { stationMembership } : {}),
     });
   } catch {
@@ -876,6 +904,37 @@ export async function executeCommercialJoin(
         replayed: true,
       }),
     };
+  }
+
+  // 3b. Durable dispatch fence. It must be written before the owner call: an expiry job may
+  // only release an attempt whose fence is absent. A failed fence never dispatches.
+  if (dependencies.repository.markDispatchStarted) {
+    let fenced = false;
+    try {
+      fenced = await dependencies.repository.markDispatchStarted({
+        tenantId: input.tenantId,
+        actorUserId: input.userId,
+        gameId: input.gameId,
+        operationId: begin.operationId,
+      });
+    } catch {
+      fenced = false;
+    }
+    if (!fenced) {
+      try {
+        await dependencies.repository.failPaidJoinAttempt({
+          tenantId: input.tenantId,
+          actorUserId: input.userId,
+          operationId: begin.operationId,
+          gameId: input.gameId,
+          code: 'GAME_OWNER_UNAVAILABLE',
+          correlationId: input.correlationId,
+        });
+      } catch {
+        // The unfenced attempt remains recoverable; it just must not dispatch.
+      }
+      return commercialFailure('GAME_OWNER_UNAVAILABLE');
+    }
   }
 
   // 4. The existing owner executes exactly this operation. No retry, no replacement key.

@@ -17,13 +17,14 @@ real-account read, provider write or commercial command.
 The concrete repository uses a short tenant-scoped PostgreSQL read-only transaction with
 local statement timeout 1500 ms. It requires the active tenant/account/unrotated session,
 exact trusted VIVA tenant binding, synced actor and subscription integration mappings,
-and the current MIRROR roster revision. A future PUBLIC/SCHEDULED 60- or 90-minute game must
+and the current MIRROR roster revision. A future PUBLIC/SCHEDULED 60-, 90- or 120-minute game must
 have four seats, an open join window and SPLIT or SUBSCRIPTION payment mode.
 
 Duration comes from the canonical game start/end timestamps, never from a client override.
 The same exact duration binds the preview selection, minute totals and subscription expiry
 check. Other durations and a duration change during evaluation fail closed. A 60-minute
-CREATE target therefore remains 60 minutes for the second participant's JOIN; its price
+CREATE target therefore remains 60 minutes for the second participant's JOIN; 90- and
+120-minute games follow the same rule and use the owner preview for their surcharge. Their price
 still comes from the owner, including when the daily free allowance is exhausted.
 
 A subscription mapping locates its provider key; it does not prove actor ownership.
@@ -45,7 +46,7 @@ identity refuses selection; metadata or product titles are never guessed.
 No transaction is held during token/provider/LK1 requests. The whole advisory operation
 has a 28-second deadline, no retries and bounded streamed bodies. The fixed existing LK1
 `POST /lk/subscriptions/game-price-preview` receives only targetKind, owner game ID,
-Moscow startsAt, the exact stored duration (60 or 90 minutes) and one owned subscription ID. It is an advisory
+Moscow startsAt, the exact stored duration (60, 90 or 120 minutes) and one owned subscription ID. It is an advisory
 owner read, not a booking or payment POST. The exact production resolver runs again
 after evaluation; mapping/source/revision/owned-record drift refuses the response. Both
 resolutions share one token promise scoped to the request AbortSignal and exact actor,

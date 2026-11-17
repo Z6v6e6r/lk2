@@ -319,9 +319,229 @@ describe('game roster commercial paid join', () => {
     expect(reservedEvent?.[1]?.[5]).toContain(`"expiresAt":"${reservationExpiresAt}"`);
     expect(reservedEvent?.[1]?.[5]).toContain(`"userId":"${playerId}"`);
 
+    const expiryCommand = query.mock.calls.find(([text]) =>
+      text.includes('game.reservation.expire.v1'),
+    );
+    expect(expiryCommand).toBeDefined();
+    expect(expiryCommand?.[1]?.[0]).toBe(tenantId);
+    expect(expiryCommand?.[1]?.[1]).toBe(gameId);
+    expect(expiryCommand?.[1]?.[2]).toBe(reservationExpiresAt);
+    expect(expiryCommand?.[1]?.[3]).toBe(2);
+    expect(JSON.parse(String(expiryCommand?.[1]?.[4]))).toEqual({
+      reservationId,
+      operationId,
+    });
+
     expect(writtenStatements(query).some((text) => text.includes('games.participations'))).toBe(
       false,
     );
+  });
+
+  it('writes the dispatch fence before any owner call and never increments it twice', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('update eligibility.payment_snapshots')) return { rowCount: 1 };
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).markPaidJoinDispatched({
+        tenantId,
+        actorUserId: playerId,
+        gameId,
+        operationId,
+      }),
+    ).resolves.toBe(true);
+
+    const fence = query.mock.calls.find(([text]) => text.includes("snapshot ? 'dispatch'"));
+    expect(fence).toBeDefined();
+    expect(fence?.[0]).toContain('jsonb_set');
+    expect(fence?.[1]).toEqual([tenantId, operationId, playerId, gameId]);
+  });
+
+  it('expires a due reservation only when the owner call never started', async () => {
+    const expiryCommandId = 'b1a6f6a7-6e5e-4d4f-9a8f-4f5f1a2b3c4d';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes("snapshot.snapshot->'dispatch'")) {
+        return {
+          rows: [
+            {
+              operation_id: operationId,
+              state: 'IN_PROGRESS',
+              dispatch: null,
+              reconciliation: null,
+              lifecycle_version: '1',
+            },
+          ],
+        };
+      }
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('for update') &&
+        !text.includes('eligibility.payment_snapshots')
+      ) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              expires_at: '2026-08-01T09:59:00.000Z',
+            },
+          ],
+        };
+      }
+      if (text.includes('update games.command_idempotency')) return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SUBSCRIPTION' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).expireReservation({
+        tenantId,
+        gameId,
+        commandId: expiryCommandId,
+        idempotencyKey: 'games-expiry-command-0002',
+        requestHash: 'd'.repeat(64),
+        correlationId: 'corr-games-expiry-0002',
+        reservationId,
+      }),
+    ).resolves.toMatchObject({ outcome: 'applied', commandId: expiryCommandId, revision: 2 });
+
+    const failedAttempt = query.mock.calls.find(
+      ([text, values]) =>
+        text.includes('update games.command_idempotency') &&
+        text.includes("'GAME_JOIN_NOT_DISPATCHED'") &&
+        values?.includes(operationId),
+    );
+    expect(failedAttempt).toBeDefined();
+    const expiredReservation = query.mock.calls.find(
+      ([text, values]) =>
+        text.includes('update games.seat_reservations') &&
+        text.includes("'EXPIRED'") &&
+        values?.includes(reservationId),
+    );
+    expect(expiredReservation).toBeDefined();
+    const expiredEvent = query.mock.calls.find(
+      ([text, values]) =>
+        text.includes('insert into audit.outbox_events') &&
+        values?.[2] === 'game.participation.expired.v1',
+    );
+    expect(expiredEvent).toBeDefined();
+  });
+
+  it('never releases a legacy attempt whose dispatch cannot be proven', async () => {
+    const expiryCommandId = 'd3c8b8c9-8a7a-4f6f-9c0a-6b7b3c4d5e6f';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes("snapshot.snapshot->'dispatch'")) {
+        return {
+          rows: [
+            {
+              operation_id: operationId,
+              state: 'IN_PROGRESS',
+              dispatch: null,
+              reconciliation: null,
+              lifecycle_version: null,
+            },
+          ],
+        };
+      }
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('for update') &&
+        !text.includes('eligibility.payment_snapshots')
+      ) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              expires_at: '2026-08-01T09:59:00.000Z',
+            },
+          ],
+        };
+      }
+      return baseHandler(text, { paymentMode: 'SUBSCRIPTION' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).expireReservation({
+        tenantId,
+        gameId,
+        commandId: expiryCommandId,
+        idempotencyKey: 'games-expiry-command-0004',
+        requestHash: 'f'.repeat(64),
+        correlationId: 'corr-games-expiry-0004',
+        reservationId,
+      }),
+    ).resolves.toMatchObject({ outcome: 'not_due' });
+
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes('update games.seat_reservations') && values?.includes(reservationId),
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps a dispatched reservation active after TTL and records reconciliation', async () => {
+    const expiryCommandId = 'c2b7a7b8-7f6f-4e5e-8b9f-5a6a2b3c4d5e';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes("snapshot.snapshot->'dispatch'")) {
+        return {
+          rows: [
+            {
+              operation_id: operationId,
+              state: 'IN_PROGRESS',
+              dispatch: { startedAt: '2026-08-01T09:55:00.000Z', attempt: 1 },
+              reconciliation: null,
+              lifecycle_version: '1',
+            },
+          ],
+        };
+      }
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('for update') &&
+        !text.includes('eligibility.payment_snapshots')
+      ) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              expires_at: '2026-08-01T09:59:00.000Z',
+            },
+          ],
+        };
+      }
+      return baseHandler(text, { paymentMode: 'SUBSCRIPTION' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).expireReservation({
+        tenantId,
+        gameId,
+        commandId: expiryCommandId,
+        idempotencyKey: 'games-expiry-command-0003',
+        requestHash: 'e'.repeat(64),
+        correlationId: 'corr-games-expiry-0003',
+        reservationId,
+      }),
+    ).resolves.toMatchObject({ outcome: 'not_due' });
+
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes('update games.seat_reservations') && values?.includes(reservationId),
+      ),
+    ).toBe(false);
+    const reconciliationUpdate = query.mock.calls.find(
+      ([text, values]) => text.includes("'{reconciliation}'") && values?.includes(operationId),
+    );
+    expect(reconciliationUpdate).toBeDefined();
+    expect(reconciliationUpdate?.[1]?.[2]).toBe(1);
+    expect(reconciliationUpdate?.[1]?.[3]).toBe(false);
   });
 
   it('replays an in-progress attempt by idempotency key and writes nothing again', async () => {
@@ -660,6 +880,7 @@ describe('game roster commercial paid join', () => {
         expiresAt: reservationExpiresAt,
       },
       receipt: null,
+      reconciliation: null,
     });
     expect(writtenStatements(query)).toEqual([]);
   });
@@ -687,6 +908,7 @@ describe('game roster commercial paid join', () => {
         expiresAt: reservationExpiresAt,
       },
       receipt: { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: committedAt },
+      reconciliation: null,
     };
     const { pool, query } = poolWithHandler((text) => {
       if (text.includes('from games.command_idempotency')) {

@@ -660,11 +660,14 @@ function parseInstant(value: string, field: string): number {
 }
 
 function activeReservations(input: GameCardProjectionInput, nowMs: number) {
-  return input.seatReservations.filter(
-    (reservation) =>
-      ACTIVE_RESERVATION_PAYMENT_STATES.includes(reservation.paymentState) &&
-      parseInstant(reservation.expiresAt, 'seatReservations.expiresAt') > nowMs,
-  );
+  return input.seatReservations.filter((reservation) => {
+    if (!ACTIVE_RESERVATION_PAYMENT_STATES.includes(reservation.paymentState)) return false;
+    // A paid attempt past its local TTL is not free: its owner outcome may still be unknown.
+    // Keep it blocking capacity and the viewer relation until the owner read or the
+    // reconciliation worker releases it on proven evidence.
+    if (reservation.paymentState === 'PROCESSING') return true;
+    return parseInstant(reservation.expiresAt, 'seatReservations.expiresAt') > nowMs;
+  });
 }
 
 export function deriveGameCapacity(

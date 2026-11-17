@@ -40,7 +40,7 @@ function boundary(
     readonly mapped?: boolean;
     readonly providerSubscriptionId?: string | undefined;
     readonly issued?: unknown[];
-    readonly durationMinutes?: 60 | 90;
+    readonly durationMinutes?: 60 | 90 | 120;
     readonly startsAt?: string;
   } = {},
 ) {
@@ -615,6 +615,7 @@ describe('60-minute second participant through the real commercial runtime', () 
             expiresAt: new Date(now + 900_000).toISOString(),
           },
           receipt: null,
+          reconciliation: null,
         };
         return {
           outcome: 'reserved',
