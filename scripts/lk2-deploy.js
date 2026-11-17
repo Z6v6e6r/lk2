@@ -145,12 +145,16 @@ function controllerState() {
   };
 }
 
+function unzipEntry(archivePath, entry) {
+  return execFileSync('/usr/bin/unzip', ['-p', archivePath, entry], { encoding: 'buffer' });
+}
+
 function manifestFromArchive(archivePath) {
-  const raw = run('/usr/bin/unzip', ['-p', archivePath, 'release-manifest.json']);
+  const bytes = unzipEntry(archivePath, 'release-manifest.json');
   return {
-    manifest: JSON.parse(raw),
-    bytes: Buffer.from(raw),
-    checksum: run('/usr/bin/unzip', ['-p', archivePath, 'release-manifest.sha256']),
+    manifest: JSON.parse(bytes.toString('utf8')),
+    bytes,
+    checksum: unzipEntry(archivePath, 'release-manifest.sha256').toString('utf8'),
   };
 }
 
