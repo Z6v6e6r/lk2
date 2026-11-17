@@ -159,10 +159,12 @@
 
 Дополнительные риски (не блокеры, но требуют решения):
 
-- Расхождение документации и кода: в трёх документах написано, что включение в `production`
-  запрещено, но проверки `APP_ENV` нет — тест утверждает обратное
+- Расхождение документации и кода: в двух документах написано, что включение в `production`
+  запрещено (`docs/contracts/game-commercial-create.md:3-6`,
+  `docs/domain/quarter-create-consumer.md:3`), а проверки `APP_ENV` нет — тест утверждает обратное
   (`packages/config/src/index.test.ts:922-928`). Решение «production разрешён при точном URL
-  `https://padlhub.su/`» выглядит намеренным, документы устарели; нужно зафиксировать одно правило.
+  `https://padlhub.su/`» (`index.ts:1091-1092`) выглядит намеренным, документы устарели; нужно
+  зафиксировать одно правило.
 - Один `Idempotency-Key` не может назвать JOIN и CREATE: домен `operationId` общий
   (`quarter-create.ts:58`), второй вызов получит `409 GAME_QUARTER_CREATE_KEY_CONFLICT`.
 - На приватном wire нет заголовка `Idempotency-Key` (`quarter-create.ts:152-159`), хотя контракт
