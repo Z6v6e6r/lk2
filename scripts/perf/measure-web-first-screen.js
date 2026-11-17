@@ -6,7 +6,7 @@
 // client shell only: bundle transfer, script execution and the first rendered auth screen.
 // They are NOT user measurements and must be reported as LOCAL evidence.
 //
-// Usage: node scripts/perf/measure-web-first-screen.mjs <url> [--runs=5] [--no-throttle]
+// Usage: node scripts/perf/measure-web-first-screen.js <url> [--runs=5] [--no-throttle]
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';

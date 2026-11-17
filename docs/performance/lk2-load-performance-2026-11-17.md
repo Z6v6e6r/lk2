@@ -22,12 +22,12 @@ What this session could not measure, and why:
 
 ```
 npm run build -w @phub/web
-node scripts/perf/bundle-critical-path.mjs apps/web/dist       # static first-paint closure
+node scripts/perf/bundle-critical-path.js apps/web/dist       # static first-paint closure
 npx vite preview -w @phub/web                                  # serve the built shell
-node scripts/perf/measure-web-first-screen.mjs http://127.0.0.1:4173/ --runs=10
+node scripts/perf/measure-web-first-screen.js http://127.0.0.1:4173/ --runs=10
 ```
 
-`scripts/perf/measure-web-first-screen.mjs` drives real Chrome over the DevTools protocol:
+`scripts/perf/measure-web-first-screen.js` drives real Chrome over the DevTools protocol:
 412x915 viewport, CPU throttled 4x, network limited to 1.6 Mbit/s down / 750 kbit/s up with 150 ms
 RTT ("slow 4G"). It reports the time to the first useful screen (the auth screen heading or the
 mobile login gate), LCP, DOMContentLoaded, request count and encoded transfer bytes. The mobile
