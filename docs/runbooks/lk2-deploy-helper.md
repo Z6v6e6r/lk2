@@ -22,3 +22,18 @@ every drift the strict runbook lists. Run it as root on the target host from the
 
 A leaked self-bind mount stack under `backups` is the known EXDEV cause of
 `DISK_PUBLISH_UNCERTAIN`; `plan` and `prepare` refuse to run until it is removed.
+
+## Baseline V6
+
+The canonical fresh dump no longer pins one frozen predecessor. When the installed
+release is not the original `4b8` V4 baseline, the producer validates the runtime
+baseline through the reviewed controller attestation
+(`deriveInstalledCanonicalBaseline` / `attestCanonicalBaseline`) and keeps the
+retained `prior-full-restore-reference` read-set unchanged. The V4 path is byte-identical
+to before.
+
+- `control-timeweb-database-backup.py --baseline <request>` (read-only) prints the
+  baseline derived from the installed descriptor, its V5 transaction and the live runtime.
+- `control-timeweb-database-backup.py --plan <request>` (read-only) validates the whole
+  draft request, including tool custody and the controller attestation, without taking a
+  lock or dumping.
