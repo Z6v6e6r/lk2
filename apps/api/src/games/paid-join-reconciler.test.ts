@@ -42,22 +42,24 @@ function repository(overrides: Record<string, unknown> = {}) {
   return {
     listPaidJoinReconciliationCandidates: vi.fn(() => Promise.resolve([candidate])),
     recordPaidJoinReconciliationAttempt: vi.fn(() => Promise.resolve(undefined)),
-    getPaidJoinAttempt: vi.fn(() => Promise.resolve({
-      commandId: operationId,
-      gameId,
-      state: 'IN_PROGRESS' as const,
-      result: null,
-      errorCode: null,
-      providerBinding: candidate.providerBinding,
-      reservation: {
-        id: reservationId,
-        state: 'ACTIVE' as const,
-        paymentState: 'PROCESSING' as const,
-        expiresAt: '2026-11-20T08:15:00.000Z',
-      },
-      receipt: null,
-      reconciliation: null,
-    })),
+    getPaidJoinAttempt: vi.fn(() =>
+      Promise.resolve({
+        commandId: operationId,
+        gameId,
+        state: 'IN_PROGRESS' as const,
+        result: null,
+        errorCode: null,
+        providerBinding: candidate.providerBinding,
+        reservation: {
+          id: reservationId,
+          state: 'ACTIVE' as const,
+          paymentState: 'PROCESSING' as const,
+          expiresAt: '2026-11-20T08:15:00.000Z',
+        },
+        receipt: null,
+        reconciliation: null,
+      }),
+    ),
     confirmPayment: vi.fn(),
     ...overrides,
   };
