@@ -1,21 +1,25 @@
 import { HomePushPrompt } from './HomePushPrompt.js';
-import { MonthlyPurchasePanel } from './MonthlyPurchasePanel.js';
 import { cancelGameAndRead } from './game-cancel-readback.js';
 import type { NativeJoinRequest } from './native-game-join-attempt.js';
-import { NativeGames } from './NativeGames.js';
-import { NativeGameJoin } from './NativeGameJoin.js';
-import { NativeSelfLeave } from './NativeSelfLeave.js';
-import { NativeGameChat } from './NativeGameChat.js';
-import { TournamentChatPage } from './TournamentChatPage.js';
 import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
 import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
-import { QuarterCreatePanel } from './QuarterCreatePanel.js';
-import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
+import type { GameDetailTab } from './GameDetailView.js';
+import { deferRead, runWhenIdle } from './deferred-idle.js';
+import { createReadCoalescer } from './read-coalescer.js';
 import { handleGameDetailBack } from './game-detail-navigation.js';
 import { normalizePhoneE164 } from '@phub/auth';
 import { PrimaryButton } from '@phub/ui';
-import { lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import type { ChangeEvent, FormEvent } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
+import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import vkIconUrl from './assets/vk-auth.svg';
@@ -98,6 +102,44 @@ import {
   safeCommunityReturnTo,
   takeAuthContinuation,
 } from './push-opt-in.js';
+
+/** Boundary for a screen opened by a later tap; the surrounding UI keeps rendering. */
+export function DeferredScreen({
+  children,
+  fallback = null,
+}: {
+  children: ReactNode;
+  fallback?: ReactNode;
+}) {
+  return <Suspense fallback={fallback}>{children}</Suspense>;
+}
+
+// Game detail, tournament chat and the purchase/quarter panels are opened by a later tap. Keeping
+// them in the entry chunk charges every visitor on a slow link for screens they may never open.
+const GameDetailView = lazy(() =>
+  import('./GameDetailView.js').then((module) => ({ default: module.GameDetailView })),
+);
+const NativeGames = lazy(() =>
+  import('./NativeGames.js').then((module) => ({ default: module.NativeGames })),
+);
+const NativeGameJoin = lazy(() =>
+  import('./NativeGameJoin.js').then((module) => ({ default: module.NativeGameJoin })),
+);
+const NativeSelfLeave = lazy(() =>
+  import('./NativeSelfLeave.js').then((module) => ({ default: module.NativeSelfLeave })),
+);
+const NativeGameChat = lazy(() =>
+  import('./NativeGameChat.js').then((module) => ({ default: module.NativeGameChat })),
+);
+const TournamentChatPage = lazy(() =>
+  import('./TournamentChatPage.js').then((module) => ({ default: module.TournamentChatPage })),
+);
+const QuarterCreatePanel = lazy(() =>
+  import('./QuarterCreatePanel.js').then((module) => ({ default: module.QuarterCreatePanel })),
+);
+const MonthlyPurchasePanel = lazy(() =>
+  import('./MonthlyPurchasePanel.js').then((module) => ({ default: module.MonthlyPurchasePanel })),
+);
 
 const BookingsPage = lazy(() =>
   import('./BookingsPage.js').then((module) => ({ default: module.BookingsPage })),
@@ -861,22 +903,24 @@ function NativeCreatedGame({
       </button>
       {game ? (
         <>
-          <GameDetailView
-            game={game}
-            activeTab={detailTab}
-            onTabChange={setDetailTab}
-            busy={busy}
-            viewerUserId={scope.userId}
-            readOnly
-            publicGameOrigin={publicGameOrigin ?? null}
-            onAction={() => {
-              throw new Error('NATIVE_GAME_ACTION_REQUIRES_CONTROLLER');
-            }}
-            onChatOpen={() => {
-              throw new Error('NATIVE_GAME_CHAT_REQUIRES_CONTROLLER');
-            }}
-            onSubmit={() => Promise.reject(new Error('NATIVE_GAME_RESULT_UNAVAILABLE'))}
-          />
+          <DeferredScreen fallback={<p role="status">Загружаем детали матча…</p>}>
+            <GameDetailView
+              game={game}
+              activeTab={detailTab}
+              onTabChange={setDetailTab}
+              busy={busy}
+              viewerUserId={scope.userId}
+              readOnly
+              publicGameOrigin={publicGameOrigin ?? null}
+              onAction={() => {
+                throw new Error('NATIVE_GAME_ACTION_REQUIRES_CONTROLLER');
+              }}
+              onChatOpen={() => {
+                throw new Error('NATIVE_GAME_CHAT_REQUIRES_CONTROLLER');
+              }}
+              onSubmit={() => Promise.reject(new Error('NATIVE_GAME_RESULT_UNAVAILABLE'))}
+            />
+          </DeferredScreen>
           {/* Keep command owners mounted across tabs: pending attempts retain their lifetime/key. */}
           <section
             className="game-detail-native-actions game-detail-card"
@@ -893,24 +937,26 @@ function NativeCreatedGame({
                 Отменить игру
               </button>
             )}
-            <NativeGameJoin
-              game={game}
-              gateway={joinGateway}
-              scope={scope}
-              onCanonicalGame={adoptGame}
-            />
-            <NativeSelfLeave
-              key={`${game.id}:${game.viewerRelation}`}
-              game={game}
-              gateway={leaveGateway}
-              scope={scope}
-            />
-            <NativeGameChat
-              key={game.id}
-              game={game}
-              principal={() => gateway.quarterCreatePrincipal?.() ?? null}
-              open={(id) => gateway.getOrCreateGameConversation(id)}
-            />
+            <DeferredScreen>
+              <NativeGameJoin
+                game={game}
+                gateway={joinGateway}
+                scope={scope}
+                onCanonicalGame={adoptGame}
+              />
+              <NativeSelfLeave
+                key={`${game.id}:${game.viewerRelation}`}
+                game={game}
+                gateway={leaveGateway}
+                scope={scope}
+              />
+              <NativeGameChat
+                key={game.id}
+                game={game}
+                principal={() => gateway.quarterCreatePrincipal?.() ?? null}
+                open={(id) => gateway.getOrCreateGameConversation(id)}
+              />
+            </DeferredScreen>
           </section>
         </>
       ) : (
@@ -931,6 +977,39 @@ export function App({
   devicePush,
 }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
+  // One screen can have several effects that poll the same list (badges, the notifications page,
+  // the unread-chat badge). They share an in-flight read instead of issuing the same request twice.
+  const coalescedReads = useMemo(() => createReadCoalescer(), []);
+  const sessionPrincipal = state.session
+    ? `${state.session.context.tenant.id}:${state.session.context.user.id}`
+    : 'anonymous';
+  const readNotifications = useCallback(
+    () =>
+      coalescedReads.read(`notifications:${sessionPrincipal}`, () => gateway.listNotifications()),
+    [coalescedReads, gateway, sessionPrincipal],
+  );
+  const readIncomingFriendRequests = useCallback(
+    (limit = 8) =>
+      coalescedReads.read(`friend-requests:incoming:${sessionPrincipal}:${limit}`, () =>
+        gateway.listProfileFriendRequests(limit),
+      ),
+    [coalescedReads, gateway, sessionPrincipal],
+  );
+  const readOutgoingFriendRequests = useCallback(
+    (limit = 8) =>
+      coalescedReads.read(`friend-requests:outgoing:${sessionPrincipal}:${limit}`, () =>
+        gateway.listProfileFriendRequests(limit, 'outgoing'),
+      ),
+    [coalescedReads, gateway, sessionPrincipal],
+  );
+  const readConversations = useCallback(
+    () =>
+      coalescedReads.read(`conversations:${sessionPrincipal}`, () => gateway.listConversations()),
+    [coalescedReads, gateway, sessionPrincipal],
+  );
+  // A settled command must not be answered by a read that started before it, so the shared entry is
+  // dropped before the post-command refresh and on logout or an account change.
+  useEffect(() => () => coalescedReads.clear(), [coalescedReads, sessionPrincipal]);
   const communityRealtimeTransport = useMemo(() => {
     if (!realtimeUrl || typeof WebSocket === 'undefined') return undefined;
     return createCommunityRealtimeTransport({
@@ -1315,14 +1394,16 @@ export function App({
     }
     let active = true;
     const loadUnreadChats = (): void => {
-      void gateway.listConversations().then(
+      void readConversations().then(
         (page) => {
           if (active) setChatsUnreadCount(totalUnreadConversations(page));
         },
         () => undefined,
       );
     };
-    loadUnreadChats();
+    // The badge is not part of the first useful screen: the read waits for spare capacity so the
+    // profile and game reads own the link, and the visibility/interval refresh keeps it current.
+    const cancelDeferredLoad = runWhenIdle(loadUnreadChats);
     const handleVisibilityChange = (): void => {
       if (document.visibilityState === 'visible') loadUnreadChats();
     };
@@ -1330,10 +1411,11 @@ export function App({
     const interval = window.setInterval(loadUnreadChats, CHATS_UNREAD_REFRESH_INTERVAL_MS);
     return () => {
       active = false;
+      cancelDeferredLoad();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.clearInterval(interval);
     };
-  }, [gateway, state.session, state.view]);
+  }, [gateway, readConversations, state.session, state.view]);
 
   useEffect(() => {
     if (publicGiftRoute) return;
@@ -1521,14 +1603,15 @@ export function App({
             }
           },
         );
-        void gateway.listPublicGames({ availability: 'INCLUDE_FULL', limit: 50 }).then(
+        // Booking preferences store station ids, and a station is a location: the games of the last
+        // 50 cards only re-derive a subset of the same list. The locations read is the smaller
+        // canonical source and includes stations that currently have no public game.
+        void deferRead(() => gateway.listLocations(), { shouldStart: () => active }).then(
           (page) => {
             if (!active) return;
-            const stations = new Map<string, string>();
-            page.items.forEach((game) => stations.set(game.station.id, game.station.name));
             setBookingPreferenceStations(
-              [...stations]
-                .map(([id, name]) => ({ id, name }))
+              page.items
+                .map((location) => ({ id: location.id, name: location.title }))
                 .sort((left, right) => left.name.localeCompare(right.name, 'ru-RU')),
             );
           },
@@ -1536,7 +1619,7 @@ export function App({
             if (active) setBookingPreferenceStations([]);
           },
         );
-        void gateway.listMyCommunities().then(
+        void deferRead(() => gateway.listMyCommunities(), { shouldStart: () => active }).then(
           (page) => {
             if (!active) return;
             setProfileCommunities(page);
@@ -1548,7 +1631,7 @@ export function App({
             setProfileCommunitiesError('Не удалось загрузить сообщества.');
           },
         );
-        void gateway.getHomeDashboard().then(
+        void deferRead(() => gateway.getHomeDashboard(), { shouldStart: () => active }).then(
           (dashboard) => {
             if (!active) return;
             setProfileSubscriptions(dashboard.subscriptions);
@@ -1560,7 +1643,7 @@ export function App({
             setProfileSubscriptionsUnavailable(true);
           },
         );
-        void gateway.listProfileFriends(8).then(
+        void deferRead(() => gateway.listProfileFriends(8)).then(
           (page) => {
             if (!active) return;
             setProfileFriends(page);
@@ -1574,7 +1657,7 @@ export function App({
         );
         // Pending requests belong to the profile's friends block, not only to the notifications
         // feed, so the viewer sees them without opening another screen.
-        void gateway.listProfileFriendRequests(8).then(
+        void deferRead(() => readIncomingFriendRequests(8), { shouldStart: () => active }).then(
           (page) => {
             if (!active) return;
             setFriendRequests(page.items);
@@ -1586,7 +1669,7 @@ export function App({
             setFriendRequestsError('Не удалось загрузить заявки в друзья.');
           },
         );
-        void gateway.listProfileFriendRequests(8, 'outgoing').then(
+        void deferRead(() => readOutgoingFriendRequests(8), { shouldStart: () => active }).then(
           (page) => {
             if (!active) return;
             setOutgoingFriendRequests(page.items);
@@ -1609,7 +1692,7 @@ export function App({
           },
         );
       }
-      void gateway.listNotifications().then(
+      void deferRead(() => readNotifications(), { shouldStart: () => active }).then(
         (page) => {
           if (active) setNotifications(page);
         },
@@ -1899,7 +1982,7 @@ export function App({
       const serviceWorkerUrl =
         window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
       const loadFriendRequests = (): void => {
-        void gateway.listProfileFriendRequests().then(
+        void readIncomingFriendRequests().then(
           (page) => {
             if (!active) return;
             setFriendRequests(page.items);
@@ -1911,7 +1994,7 @@ export function App({
             setFriendRequestsError('Не удалось загрузить заявки в друзья.');
           },
         );
-        void gateway.listProfileFriendRequests(8, 'outgoing').then(
+        void readOutgoingFriendRequests(8).then(
           (page) => {
             if (!active) return;
             setOutgoingFriendRequests(page.items);
@@ -1923,7 +2006,7 @@ export function App({
         );
       };
       const loadConversations = (): void => {
-        void gateway.listConversations().then(
+        void readConversations().then(
           (result) => {
             if (!active) return;
             setNotificationConversations(result.items);
@@ -1933,7 +2016,7 @@ export function App({
       };
       const refreshNotifications = (): void => {
         loadFriendRequests();
-        void gateway.listNotifications().then(
+        void readNotifications().then(
           (page) => {
             if (!active) return;
             setNotifications(page);
@@ -1957,15 +2040,15 @@ export function App({
       };
       loadConversations();
       void Promise.allSettled([
-        gateway.listNotifications(),
+        readNotifications(),
         clientPlatform === 'android'
           ? Promise.resolve({ enabled: false })
           : gateway.getWebPushConfiguration(),
         clientPlatform === 'android'
           ? Promise.resolve('unsupported' as const)
           : getWebPushBrowserState(serviceWorkerUrl),
-        gateway.listProfileFriendRequests(),
-        gateway.listProfileFriendRequests(8, 'outgoing'),
+        readIncomingFriendRequests(),
+        readOutgoingFriendRequests(8),
         gateway.getNotificationPreferences(),
       ]).then(
         ([
@@ -2097,14 +2180,14 @@ export function App({
       );
     };
     const refreshNotificationBadge = (): void => {
-      void gateway.listNotifications().then(
+      void readNotifications().then(
         (page) => {
           if (active) setNotifications(page);
         },
         () => undefined,
       );
       // Pending friend requests are actionable from the bell, so the badge counts them too.
-      void gateway.listProfileFriendRequests().then(
+      void readIncomingFriendRequests().then(
         (page) => {
           if (active) setFriendRequests(page.items);
         },
@@ -2118,7 +2201,11 @@ export function App({
     const refreshVisibleHome = (): void => {
       if (document.visibilityState === 'visible') refreshHomeContent();
     };
-    refreshHomeContent();
+    // Only the dashboard read belongs to the first screen. Notification and friend-request badges
+    // are fetched once the browser is idle, so three extra responses no longer compete with the
+    // content the visitor came to see; focus and the interval below still refresh them immediately.
+    refreshHome();
+    const cancelDeferredBadges = runWhenIdle(refreshNotificationBadge);
     const homeRefreshInterval = window.setInterval(() => refreshHome(), HOME_REFRESH_INTERVAL_MS);
     const notificationRefreshInterval = window.setInterval(
       refreshNotificationBadge,
@@ -2128,6 +2215,7 @@ export function App({
     document.addEventListener('visibilitychange', refreshVisibleHome);
     return () => {
       active = false;
+      cancelDeferredBadges();
       if (homeRetryTimer !== undefined) window.clearTimeout(homeRetryTimer);
       window.clearInterval(homeRefreshInterval);
       window.clearInterval(notificationRefreshInterval);
@@ -2144,6 +2232,10 @@ export function App({
     requestedLocationId,
     requestedProfileUserId,
     homeReloadToken,
+    readConversations,
+    readIncomingFriendRequests,
+    readNotifications,
+    readOutgoingFriendRequests,
     state.session,
     state.view,
     tenantKey,
@@ -2727,7 +2819,10 @@ export function App({
     void gateway
       .markNotificationsRead(newest.id)
       .then(
-        () => gateway.listNotifications(),
+        () => {
+          coalescedReads.clear();
+          return gateway.listNotifications();
+        },
         () => {
           throw new Error('NOTIFICATION_READ_FAILED');
         },
@@ -3355,7 +3450,17 @@ export function App({
         ? new URLSearchParams(window.location.search).get('event')
         : null;
     if (clientPlatform === 'android' && protectedRoute.kind === 'games' && !bookingEventId)
-      return <NativeGames gateway={gateway} />;
+      return (
+        <DeferredScreen
+          fallback={
+            <main className="games-page">
+              <p role="status">Открываем игры…</p>
+            </main>
+          }
+        >
+          <NativeGames gateway={gateway} />
+        </DeferredScreen>
+      );
     if (clientPlatform === 'android' && protectedRoute.kind === 'game') {
       return (
         <NativeCreatedGame
@@ -3398,15 +3503,23 @@ export function App({
       };
       if (clientPlatform === 'android')
         return (
-          <QuarterCreatePanel
-            gamesHref="/"
-            gateway={gateway}
-            principal={createGamePrincipal}
-            navigate={(url) => {
-              window.history.pushState(null, '', url);
-              window.dispatchEvent(new PopStateEvent('popstate'));
-            }}
-          />
+          <DeferredScreen
+            fallback={
+              <main>
+                <p role="status">Открываем создание игры…</p>
+              </main>
+            }
+          >
+            <QuarterCreatePanel
+              gamesHref="/"
+              gateway={gateway}
+              principal={createGamePrincipal}
+              navigate={(url) => {
+                window.history.pushState(null, '', url);
+                window.dispatchEvent(new PopStateEvent('popstate'));
+              }}
+            />
+          </DeferredScreen>
         );
       return (
         <CreateGamePage
@@ -3444,26 +3557,34 @@ export function App({
           </main>
         );
       return (
-        <TournamentChatPage
-          key={`${context.tenant.id}:${context.user.id}:${protectedRoute.tournamentId}`}
-          tournamentId={protectedRoute.tournamentId}
-          principal={{ tenantId: context.tenant.id, userId: context.user.id }}
-          gateway={{
-            tournamentChatPrincipal: gateway.tournamentChatPrincipal,
-            sendTournamentChatMessage: gateway.sendTournamentChatMessage,
-            getTournamentChatRequest: gateway.getTournamentChatRequest,
-            getTournamentChatHistory: gateway.getTournamentChatHistory,
-            ...(gateway.getTournamentChatReadPosition &&
-            gateway.advanceTournamentChatRead &&
-            gateway.getTournamentChatReadRequest
-              ? {
-                  getTournamentChatReadPosition: gateway.getTournamentChatReadPosition,
-                  advanceTournamentChatRead: gateway.advanceTournamentChatRead,
-                  getTournamentChatReadRequest: gateway.getTournamentChatReadRequest,
-                }
-              : {}),
-          }}
-        />
+        <DeferredScreen
+          fallback={
+            <main>
+              <p role="status">Открываем чат турнира…</p>
+            </main>
+          }
+        >
+          <TournamentChatPage
+            key={`${context.tenant.id}:${context.user.id}:${protectedRoute.tournamentId}`}
+            tournamentId={protectedRoute.tournamentId}
+            principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+            gateway={{
+              tournamentChatPrincipal: gateway.tournamentChatPrincipal,
+              sendTournamentChatMessage: gateway.sendTournamentChatMessage,
+              getTournamentChatRequest: gateway.getTournamentChatRequest,
+              getTournamentChatHistory: gateway.getTournamentChatHistory,
+              ...(gateway.getTournamentChatReadPosition &&
+              gateway.advanceTournamentChatRead &&
+              gateway.getTournamentChatReadRequest
+                ? {
+                    getTournamentChatReadPosition: gateway.getTournamentChatReadPosition,
+                    advanceTournamentChatRead: gateway.advanceTournamentChatRead,
+                    getTournamentChatReadRequest: gateway.getTournamentChatReadRequest,
+                  }
+                : {}),
+            }}
+          />
+        </DeferredScreen>
       );
     }
     if (protectedRoute.kind === 'tournaments') {
@@ -3490,10 +3611,12 @@ export function App({
       return (
         <>
           {clientPlatform !== 'web' && gateway.monthlyPurchase ? (
-            <MonthlyPurchasePanel
-              gateway={gateway.monthlyPurchase}
-              principal={{ tenantId: context.tenant.id, userId: context.user.id }}
-            />
+            <DeferredScreen>
+              <MonthlyPurchasePanel
+                gateway={gateway.monthlyPurchase}
+                principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+              />
+            </DeferredScreen>
           ) : null}
           <SubscriptionsPage
             key={`${context.tenant.id}:${context.user.id}`}
