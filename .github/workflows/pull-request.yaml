@@ -502,7 +502,7 @@ jobs:
           caddy_image_id="$(docker image inspect "$CADDY_IMAGE" --format '{{.Id}}')"
           printf 'caddy identity: %s %s\n' "$caddy_platform" "$caddy_image_id"
           test "$caddy_platform" = linux/amd64
-          test "$caddy_image_id" = "$CADDY_CONFIG_DIGEST" || test "$caddy_image_id" = "sha256:${CADDY_IMAGE##*@}"
+          test "$caddy_image_id" = "$CADDY_CONFIG_DIGEST" || test "$caddy_image_id" = "${CADDY_IMAGE##*@}"
           docker run --rm --network none "$CADDY_IMAGE" caddy version \
             | grep --quiet "^$CADDY_VERSION "
           docker run --rm --network none \
