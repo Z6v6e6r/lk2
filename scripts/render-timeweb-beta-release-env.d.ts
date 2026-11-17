@@ -194,6 +194,3 @@ export function writeTimewebBetaReleaseEnvironment(options: {
   ambientEnvironment?: NodeJS.ProcessEnv;
   failAfter?: 'rename';
 }): { releaseId: string; output: string; mode: '0600' };
-
-/** Bounded in-memory parser; does not extract files onto the host. */
-export function extractCanonicalArtifactPair(archiveBytes: Buffer): Map<string, Buffer>;
