@@ -99,6 +99,37 @@ describe('community logo media route', () => {
     expect(response.headers.etag).toBe('"community-v1"');
   });
 
+  it('streams the changed logo when the cached tag no longer matches', async () => {
+    const body = Buffer.from('RIFF-community-webp-v2');
+    const app = await buildApp({
+      config,
+      logger: createLogger('community-logo-media-route-test', 'silent'),
+      communityLogoMediaRepository: {
+        getObjectKey: vi
+          .fn<CommunityLogoMediaRepository['getObjectKey']>()
+          .mockResolvedValue(objectKey),
+      },
+      profilePhotoMediaStore: {
+        read: vi.fn<ProfilePhotoMediaStore['read']>().mockResolvedValue({
+          body: Readable.from(body),
+          contentLength: body.byteLength,
+          etag: '"community-v2"',
+        }),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/public/api/v1/media/community-logos/${tenantId}/${communityId}`,
+      headers: { 'if-none-match': '"community-v1"' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers.etag).toBe('"community-v2"');
+    expect(response.rawPayload).toEqual(body);
+  });
+
   it('returns not found when no local object is mapped', async () => {
     const app = await buildApp({
       config,

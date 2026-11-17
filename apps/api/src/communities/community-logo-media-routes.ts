@@ -60,6 +60,7 @@ export function registerCommunityLogoMediaRoutes(
       reply.header('Cross-Origin-Resource-Policy', 'cross-origin');
       if (object.etag) reply.header('ETag', object.etag);
       if (ifNoneMatchMatches(request.headers['if-none-match'], object.etag)) {
+        object.body.destroy();
         return reply.status(304).send();
       }
       reply.type('image/webp');

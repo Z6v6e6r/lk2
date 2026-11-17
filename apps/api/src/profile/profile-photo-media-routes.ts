@@ -434,6 +434,9 @@ export function registerProfilePhotoMediaRoutes(
       // An unchanged avatar costs a header-only revalidation instead of the whole WebP body, which
       // is what a returning app previously paid for every image on every screen.
       if (ifNoneMatchMatches(request.headers['if-none-match'], object.etag)) {
+        // The stored body was already opened; releasing it keeps the S3 socket and its read
+        // timeout from lingering for every revalidated avatar.
+        object.body.destroy();
         return reply.status(304).send();
       }
       reply.type('image/webp');

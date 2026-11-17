@@ -487,6 +487,7 @@ describe('profile photo media route', () => {
       'public, max-age=300, stale-while-revalidate=600',
     );
     expect(response.headers['cross-origin-resource-policy']).toBe('cross-origin');
+    expect(response.headers.etag).toBe('"avatar-v1"');
     expect(response.rawPayload).toEqual(body);
     expect(repository.getPhotoObjectKey).toHaveBeenCalledWith(tenantId, deliveryId);
     expect(read).toHaveBeenCalledWith(objectKey);
@@ -551,6 +552,36 @@ describe('profile photo media route', () => {
       method: 'GET',
       url: `/public/api/v1/media/profile-photos/${tenantId}/${deliveryId}`,
       headers: { 'if-none-match': '"avatar-v1"' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.rawPayload).toEqual(body);
+  });
+
+  it('cannot answer 304 when the stored object carries no ETag', async () => {
+    const body = Buffer.from('RIFF-profile-webp');
+    const app = await buildApp({
+      config,
+      logger: createLogger('profile-photo-media-route-test', 'silent'),
+      profilePhotoMediaRepository: {
+        getPhotoObjectKey: vi
+          .fn<ProfileSummaryRepository['getPhotoObjectKey']>()
+          .mockResolvedValue(objectKey),
+        getPhotoDeliveryIds: vi.fn<ProfileSummaryRepository['getPhotoDeliveryIds']>(),
+      },
+      profilePhotoMediaStore: {
+        read: vi.fn<ProfilePhotoMediaStore['read']>().mockResolvedValue({
+          body: Readable.from(body),
+          contentLength: body.byteLength,
+        }),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/public/api/v1/media/profile-photos/${tenantId}/${deliveryId}`,
+      headers: { 'if-none-match': '*' },
     });
 
     expect(response.statusCode).toBe(200);

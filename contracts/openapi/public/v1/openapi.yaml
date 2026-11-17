@@ -43,7 +43,9 @@ paths:
       - name: If-None-Match
         in: header
         required: false
-        description: ETag of the copy already held by the client. A matching tag returns bodyless 304.
+        description: >-
+          ETag of the cached copy. Browsers and WebViews send it automatically when the HTTP cache
+          revalidates; a matching tag returns a bodyless 304.
         schema:
           type: string
     get:
@@ -56,6 +58,14 @@ paths:
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            ETag:
+              description: Tag of the stored logo; revalidate with If-None-Match.
+              schema:
+                type: string
+            Cache-Control:
+              description: public, max-age=300, stale-while-revalidate=600.
+              schema:
+                type: string
           content:
             image/webp:
               schema:
@@ -94,7 +104,9 @@ paths:
       - name: If-None-Match
         in: header
         required: false
-        description: ETag of the copy already held by the client. A matching tag returns bodyless 304.
+        description: >-
+          ETag of the cached copy. Browsers and WebViews send it automatically when the HTTP cache
+          revalidates; a matching tag returns a bodyless 304.
         schema:
           type: string
     get:
@@ -107,6 +119,14 @@ paths:
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            ETag:
+              description: Tag of the stored photo; revalidate with If-None-Match.
+              schema:
+                type: string
+            Cache-Control:
+              description: public, max-age=300, stale-while-revalidate=600.
+              schema:
+                type: string
           content:
             image/webp:
               schema:
