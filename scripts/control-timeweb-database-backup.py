@@ -3428,6 +3428,19 @@ def installed_release_id():
     need(isinstance(value,str) and RELEASE.fullmatch(value),'INSTALLED_RELEASE_IDENTITY')
     return value
 
+def v6_file_sha256(path):
+    """Stream a retained read-set file without assuming a 0600 mode or small size."""
+    before=secure(path)
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+    try:
+        opened=os.fstat(fd);need(identity(before)==identity(opened),'V6_HISTORY_RACE')
+        h=hashlib.sha256()
+        with os.fdopen(os.dup(fd),'rb') as stream:
+            for block in iter(lambda:stream.read(1024**2),b''):h.update(block)
+        need(identity(opened)==identity(os.fstat(fd))==identity(path.lstat()),'V6_HISTORY_CHANGED')
+        return h.hexdigest()
+    finally:os.close(fd)
+
 def validate_v6_prior_restore(op):
     b=op['canonicalBaseline'];directory=ROOT/'backups'/(b['installedReleaseId']+'-api-web')
     secure(directory,'dir',0o700)
@@ -3437,8 +3450,8 @@ def validate_v6_prior_restore(op):
     files=ref.get('files');need(isinstance(files,list) and files,'V6_HISTORY_FILES')
     for item in files:
         exact(item,['path','sha256','identity'])
-        needle=ROOT/item['path'];secure(needle)
-        need(hashlib.sha256(read_secure(needle)).hexdigest()==item['sha256'],'V6_HISTORY_FILE')
+        needle=ROOT/item['path']
+        need(v6_file_sha256(needle)==item['sha256'],'V6_HISTORY_FILE')
     need(encoded(ref)==raw,'V6_HISTORY_CANONICAL')
     return ref
 
