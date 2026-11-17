@@ -189,6 +189,10 @@ function redirectOAuthCallbackConflictToLogin(
     fragment.set('viva_auth_error', error.code);
     fragment.set('viva_correlation_id', request.id);
     target.hash = fragment.toString();
+    request.log.info(
+      { authEvent: 'VIVA_OAUTH_IDENTITY_CONFLICT_REDIRECT', code: error.code },
+      'Viva OAuth callback returned a conflicting profile to the login screen',
+    );
     preventCredentialCaching(reply);
     return reply.redirect(target.toString());
   } catch {
