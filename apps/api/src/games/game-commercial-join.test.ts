@@ -251,12 +251,12 @@ describe('commercial JOIN orchestration', () => {
   it('writes the durable dispatch fence before the owner call', async () => {
     const { repository: repo } = repository();
     const order: string[] = [];
-    const markDispatchStarted = vi.fn(async () => {
+    const markDispatchStarted = vi.fn(() => {
       order.push('fence');
-      return true;
+      return Promise.resolve(true);
     });
     const owner = ownerPort([{ status: 'PENDING' }]);
-    const execute = owner.owner.execute;
+    const execute = owner.owner.execute.bind(owner.owner);
     owner.owner.execute = () => {
       order.push('execute');
       return execute();
@@ -278,7 +278,7 @@ describe('commercial JOIN orchestration', () => {
 
   it('never dispatches when the durable dispatch fence cannot be written', async () => {
     const { calls, repository: repo } = repository();
-    const markDispatchStarted = vi.fn(async () => false);
+    const markDispatchStarted = vi.fn(() => Promise.resolve(false));
     const owner = ownerPort([{ status: 'PENDING' }]);
 
     const result = await executeCommercialJoin(

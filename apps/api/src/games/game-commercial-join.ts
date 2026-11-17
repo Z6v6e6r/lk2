@@ -909,7 +909,7 @@ export async function executeCommercialJoin(
   // 3b. Durable dispatch fence. It must be written before the owner call: an expiry job may
   // only release an attempt whose fence is absent. A failed fence never dispatches.
   if (dependencies.repository.markDispatchStarted) {
-    let fenced = false;
+    let fenced: boolean;
     try {
       fenced = await dependencies.repository.markDispatchStarted({
         tenantId: input.tenantId,

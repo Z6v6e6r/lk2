@@ -40,9 +40,9 @@ const candidate = {
 
 function repository(overrides: Record<string, unknown> = {}) {
   return {
-    listPaidJoinReconciliationCandidates: vi.fn(async () => [candidate]),
-    recordPaidJoinReconciliationAttempt: vi.fn(async () => undefined),
-    getPaidJoinAttempt: vi.fn(async () => ({
+    listPaidJoinReconciliationCandidates: vi.fn(() => Promise.resolve([candidate])),
+    recordPaidJoinReconciliationAttempt: vi.fn(() => Promise.resolve(undefined)),
+    getPaidJoinAttempt: vi.fn(() => Promise.resolve({
       commandId: operationId,
       gameId,
       state: 'IN_PROGRESS' as const,
@@ -69,11 +69,11 @@ describe('paid JOIN background reconciliation', () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const result = await runPaidJoinReconciliationCycle({
       tenantId,
-      repository: repo as never,
+      repository: repo,
       owner: {
         execute: vi.fn(),
-        read: vi.fn(async () => ({ status: 'PENDING' as const })),
-      } as never,
+        read: vi.fn(() => Promise.resolve({ status: 'PENDING' as const })),
+      },
       logger,
       maxAttempts: 5,
     });
@@ -90,18 +90,18 @@ describe('paid JOIN background reconciliation', () => {
 
   it('escalates a repeatedly unresolved attempt without mutating the reservation', async () => {
     const repo = repository({
-      listPaidJoinReconciliationCandidates: vi.fn(async () => [
-        { ...candidate, reconciliationAttempts: 4 },
-      ]),
+      listPaidJoinReconciliationCandidates: vi.fn(() =>
+        Promise.resolve([{ ...candidate, reconciliationAttempts: 4 }]),
+      ),
     });
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const result = await runPaidJoinReconciliationCycle({
       tenantId,
-      repository: repo as never,
+      repository: repo,
       owner: {
         execute: vi.fn(),
-        read: vi.fn(async () => ({ status: 'UNKNOWN' as const })),
-      } as never,
+        read: vi.fn(() => Promise.resolve({ status: 'UNKNOWN' as const })),
+      },
       logger,
       maxAttempts: 5,
     });
