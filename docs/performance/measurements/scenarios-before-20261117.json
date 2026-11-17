@@ -3299,9 +3299,7 @@
           "endpointCounts": {
             "session-refresh": 1
           },
-          "requestKeys": [
-            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
-          ],
+          "requestKeys": ["POST /user/api/v1/local-padel/auth/session/refresh ×1"],
           "requestTimeline": [
             {
               "endpoint": "other",
@@ -3456,9 +3454,7 @@
           "endpointCounts": {
             "session-refresh": 1
           },
-          "requestKeys": [
-            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
-          ],
+          "requestKeys": ["POST /user/api/v1/local-padel/auth/session/refresh ×1"],
           "requestTimeline": [
             {
               "endpoint": "other",
@@ -3774,9 +3770,7 @@
           "endpointCounts": {
             "session-refresh": 1
           },
-          "requestKeys": [
-            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
-          ],
+          "requestKeys": ["POST /user/api/v1/local-padel/auth/session/refresh ×1"],
           "requestTimeline": [
             {
               "endpoint": "other",
@@ -3931,9 +3925,7 @@
           "endpointCounts": {
             "session-refresh": 1
           },
-          "requestKeys": [
-            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
-          ],
+          "requestKeys": ["POST /user/api/v1/local-padel/auth/session/refresh ×1"],
           "requestTimeline": [
             {
               "endpoint": "other",

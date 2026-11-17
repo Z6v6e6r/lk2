@@ -3492,9 +3492,7 @@
           "endpointCounts": {
             "session-refresh": 1
           },
-          "requestKeys": [
-            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
-          ],
+          "requestKeys": ["POST /user/api/v1/local-padel/auth/session/refresh ×1"],
           "requestTimeline": [
             {
               "endpoint": "other",
@@ -3673,9 +3671,7 @@
           "endpointCounts": {
             "session-refresh": 1
           },
-          "requestKeys": [
-            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
-          ],
+          "requestKeys": ["POST /user/api/v1/local-padel/auth/session/refresh ×1"],
           "requestTimeline": [
             {
               "endpoint": "other",
@@ -3854,9 +3850,7 @@
           "endpointCounts": {
             "session-refresh": 1
           },
-          "requestKeys": [
-            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
-          ],
+          "requestKeys": ["POST /user/api/v1/local-padel/auth/session/refresh ×1"],
           "requestTimeline": [
             {
               "endpoint": "other",
@@ -4220,9 +4214,7 @@
           "endpointCounts": {
             "session-refresh": 1
           },
-          "requestKeys": [
-            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
-          ],
+          "requestKeys": ["POST /user/api/v1/local-padel/auth/session/refresh ×1"],
           "requestTimeline": [
             {
               "endpoint": "other",
@@ -5910,9 +5902,7 @@
           "endpointCounts": {
             "profile-privacy": 1
           },
-          "requestKeys": [
-            "GET /user/api/v1/local-padel/profile/privacy ×1"
-          ],
+          "requestKeys": ["GET /user/api/v1/local-padel/profile/privacy ×1"],
           "requestTimeline": [
             {
               "endpoint": "profile-privacy",
@@ -6281,9 +6271,7 @@
           "endpointCounts": {
             "profile-privacy": 1
           },
-          "requestKeys": [
-            "GET /user/api/v1/local-padel/profile/privacy ×1"
-          ],
+          "requestKeys": ["GET /user/api/v1/local-padel/profile/privacy ×1"],
           "requestTimeline": [
             {
               "endpoint": "profile-privacy",

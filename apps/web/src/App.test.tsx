@@ -935,14 +935,12 @@ describe('PadlHub web authentication', () => {
   it('shares one inbox read when a focus refresh overlaps the first read', async () => {
     window.history.replaceState({}, '', '/notifications');
     let resolveInbox: (page: typeof notificationInbox) => void = () => undefined;
-    const listNotifications = vi
-      .fn<AuthGateway['listNotifications']>()
-      .mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolveInbox = resolve;
-          }),
-      );
+    const listNotifications = vi.fn<AuthGateway['listNotifications']>().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveInbox = resolve;
+        }),
+    );
     const gateway = createGateway({
       restoreSession: vi.fn().mockResolvedValue(session),
       listNotifications,
