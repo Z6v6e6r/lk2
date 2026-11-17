@@ -835,7 +835,9 @@ describe.sequential('CI test diagnostics supervisor', () => {
             CI_TEST_OUTPUT_REDACTION_TIMEOUT: '0.5s',
             CI_TEST_SECRET_SENTINEL: secretSentinel,
           },
-          timeout: 10_000,
+          // The supervisor bounds its own stages (0.5s redaction, 1s group probes, 5s snapshot);
+          // the external bound must leave headroom for cleanup on a loaded runner.
+          timeout: 30_000,
         },
       );
 
