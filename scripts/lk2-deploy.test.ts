@@ -148,7 +148,7 @@ describe('buildV5Request', () => {
     expect(op.expectedWorker.releaseId).toBeNull();
     expect(op.publicationRunId).toBe('7');
     expect(op.confirmation).toBe(confirmationFor('c'.repeat(40), 'b'.repeat(64)));
-    expect(op.ownerDecisions.alertDrill.scopeSha256).toBe('s'.repeat(64));
+    expect(op.ownerDecisions['alertDrill']?.scopeSha256).toBe('s'.repeat(64));
     expect(op.expiresAt).toBe('2026-01-01T00:00:00.000Z');
   });
 
