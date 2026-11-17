@@ -1,0 +1,6325 @@
+{
+  "baseUrl": "http://127.0.0.1:4181",
+  "mode": "4G 1.6Mbps/150ms RTT, CPU 4x slowdown",
+  "evidence": "LOCAL (synthetic API via scripts/perf/stub-lk2-api.js; client shell timing, not a user measurement)",
+  "summary": {
+    "home": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 4788,
+        "p95": 5787
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 4768,
+        "p95": 5048
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 4672,
+        "p95": 4955
+      },
+      "requests": {
+        "runs": 7,
+        "p50": 10,
+        "p95": 10
+      },
+      "transferBytes": {
+        "runs": 7,
+        "p50": 3444,
+        "p95": 3444
+      },
+      "requestStartsByEndpoint": {
+        "other": {
+          "runs": 235,
+          "p50": 1046,
+          "p95": 5832
+        },
+        "session-refresh": {
+          "runs": 7,
+          "p50": 4770,
+          "p95": 5041
+        },
+        "routing-plan": {
+          "runs": 7,
+          "p50": 4956,
+          "p95": 5217
+        },
+        "booking-preferences": {
+          "runs": 7,
+          "p50": 4959,
+          "p95": 5217
+        },
+        "home-base": {
+          "runs": 7,
+          "p50": 4959,
+          "p95": 5218
+        },
+        "notifications": {
+          "runs": 7,
+          "p50": 4961,
+          "p95": 5219
+        },
+        "friend-requests": {
+          "runs": 7,
+          "p50": 4961,
+          "p95": 5219
+        },
+        "self-profile": {
+          "runs": 7,
+          "p50": 5125,
+          "p95": 5385
+        },
+        "communities-mine": {
+          "runs": 7,
+          "p50": 5574,
+          "p95": 6017
+        }
+      },
+      "samples": [
+        {
+          "firstDataMs": 2891,
+          "lcp": 1832,
+          "domContentLoaded": 1707.3999999761581,
+          "requests": 7,
+          "transferBytes": 2953,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 4
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 228
+            },
+            {
+              "endpoint": "other",
+              "startMs": 228
+            },
+            {
+              "endpoint": "other",
+              "startMs": 228
+            },
+            {
+              "endpoint": "other",
+              "startMs": 228
+            },
+            {
+              "endpoint": "other",
+              "startMs": 228
+            },
+            {
+              "endpoint": "other",
+              "startMs": 228
+            },
+            {
+              "endpoint": "other",
+              "startMs": 229
+            },
+            {
+              "endpoint": "other",
+              "startMs": 229
+            },
+            {
+              "endpoint": "other",
+              "startMs": 229
+            },
+            {
+              "endpoint": "other",
+              "startMs": 229
+            },
+            {
+              "endpoint": "other",
+              "startMs": 229
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 241
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1750
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 1841
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1842
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1842
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 2025
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 2025
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 2025
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 2025
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 2025
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 2200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2215
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2215
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2216
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2641
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2654
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2659
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3066
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3067
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3067
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3084
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3085
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3085
+            }
+          ],
+          "wallMs": 3097,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 4611,
+          "lcp": 4728,
+          "domContentLoaded": 4630.300000011921,
+          "requests": 10,
+          "transferBytes": 3444,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 3
+            },
+            {
+              "endpoint": "other",
+              "startMs": 928
+            },
+            {
+              "endpoint": "other",
+              "startMs": 929
+            },
+            {
+              "endpoint": "other",
+              "startMs": 929
+            },
+            {
+              "endpoint": "other",
+              "startMs": 929
+            },
+            {
+              "endpoint": "other",
+              "startMs": 929
+            },
+            {
+              "endpoint": "other",
+              "startMs": 929
+            },
+            {
+              "endpoint": "other",
+              "startMs": 929
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 930
+            },
+            {
+              "endpoint": "other",
+              "startMs": 936
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4663
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 4721
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4723
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4725
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 4911
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 4918
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 4922
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 4925
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 4925
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 5075
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5095
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5095
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5095
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5486
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5499
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5505
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5521
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 5521
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5522
+            }
+          ],
+          "wallMs": 5525,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 5787,
+          "lcp": 5048,
+          "domContentLoaded": 4955.200000047684,
+          "requests": 10,
+          "transferBytes": 3444,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 6
+            },
+            {
+              "endpoint": "other",
+              "startMs": 220
+            },
+            {
+              "endpoint": "other",
+              "startMs": 220
+            },
+            {
+              "endpoint": "other",
+              "startMs": 220
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 222
+            },
+            {
+              "endpoint": "other",
+              "startMs": 222
+            },
+            {
+              "endpoint": "other",
+              "startMs": 228
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4987
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 5041
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5048
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 5217
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 5217
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 5218
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 5219
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 5219
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 5385
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5413
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5413
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5413
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5804
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5814
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5815
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5831
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 5832
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5832
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5982
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5982
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5982
+            }
+          ],
+          "wallMs": 6061,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 4243,
+          "lcp": 3372,
+          "domContentLoaded": 3291.600000023842,
+          "requests": 10,
+          "transferBytes": 3444,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 9
+            },
+            {
+              "endpoint": "other",
+              "startMs": 204
+            },
+            {
+              "endpoint": "other",
+              "startMs": 204
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 207
+            },
+            {
+              "endpoint": "other",
+              "startMs": 207
+            },
+            {
+              "endpoint": "other",
+              "startMs": 207
+            },
+            {
+              "endpoint": "other",
+              "startMs": 207
+            },
+            {
+              "endpoint": "other",
+              "startMs": 207
+            },
+            {
+              "endpoint": "other",
+              "startMs": 207
+            },
+            {
+              "endpoint": "other",
+              "startMs": 207
+            },
+            {
+              "endpoint": "other",
+              "startMs": 208
+            },
+            {
+              "endpoint": "other",
+              "startMs": 208
+            },
+            {
+              "endpoint": "other",
+              "startMs": 212
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3326
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3378
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3379
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3380
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3559
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3559
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 3559
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3559
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3559
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 3729
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3751
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3751
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3751
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4260
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4273
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4273
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4289
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 4289
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4289
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4426
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4426
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4426
+            }
+          ],
+          "wallMs": 4435,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 4909,
+          "lcp": 5020,
+          "domContentLoaded": 4914.800000011921,
+          "requests": 10,
+          "transferBytes": 3444,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1044
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1044
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1045
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1045
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1048
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1051
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4956
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 5022
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5022
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5022
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 5208
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 5209
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 5209
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 5209
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 5209
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 5372
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5389
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5390
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5390
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5775
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5785
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5785
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5799
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 5799
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5799
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5934
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5934
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5934
+            }
+          ],
+          "wallMs": 5939,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 5001,
+          "lcp": 4972,
+          "domContentLoaded": 4884,
+          "requests": 7,
+          "transferBytes": 2953,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1045
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1045
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1045
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1045
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1045
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1045
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1046
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1047
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1051
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4922
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 4980
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4980
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4981
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 5159
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 5159
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 5159
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 5159
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 5160
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 5333
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5350
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5350
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5351
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5755
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5765
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5775
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5988
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5989
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5989
+            },
+            {
+              "endpoint": "other",
+              "startMs": 6013
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 6017
+            },
+            {
+              "endpoint": "other",
+              "startMs": 6023
+            }
+          ],
+          "wallMs": 6038,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 4788,
+          "lcp": 4768,
+          "domContentLoaded": 4671.600000023842,
+          "requests": 10,
+          "transferBytes": 3444,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 19
+            },
+            {
+              "endpoint": "other",
+              "startMs": 832
+            },
+            {
+              "endpoint": "other",
+              "startMs": 836
+            },
+            {
+              "endpoint": "other",
+              "startMs": 842
+            },
+            {
+              "endpoint": "other",
+              "startMs": 843
+            },
+            {
+              "endpoint": "other",
+              "startMs": 844
+            },
+            {
+              "endpoint": "other",
+              "startMs": 845
+            },
+            {
+              "endpoint": "other",
+              "startMs": 853
+            },
+            {
+              "endpoint": "other",
+              "startMs": 857
+            },
+            {
+              "endpoint": "other",
+              "startMs": 858
+            },
+            {
+              "endpoint": "other",
+              "startMs": 867
+            },
+            {
+              "endpoint": "other",
+              "startMs": 876
+            },
+            {
+              "endpoint": "other",
+              "startMs": 878
+            },
+            {
+              "endpoint": "other",
+              "startMs": 882
+            },
+            {
+              "endpoint": "other",
+              "startMs": 883
+            },
+            {
+              "endpoint": "other",
+              "startMs": 884
+            },
+            {
+              "endpoint": "other",
+              "startMs": 889
+            },
+            {
+              "endpoint": "other",
+              "startMs": 892
+            },
+            {
+              "endpoint": "other",
+              "startMs": 893
+            },
+            {
+              "endpoint": "other",
+              "startMs": 920
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4711
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 4770
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4772
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4773
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 4956
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 4959
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 4959
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 4961
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 4961
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 5125
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5147
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5148
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5148
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5543
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5556
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5564
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5574
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 5574
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5574
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5749
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5751
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5751
+            }
+          ],
+          "wallMs": 5756,
+          "scenario": "home"
+        }
+      ]
+    },
+    "profile": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 4724,
+        "p95": 5665
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 3596,
+        "p95": 4936
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 3521,
+        "p95": 4839
+      },
+      "requests": {
+        "runs": 7,
+        "p50": 12,
+        "p95": 12
+      },
+      "transferBytes": {
+        "runs": 7,
+        "p50": 5043,
+        "p95": 5043
+      },
+      "requestStartsByEndpoint": {
+        "other": {
+          "runs": 223,
+          "p50": 233,
+          "p95": 5664
+        },
+        "self-profile": {
+          "runs": 14,
+          "p50": 2362,
+          "p95": 5485
+        },
+        "session-refresh": {
+          "runs": 7,
+          "p50": 3603,
+          "p95": 4935
+        },
+        "profile-privacy": {
+          "runs": 7,
+          "p50": 3778,
+          "p95": 5117
+        },
+        "booking-preferences": {
+          "runs": 7,
+          "p50": 3779,
+          "p95": 5118
+        },
+        "public-games": {
+          "runs": 7,
+          "p50": 3779,
+          "p95": 5118
+        },
+        "communities-mine": {
+          "runs": 7,
+          "p50": 3779,
+          "p95": 5118
+        },
+        "home-dashboard": {
+          "runs": 7,
+          "p50": 3779,
+          "p95": 5118
+        },
+        "friends": {
+          "runs": 7,
+          "p50": 3779,
+          "p95": 5118
+        },
+        "friend-requests": {
+          "runs": 14,
+          "p50": 3780,
+          "p95": 5118
+        },
+        "notifications": {
+          "runs": 7,
+          "p50": 3780,
+          "p95": 5119
+        },
+        "routing-plan": {
+          "runs": 7,
+          "p50": 3781,
+          "p95": 5119
+        }
+      },
+      "samples": [
+        {
+          "firstDataMs": 5665,
+          "lcp": 4936,
+          "domContentLoaded": 4838.800000011921,
+          "requests": 12,
+          "transferBytes": 5043,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "routing-plan": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "self-profile",
+              "startMs": 3
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1055
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1055
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1055
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1055
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1056
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1056
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1056
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1056
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1056
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1057
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1058
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1058
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1058
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1058
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1058
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1058
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1058
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1059
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1063
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4880
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 4935
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4935
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4937
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 5117
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 5118
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 5118
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 5118
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 5118
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 5118
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 5118
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 5118
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 5119
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 5119
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 5485
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5664
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5664
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5664
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5665
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5666
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5666
+            },
+            {
+              "endpoint": "other",
+              "startMs": 6283
+            },
+            {
+              "endpoint": "other",
+              "startMs": 6681
+            },
+            {
+              "endpoint": "other",
+              "startMs": 6681
+            },
+            {
+              "endpoint": "other",
+              "startMs": 6681
+            },
+            {
+              "endpoint": "other",
+              "startMs": 6681
+            },
+            {
+              "endpoint": "other",
+              "startMs": 6682
+            }
+          ],
+          "wallMs": 6715,
+          "scenario": "profile"
+        },
+        {
+          "firstDataMs": 4547,
+          "lcp": 3228,
+          "domContentLoaded": 3132.400000035763,
+          "requests": 12,
+          "transferBytes": 5043,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "routing-plan": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "self-profile",
+              "startMs": 17
+            },
+            {
+              "endpoint": "other",
+              "startMs": 229
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 230
+            },
+            {
+              "endpoint": "other",
+              "startMs": 231
+            },
+            {
+              "endpoint": "other",
+              "startMs": 231
+            },
+            {
+              "endpoint": "other",
+              "startMs": 231
+            },
+            {
+              "endpoint": "other",
+              "startMs": 232
+            },
+            {
+              "endpoint": "other",
+              "startMs": 233
+            },
+            {
+              "endpoint": "other",
+              "startMs": 233
+            },
+            {
+              "endpoint": "other",
+              "startMs": 233
+            },
+            {
+              "endpoint": "other",
+              "startMs": 233
+            },
+            {
+              "endpoint": "other",
+              "startMs": 234
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3182
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3238
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3242
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3243
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3432
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3433
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 3434
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3434
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3437
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3437
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3437
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3438
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3438
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3438
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 3790
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3963
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3964
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3964
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3964
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3964
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3964
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4542
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4745
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4745
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4745
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4745
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4746
+            }
+          ],
+          "wallMs": 4754,
+          "scenario": "profile"
+        },
+        {
+          "firstDataMs": 4517,
+          "lcp": 3408,
+          "domContentLoaded": 3320.900000035763,
+          "requests": 12,
+          "transferBytes": 5043,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "routing-plan": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "self-profile",
+              "startMs": 10
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 224
+            },
+            {
+              "endpoint": "other",
+              "startMs": 225
+            },
+            {
+              "endpoint": "other",
+              "startMs": 225
+            },
+            {
+              "endpoint": "other",
+              "startMs": 225
+            },
+            {
+              "endpoint": "other",
+              "startMs": 226
+            },
+            {
+              "endpoint": "other",
+              "startMs": 226
+            },
+            {
+              "endpoint": "other",
+              "startMs": 226
+            },
+            {
+              "endpoint": "other",
+              "startMs": 226
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 227
+            },
+            {
+              "endpoint": "other",
+              "startMs": 229
+            },
+            {
+              "endpoint": "other",
+              "startMs": 229
+            },
+            {
+              "endpoint": "other",
+              "startMs": 229
+            },
+            {
+              "endpoint": "other",
+              "startMs": 235
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3352
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3401
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3401
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3402
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3586
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3587
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 3587
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3587
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3591
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3591
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3591
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3591
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3591
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3592
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 3954
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4132
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4132
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4132
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4132
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4132
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4132
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4695
+            }
+          ],
+          "wallMs": 4719,
+          "scenario": "profile"
+        },
+        {
+          "firstDataMs": 5050,
+          "lcp": 3752,
+          "domContentLoaded": 3670.199999988079,
+          "requests": 12,
+          "transferBytes": 5043,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "routing-plan": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "self-profile",
+              "startMs": 10
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3705
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3760
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3760
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3760
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3938
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3940
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 3941
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3941
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3941
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3941
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3941
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3942
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3942
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3942
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 4307
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4483
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4483
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4484
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4484
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4484
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4484
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5050
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5224
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5224
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5225
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5225
+            }
+          ],
+          "wallMs": 5257,
+          "scenario": "profile"
+        },
+        {
+          "firstDataMs": 2968,
+          "lcp": 1832,
+          "domContentLoaded": 1744,
+          "requests": 12,
+          "transferBytes": 5043,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "routing-plan": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "self-profile",
+              "startMs": 3
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1774
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 1827
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1827
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1828
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 2015
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 2016
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 2016
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 2016
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 2017
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 2017
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 2017
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 2017
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 2017
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 2017
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 2362
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2540
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2541
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2541
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2541
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2541
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2541
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3109
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3284
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3285
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3285
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3285
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3285
+            }
+          ],
+          "wallMs": 3286,
+          "scenario": "profile"
+        },
+        {
+          "firstDataMs": 4724,
+          "lcp": 3596,
+          "domContentLoaded": 3520.699999988079,
+          "requests": 12,
+          "transferBytes": 5043,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "routing-plan": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "self-profile",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 214
+            },
+            {
+              "endpoint": "other",
+              "startMs": 214
+            },
+            {
+              "endpoint": "other",
+              "startMs": 215
+            },
+            {
+              "endpoint": "other",
+              "startMs": 215
+            },
+            {
+              "endpoint": "other",
+              "startMs": 215
+            },
+            {
+              "endpoint": "other",
+              "startMs": 215
+            },
+            {
+              "endpoint": "other",
+              "startMs": 215
+            },
+            {
+              "endpoint": "other",
+              "startMs": 215
+            },
+            {
+              "endpoint": "other",
+              "startMs": 216
+            },
+            {
+              "endpoint": "other",
+              "startMs": 216
+            },
+            {
+              "endpoint": "other",
+              "startMs": 216
+            },
+            {
+              "endpoint": "other",
+              "startMs": 216
+            },
+            {
+              "endpoint": "other",
+              "startMs": 216
+            },
+            {
+              "endpoint": "other",
+              "startMs": 216
+            },
+            {
+              "endpoint": "other",
+              "startMs": 217
+            },
+            {
+              "endpoint": "other",
+              "startMs": 217
+            },
+            {
+              "endpoint": "other",
+              "startMs": 217
+            },
+            {
+              "endpoint": "other",
+              "startMs": 217
+            },
+            {
+              "endpoint": "other",
+              "startMs": 221
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3552
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3603
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3603
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3606
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3778
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3779
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 3779
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3779
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3779
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3779
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3780
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3780
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3780
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3781
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 4157
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4337
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4338
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4338
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4338
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4338
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4339
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4902
+            }
+          ],
+          "wallMs": 4926,
+          "scenario": "profile"
+        },
+        {
+          "firstDataMs": 4912,
+          "lcp": 3736,
+          "domContentLoaded": 3666.600000023842,
+          "requests": 12,
+          "transferBytes": 5043,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "routing-plan": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "self-profile",
+              "startMs": 3
+            },
+            {
+              "endpoint": "other",
+              "startMs": 191
+            },
+            {
+              "endpoint": "other",
+              "startMs": 192
+            },
+            {
+              "endpoint": "other",
+              "startMs": 192
+            },
+            {
+              "endpoint": "other",
+              "startMs": 192
+            },
+            {
+              "endpoint": "other",
+              "startMs": 192
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3697
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3751
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3751
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3752
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3934
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3934
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 3934
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3935
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3935
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3935
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3935
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3935
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3935
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3936
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 4314
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4492
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4492
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4492
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4492
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4492
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4493
+            },
+            {
+              "endpoint": "other",
+              "startMs": 5056
+            }
+          ],
+          "wallMs": 5088,
+          "scenario": "profile"
+        }
+      ]
+    },
+    "games": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 3280,
+        "p95": 4570
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 2636,
+        "p95": 3768
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 2540,
+        "p95": 3670
+      },
+      "requests": {
+        "runs": 7,
+        "p50": 1,
+        "p95": 3
+      },
+      "transferBytes": {
+        "runs": 7,
+        "p50": 430,
+        "p95": 511
+      },
+      "requestStartsByEndpoint": {
+        "other": {
+          "runs": 231,
+          "p50": 204,
+          "p95": 3777
+        },
+        "session-refresh": {
+          "runs": 7,
+          "p50": 2623,
+          "p95": 3777
+        },
+        "locations": {
+          "runs": 7,
+          "p50": 3447,
+          "p95": 4509
+        }
+      },
+      "samples": [
+        {
+          "firstDataMs": 4570,
+          "lcp": 3768,
+          "domContentLoaded": 3670.100000023842,
+          "requests": 3,
+          "transferBytes": 511,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "locations": 1,
+            "unimplemented": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 4
+            },
+            {
+              "endpoint": "other",
+              "startMs": 196
+            },
+            {
+              "endpoint": "other",
+              "startMs": 197
+            },
+            {
+              "endpoint": "other",
+              "startMs": 197
+            },
+            {
+              "endpoint": "other",
+              "startMs": 197
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 214
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3715
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3777
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3777
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3780
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3954
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3954
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3954
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3954
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3955
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3955
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 4509
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4509
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4738
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4738
+            },
+            {
+              "endpoint": "other",
+              "startMs": 4739
+            }
+          ],
+          "wallMs": 4756,
+          "scenario": "games"
+        },
+        {
+          "firstDataMs": 2737,
+          "lcp": 2080,
+          "domContentLoaded": 1994.699999988079,
+          "requests": 1,
+          "transferBytes": 430,
+          "endpointCounts": {
+            "session-refresh": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 4
+            },
+            {
+              "endpoint": "other",
+              "startMs": 202
+            },
+            {
+              "endpoint": "other",
+              "startMs": 203
+            },
+            {
+              "endpoint": "other",
+              "startMs": 203
+            },
+            {
+              "endpoint": "other",
+              "startMs": 204
+            },
+            {
+              "endpoint": "other",
+              "startMs": 204
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 207
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2029
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2087
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2087
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2088
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2265
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2265
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2265
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2266
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2266
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2266
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2912
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2912
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2913
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 2929
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2929
+            }
+          ],
+          "wallMs": 2929,
+          "scenario": "games"
+        },
+        {
+          "firstDataMs": 3263,
+          "lcp": 2644,
+          "domContentLoaded": 2544.199999988079,
+          "requests": 1,
+          "transferBytes": 430,
+          "endpointCounts": {
+            "session-refresh": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 197
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 202
+            },
+            {
+              "endpoint": "other",
+              "startMs": 203
+            },
+            {
+              "endpoint": "other",
+              "startMs": 204
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2576
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2623
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2628
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2629
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2799
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2800
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2800
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2800
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2800
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2800
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3442
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3442
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3442
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3460
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3460
+            }
+          ],
+          "wallMs": 3460,
+          "scenario": "games"
+        },
+        {
+          "firstDataMs": 3301,
+          "lcp": 2620,
+          "domContentLoaded": 2540.199999988079,
+          "requests": 3,
+          "transferBytes": 511,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "locations": 1,
+            "unimplemented": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 205
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2572
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2623
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2623
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2624
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2815
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2816
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2816
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2816
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2817
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2817
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3333
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3333
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3476
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3478
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3478
+            }
+          ],
+          "wallMs": 3492,
+          "scenario": "games"
+        },
+        {
+          "firstDataMs": 3253,
+          "lcp": 2600,
+          "domContentLoaded": 2519.800000011921,
+          "requests": 1,
+          "transferBytes": 430,
+          "endpointCounts": {
+            "session-refresh": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 3
+            },
+            {
+              "endpoint": "other",
+              "startMs": 193
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 194
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 195
+            },
+            {
+              "endpoint": "other",
+              "startMs": 196
+            },
+            {
+              "endpoint": "other",
+              "startMs": 196
+            },
+            {
+              "endpoint": "other",
+              "startMs": 196
+            },
+            {
+              "endpoint": "other",
+              "startMs": 196
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2552
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2603
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2603
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2605
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2779
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2779
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2779
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2780
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2780
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2780
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3429
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3429
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3429
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3447
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3447
+            }
+          ],
+          "wallMs": 3448,
+          "scenario": "games"
+        },
+        {
+          "firstDataMs": 3280,
+          "lcp": 2636,
+          "domContentLoaded": 2539.600000023842,
+          "requests": 1,
+          "transferBytes": 430,
+          "endpointCounts": {
+            "session-refresh": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 202
+            },
+            {
+              "endpoint": "other",
+              "startMs": 202
+            },
+            {
+              "endpoint": "other",
+              "startMs": 202
+            },
+            {
+              "endpoint": "other",
+              "startMs": 202
+            },
+            {
+              "endpoint": "other",
+              "startMs": 202
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2574
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2631
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2631
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2632
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2817
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2817
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2817
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2817
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2818
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2818
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3458
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3458
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3459
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3481
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3481
+            }
+          ],
+          "wallMs": 3482,
+          "scenario": "games"
+        },
+        {
+          "firstDataMs": 3352,
+          "lcp": 2668,
+          "domContentLoaded": 2553.800000011921,
+          "requests": 3,
+          "transferBytes": 511,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "locations": 1,
+            "unimplemented": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 198
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 199
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 200
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 201
+            },
+            {
+              "endpoint": "other",
+              "startMs": 206
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2623
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2670
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2672
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2673
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2844
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2844
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2845
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2847
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2848
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2848
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3392
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3392
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3529
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3530
+            },
+            {
+              "endpoint": "other",
+              "startMs": 3530
+            }
+          ],
+          "wallMs": 3547,
+          "scenario": "games"
+        }
+      ]
+    },
+    "repeat": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 647,
+        "p95": 1863
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 380,
+        "p95": 1236
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 297,
+        "p95": 1139
+      },
+      "requests": {
+        "runs": 7,
+        "p50": 9,
+        "p95": 10
+      },
+      "transferBytes": {
+        "runs": 7,
+        "p50": 3195,
+        "p95": 3444
+      },
+      "requestStartsByEndpoint": {
+        "other": {
+          "runs": 228,
+          "p50": 236,
+          "p95": 1041
+        },
+        "session-refresh": {
+          "runs": 7,
+          "p50": 387,
+          "p95": 1232
+        },
+        "routing-plan": {
+          "runs": 7,
+          "p50": 557,
+          "p95": 1807
+        },
+        "booking-preferences": {
+          "runs": 7,
+          "p50": 557,
+          "p95": 1808
+        },
+        "home-base": {
+          "runs": 7,
+          "p50": 557,
+          "p95": 1808
+        },
+        "notifications": {
+          "runs": 7,
+          "p50": 558,
+          "p95": 1808
+        },
+        "friend-requests": {
+          "runs": 7,
+          "p50": 558,
+          "p95": 1808
+        },
+        "self-profile": {
+          "runs": 7,
+          "p50": 727,
+          "p95": 2307
+        },
+        "communities-mine": {
+          "runs": 7,
+          "p50": 968,
+          "p95": 2878
+        }
+      },
+      "samples": [
+        {
+          "firstDataMs": 1863,
+          "lcp": 1236,
+          "domContentLoaded": 1139,
+          "requests": 8,
+          "transferBytes": 3183,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1035
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1035
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1035
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1035
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1036
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1036
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1037
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1037
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1038
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1038
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1038
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1039
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1040
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1040
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1040
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1041
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1041
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1041
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1067
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1182
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 1232
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1267
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 1807
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 1808
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 1808
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 1808
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 1808
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 2307
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2684
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2685
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2685
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2741
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2746
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2747
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2878
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 2878
+            },
+            {
+              "endpoint": "other",
+              "startMs": 2878
+            }
+          ],
+          "wallMs": 2880,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 629,
+          "lcp": 432,
+          "domContentLoaded": 332.5999999642372,
+          "requests": 10,
+          "transferBytes": 3444,
+          "endpointCounts": {
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 3
+            },
+            {
+              "endpoint": "other",
+              "startMs": 233
+            },
+            {
+              "endpoint": "other",
+              "startMs": 233
+            },
+            {
+              "endpoint": "other",
+              "startMs": 234
+            },
+            {
+              "endpoint": "other",
+              "startMs": 234
+            },
+            {
+              "endpoint": "other",
+              "startMs": 234
+            },
+            {
+              "endpoint": "other",
+              "startMs": 234
+            },
+            {
+              "endpoint": "other",
+              "startMs": 234
+            },
+            {
+              "endpoint": "other",
+              "startMs": 235
+            },
+            {
+              "endpoint": "other",
+              "startMs": 235
+            },
+            {
+              "endpoint": "other",
+              "startMs": 235
+            },
+            {
+              "endpoint": "other",
+              "startMs": 235
+            },
+            {
+              "endpoint": "other",
+              "startMs": 235
+            },
+            {
+              "endpoint": "other",
+              "startMs": 236
+            },
+            {
+              "endpoint": "other",
+              "startMs": 236
+            },
+            {
+              "endpoint": "other",
+              "startMs": 236
+            },
+            {
+              "endpoint": "other",
+              "startMs": 236
+            },
+            {
+              "endpoint": "other",
+              "startMs": 237
+            },
+            {
+              "endpoint": "other",
+              "startMs": 237
+            },
+            {
+              "endpoint": "other",
+              "startMs": 262
+            },
+            {
+              "endpoint": "other",
+              "startMs": 362
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 413
+            },
+            {
+              "endpoint": "other",
+              "startMs": 435
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 591
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 591
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 591
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 591
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 592
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 758
+            },
+            {
+              "endpoint": "other",
+              "startMs": 779
+            },
+            {
+              "endpoint": "other",
+              "startMs": 779
+            },
+            {
+              "endpoint": "other",
+              "startMs": 779
+            },
+            {
+              "endpoint": "other",
+              "startMs": 846
+            },
+            {
+              "endpoint": "other",
+              "startMs": 846
+            },
+            {
+              "endpoint": "other",
+              "startMs": 846
+            },
+            {
+              "endpoint": "other",
+              "startMs": 981
+            },
+            {
+              "endpoint": "other",
+              "startMs": 981
+            },
+            {
+              "endpoint": "other",
+              "startMs": 982
+            },
+            {
+              "endpoint": "other",
+              "startMs": 996
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 996
+            },
+            {
+              "endpoint": "other",
+              "startMs": 997
+            }
+          ],
+          "wallMs": 997,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 685,
+          "lcp": 408,
+          "domContentLoaded": 323.80000001192093,
+          "requests": 9,
+          "transferBytes": 3195,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 3
+            },
+            {
+              "endpoint": "other",
+              "startMs": 183
+            },
+            {
+              "endpoint": "other",
+              "startMs": 184
+            },
+            {
+              "endpoint": "other",
+              "startMs": 184
+            },
+            {
+              "endpoint": "other",
+              "startMs": 184
+            },
+            {
+              "endpoint": "other",
+              "startMs": 184
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 238
+            },
+            {
+              "endpoint": "other",
+              "startMs": 354
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 417
+            },
+            {
+              "endpoint": "other",
+              "startMs": 423
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 596
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 597
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 597
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 597
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 597
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 762
+            },
+            {
+              "endpoint": "other",
+              "startMs": 778
+            },
+            {
+              "endpoint": "other",
+              "startMs": 778
+            },
+            {
+              "endpoint": "other",
+              "startMs": 779
+            },
+            {
+              "endpoint": "other",
+              "startMs": 849
+            },
+            {
+              "endpoint": "other",
+              "startMs": 849
+            },
+            {
+              "endpoint": "other",
+              "startMs": 849
+            },
+            {
+              "endpoint": "other",
+              "startMs": 991
+            },
+            {
+              "endpoint": "other",
+              "startMs": 992
+            },
+            {
+              "endpoint": "other",
+              "startMs": 992
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1013
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 1013
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1013
+            }
+          ],
+          "wallMs": 1014,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 647,
+          "lcp": 376,
+          "domContentLoaded": 291.30000001192093,
+          "requests": 8,
+          "transferBytes": 3146,
+          "endpointCounts": {
+            "communities-mine": 1,
+            "unimplemented": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 3
+            },
+            {
+              "endpoint": "other",
+              "startMs": 183
+            },
+            {
+              "endpoint": "other",
+              "startMs": 184
+            },
+            {
+              "endpoint": "other",
+              "startMs": 184
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 185
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 189
+            },
+            {
+              "endpoint": "other",
+              "startMs": 212
+            },
+            {
+              "endpoint": "other",
+              "startMs": 322
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 380
+            },
+            {
+              "endpoint": "other",
+              "startMs": 388
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 554
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 554
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 555
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 555
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 555
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 723
+            },
+            {
+              "endpoint": "other",
+              "startMs": 738
+            },
+            {
+              "endpoint": "other",
+              "startMs": 738
+            },
+            {
+              "endpoint": "other",
+              "startMs": 738
+            },
+            {
+              "endpoint": "other",
+              "startMs": 808
+            },
+            {
+              "endpoint": "other",
+              "startMs": 808
+            },
+            {
+              "endpoint": "other",
+              "startMs": 808
+            },
+            {
+              "endpoint": "other",
+              "startMs": 947
+            },
+            {
+              "endpoint": "other",
+              "startMs": 947
+            },
+            {
+              "endpoint": "other",
+              "startMs": 947
+            },
+            {
+              "endpoint": "other",
+              "startMs": 966
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 967
+            },
+            {
+              "endpoint": "other",
+              "startMs": 967
+            }
+          ],
+          "wallMs": 967,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 651,
+          "lcp": 380,
+          "domContentLoaded": 296.80000001192093,
+          "requests": 9,
+          "transferBytes": 3195,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 3
+            },
+            {
+              "endpoint": "other",
+              "startMs": 182
+            },
+            {
+              "endpoint": "other",
+              "startMs": 182
+            },
+            {
+              "endpoint": "other",
+              "startMs": 183
+            },
+            {
+              "endpoint": "other",
+              "startMs": 183
+            },
+            {
+              "endpoint": "other",
+              "startMs": 183
+            },
+            {
+              "endpoint": "other",
+              "startMs": 183
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 189
+            },
+            {
+              "endpoint": "other",
+              "startMs": 189
+            },
+            {
+              "endpoint": "other",
+              "startMs": 189
+            },
+            {
+              "endpoint": "other",
+              "startMs": 189
+            },
+            {
+              "endpoint": "other",
+              "startMs": 189
+            },
+            {
+              "endpoint": "other",
+              "startMs": 213
+            },
+            {
+              "endpoint": "other",
+              "startMs": 330
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 387
+            },
+            {
+              "endpoint": "other",
+              "startMs": 395
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 557
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 557
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 557
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 558
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 558
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 727
+            },
+            {
+              "endpoint": "other",
+              "startMs": 741
+            },
+            {
+              "endpoint": "other",
+              "startMs": 742
+            },
+            {
+              "endpoint": "other",
+              "startMs": 742
+            },
+            {
+              "endpoint": "other",
+              "startMs": 815
+            },
+            {
+              "endpoint": "other",
+              "startMs": 815
+            },
+            {
+              "endpoint": "other",
+              "startMs": 816
+            },
+            {
+              "endpoint": "other",
+              "startMs": 952
+            },
+            {
+              "endpoint": "other",
+              "startMs": 953
+            },
+            {
+              "endpoint": "other",
+              "startMs": 953
+            },
+            {
+              "endpoint": "other",
+              "startMs": 968
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 968
+            },
+            {
+              "endpoint": "other",
+              "startMs": 969
+            }
+          ],
+          "wallMs": 969,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 622,
+          "lcp": 364,
+          "domContentLoaded": 277.19999998807907,
+          "requests": 9,
+          "transferBytes": 3195,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "unimplemented": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 177
+            },
+            {
+              "endpoint": "other",
+              "startMs": 178
+            },
+            {
+              "endpoint": "other",
+              "startMs": 178
+            },
+            {
+              "endpoint": "other",
+              "startMs": 178
+            },
+            {
+              "endpoint": "other",
+              "startMs": 179
+            },
+            {
+              "endpoint": "other",
+              "startMs": 179
+            },
+            {
+              "endpoint": "other",
+              "startMs": 179
+            },
+            {
+              "endpoint": "other",
+              "startMs": 179
+            },
+            {
+              "endpoint": "other",
+              "startMs": 179
+            },
+            {
+              "endpoint": "other",
+              "startMs": 180
+            },
+            {
+              "endpoint": "other",
+              "startMs": 180
+            },
+            {
+              "endpoint": "other",
+              "startMs": 180
+            },
+            {
+              "endpoint": "other",
+              "startMs": 180
+            },
+            {
+              "endpoint": "other",
+              "startMs": 181
+            },
+            {
+              "endpoint": "other",
+              "startMs": 181
+            },
+            {
+              "endpoint": "other",
+              "startMs": 181
+            },
+            {
+              "endpoint": "other",
+              "startMs": 182
+            },
+            {
+              "endpoint": "other",
+              "startMs": 182
+            },
+            {
+              "endpoint": "other",
+              "startMs": 204
+            },
+            {
+              "endpoint": "other",
+              "startMs": 306
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 365
+            },
+            {
+              "endpoint": "other",
+              "startMs": 372
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 537
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 537
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 537
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 538
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 538
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 700
+            },
+            {
+              "endpoint": "other",
+              "startMs": 714
+            },
+            {
+              "endpoint": "other",
+              "startMs": 714
+            },
+            {
+              "endpoint": "other",
+              "startMs": 714
+            },
+            {
+              "endpoint": "other",
+              "startMs": 780
+            },
+            {
+              "endpoint": "other",
+              "startMs": 780
+            },
+            {
+              "endpoint": "other",
+              "startMs": 780
+            },
+            {
+              "endpoint": "other",
+              "startMs": 920
+            },
+            {
+              "endpoint": "other",
+              "startMs": 920
+            },
+            {
+              "endpoint": "other",
+              "startMs": 921
+            },
+            {
+              "endpoint": "other",
+              "startMs": 934
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 935
+            },
+            {
+              "endpoint": "other",
+              "startMs": 935
+            }
+          ],
+          "wallMs": 936,
+          "scenario": "home"
+        },
+        {
+          "firstDataMs": 625,
+          "lcp": 368,
+          "domContentLoaded": 272.4000000357628,
+          "requests": 8,
+          "transferBytes": 3146,
+          "endpointCounts": {
+            "communities-mine": 1,
+            "unimplemented": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 2
+            },
+            {
+              "endpoint": "other",
+              "startMs": 183
+            },
+            {
+              "endpoint": "other",
+              "startMs": 184
+            },
+            {
+              "endpoint": "other",
+              "startMs": 184
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 186
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 187
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 188
+            },
+            {
+              "endpoint": "other",
+              "startMs": 189
+            },
+            {
+              "endpoint": "other",
+              "startMs": 189
+            },
+            {
+              "endpoint": "other",
+              "startMs": 189
+            },
+            {
+              "endpoint": "other",
+              "startMs": 210
+            },
+            {
+              "endpoint": "other",
+              "startMs": 303
+            },
+            {
+              "endpoint": "session-refresh",
+              "startMs": 358
+            },
+            {
+              "endpoint": "other",
+              "startMs": 375
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 532
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 532
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 532
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 533
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 533
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 698
+            },
+            {
+              "endpoint": "other",
+              "startMs": 714
+            },
+            {
+              "endpoint": "other",
+              "startMs": 714
+            },
+            {
+              "endpoint": "other",
+              "startMs": 714
+            },
+            {
+              "endpoint": "other",
+              "startMs": 786
+            },
+            {
+              "endpoint": "other",
+              "startMs": 786
+            },
+            {
+              "endpoint": "other",
+              "startMs": 787
+            },
+            {
+              "endpoint": "other",
+              "startMs": 923
+            },
+            {
+              "endpoint": "other",
+              "startMs": 924
+            },
+            {
+              "endpoint": "other",
+              "startMs": 924
+            },
+            {
+              "endpoint": "other",
+              "startMs": 938
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 938
+            },
+            {
+              "endpoint": "other",
+              "startMs": 939
+            }
+          ],
+          "wallMs": 939,
+          "scenario": "home"
+        }
+      ]
+    },
+    "profile-nav": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 3348,
+        "p95": 3375
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 3108,
+        "p95": 4804
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 3026,
+        "p95": 4725
+      },
+      "requests": {
+        "runs": 7,
+        "p50": 7,
+        "p95": 10
+      },
+      "transferBytes": {
+        "runs": 7,
+        "p50": 3743,
+        "p95": 4234
+      },
+      "requestStartsByEndpoint": {
+        "profile-privacy": {
+          "runs": 7,
+          "p50": 14,
+          "p95": 170
+        },
+        "public-games": {
+          "runs": 7,
+          "p50": 15,
+          "p95": 170
+        },
+        "communities-mine": {
+          "runs": 7,
+          "p50": 15,
+          "p95": 171
+        },
+        "home-dashboard": {
+          "runs": 7,
+          "p50": 15,
+          "p95": 171
+        },
+        "friends": {
+          "runs": 7,
+          "p50": 15,
+          "p95": 171
+        },
+        "friend-requests": {
+          "runs": 14,
+          "p50": 16,
+          "p95": 172
+        },
+        "other": {
+          "runs": 29,
+          "p50": 21,
+          "p95": 1457
+        }
+      },
+      "samples": [
+        {
+          "firstDataMs": 3375,
+          "lcp": 1720,
+          "domContentLoaded": 1644.1000000238419,
+          "requests": 7,
+          "transferBytes": 3743,
+          "endpointCounts": {
+            "profile-privacy": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 20
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 20
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 21
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 21
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 21
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 21
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 22
+            },
+            {
+              "endpoint": "other",
+              "startMs": 29
+            },
+            {
+              "endpoint": "other",
+              "startMs": 29
+            },
+            {
+              "endpoint": "other",
+              "startMs": 29
+            }
+          ],
+          "wallMs": 3397,
+          "scenario": "profile-nav"
+        },
+        {
+          "firstDataMs": 1451,
+          "lcp": 3072,
+          "domContentLoaded": 2997.900000035763,
+          "requests": 10,
+          "transferBytes": 4234,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 2,
+            "unimplemented": 1,
+            "profile-privacy": 1,
+            "public-games": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×2",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 13
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 14
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 14
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 14
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 14
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 14
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 15
+            },
+            {
+              "endpoint": "other",
+              "startMs": 17
+            },
+            {
+              "endpoint": "other",
+              "startMs": 17
+            },
+            {
+              "endpoint": "other",
+              "startMs": 17
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1455
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1456
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1456
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1457
+            },
+            {
+              "endpoint": "other",
+              "startMs": 1459
+            }
+          ],
+          "wallMs": 1478,
+          "scenario": "profile-nav"
+        },
+        {
+          "firstDataMs": 3355,
+          "lcp": 3220,
+          "domContentLoaded": 3144.599999964237,
+          "requests": 7,
+          "transferBytes": 3743,
+          "endpointCounts": {
+            "profile-privacy": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 14
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 15
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 15
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 15
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 15
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 15
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 16
+            },
+            {
+              "endpoint": "other",
+              "startMs": 18
+            },
+            {
+              "endpoint": "other",
+              "startMs": 18
+            },
+            {
+              "endpoint": "other",
+              "startMs": 18
+            }
+          ],
+          "wallMs": 3373,
+          "scenario": "profile-nav"
+        },
+        {
+          "firstDataMs": 3348,
+          "lcp": 3092,
+          "domContentLoaded": 3020.199999988079,
+          "requests": 7,
+          "transferBytes": 3743,
+          "endpointCounts": {
+            "profile-privacy": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 13
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 14
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 14
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 14
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 15
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 15
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 15
+            },
+            {
+              "endpoint": "other",
+              "startMs": 18
+            },
+            {
+              "endpoint": "other",
+              "startMs": 18
+            },
+            {
+              "endpoint": "other",
+              "startMs": 19
+            }
+          ],
+          "wallMs": 3365,
+          "scenario": "profile-nav"
+        },
+        {
+          "firstDataMs": 1314,
+          "lcp": 3108,
+          "domContentLoaded": 3025.699999988079,
+          "requests": 10,
+          "transferBytes": 4234,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 2,
+            "unimplemented": 1,
+            "profile-privacy": 1,
+            "public-games": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×2",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 12
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 12
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 12
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 12
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 13
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 13
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 13
+            },
+            {
+              "endpoint": "other",
+              "startMs": 21
+            },
+            {
+              "endpoint": "other",
+              "startMs": 21
+            },
+            {
+              "endpoint": "other",
+              "startMs": 21
+            }
+          ],
+          "wallMs": 1328,
+          "scenario": "profile-nav"
+        },
+        {
+          "firstDataMs": 2081,
+          "lcp": 4804,
+          "domContentLoaded": 4724.5,
+          "requests": 10,
+          "transferBytes": 4234,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 2,
+            "unimplemented": 1,
+            "profile-privacy": 1,
+            "public-games": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×2",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "other",
+              "startMs": 152
+            },
+            {
+              "endpoint": "other",
+              "startMs": 155
+            },
+            {
+              "endpoint": "other",
+              "startMs": 156
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 170
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 170
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 171
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 171
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 171
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 171
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 172
+            },
+            {
+              "endpoint": "other",
+              "startMs": 180
+            },
+            {
+              "endpoint": "other",
+              "startMs": 180
+            },
+            {
+              "endpoint": "other",
+              "startMs": 180
+            }
+          ],
+          "wallMs": 2255,
+          "scenario": "profile-nav"
+        },
+        {
+          "firstDataMs": 3365,
+          "lcp": 3784,
+          "domContentLoaded": 3700.199999988079,
+          "requests": 7,
+          "transferBytes": 3743,
+          "endpointCounts": {
+            "profile-privacy": 1,
+            "public-games": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /public/api/v1/local-padel/games ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2"
+          ],
+          "requestTimeline": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 14
+            },
+            {
+              "endpoint": "public-games",
+              "startMs": 15
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 15
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 15
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 15
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 16
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 16
+            },
+            {
+              "endpoint": "other",
+              "startMs": 19
+            },
+            {
+              "endpoint": "other",
+              "startMs": 19
+            },
+            {
+              "endpoint": "other",
+              "startMs": 20
+            }
+          ],
+          "wallMs": 3384,
+          "scenario": "profile-nav"
+        }
+      ]
+    },
+    "background": {
+      "runs": 7,
+      "refreshRequestMs": {
+        "runs": 7,
+        "p50": 11,
+        "p95": 29
+      },
+      "lcpMs": {
+        "runs": 0,
+        "p50": null,
+        "p95": null
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": null,
+        "p95": null
+      },
+      "requests": {
+        "runs": 0,
+        "p50": null,
+        "p95": null
+      },
+      "transferBytes": {
+        "runs": 0,
+        "p50": null,
+        "p95": null
+      },
+      "requestStartsByEndpoint": {},
+      "samples": [
+        {
+          "scenario": "background",
+          "refreshRequestMs": 29
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 18
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 13
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 6
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 8
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 11
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 9
+        }
+      ]
+    }
+  }
+}
