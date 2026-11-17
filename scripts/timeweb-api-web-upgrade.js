@@ -2607,7 +2607,7 @@ export function readCanonicalPredecessor(op, recovering = false) {
   if (
     hash(bytes) !== b.installedDescriptorSha256 ||
     values.PHUB_RELEASE_ID !== b.installedReleaseId ||
-    values.PHUB_COMPONENT_ROLLOUT_KIND !== OWNER_KIND ||
+    ![OWNER_KIND, CANONICAL_KIND].includes(values.PHUB_COMPONENT_ROLLOUT_KIND) ||
     values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID !== b.secretSetReleaseId ||
     values.TIMEWEB_RUNTIME_ENV_ROOT !== RUNTIME ||
     values.PHUB_MIGRATOR_ENABLED !== 'false'
