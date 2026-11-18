@@ -71,6 +71,116 @@ const gameCard = {
   deepLink: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
 };
 
+// The station list is read from one place in one build and from another in the other build, so the
+// fixture must expose the same station ids and names either way. The id/name match `gameCard.station`.
+const stationFixtures = {
+  items: [
+    {
+      id: 'a8df730b-6a67-41a5-8772-48bca84f73bc',
+      title: 'Селигерская',
+      city: 'Москва',
+      courtCount: 3,
+      coverImageUrl: null,
+      route: '/locations/a8df730b-6a67-41a5-8772-48bca84f73bc',
+    },
+  ],
+};
+
+// A read-job answer that is fully local: no Viva, no LK1. The web client starts the job, sees no
+// provider commands to execute, and completes it to receive the page.
+const recommendationGame = (id) => ({
+  id,
+  revision: 1,
+  surface: 'DISCOVER',
+  displayState: 'FINDING_PLAYERS',
+  title: 'Открытая игра',
+  kind: 'RATING',
+  visibility: 'PUBLIC',
+  startsAt: '2026-07-30T15:00:00.000Z',
+  endsAt: '2026-07-30T16:30:00.000Z',
+  timezone: 'Europe/Moscow',
+  station: { id: 'a8df730b-6a67-41a5-8772-48bca84f73bc', name: 'Селигерская' },
+  court: null,
+  levelRange: { from: 'D+', to: 'C' },
+  rosterState: 'OPEN',
+  capacity: { total: 4, occupied: 1, reserved: 0, open: 3, waitlistCount: 0 },
+  participants: [
+    {
+      userId: '80000000-0000-4000-8000-000000000001',
+      displayName: 'Анна Петрова',
+      avatarUrl: null,
+      level: 'D+',
+      role: 'ORGANIZER',
+    },
+  ],
+  priceSummary: null,
+  viewerRelation: 'NONE',
+  viewerPaymentState: 'NOT_REQUIRED',
+  badges: [],
+  allowedActions: ['OPEN_DETAILS', 'JOIN'],
+  deepLink: '/games/' + id,
+  resultSummary: null,
+  conversation: null,
+});
+
+const recommendationPage = {
+  version: 'c'.repeat(64),
+  generatedAt: '2026-07-29T09:00:00.000Z',
+  staleAt: '2026-07-29T09:05:00.000Z',
+  personalization: 'BASIC',
+  items: [
+    {
+      kind: 'GAME',
+      game: recommendationGame('70000000-0000-4000-8000-000000000001'),
+      reasons: [],
+    },
+    {
+      kind: 'GAME',
+      game: recommendationGame('70000000-0000-4000-8000-000000000002'),
+      reasons: [],
+    },
+  ],
+  nextCursor: null,
+};
+
+const eventCatalogPage = {
+  state: 'READY',
+  items: [
+    {
+      kind: 'GAME',
+      game: recommendationGame('70000000-0000-4000-8000-000000000011'),
+    },
+    {
+      kind: 'GAME',
+      game: recommendationGame('70000000-0000-4000-8000-000000000012'),
+    },
+  ],
+  nextCursor: null,
+  totalMatched: 2,
+  facets: {},
+  sourceStatus: 'READY',
+  staleAt: '2026-07-29T09:05:00.000Z',
+};
+
+const trainingPage = {
+  state: 'READY',
+  items: [],
+  nextCursor: null,
+  sourceStatus: 'READY',
+  staleAt: '2026-07-29T09:05:00.000Z',
+};
+
+const jobsByScreen = new Map();
+const readJobFor = (screen) => ({
+  jobId: `perf-read-job-${screen}`,
+  screen,
+  state: 'READY',
+  commands: [],
+  concurrency: 1,
+  createdAt: '2026-07-29T09:00:00.000Z',
+  expiresAt: '2099-01-01T00:00:00.000Z',
+});
+
 const routes = [
   ['POST', /\/auth\/session\/refresh$/, () => sessionDto, 'session-refresh'],
   ['DELETE', /\/auth\/session$/, () => ({}), 'logout'],
@@ -101,7 +211,7 @@ const routes = [
   ['GET', /\/profile\/friend-requests$/, () => ({ items: [] }), 'friend-requests'],
   ['GET', /\/bookings\/upcoming$/, () => fixtures.upcomingBookings, 'upcoming-bookings'],
   ['GET', /\/recommendations\/bookings$/, () => fixtures.bookingRecommendations, 'recommendations'],
-  ['GET', /\/locations$/, () => ({ items: [] }), 'locations'],
+  ['GET', /\/locations$/, () => stationFixtures, 'locations'],
   ['GET', /\/communities\/mine$/, () => fixtures.communityMemberships, 'communities-mine'],
   ['GET', /\/conversations$/, () => ({ items: [] }), 'conversations'],
   [
@@ -127,12 +237,87 @@ const routes = [
     'realtime-ticket',
   ],
   [
+    'POST',
+    /\/booking-screen-read-jobs$/,
+    (_request, body) => {
+      const screen = typeof body?.screen === 'string' ? body.screen : 'FOR_ME';
+      const job = readJobFor(screen);
+      jobsByScreen.set(job.jobId, screen);
+      return job;
+    },
+    'read-job-start',
+  ],
+  [
+    'GET',
+    /\/booking-screen-read-jobs\/[^/]+$/,
+    (request) => readJobFor(jobsByScreen.get(request.url.split('/').at(-1)) ?? 'FOR_ME'),
+    'read-job-poll',
+  ],
+  [
+    'POST',
+    /\/booking-screen-read-jobs\/[^/]+\/complete$/,
+    (request) => {
+      const jobId = request.url.split('/').at(-2) ?? '';
+      const screen = jobsByScreen.get(jobId) ?? 'FOR_ME';
+      const completion = { jobId, screen, state: 'READY' };
+      if (screen === 'EVENT_CATALOG') return { ...completion, catalog: eventCatalogPage };
+      if (screen === 'GROUP_TRAININGS') return { ...completion, trainings: trainingPage };
+      if (screen === 'MY_BOOKINGS') {
+        return { ...completion, upcoming: fixtures.upcomingBookings };
+      }
+      return { ...completion, page: recommendationPage };
+    },
+    'read-job-complete',
+  ],
+  ['POST', /\/booking-screen-read-jobs\/[^/]+\/results\/[^/]+$/, () => ({}), 'read-job-result'],
+  [
+    'GET',
+    /\/public\/api\/v1\/[^/]+\/tournaments$/,
+    () => ({ items: [], nextCursor: null }),
+    'public-tournaments',
+  ],
+  [
+    'GET',
+    /\/trainings\/catalog$/,
+    () => ({ items: [], nextCursor: null, state: 'READY' }),
+    'training-catalog',
+  ],
+  [
+    'GET',
+    /\/event-catalog$/,
+    () => ({ items: [], nextCursor: null, state: 'READY' }),
+    'event-catalog',
+  ],
+  [
     'GET',
     /\/public\/api\/v1\/[^/]+\/games$/,
     () => ({ items: [gameCard], nextCursor: null }),
     'public-games',
   ],
 ];
+
+function readJsonBody(request) {
+  return new Promise((resolve) => {
+    if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'DELETE') {
+      resolve(undefined);
+      return;
+    }
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => {
+      raw += chunk;
+      if (raw.length > 1_000_000) request.destroy();
+    });
+    request.on('end', () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : undefined);
+      } catch {
+        resolve(undefined);
+      }
+    });
+    request.on('error', () => resolve(undefined));
+  });
+}
 
 const stats = new Map();
 function record(name, method, url, bytes) {
@@ -227,8 +412,9 @@ const server = createServer(async (request, response) => {
     : undefined;
   if (route) {
     const [, , handler, name] = route;
+    const requestBody = await readJsonBody(request);
     await new Promise((resolve) => setTimeout(resolve, latencyMs));
-    const body = Buffer.from(JSON.stringify(handler()));
+    const body = Buffer.from(JSON.stringify(handler(request, requestBody)));
     record(name, request.method, path, body.length);
     return send(
       response,

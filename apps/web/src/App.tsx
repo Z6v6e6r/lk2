@@ -1643,7 +1643,7 @@ export function App({
             setProfileSubscriptionsUnavailable(true);
           },
         );
-        void deferRead(() => gateway.listProfileFriends(8)).then(
+        void deferRead(() => gateway.listProfileFriends(8), { shouldStart: () => active }).then(
           (page) => {
             if (!active) return;
             setProfileFriends(page);
@@ -1916,6 +1916,8 @@ export function App({
                       chatReadThroughRef.current,
                       readThroughSequence,
                     );
+                    coalescedReads.invalidate('conversations:');
+                    coalescedReads.invalidate('notifications:');
                   },
                   () => undefined,
                 );
@@ -2223,6 +2225,7 @@ export function App({
       document.removeEventListener('visibilitychange', refreshVisibleHome);
     };
   }, [
+    coalescedReads,
     gateway,
     chatsReloadToken,
     clientPlatform,
@@ -2820,7 +2823,8 @@ export function App({
       .markNotificationsRead(newest.id)
       .then(
         () => {
-          coalescedReads.clear();
+          coalescedReads.invalidate('notifications:');
+          coalescedReads.invalidate('conversations:');
           return gateway.listNotifications();
         },
         () => {
@@ -2873,6 +2877,8 @@ export function App({
     setNotificationsError(null);
     void gateway.markNotificationsRead(item.id).then(
       () => {
+        coalescedReads.invalidate('notifications:');
+        coalescedReads.invalidate('conversations:');
         if (navigate) navigateToNotificationTarget(href);
         setNotificationsBusy(false);
       },
@@ -3027,6 +3033,7 @@ export function App({
         : gateway.declineProfileFriendRequest(requestId);
     void command.then(
       () => {
+        coalescedReads.invalidate('friend-requests:');
         setFriendRequests((current) =>
           current.filter((request) => request.requestId !== requestId),
         );

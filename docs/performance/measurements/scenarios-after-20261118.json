@@ -1,0 +1,3252 @@
+{
+  "baseUrl": "http://127.0.0.1:4180",
+  "mode": "4G 1.6Mbps/150ms RTT, CPU 4x slowdown",
+  "evidence": "LOCAL (synthetic API via scripts/perf/stub-lk2-api.js; client shell timing, not a user measurement)",
+  "summary": {
+    "home": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 4569,
+        "p95": 5644
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 4516,
+        "p95": 4824
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 4418,
+        "p95": 4740
+      },
+      "apiRequests": {
+        "runs": 7,
+        "p50": 11,
+        "p95": 12
+      },
+      "apiPayloadBytes": {
+        "runs": 7,
+        "p50": 4096,
+        "p95": 5723
+      },
+      "networkTransferBytes": {
+        "runs": 7,
+        "p50": 267933,
+        "p95": 269080
+      },
+      "staticTransferBytes": {
+        "runs": 7,
+        "p50": 263380,
+        "p95": 263380
+      },
+      "requestStartsByEndpoint": {
+        "session-refresh": {
+          "runs": 7,
+          "p50": 4501,
+          "p95": 4818
+        },
+        "communities-mine": {
+          "runs": 3,
+          "p50": 4544,
+          "p95": 5377
+        },
+        "read-job-start": {
+          "runs": 3,
+          "p50": 4548,
+          "p95": 5380
+        },
+        "routing-plan": {
+          "runs": 7,
+          "p50": 4680,
+          "p95": 5000
+        },
+        "booking-preferences": {
+          "runs": 7,
+          "p50": 4681,
+          "p95": 5001
+        },
+        "home-base": {
+          "runs": 7,
+          "p50": 4684,
+          "p95": 5003
+        },
+        "notifications": {
+          "runs": 7,
+          "p50": 4705,
+          "p95": 5019
+        },
+        "friend-requests": {
+          "runs": 7,
+          "p50": 4705,
+          "p95": 5020
+        },
+        "self-profile": {
+          "runs": 7,
+          "p50": 4860,
+          "p95": 5179
+        },
+        "other-api": {
+          "runs": 4,
+          "p50": 5373,
+          "p95": 5457
+        }
+      },
+      "samples": [
+        {
+          "lcp": 1524,
+          "domContentLoaded": 1428.199999988079,
+          "timeOrigin": 1794982730730.4,
+          "apiRequests": 10,
+          "apiPayloadBytes": 3549,
+          "networkRequests": 36,
+          "networkTransferBytes": 269080,
+          "apiNetworkBytes": 5700,
+          "staticTransferBytes": 263380,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "read-job-start": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 1505,
+              "endMs": 1782,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 1793,
+              "endMs": 1946,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 1794,
+              "endMs": 1954,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 1796,
+              "endMs": 1961,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 1811,
+              "endMs": 1968,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 1811,
+              "endMs": 1974,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 1958,
+              "endMs": 2117,
+              "bytes": 249
+            },
+            {
+              "endpoint": "other-api",
+              "startMs": 2460,
+              "endMs": 2647,
+              "bytes": 49
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 2470,
+              "endMs": 2660,
+              "bytes": 373
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 2473,
+              "endMs": 2671,
+              "bytes": 174
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 2569,
+          "wallMs": 2761
+        },
+        {
+          "lcp": 4516,
+          "domContentLoaded": 4417.800000011921,
+          "timeOrigin": 1794982733659.6,
+          "apiRequests": 11,
+          "apiPayloadBytes": 5723,
+          "networkRequests": 36,
+          "networkTransferBytes": 269080,
+          "apiNetworkBytes": 5700,
+          "staticTransferBytes": 263380,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "read-job-start": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 4501,
+              "endMs": 4660,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 4680,
+              "endMs": 4846,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 4681,
+              "endMs": 4861,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 4684,
+              "endMs": 4867,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 4705,
+              "endMs": 4889,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 4705,
+              "endMs": 5002,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 4860,
+              "endMs": 5018,
+              "bytes": 249
+            },
+            {
+              "endpoint": "other-api",
+              "startMs": 5373,
+              "endMs": 5548,
+              "bytes": 49
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 5377,
+              "endMs": 5561,
+              "bytes": 373
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 5380,
+              "endMs": 5575,
+              "bytes": 174
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 4726,
+          "wallMs": 5595
+        },
+        {
+          "lcp": 4596,
+          "domContentLoaded": 4507.899999976158,
+          "timeOrigin": 1794982739397.3,
+          "apiRequests": 11,
+          "apiPayloadBytes": 5723,
+          "networkRequests": 34,
+          "networkTransferBytes": 267933,
+          "apiNetworkBytes": 4553,
+          "staticTransferBytes": 263380,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "read-job-start": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 4593,
+              "endMs": 4759,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 4773,
+              "endMs": 4944,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 4774,
+              "endMs": 4952,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 4776,
+              "endMs": 4959,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 4791,
+              "endMs": 4980,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 4793,
+              "endMs": 5101,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 4955,
+              "endMs": 5108,
+              "bytes": 249
+            },
+            {
+              "endpoint": "other-api",
+              "startMs": 5457,
+              "endMs": 5630,
+              "bytes": 49
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 4671,
+          "wallMs": 5653
+        },
+        {
+          "lcp": 4652,
+          "domContentLoaded": 4549.899999976158,
+          "timeOrigin": 1794982745201.2,
+          "apiRequests": 8,
+          "apiPayloadBytes": 5127,
+          "networkRequests": 33,
+          "networkTransferBytes": 267584,
+          "apiNetworkBytes": 4204,
+          "staticTransferBytes": 263380,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 4633,
+              "endMs": 4805,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 4823,
+              "endMs": 4991,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 4825,
+              "endMs": 5005,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 4828,
+              "endMs": 5013,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 4849,
+              "endMs": 5037,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 4850,
+              "endMs": 5147,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 5006,
+              "endMs": 5162,
+              "bytes": 249
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 4521,
+          "wallMs": 5525
+        },
+        {
+          "lcp": 4824,
+          "domContentLoaded": 4740,
+          "timeOrigin": 1794982750853.4,
+          "apiRequests": 11,
+          "apiPayloadBytes": 3723,
+          "networkRequests": 36,
+          "networkTransferBytes": 267584,
+          "apiNetworkBytes": 4204,
+          "staticTransferBytes": 263380,
+          "endpointCounts": {
+            "read-job-start": 2,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×2",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 4818,
+              "endMs": 4989,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 5000,
+              "endMs": 5168,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 5001,
+              "endMs": 5174,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 5003,
+              "endMs": 5189,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 5019,
+              "endMs": 5203,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 5020,
+              "endMs": 5325,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 5179,
+              "endMs": 5331,
+              "bytes": 249
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 5644,
+          "wallMs": 5878
+        },
+        {
+          "lcp": 3092,
+          "domContentLoaded": 2987.399999976158,
+          "timeOrigin": 1794982756875.1,
+          "apiRequests": 7,
+          "apiPayloadBytes": 2953,
+          "networkRequests": 34,
+          "networkTransferBytes": 267584,
+          "apiNetworkBytes": 4204,
+          "staticTransferBytes": 263380,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3082,
+              "endMs": 3244,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3258,
+              "endMs": 3423,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3259,
+              "endMs": 3437,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 3262,
+              "endMs": 3445,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3279,
+              "endMs": 3466,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3280,
+              "endMs": 3580,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 3440,
+              "endMs": 3602,
+              "bytes": 249
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 4117,
+          "wallMs": 4304
+        },
+        {
+          "lcp": 3652,
+          "domContentLoaded": 3536.599999964237,
+          "timeOrigin": 1794982761332,
+          "apiRequests": 12,
+          "apiPayloadBytes": 4096,
+          "networkRequests": 36,
+          "networkTransferBytes": 269080,
+          "apiNetworkBytes": 5700,
+          "staticTransferBytes": 263380,
+          "endpointCounts": {
+            "communities-mine": 2,
+            "read-job-start": 2,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/communities/mine ×2",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×2",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3654,
+              "endMs": 3823,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3841,
+              "endMs": 4001,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3841,
+              "endMs": 4009,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 3844,
+              "endMs": 4016,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3866,
+              "endMs": 4023,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3867,
+              "endMs": 4030,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 4016,
+              "endMs": 4172,
+              "bytes": 249
+            },
+            {
+              "endpoint": "other-api",
+              "startMs": 4525,
+              "endMs": 4724,
+              "bytes": 49
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 4544,
+              "endMs": 4731,
+              "bytes": 373
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 4548,
+              "endMs": 4744,
+              "bytes": 174
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 4569,
+          "wallMs": 4793
+        }
+      ]
+    },
+    "profile": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 4490,
+        "p95": 5758
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 3100,
+        "p95": 4588
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 3008,
+        "p95": 4481
+      },
+      "apiRequests": {
+        "runs": 7,
+        "p50": 12,
+        "p95": 13
+      },
+      "apiPayloadBytes": {
+        "runs": 7,
+        "p50": 4168,
+        "p95": 6342
+      },
+      "networkTransferBytes": {
+        "runs": 7,
+        "p50": 302422,
+        "p95": 342850
+      },
+      "staticTransferBytes": {
+        "runs": 7,
+        "p50": 295701,
+        "p95": 336129
+      },
+      "requestStartsByEndpoint": {
+        "session-refresh": {
+          "runs": 7,
+          "p50": 3104,
+          "p95": 4581
+        },
+        "profile-privacy": {
+          "runs": 7,
+          "p50": 3282,
+          "p95": 4758
+        },
+        "booking-preferences": {
+          "runs": 7,
+          "p50": 3283,
+          "p95": 4759
+        },
+        "routing-plan": {
+          "runs": 7,
+          "p50": 3283,
+          "p95": 4762
+        },
+        "locations": {
+          "runs": 7,
+          "p50": 3296,
+          "p95": 4771
+        },
+        "communities-mine": {
+          "runs": 7,
+          "p50": 3301,
+          "p95": 4773
+        },
+        "home-dashboard": {
+          "runs": 7,
+          "p50": 3303,
+          "p95": 4774
+        },
+        "friends": {
+          "runs": 7,
+          "p50": 3303,
+          "p95": 4774
+        },
+        "friend-requests": {
+          "runs": 14,
+          "p50": 3308,
+          "p95": 4776
+        },
+        "notifications": {
+          "runs": 7,
+          "p50": 3312,
+          "p95": 4777
+        },
+        "self-profile": {
+          "runs": 7,
+          "p50": 3478,
+          "p95": 4959
+        }
+      },
+      "samples": [
+        {
+          "lcp": 4588,
+          "domContentLoaded": 4480.599999964237,
+          "timeOrigin": 1794982766304.4,
+          "apiRequests": 13,
+          "apiPayloadBytes": 6342,
+          "networkRequests": 42,
+          "networkTransferBytes": 342850,
+          "apiNetworkBytes": 6721,
+          "staticTransferBytes": 336129,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "routing-plan": 1,
+            "locations": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 4581,
+              "endMs": 4743,
+              "bytes": 430
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 4758,
+              "endMs": 4932,
+              "bytes": 107
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 4759,
+              "endMs": 4936,
+              "bytes": 207
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 4762,
+              "endMs": 4943,
+              "bytes": 131
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 4771,
+              "endMs": 4965,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 4773,
+              "endMs": 5093,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 4774,
+              "endMs": 5101,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 4774,
+              "endMs": 5113,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 4775,
+              "endMs": 5171,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 4776,
+              "endMs": 5172,
+              "bytes": 12
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 4777,
+              "endMs": 5187,
+              "bytes": 283
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 4959,
+              "endMs": 5264,
+              "bytes": 249
+            }
+          ],
+          "scenario": "profile",
+          "firstDataMs": 5758,
+          "wallMs": 7848
+        },
+        {
+          "lcp": 1620,
+          "domContentLoaded": 1517.7000000476837,
+          "timeOrigin": 1794982774997.8,
+          "apiRequests": 12,
+          "apiPayloadBytes": 4168,
+          "networkRequests": 41,
+          "networkTransferBytes": 302422,
+          "apiNetworkBytes": 6721,
+          "staticTransferBytes": 295701,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "routing-plan": 1,
+            "locations": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 1606,
+              "endMs": 1835,
+              "bytes": 430
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 1899,
+              "endMs": 2058,
+              "bytes": 107
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 1899,
+              "endMs": 2066,
+              "bytes": 207
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 1903,
+              "endMs": 2075,
+              "bytes": 131
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 1920,
+              "endMs": 2079,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 1923,
+              "endMs": 2165,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 1923,
+              "endMs": 2235,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 1924,
+              "endMs": 2243,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 1924,
+              "endMs": 2278,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 1924,
+              "endMs": 2286,
+              "bytes": 12
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 1927,
+              "endMs": 2293,
+              "bytes": 283
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 2084,
+              "endMs": 2351,
+              "bytes": 249
+            }
+          ],
+          "scenario": "profile",
+          "firstDataMs": 3118,
+          "wallMs": 3342
+        },
+        {
+          "lcp": 2880,
+          "domContentLoaded": 2765.300000011921,
+          "timeOrigin": 1794982778806.2,
+          "apiRequests": 12,
+          "apiPayloadBytes": 4168,
+          "networkRequests": 41,
+          "networkTransferBytes": 302422,
+          "apiNetworkBytes": 6721,
+          "staticTransferBytes": 295701,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "routing-plan": 1,
+            "locations": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2854,
+              "endMs": 3041,
+              "bytes": 430
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3063,
+              "endMs": 3233,
+              "bytes": 107
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3064,
+              "endMs": 3241,
+              "bytes": 207
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3064,
+              "endMs": 3255,
+              "bytes": 131
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3078,
+              "endMs": 3263,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3081,
+              "endMs": 3383,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3082,
+              "endMs": 3392,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3082,
+              "endMs": 3399,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3082,
+              "endMs": 3412,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3082,
+              "endMs": 3419,
+              "bytes": 12
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3087,
+              "endMs": 3449,
+              "bytes": 283
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 3272,
+              "endMs": 3541,
+              "bytes": 249
+            }
+          ],
+          "scenario": "profile",
+          "firstDataMs": 4266,
+          "wallMs": 4541
+        },
+        {
+          "lcp": 3044,
+          "domContentLoaded": 2925.099999964237,
+          "timeOrigin": 1794982783723.6,
+          "apiRequests": 12,
+          "apiPayloadBytes": 4168,
+          "networkRequests": 41,
+          "networkTransferBytes": 302422,
+          "apiNetworkBytes": 6721,
+          "staticTransferBytes": 295701,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "routing-plan": 1,
+            "locations": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3022,
+              "endMs": 3187,
+              "bytes": 430
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3231,
+              "endMs": 3394,
+              "bytes": 107
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3231,
+              "endMs": 3401,
+              "bytes": 207
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3234,
+              "endMs": 3409,
+              "bytes": 131
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3242,
+              "endMs": 3416,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3243,
+              "endMs": 3509,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3243,
+              "endMs": 3537,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3243,
+              "endMs": 3552,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3243,
+              "endMs": 3559,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3243,
+              "endMs": 3566,
+              "bytes": 12
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3243,
+              "endMs": 3573,
+              "bytes": 283
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 3425,
+              "endMs": 3666,
+              "bytes": 249
+            }
+          ],
+          "scenario": "profile",
+          "firstDataMs": 4367,
+          "wallMs": 4641
+        },
+        {
+          "lcp": 3196,
+          "domContentLoaded": 3089.699999988079,
+          "timeOrigin": 1794982788539.1,
+          "apiRequests": 12,
+          "apiPayloadBytes": 4168,
+          "networkRequests": 41,
+          "networkTransferBytes": 302422,
+          "apiNetworkBytes": 6721,
+          "staticTransferBytes": 295701,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "routing-plan": 1,
+            "locations": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3178,
+              "endMs": 3342,
+              "bytes": 430
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3357,
+              "endMs": 3528,
+              "bytes": 107
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3358,
+              "endMs": 3535,
+              "bytes": 207
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3361,
+              "endMs": 3543,
+              "bytes": 131
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3370,
+              "endMs": 3563,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3370,
+              "endMs": 3685,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3370,
+              "endMs": 3693,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3370,
+              "endMs": 3699,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3371,
+              "endMs": 3721,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3375,
+              "endMs": 3735,
+              "bytes": 12
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3376,
+              "endMs": 3743,
+              "bytes": 283
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 3559,
+              "endMs": 3842,
+              "bytes": 249
+            }
+          ],
+          "scenario": "profile",
+          "firstDataMs": 4490,
+          "wallMs": 4747
+        },
+        {
+          "lcp": 3204,
+          "domContentLoaded": 3065.2000000476837,
+          "timeOrigin": 1794982793565.3,
+          "apiRequests": 12,
+          "apiPayloadBytes": 4168,
+          "networkRequests": 41,
+          "networkTransferBytes": 302422,
+          "apiNetworkBytes": 6721,
+          "staticTransferBytes": 295701,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "routing-plan": 1,
+            "locations": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3153,
+              "endMs": 3316,
+              "bytes": 430
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3347,
+              "endMs": 3515,
+              "bytes": 107
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3347,
+              "endMs": 3522,
+              "bytes": 207
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3348,
+              "endMs": 3537,
+              "bytes": 131
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3355,
+              "endMs": 3551,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3356,
+              "endMs": 3672,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3357,
+              "endMs": 3680,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3358,
+              "endMs": 3694,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3360,
+              "endMs": 3708,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3362,
+              "endMs": 3715,
+              "bytes": 12
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3364,
+              "endMs": 3744,
+              "bytes": 283
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 3554,
+              "endMs": 3829,
+              "bytes": 249
+            }
+          ],
+          "scenario": "profile",
+          "firstDataMs": 4515,
+          "wallMs": 4746
+        },
+        {
+          "lcp": 3100,
+          "domContentLoaded": 3007.699999988079,
+          "timeOrigin": 1794982798631,
+          "apiRequests": 12,
+          "apiPayloadBytes": 4168,
+          "networkRequests": 41,
+          "networkTransferBytes": 302422,
+          "apiNetworkBytes": 6721,
+          "staticTransferBytes": 295701,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "profile-privacy": 1,
+            "booking-preferences": 1,
+            "routing-plan": 1,
+            "locations": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "notifications": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 3104,
+              "endMs": 3270,
+              "bytes": 430
+            },
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 3282,
+              "endMs": 3450,
+              "bytes": 107
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 3283,
+              "endMs": 3456,
+              "bytes": 207
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 3283,
+              "endMs": 3464,
+              "bytes": 131
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3296,
+              "endMs": 3477,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 3301,
+              "endMs": 3592,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 3303,
+              "endMs": 3606,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 3303,
+              "endMs": 3616,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3305,
+              "endMs": 3621,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 3308,
+              "endMs": 3635,
+              "bytes": 12
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 3312,
+              "endMs": 3649,
+              "bytes": 283
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 3478,
+              "endMs": 3749,
+              "bytes": 249
+            }
+          ],
+          "scenario": "profile",
+          "firstDataMs": 4534,
+          "wallMs": 4781
+        }
+      ]
+    },
+    "profile-nav": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 2817,
+        "p95": 6840
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 2632,
+        "p95": 7596
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 2364,
+        "p95": 3124
+      },
+      "apiRequests": {
+        "runs": 7,
+        "p50": 5,
+        "p95": 9
+      },
+      "apiPayloadBytes": {
+        "runs": 7,
+        "p50": 2281,
+        "p95": 5216
+      },
+      "networkTransferBytes": {
+        "runs": 7,
+        "p50": 33234,
+        "p95": 105927
+      },
+      "staticTransferBytes": {
+        "runs": 7,
+        "p50": 32321,
+        "p95": 100977
+      },
+      "requestStartsByEndpoint": {
+        "profile-privacy": {
+          "runs": 7,
+          "p50": 10,
+          "p95": 16
+        },
+        "locations": {
+          "runs": 4,
+          "p50": 28,
+          "p95": 35
+        },
+        "communities-mine": {
+          "runs": 3,
+          "p50": 29,
+          "p95": 37
+        },
+        "home-dashboard": {
+          "runs": 3,
+          "p50": 29,
+          "p95": 40
+        },
+        "friends": {
+          "runs": 3,
+          "p50": 29,
+          "p95": 41
+        },
+        "friend-requests": {
+          "runs": 5,
+          "p50": 29,
+          "p95": 46
+        },
+        "read-job-complete": {
+          "runs": 2,
+          "p50": 1980,
+          "p95": 1980
+        }
+      },
+      "samples": [
+        {
+          "lcp": 7596,
+          "domContentLoaded": 3123.699999988079,
+          "timeOrigin": 1794982803547.4,
+          "apiRequests": 5,
+          "apiPayloadBytes": 909,
+          "networkRequests": 5,
+          "networkTransferBytes": 33234,
+          "apiNetworkBytes": 913,
+          "staticTransferBytes": 32321,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "read-job-start": 1,
+            "communities-mine": 1,
+            "profile-privacy": 1,
+            "locations": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/locations ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 16,
+              "endMs": 1445,
+              "bytes": 107
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 26,
+              "endMs": 2748,
+              "bytes": 206
+            }
+          ],
+          "scenario": "profile-nav",
+          "firstDataMs": 2666,
+          "wallMs": 2990
+        },
+        {
+          "lcp": 2116,
+          "domContentLoaded": 2010.199999988079,
+          "timeOrigin": 1794982812924.9,
+          "apiRequests": 2,
+          "apiPayloadBytes": 2281,
+          "networkRequests": 4,
+          "networkTransferBytes": 32728,
+          "apiNetworkBytes": 407,
+          "staticTransferBytes": 32321,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "profile-privacy": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 4,
+              "endMs": 1561,
+              "bytes": 107
+            }
+          ],
+          "scenario": "profile-nav",
+          "firstDataMs": 2784,
+          "wallMs": 2819
+        },
+        {
+          "lcp": 2632,
+          "domContentLoaded": 2501.100000023842,
+          "timeOrigin": 1794982819218.1,
+          "apiRequests": 9,
+          "apiPayloadBytes": 3452,
+          "networkRequests": 9,
+          "networkTransferBytes": 35930,
+          "apiNetworkBytes": 3609,
+          "staticTransferBytes": 32321,
+          "endpointCounts": {
+            "webpush-config": 1,
+            "communities-mine": 2,
+            "read-job-start": 1,
+            "profile-privacy": 1,
+            "locations": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×2",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 2,
+              "endMs": 2745,
+              "bytes": 107
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 10,
+              "endMs": 3275,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 15,
+              "endMs": 3404,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 17,
+              "endMs": 3461,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 18,
+              "endMs": 3575,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 18,
+              "endMs": 3639,
+              "bytes": 12
+            }
+          ],
+          "scenario": "profile-nav",
+          "firstDataMs": 3601,
+          "wallMs": 3758
+        },
+        {
+          "lcp": 1992,
+          "domContentLoaded": 1867.5,
+          "timeOrigin": 1794982827484,
+          "apiRequests": 2,
+          "apiPayloadBytes": 2281,
+          "networkRequests": 4,
+          "networkTransferBytes": 32728,
+          "apiNetworkBytes": 407,
+          "staticTransferBytes": 32321,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "profile-privacy": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 10,
+              "endMs": 1578,
+              "bytes": 107
+            }
+          ],
+          "scenario": "profile-nav",
+          "firstDataMs": 2817,
+          "wallMs": 2841
+        },
+        {
+          "lcp": 7324,
+          "domContentLoaded": 2397.7000000476837,
+          "timeOrigin": 1794982833807.6,
+          "apiRequests": 9,
+          "apiPayloadBytes": 5216,
+          "networkRequests": 15,
+          "networkTransferBytes": 105927,
+          "apiNetworkBytes": 4950,
+          "staticTransferBytes": 100977,
+          "endpointCounts": {
+            "read-job-start": 1,
+            "profile-privacy": 1,
+            "locations": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "read-job-complete": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 10,
+              "endMs": 2173,
+              "bytes": 107
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 28,
+              "endMs": 3397,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 29,
+              "endMs": 3418,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 29,
+              "endMs": 3486,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 29,
+              "endMs": 3708,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 29,
+              "endMs": 3909,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 29,
+              "endMs": 4039,
+              "bytes": 12
+            },
+            {
+              "endpoint": "read-job-complete",
+              "startMs": 1980,
+              "endMs": 4193,
+              "bytes": 729
+            }
+          ],
+          "scenario": "profile-nav",
+          "firstDataMs": 6840,
+          "wallMs": 6911
+        },
+        {
+          "lcp": 1532,
+          "domContentLoaded": 1420.5999999642372,
+          "timeOrigin": 1794982846043.1,
+          "apiRequests": 2,
+          "apiPayloadBytes": 2281,
+          "networkRequests": 4,
+          "networkTransferBytes": 32728,
+          "apiNetworkBytes": 407,
+          "staticTransferBytes": 32321,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "profile-privacy": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 8,
+              "endMs": 1570,
+              "bytes": 107
+            }
+          ],
+          "scenario": "profile-nav",
+          "firstDataMs": 2792,
+          "wallMs": 2811
+        },
+        {
+          "lcp": 7408,
+          "domContentLoaded": 2363.899999976158,
+          "timeOrigin": 1794982851900.5,
+          "apiRequests": 9,
+          "apiPayloadBytes": 5216,
+          "networkRequests": 15,
+          "networkTransferBytes": 105927,
+          "apiNetworkBytes": 4950,
+          "staticTransferBytes": 100977,
+          "endpointCounts": {
+            "read-job-start": 1,
+            "profile-privacy": 1,
+            "locations": 1,
+            "communities-mine": 1,
+            "home-dashboard": 1,
+            "friends": 1,
+            "friend-requests": 2,
+            "read-job-complete": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "GET /user/api/v1/local-padel/profile/privacy ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "GET /user/api/v1/local-padel/home ×1",
+            "GET /user/api/v1/local-padel/profile/friends ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×2",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "profile-privacy",
+              "startMs": 10,
+              "endMs": 1869,
+              "bytes": 107
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 35,
+              "endMs": 3928,
+              "bytes": 206
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 37,
+              "endMs": 4180,
+              "bytes": 373
+            },
+            {
+              "endpoint": "home-dashboard",
+              "startMs": 40,
+              "endMs": 4182,
+              "bytes": 1099
+            },
+            {
+              "endpoint": "friends",
+              "startMs": 41,
+              "endMs": 4487,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 42,
+              "endMs": 4665,
+              "bytes": 12
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 46,
+              "endMs": 4692,
+              "bytes": 12
+            },
+            {
+              "endpoint": "read-job-complete",
+              "startMs": 171,
+              "endMs": 4868,
+              "bytes": 729
+            }
+          ],
+          "scenario": "profile-nav",
+          "firstDataMs": 6179,
+          "wallMs": 6210
+        }
+      ]
+    },
+    "games": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 3808,
+        "p95": 7271
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 2624,
+        "p95": 2680
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 2520,
+        "p95": 2576
+      },
+      "apiRequests": {
+        "runs": 7,
+        "p50": 4,
+        "p95": 4
+      },
+      "apiPayloadBytes": {
+        "runs": 7,
+        "p50": 2913,
+        "p95": 2913
+      },
+      "networkTransferBytes": {
+        "runs": 7,
+        "p50": 308222,
+        "p95": 664762
+      },
+      "staticTransferBytes": {
+        "runs": 7,
+        "p50": 305466,
+        "p95": 662006
+      },
+      "requestStartsByEndpoint": {
+        "session-refresh": {
+          "runs": 7,
+          "p50": 2617,
+          "p95": 2662
+        },
+        "locations": {
+          "runs": 7,
+          "p50": 3602,
+          "p95": 3827
+        },
+        "read-job-start": {
+          "runs": 7,
+          "p50": 3605,
+          "p95": 3828
+        },
+        "read-job-complete": {
+          "runs": 7,
+          "p50": 3788,
+          "p95": 4105
+        }
+      },
+      "samples": [
+        {
+          "lcp": 1568,
+          "domContentLoaded": 1449.1000000238419,
+          "timeOrigin": 1794982862807.1,
+          "apiRequests": 4,
+          "apiPayloadBytes": 2913,
+          "networkRequests": 38,
+          "networkTransferBytes": 308222,
+          "apiNetworkBytes": 2756,
+          "staticTransferBytes": 305466,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "locations": 1,
+            "read-job-start": 1,
+            "read-job-complete": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-EVENT_CATALOG/complete ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 1546,
+              "endMs": 1703,
+              "bytes": 430
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 2500,
+              "endMs": 2655,
+              "bytes": 206
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 2506,
+              "endMs": 2676,
+              "bytes": 188
+            },
+            {
+              "endpoint": "read-job-complete",
+              "startMs": 2747,
+              "endMs": 2935,
+              "bytes": 732
+            }
+          ],
+          "scenario": "games",
+          "firstDataMs": 2799,
+          "wallMs": 3021
+        },
+        {
+          "lcp": 2624,
+          "domContentLoaded": 2525.599999964237,
+          "timeOrigin": 1794982866006.8,
+          "apiRequests": 4,
+          "apiPayloadBytes": 2913,
+          "networkRequests": 38,
+          "networkTransferBytes": 308222,
+          "apiNetworkBytes": 2756,
+          "staticTransferBytes": 305466,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "locations": 1,
+            "read-job-start": 1,
+            "read-job-complete": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-EVENT_CATALOG/complete ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2621,
+              "endMs": 2789,
+              "bytes": 430
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3602,
+              "endMs": 3760,
+              "bytes": 206
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 3605,
+              "endMs": 3820,
+              "bytes": 188
+            },
+            {
+              "endpoint": "read-job-complete",
+              "startMs": 3823,
+              "endMs": 4014,
+              "bytes": 732
+            }
+          ],
+          "scenario": "games",
+          "firstDataMs": 3867,
+          "wallMs": 4081
+        },
+        {
+          "lcp": 2632,
+          "domContentLoaded": 2520,
+          "timeOrigin": 1794982870333.7,
+          "apiRequests": 4,
+          "apiPayloadBytes": 2913,
+          "networkRequests": 42,
+          "networkTransferBytes": 664762,
+          "apiNetworkBytes": 2756,
+          "staticTransferBytes": 662006,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "locations": 1,
+            "read-job-start": 1,
+            "read-job-complete": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-EVENT_CATALOG/complete ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2617,
+              "endMs": 2806,
+              "bytes": 430
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3647,
+              "endMs": 3819,
+              "bytes": 206
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 3653,
+              "endMs": 3840,
+              "bytes": 188
+            },
+            {
+              "endpoint": "read-job-complete",
+              "startMs": 3886,
+              "endMs": 4357,
+              "bytes": 732
+            }
+          ],
+          "scenario": "games",
+          "firstDataMs": 7271,
+          "wallMs": 7647
+        },
+        {
+          "lcp": 1528,
+          "domContentLoaded": 1422.5,
+          "timeOrigin": 1794982878221.7,
+          "apiRequests": 4,
+          "apiPayloadBytes": 2913,
+          "networkRequests": 38,
+          "networkTransferBytes": 308222,
+          "apiNetworkBytes": 2756,
+          "staticTransferBytes": 305466,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "locations": 1,
+            "read-job-start": 1,
+            "read-job-complete": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-EVENT_CATALOG/complete ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 1514,
+              "endMs": 1673,
+              "bytes": 430
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 2474,
+              "endMs": 2631,
+              "bytes": 206
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 2478,
+              "endMs": 2639,
+              "bytes": 188
+            },
+            {
+              "endpoint": "read-job-complete",
+              "startMs": 2674,
+              "endMs": 2861,
+              "bytes": 732
+            }
+          ],
+          "scenario": "games",
+          "firstDataMs": 2723,
+          "wallMs": 2899
+        },
+        {
+          "lcp": 2680,
+          "domContentLoaded": 2576.399999976158,
+          "timeOrigin": 1794982881282.5,
+          "apiRequests": 4,
+          "apiPayloadBytes": 2913,
+          "networkRequests": 38,
+          "networkTransferBytes": 308222,
+          "apiNetworkBytes": 2756,
+          "staticTransferBytes": 305466,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "locations": 1,
+            "read-job-start": 1,
+            "read-job-complete": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-EVENT_CATALOG/complete ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2662,
+              "endMs": 2824,
+              "bytes": 430
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3604,
+              "endMs": 3763,
+              "bytes": 206
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 3607,
+              "endMs": 3784,
+              "bytes": 188
+            },
+            {
+              "endpoint": "read-job-complete",
+              "startMs": 3788,
+              "endMs": 3971,
+              "bytes": 732
+            }
+          ],
+          "scenario": "games",
+          "firstDataMs": 3808,
+          "wallMs": 4009
+        },
+        {
+          "lcp": 2640,
+          "domContentLoaded": 2527.899999976158,
+          "timeOrigin": 1794982885492.8,
+          "apiRequests": 4,
+          "apiPayloadBytes": 2913,
+          "networkRequests": 40,
+          "networkTransferBytes": 336526,
+          "apiNetworkBytes": 2756,
+          "staticTransferBytes": 333770,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "read-job-start": 1,
+            "locations": 1,
+            "read-job-complete": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-EVENT_CATALOG/complete ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 2624,
+              "endMs": 2784,
+              "bytes": 430
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 3827,
+              "endMs": 4115,
+              "bytes": 206
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 3828,
+              "endMs": 4100,
+              "bytes": 188
+            },
+            {
+              "endpoint": "read-job-complete",
+              "startMs": 4105,
+              "endMs": 4292,
+              "bytes": 732
+            }
+          ],
+          "scenario": "games",
+          "firstDataMs": 4598,
+          "wallMs": 4816
+        },
+        {
+          "lcp": 1520,
+          "domContentLoaded": 1462.6000000238419,
+          "timeOrigin": 1794982890765.9,
+          "apiRequests": 4,
+          "apiPayloadBytes": 2913,
+          "networkRequests": 38,
+          "networkTransferBytes": 308222,
+          "apiNetworkBytes": 2756,
+          "staticTransferBytes": 305466,
+          "endpointCounts": {
+            "session-refresh": 1,
+            "locations": 1,
+            "read-job-start": 1,
+            "read-job-complete": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/locations ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-EVENT_CATALOG/complete ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 1506,
+              "endMs": 1675,
+              "bytes": 430
+            },
+            {
+              "endpoint": "locations",
+              "startMs": 2446,
+              "endMs": 2603,
+              "bytes": 206
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 2450,
+              "endMs": 2610,
+              "bytes": 188
+            },
+            {
+              "endpoint": "read-job-complete",
+              "startMs": 2617,
+              "endMs": 2797,
+              "bytes": 732
+            }
+          ],
+          "scenario": "games",
+          "firstDataMs": 2629,
+          "wallMs": 2851
+        }
+      ]
+    },
+    "repeat": {
+      "runs": 7,
+      "firstDataMs": {
+        "runs": 7,
+        "p50": 909,
+        "p95": 1752
+      },
+      "lcpMs": {
+        "runs": 7,
+        "p50": 780,
+        "p95": 2264
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": 297,
+        "p95": 1015
+      },
+      "apiRequests": {
+        "runs": 7,
+        "p50": 11,
+        "p95": 11
+      },
+      "apiPayloadBytes": {
+        "runs": 7,
+        "p50": 4878,
+        "p95": 5723
+      },
+      "networkTransferBytes": {
+        "runs": 7,
+        "p50": 9803,
+        "p95": 11299
+      },
+      "staticTransferBytes": {
+        "runs": 7,
+        "p50": 5599,
+        "p95": 5599
+      },
+      "requestStartsByEndpoint": {
+        "session-refresh": {
+          "runs": 7,
+          "p50": 396,
+          "p95": 1147
+        },
+        "routing-plan": {
+          "runs": 7,
+          "p50": 574,
+          "p95": 1356
+        },
+        "booking-preferences": {
+          "runs": 7,
+          "p50": 575,
+          "p95": 1357
+        },
+        "home-base": {
+          "runs": 7,
+          "p50": 576,
+          "p95": 1358
+        },
+        "notifications": {
+          "runs": 7,
+          "p50": 598,
+          "p95": 1366
+        },
+        "friend-requests": {
+          "runs": 6,
+          "p50": 599,
+          "p95": 621
+        },
+        "self-profile": {
+          "runs": 5,
+          "p50": 741,
+          "p95": 784
+        },
+        "other-api": {
+          "runs": 3,
+          "p50": 940,
+          "p95": 963
+        },
+        "communities-mine": {
+          "runs": 3,
+          "p50": 967,
+          "p95": 978
+        },
+        "read-job-start": {
+          "runs": 2,
+          "p50": 983,
+          "p95": 983
+        }
+      },
+      "samples": [
+        {
+          "lcp": 2264,
+          "domContentLoaded": 1015.0999999642372,
+          "timeOrigin": 1794982897750.7,
+          "apiRequests": 7,
+          "apiPayloadBytes": 4878,
+          "networkRequests": 31,
+          "networkTransferBytes": 8942,
+          "apiNetworkBytes": 3343,
+          "staticTransferBytes": 5599,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 1147,
+              "endMs": 1341,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 1356,
+              "endMs": 1855,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 1357,
+              "endMs": 2042,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 1358,
+              "endMs": 2235,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 1366,
+              "endMs": 2428,
+              "bytes": 283
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 1752,
+          "wallMs": 2631
+        },
+        {
+          "lcp": 764,
+          "domContentLoaded": 297.10000002384186,
+          "timeOrigin": 1794982900491.9,
+          "apiRequests": 11,
+          "apiPayloadBytes": 3798,
+          "networkRequests": 36,
+          "networkTransferBytes": 9254,
+          "apiNetworkBytes": 3655,
+          "staticTransferBytes": 5599,
+          "endpointCounts": {
+            "self-profile": 2,
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "read-job-start": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1
+          },
+          "requestKeys": [
+            "GET /user/api/v1/local-padel/profile ×2",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 385,
+              "endMs": 545,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 559,
+              "endMs": 716,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 559,
+              "endMs": 730,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 561,
+              "endMs": 737,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 574,
+              "endMs": 752,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 575,
+              "endMs": 789,
+              "bytes": 12
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 685,
+          "wallMs": 1066
+        },
+        {
+          "lcp": 780,
+          "domContentLoaded": 296.80000001192093,
+          "timeOrigin": 1794982901711.9,
+          "apiRequests": 8,
+          "apiPayloadBytes": 5127,
+          "networkRequests": 38,
+          "networkTransferBytes": 9803,
+          "apiNetworkBytes": 4204,
+          "staticTransferBytes": 5599,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 396,
+              "endMs": 554,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 574,
+              "endMs": 735,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 575,
+              "endMs": 741,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 576,
+              "endMs": 750,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 598,
+              "endMs": 755,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 599,
+              "endMs": 765,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 742,
+              "endMs": 905,
+              "bytes": 249
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 767,
+          "wallMs": 1380
+        },
+        {
+          "lcp": 832,
+          "domContentLoaded": 336.5,
+          "timeOrigin": 1794982903273.6,
+          "apiRequests": 11,
+          "apiPayloadBytes": 3723,
+          "networkRequests": 41,
+          "networkTransferBytes": 11299,
+          "apiNetworkBytes": 5700,
+          "staticTransferBytes": 5599,
+          "endpointCounts": {
+            "read-job-start": 2,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×2",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 428,
+              "endMs": 589,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 603,
+              "endMs": 766,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 604,
+              "endMs": 773,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 606,
+              "endMs": 782,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 621,
+              "endMs": 795,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 621,
+              "endMs": 810,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 784,
+              "endMs": 945,
+              "bytes": 249
+            },
+            {
+              "endpoint": "other-api",
+              "startMs": 963,
+              "endMs": 1124,
+              "bytes": 49
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 978,
+              "endMs": 1140,
+              "bytes": 373
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 983,
+              "endMs": 1145,
+              "bytes": 174
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 1008,
+          "wallMs": 1203
+        },
+        {
+          "lcp": 752,
+          "domContentLoaded": 287.80000001192093,
+          "timeOrigin": 1794982904601.7,
+          "apiRequests": 11,
+          "apiPayloadBytes": 5723,
+          "networkRequests": 40,
+          "networkTransferBytes": 10825,
+          "apiNetworkBytes": 5226,
+          "staticTransferBytes": 5599,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1,
+            "read-job-start": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1",
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 376,
+              "endMs": 532,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 547,
+              "endMs": 704,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 548,
+              "endMs": 711,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 550,
+              "endMs": 718,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 564,
+              "endMs": 725,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 565,
+              "endMs": 733,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 718,
+              "endMs": 876,
+              "bytes": 249
+            },
+            {
+              "endpoint": "other-api",
+              "startMs": 892,
+              "endMs": 1047,
+              "bytes": 49
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 897,
+              "endMs": 1055,
+              "bytes": 373
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 909,
+          "wallMs": 1091
+        },
+        {
+          "lcp": 776,
+          "domContentLoaded": 282.30000001192093,
+          "timeOrigin": 1794982905809.9,
+          "apiRequests": 8,
+          "apiPayloadBytes": 5127,
+          "networkRequests": 35,
+          "networkTransferBytes": 9803,
+          "apiNetworkBytes": 4204,
+          "staticTransferBytes": 5599,
+          "endpointCounts": {
+            "read-job-complete": 1,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME/complete ×1",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 374,
+              "endMs": 533,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 560,
+              "endMs": 719,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 561,
+              "endMs": 726,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 564,
+              "endMs": 734,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 571,
+              "endMs": 741,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 573,
+              "endMs": 747,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 733,
+              "endMs": 891,
+              "bytes": 249
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 751,
+          "wallMs": 925
+        },
+        {
+          "lcp": 784,
+          "domContentLoaded": 297.69999998807907,
+          "timeOrigin": 1794982906854.7,
+          "apiRequests": 11,
+          "apiPayloadBytes": 3723,
+          "networkRequests": 41,
+          "networkTransferBytes": 11299,
+          "apiNetworkBytes": 5700,
+          "staticTransferBytes": 5599,
+          "endpointCounts": {
+            "read-job-start": 2,
+            "session-refresh": 1,
+            "routing-plan": 1,
+            "booking-preferences": 1,
+            "home-base": 1,
+            "notifications": 1,
+            "friend-requests": 1,
+            "self-profile": 1,
+            "webpush-config": 1,
+            "communities-mine": 1
+          },
+          "requestKeys": [
+            "POST /user/api/v1/local-padel/booking-screen-read-jobs ×2",
+            "POST /user/api/v1/local-padel/auth/session/refresh ×1",
+            "GET /user/api/v1/local-padel/routing-plan ×1",
+            "GET /user/api/v1/local-padel/profile/booking-preferences ×1",
+            "GET /user/api/v1/local-padel/home/base ×1",
+            "GET /user/api/v1/local-padel/notifications ×1",
+            "GET /user/api/v1/local-padel/profile/friend-requests ×1",
+            "GET /user/api/v1/local-padel/profile ×1",
+            "GET /user/api/v1/local-padel/notification-endpoints/web/config ×1",
+            "GET /user/api/v1/local-padel/communities/mine ×1"
+          ],
+          "waterfall": [
+            {
+              "endpoint": "session-refresh",
+              "startMs": 403,
+              "endMs": 561,
+              "bytes": 430
+            },
+            {
+              "endpoint": "routing-plan",
+              "startMs": 579,
+              "endMs": 733,
+              "bytes": 131
+            },
+            {
+              "endpoint": "booking-preferences",
+              "startMs": 580,
+              "endMs": 740,
+              "bytes": 207
+            },
+            {
+              "endpoint": "home-base",
+              "startMs": 582,
+              "endMs": 747,
+              "bytes": 792
+            },
+            {
+              "endpoint": "notifications",
+              "startMs": 605,
+              "endMs": 761,
+              "bytes": 283
+            },
+            {
+              "endpoint": "friend-requests",
+              "startMs": 605,
+              "endMs": 769,
+              "bytes": 12
+            },
+            {
+              "endpoint": "self-profile",
+              "startMs": 741,
+              "endMs": 908,
+              "bytes": 249
+            },
+            {
+              "endpoint": "other-api",
+              "startMs": 940,
+              "endMs": 1099,
+              "bytes": 49
+            },
+            {
+              "endpoint": "communities-mine",
+              "startMs": 967,
+              "endMs": 1127,
+              "bytes": 373
+            },
+            {
+              "endpoint": "read-job-start",
+              "startMs": 970,
+              "endMs": 1135,
+              "bytes": 174
+            }
+          ],
+          "scenario": "home",
+          "firstDataMs": 1049,
+          "wallMs": 1226
+        }
+      ]
+    },
+    "background": {
+      "runs": 7,
+      "refreshRequestMs": {
+        "runs": 7,
+        "p50": 8,
+        "p95": 13
+      },
+      "lcpMs": {
+        "runs": 0,
+        "p50": null,
+        "p95": null
+      },
+      "domContentLoadedMs": {
+        "runs": 7,
+        "p50": null,
+        "p95": null
+      },
+      "apiRequests": {
+        "runs": 0,
+        "p50": null,
+        "p95": null
+      },
+      "apiPayloadBytes": {
+        "runs": 0,
+        "p50": null,
+        "p95": null
+      },
+      "networkTransferBytes": {
+        "runs": 0,
+        "p50": null,
+        "p95": null
+      },
+      "staticTransferBytes": {
+        "runs": 0,
+        "p50": null,
+        "p95": null
+      },
+      "requestStartsByEndpoint": {},
+      "samples": [
+        {
+          "scenario": "background",
+          "refreshRequestMs": 7
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 8
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 9
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 13
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 8
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 8
+        },
+        {
+          "scenario": "background",
+          "refreshRequestMs": 6
+        }
+      ]
+    }
+  }
+}

@@ -53,6 +53,41 @@ describe('createReadCoalescer', () => {
     expect(start).toHaveBeenCalledTimes(2);
   });
 
+  it('does not let a read that started before a command satisfy the read after it', async () => {
+    const coalescer = createReadCoalescer();
+    let resolveBeforeCommand: (value: { items: string[] }) => void = () => undefined;
+    const beforeCommand = new Promise<{ items: string[] }>((resolve) => {
+      resolveBeforeCommand = resolve;
+    });
+    const start = vi
+      .fn()
+      .mockReturnValueOnce(beforeCommand)
+      .mockResolvedValueOnce({ items: ['after-command'] });
+
+    const pendingBefore = coalescer.read('notifications:tenant:user', start);
+    coalescer.invalidate('notifications:');
+    const afterCommand = coalescer.read('notifications:tenant:user', start);
+
+    expect(afterCommand).not.toBe(pendingBefore);
+    resolveBeforeCommand({ items: ['before-command'] });
+    await expect(afterCommand).resolves.toEqual({ items: ['after-command'] });
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates only the affected keys', () => {
+    const coalescer = createReadCoalescer();
+    const start = vi.fn((): Promise<{ items: [] }> => new Promise(() => undefined));
+
+    void coalescer.read('notifications:tenant:user', start);
+    void coalescer.read('friend-requests:incoming:tenant:user:8', start);
+    coalescer.invalidate('friend-requests:');
+
+    void coalescer.read('notifications:tenant:user', start);
+    void coalescer.read('friend-requests:incoming:tenant:user:8', start);
+
+    expect(start).toHaveBeenCalledTimes(3);
+  });
+
   it('drops pending entries when the session ends so another account cannot reuse them', async () => {
     const coalescer = createReadCoalescer();
     let resolveFirst: (value: { items: [] }) => void = () => undefined;

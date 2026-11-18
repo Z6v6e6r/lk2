@@ -10,6 +10,8 @@
  */
 export interface ReadCoalescer {
   read<T>(key: string, start: () => Promise<T>): Promise<T>;
+  /** Drops pending reads whose key starts with the prefix, so a post-command read starts fresh. */
+  invalidate(keyPrefix: string): void;
   clear(): void;
 }
 
@@ -26,6 +28,11 @@ export function createReadCoalescer(): ReadCoalescer {
       };
       request.then(settle, settle);
       return request;
+    },
+    invalidate(keyPrefix: string): void {
+      for (const key of inFlight.keys()) {
+        if (key.startsWith(keyPrefix)) inFlight.delete(key);
+      }
     },
     clear(): void {
       inFlight.clear();

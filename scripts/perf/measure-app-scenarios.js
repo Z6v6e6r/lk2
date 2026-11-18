@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 // LOCAL synthetic timing of authorized LK2 screens against scripts/perf/stub-lk2-api.js.
 //
-// Every scenario runs in real headless Chrome with one throttling profile, the same fixture API
-// (fixed read latency), a cleared HTTP cache unless the scenario is a repeat open, and reports:
-//   * when the first data-bearing DOM marker appeared,
-//   * when each read left the client (so request priority is visible, not just claimed),
-//   * how many requests and bytes that run cost.
+// One clock: every request offset is measured on the browser monotonic clock of the navigation's own
+// document request, so the DOM marker and the request waterfall share a single time origin.
+//
+// Per run it records: marker time, per-endpoint waterfall (start/end/bytes), API payload bytes
+// separately from the whole network transfer, and (optionally) CSS rule coverage.
 //
 // These are client timings against a synthetic API. They are NOT user measurements, NOT STAGING
 // evidence and NOT a run of the installed Android application.
 //
 // Usage:
 //   node scripts/perf/measure-app-scenarios.js http://127.0.0.1:4180/ --runs=7 \
-//     --scenarios=home,profile,games,repeat,profile-nav,background [--no-throttle] [--debug]
+//     --scenarios=home,profile,profile-nav,games,repeat,background \
+//     [--no-throttle] [--debug] [--css-coverage] [--trace=/tmp/home-trace.json]
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,29 +24,47 @@ const numberFlag = (name, fallback) => {
   const raw = process.argv.find((value) => value.startsWith(`--${name}=`));
   return raw ? Number(raw.split('=')[1]) : fallback;
 };
+const stringFlag = (name) => {
+  const raw = process.argv.find((value) => value.startsWith(`--${name}=`));
+  return raw ? raw.slice(name.length + 3) : undefined;
+};
 const runs = numberFlag('runs', 7);
 const scenariosFlag = process.argv.find((value) => value.startsWith('--scenarios='));
 const scenarioList = (
-  scenariosFlag ? scenariosFlag.split('=')[1] : 'home,profile,games,repeat,profile-nav,background'
+  scenariosFlag ? scenariosFlag.split('=')[1] : 'home,profile,profile-nav,games,repeat,background'
 ).split(',');
 const throttle = !process.argv.includes('--no-throttle');
 const debug = process.argv.includes('--debug');
+const cssCoverage = process.argv.includes('--css-coverage');
+const tracePath = stringFlag('trace');
 const chromePath =
   process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const MARKERS = {
-  home: "Array.from(document.querySelectorAll('h1,h2')).some((node) => node.textContent.trim() === 'Анна Петрова')",
-  profile:
-    "document.querySelector('.profile-booking-preferences') !== null || Array.from(document.querySelectorAll('h1,h2,h3')).some((node) => node.textContent.includes('Анна Петрова'))",
-  // The /games discovery screen builds its cards from the client-assisted read job
-  // (POST /booking-screen-read-jobs + .../complete), which this read-only stub cannot produce.
-  // The measured marker is therefore the screen shell; card timing for that route stays unmeasured.
-  games: "document.body.innerText.includes('Найти партнёров и корт')",
-};
-const PATHS = { home: '/', profile: '/profile', games: '/games' };
+// Markers only flip when the screen that owns them has its data, not when a shared header appears.
+// A marker must combine the DOM signal with the read that owns the data, otherwise a shared name in
+// the header would stop the clock before the screen's own data arrived. MessageResource timings are
+// relative to the same document origin as the DOM marker.
+const dataArrived = (pathFragment) =>
+  `performance.getEntriesByType('resource').some((entry) => entry.name.includes('${pathFragment}') && entry.responseEnd > 0)`;
 
-// Endpoint labels used in the per-run request timeline.
+const MARKERS = {
+  home: `document.querySelector('.fh-bottom-nav') !== null && Array.from(document.querySelectorAll('h1,h2')).some((node) => node.textContent.trim() === 'Анна Петрова') && ${dataArrived('/home/base')}`,
+  // Profile main data: the name, the balance block and a completed profile read. On this build the
+  // preferences section is not always rendered (it depends on the profile's own capabilities), so the
+  // marker uses the balance block that the self-profile read fills.
+  profile: `document.querySelector('#profile-name') !== null && document.body.innerText.includes('Баланс') && ${dataArrived('/profile')}`,
+  // The games catalog renders GAME items through GameCard (class "game-card").
+  games: "document.querySelectorAll('.game-card').length > 0",
+};
+const PATHS = {
+  home: '/',
+  profile: '/profile',
+  games: '/games',
+  repeat: '/',
+  profileNav: '/profile',
+};
+
 const ENDPOINTS = [
   ['session-refresh', /\/auth\/session\/refresh/],
   ['routing-plan', /\/routing-plan/],
@@ -59,6 +78,9 @@ const ENDPOINTS = [
   ['friend-requests', /\/profile\/friend-requests/],
   ['upcoming-bookings', /\/bookings\/upcoming/],
   ['recommendations', /\/recommendations\/bookings/],
+  ['read-job-start', /\/booking-screen-read-jobs$/],
+  ['read-job-complete', /\/booking-screen-read-jobs\/[^/]+\/complete$/],
+  ['read-job-poll', /\/booking-screen-read-jobs\/[^/]+$/],
   ['locations', /\/locations$/],
   ['communities-mine', /\/communities\/mine/],
   ['conversations', /\/conversations/],
@@ -66,9 +88,11 @@ const ENDPOINTS = [
   ['notification-preferences', /\/notifications\/preferences/],
   ['public-games', /\/public\/api\/v1\/[^/]+\/games/],
 ];
+const isApiUrl = (url) => /\/(?:user|public|admin)\/api\//.test(new URL(url).pathname);
 function endpointOf(url) {
-  const match = ENDPOINTS.find(([, pattern]) => pattern.test(new URL(url).pathname));
-  return match ? match[0] : 'other';
+  const path = new URL(url).pathname;
+  const match = ENDPOINTS.find(([, pattern]) => pattern.test(path));
+  return match ? match[0] : isApiUrl(url) ? 'other-api' : 'static';
 }
 
 function launchChrome(profileDir) {
@@ -142,6 +166,9 @@ class Cdp {
   }
   onEvent(handler) {
     this.handlers.push(handler);
+    return () => {
+      this.handlers = this.handlers.filter((entry) => entry !== handler);
+    };
   }
 }
 
@@ -196,14 +223,25 @@ async function waitForMarker(cdp, expression, timeoutMs = 25000) {
   return null;
 }
 
-async function collectRun(cdp, startedAt, requests) {
+async function collectRun(cdp, sinceMs = 0) {
   const stats = await stubStats();
   const navigation = await cdp.send('Runtime.evaluate', {
     expression: `(() => {
       const nav = performance.getEntriesByType('navigation')[0];
+      const resources = performance.getEntriesByType('resource')
+        .filter((entry) => entry.startTime >= ${sinceMs})
+        .map((entry) => ({
+          name: entry.name,
+          startTime: entry.startTime - ${sinceMs},
+          responseEnd: entry.responseEnd - ${sinceMs},
+          encodedBodySize: entry.encodedBodySize || 0,
+          transferSize: entry.transferSize || 0,
+        }));
       return {
         lcp: window.__PHUB_MARKS.lcp,
         domContentLoaded: nav ? nav.domContentLoadedEventEnd : 0,
+        timeOrigin: performance.timeOrigin,
+        resources,
       };
     })()`,
     returnByValue: true,
@@ -211,87 +249,163 @@ async function collectRun(cdp, startedAt, requests) {
   const pageText = debug
     ? (
         await cdp.send('Runtime.evaluate', {
-          expression: 'document.body.innerText.slice(0, 300)',
+          expression:
+            "JSON.stringify({name: !!document.querySelector('#profile-name'), prefs: !!document.querySelector('.profile-booking-preferences'), balance: document.body.innerText.includes('Баланс'), text: document.body.innerText.slice(0, 200)})",
           returnByValue: true,
         })
       ).result.value
     : undefined;
+  const resources = navigation.result.value.resources;
+  const apiBytes = stats.requests.reduce((total, entry) => total + entry.bytes, 0);
+  const apiRequestCount = stats.requests.reduce((total, entry) => total + entry.count, 0);
+  const apiResources = resources.filter((entry) => isApiUrl(entry.name));
+  const staticResources = resources.filter((entry) => !isApiUrl(entry.name));
+  const sum = (entries, field) => entries.reduce((total, entry) => total + entry[field], 0);
   return {
-    firstDataMs: null,
     lcp: navigation.result.value.lcp,
     domContentLoaded: navigation.result.value.domContentLoaded,
-    requests: stats.requests.reduce((total, entry) => total + entry.count, 0),
-    transferBytes: stats.requests.reduce((total, entry) => total + entry.bytes, 0),
+    timeOrigin: navigation.result.value.timeOrigin,
+    apiRequests: apiRequestCount,
+    apiPayloadBytes: apiBytes,
+    networkRequests: resources.length,
+    networkTransferBytes: sum(resources, 'transferSize'),
+    apiNetworkBytes: sum(apiResources, 'transferSize'),
+    staticTransferBytes: sum(staticResources, 'transferSize'),
     endpointCounts: Object.fromEntries(
       stats.requests.map((entry) => [entry.endpoint, entry.count]),
     ),
     requestKeys: stats.requests.map((entry) => `${entry.key} ×${entry.count}`),
-    requestTimeline: requests.map((request) => ({
-      endpoint: request.endpoint,
-      startMs: request.startMs,
-    })),
+    waterfall: apiResources
+      .map((entry) => ({
+        endpoint: endpointOf(entry.name),
+        startMs: Math.round(entry.startTime),
+        endMs: Math.round(entry.responseEnd),
+        bytes: entry.encodedBodySize,
+      }))
+      .sort((left, right) => left.startMs - right.startMs),
     ...(pageText ? { pageText } : {}),
-    wallMs: Date.now() - startedAt,
   };
 }
 
 let runSequence = 0;
 
+async function cssCoverageOf(cdp) {
+  const { ruleUsage } = await cdp.send('CSS.stopRuleUsageTracking');
+  const sheets = new Map();
+  for (const rule of ruleUsage) {
+    const entry = sheets.get(rule.styleSheetId) ?? { used: [], total: 0 };
+    if (rule.used) entry.used.push([rule.startOffset, rule.endOffset]);
+    sheets.set(rule.styleSheetId, entry);
+  }
+  let totalBytes = 0;
+  let usedBytes = 0;
+  for (const [styleSheetId, entry] of sheets) {
+    try {
+      const { text } = await cdp.send('CSS.getStyleSheetText', { styleSheetId });
+      if (!text) continue;
+      const merged = entry.used
+        .sort((left, right) => left[0] - right[0])
+        .reduce((ranges, [start, end]) => {
+          const last = ranges[ranges.length - 1];
+          if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+          else ranges.push([start, end]);
+          return ranges;
+        }, []);
+      const used = merged.reduce((sum, [start, end]) => sum + (end - start), 0);
+      totalBytes += text.length;
+      usedBytes += used;
+    } catch {
+      // Some sheets (extensions, injected) cannot be read; they are not part of the measurement.
+    }
+  }
+  return { totalBytes, usedBytes };
+}
+
 async function runColdScenario(cdp, scenario, options = {}) {
-  const url = `${baseUrl}${PATHS[scenario] ?? '/'}`;
+  const path = PATHS[scenario] ?? '/';
+  const url = `${baseUrl}${path}`;
   const runId = `run-${++runSequence}`;
   if (!options.keepCache) await cdp.send('Network.clearBrowserCache');
   await cdp.send('Page.navigate', { url: 'about:blank' });
   await sleep(100);
   await stubReset();
-  // Every run marks its own document, so a marker left over from the previous page can never be
-  // mistaken for this run's first data.
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
     source: `window.__PHUB_RUN_ID = '${runId}';${INSTRUMENT}`,
   });
-
-  const requests = [];
-  const stop = (message) => {
-    if (message.method !== 'Network.requestWillBeSent') return;
-    const requestUrl = message.params?.request?.url ?? '';
-    if (!requestUrl.startsWith(baseUrl)) return;
-    requests.push({ endpoint: endpointOf(requestUrl), startMs: Date.now() - startedAt });
-  };
-  cdp.onEvent(stop);
+  if (cssCoverage) await cdp.send('CSS.startRuleUsageTracking');
+  let tracing = false;
+  if (tracePath && scenario === 'home') {
+    await cdp.send('Tracing.start', {
+      traceConfig: { includedCategories: ['devtools.timeline', 'blink.user_timing', 'loading'] },
+      transferMode: 'ReportEvents',
+    });
+    tracing = true;
+  }
 
   const startedAt = Date.now();
   await cdp.send('Page.navigate', { url });
-  const marker = MARKERS[scenario] ?? MARKERS.home;
-  const firstData = await waitForMarker(cdp, `window.__PHUB_RUN_ID === '${runId}' && (${marker})`);
-  const sample = await collectRun(cdp, startedAt, requests);
-  return { ...sample, scenario, firstDataMs: firstData };
+  const firstData = await waitForMarker(
+    cdp,
+    `window.__PHUB_RUN_ID === '${runId}' && (${MARKERS[scenario] ?? MARKERS.home})`,
+  );
+  let coverage;
+  if (cssCoverage) coverage = await cssCoverageOf(cdp);
+  if (tracing) {
+    const events = [];
+    const collect = cdp.onEvent((message) => {
+      if (message.method === 'Tracing.dataCollected') events.push(...message.params.value);
+    });
+    await cdp.send('Tracing.end');
+    await new Promise((resolve) => {
+      const done = cdp.onEvent((message) => {
+        if (message.method === 'Tracing.tracingComplete') {
+          done();
+          collect();
+          resolve();
+        }
+      });
+      setTimeout(() => {
+        done();
+        collect();
+        resolve();
+      }, 10000);
+    });
+    writeFileSync(tracePath, JSON.stringify({ traceEvents: events }));
+  }
+  const sample = await collectRun(cdp, 0);
+  return {
+    ...sample,
+    scenario,
+    firstDataMs: firstData,
+    wallMs: Date.now() - startedAt,
+    ...(coverage ? { cssCoverage: coverage } : {}),
+  };
 }
 
 async function runNavigationScenario(cdp) {
-  // Home first, then an in-app route change, which is what "open the profile" means once the user
-  // is already inside the cabinet.
   await runColdScenario(cdp, 'home');
   await stubReset();
-  const requests = [];
-  cdp.onEvent((message) => {
-    if (message.method !== 'Network.requestWillBeSent') return;
-    const requestUrl = message.params?.request?.url ?? '';
-    if (!requestUrl.startsWith(baseUrl)) return;
-    requests.push({ endpoint: endpointOf(requestUrl), startMs: Date.now() - startedAt });
+  const runId = `nav-${++runSequence}`;
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: `window.__PHUB_RUN_ID = '${runId}';`,
   });
   const startedAt = Date.now();
-  await cdp.send('Runtime.evaluate', {
+  const navStart = await cdp.send('Runtime.evaluate', {
     expression:
-      "window.history.pushState({}, '', '/profile'); window.dispatchEvent(new PopStateEvent('popstate')); 1",
+      "window.__PHUB_NAV_START = performance.now(); window.history.pushState({}, '', '/profile'); window.dispatchEvent(new PopStateEvent('popstate')); window.__PHUB_NAV_START",
     returnByValue: true,
   });
   const firstData = await waitForMarker(cdp, MARKERS.profile);
-  const sample = await collectRun(cdp, startedAt, requests);
-  return { ...sample, scenario: 'profile-nav', firstDataMs: firstData };
+  const sample = await collectRun(cdp, navStart.result.value);
+  return {
+    ...sample,
+    scenario: 'profile-nav',
+    firstDataMs: firstData,
+    wallMs: Date.now() - startedAt,
+  };
 }
 
 async function runBackgroundRefresh(cdp) {
-  // Warm Home, then measure the refresh that a return from the background triggers.
   await runColdScenario(cdp, 'home');
   await stubReset();
   const startedAt = Date.now();
@@ -301,13 +415,14 @@ async function runBackgroundRefresh(cdp) {
     if (!String(message.params?.request?.url ?? '').includes('/home/base')) return;
     requestAt = Date.now() - startedAt;
   };
-  cdp.onEvent(stop);
+  const unregister = cdp.onEvent(stop);
   await cdp.send('Runtime.evaluate', {
     expression:
       "window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); 1",
     returnByValue: true,
   });
   while (Date.now() - startedAt < 15000 && requestAt === null) await sleep(20);
+  unregister();
   return { scenario: 'background', refreshRequestMs: requestAt };
 }
 
@@ -322,7 +437,7 @@ function stats(values) {
 function endpointStartStats(samples) {
   const byEndpoint = new Map();
   for (const sample of samples) {
-    for (const request of sample.requestTimeline ?? []) {
+    for (const request of sample.waterfall ?? []) {
       const list = byEndpoint.get(request.endpoint) ?? [];
       list.push(request.startMs);
       byEndpoint.set(request.endpoint, list);
@@ -353,6 +468,10 @@ try {
   await cdp.send('Page.enable');
   await cdp.send('Network.enable');
   await cdp.send('Runtime.enable');
+  if (cssCoverage) {
+    await cdp.send('DOM.enable');
+    await cdp.send('CSS.enable');
+  }
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width: 412,
     height: 915,
@@ -403,10 +522,30 @@ try {
           : undefined,
       lcpMs: stats(samples.map((sample) => sample.lcp).filter((value) => value > 0)),
       domContentLoadedMs: stats(samples.map((sample) => sample.domContentLoaded)),
-      requests: stats(samples.map((sample) => sample.requests).filter((value) => value > 0)),
-      transferBytes: stats(
-        samples.map((sample) => sample.transferBytes).filter((value) => value > 0),
+      apiRequests: stats(samples.map((sample) => sample.apiRequests).filter((value) => value > 0)),
+      apiPayloadBytes: stats(
+        samples.map((sample) => sample.apiPayloadBytes).filter((value) => value > 0),
       ),
+      networkTransferBytes: stats(
+        samples.map((sample) => sample.networkTransferBytes).filter((value) => value > 0),
+      ),
+      staticTransferBytes: stats(
+        samples.map((sample) => sample.staticTransferBytes).filter((value) => value > 0),
+      ),
+      cssCoverage: cssCoverage
+        ? stats(
+            samples
+              .map((sample) => sample.cssCoverage?.usedBytes)
+              .filter((value) => typeof value === 'number' && value > 0),
+          )
+        : undefined,
+      cssCoverageTotalBytes: cssCoverage
+        ? stats(
+            samples
+              .map((sample) => sample.cssCoverage?.totalBytes)
+              .filter((value) => typeof value === 'number' && value > 0),
+          )
+        : undefined,
       requestStartsByEndpoint: endpointStartStats(samples),
       samples,
     };

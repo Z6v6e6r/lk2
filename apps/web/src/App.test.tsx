@@ -1005,10 +1005,14 @@ describe('PadlHub web authentication', () => {
     const listNotifications = vi
       .fn<AuthGateway['listNotifications']>()
       .mockResolvedValue(notificationInbox);
+    const listProfileFriends = vi
+      .fn<AuthGateway['listProfileFriends']>()
+      .mockResolvedValue({ items: [] });
     const gateway = createGateway({
       restoreSession: vi.fn().mockResolvedValue(session),
       listMyCommunities,
       listNotifications,
+      listProfileFriends,
     });
 
     const view = render(<App gateway={gateway} tenantKey="padlhub" />);
@@ -1019,6 +1023,7 @@ describe('PadlHub web authentication', () => {
     });
 
     expect(listMyCommunities).not.toHaveBeenCalled();
+    expect(listProfileFriends).not.toHaveBeenCalled();
   });
 
   it('retries an initial Home projection read before showing the unavailable screen', async () => {
