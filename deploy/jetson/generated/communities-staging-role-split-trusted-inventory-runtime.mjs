@@ -27702,7 +27702,7 @@ var communityReadExperienceChatMessageSchema = external_exports.object({
 var communityReadExperienceRatingRowSchema = external_exports.object({
   place: external_exports.number().int().positive(),
   displayName: external_exports.string().min(1).max(120),
-  currentLevel: finite,
+  currentLevel: finite.nullable(),
   score: finite,
   delta: finite,
   games: finite,
@@ -29675,6 +29675,32 @@ init_connection();
 // ../../packages/database/src/cup-player-level-projection-repository.ts
 init_esm_shims();
 init_connection();
+var CALCULATED_PROJECTION_EVENT_TYPES = [
+  "RATING_BOOTSTRAPPED_FROM_GAME_RESULT",
+  "RATING_BOOTSTRAPPED_FROM_TOURNAMENT",
+  "RATING_TOURNAMENT_CANONICAL_RECONCILED",
+  "RATING_LEVEL_CORRECTION_APPLIED",
+  "FPR_CANONICAL_RECONCILIATION_APPLIED",
+  "GAME_RESULT_SUBMITTED_APPLIED",
+  "GAME_RESULT_CORRECTION_APPLIED",
+  "GAME_RESULT_CORRECTION_REVERTED",
+  "GAME_RESULT_DISPUTED_REVERTED",
+  "GAME_RESULT_EXPIRED_REVERTED",
+  "GAME_RESULT_CONFIRMED",
+  "GAME_RESULT_TIMEOUT_CONFIRMED",
+  "TOURNAMENT_RATING_FINALIZED",
+  "TOURNAMENT_RATING_CORRECTION_APPLIED",
+  "TOURNAMENT_RATING_REOPENED_REVERTED",
+  "TOURNAMENT_RATING_ANNULLED",
+  "TOURNAMENT_RATING_CORRECTION_REVERTED",
+  "TOURNAMENT_START_RATING_CHANGED"
+];
+var CUP_PLAYER_LEVEL_PROJECTION_EVENT_TYPES = [
+  "RATING_INITIAL_IMPORTED",
+  "RATING_BOOTSTRAPPED_FROM_VIVA",
+  "RATING_MANUALLY_CHANGED",
+  ...CALCULATED_PROJECTION_EVENT_TYPES
+];
 
 // ../../packages/database/src/notification-repository.ts
 init_esm_shims();
