@@ -137,7 +137,7 @@ export interface ResidencyAttempt extends ResidencyPrincipal {
   readonly key: string;
   readonly mode: ResidencyOrderMode;
   readonly orderId: string | null;
-  /** The catalog price the user confirmed; the order total must not exceed it before payment opens. */
+  /** The catalog price the user confirmed; the order total must equal it before payment opens. */
   readonly confirmedPriceMinor: number;
   readonly createdAt: string;
 }
@@ -520,7 +520,7 @@ export function isDefinitiveCreateRefusal(error: unknown, attempt?: ResidencyAtt
     attempt?.createPayload &&
     d.expectedTotalMinor === attempt.createPayload.expectedTotalMinor &&
     money(d.totalMinor) &&
-    d.totalMinor > attempt.createPayload.expectedTotalMinor &&
+    d.totalMinor !== attempt.createPayload.expectedTotalMinor &&
     d.currency === 'RUB' &&
     d.productId === attempt.createPayload.expectedProductId
   )
@@ -611,7 +611,7 @@ export function residencyErrorMessage(error: unknown, fallback: string): string 
   if (code === 'RESIDENCY_PRICE_CHANGED') {
     const d = residencyErrorDetails(error);
     if (money(d.totalMinor) && money(d.expectedTotalMinor))
-      return `Цена выросла до ${formatRub(d.totalMinor)}. Вы подтвердили ${formatRub(d.expectedTotalMinor)}. Подтвердите новые условия отдельно.`;
+      return `Цена ${d.totalMinor > d.expectedTotalMinor ? 'выросла' : 'снизилась'} до ${formatRub(d.totalMinor)}. Вы подтвердили ${formatRub(d.expectedTotalMinor)}. Подтвердите новые условия отдельно.`;
   }
   if (code && ORDER_ERROR_MESSAGES[code]) return ORDER_ERROR_MESSAGES[code];
   if (status === 401) return 'Сессия истекла. Войдите снова и проверьте заказ.';

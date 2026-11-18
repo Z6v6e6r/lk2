@@ -5,16 +5,16 @@
  * Viva/CUP ports are synthetic. No live provider calls. This helper is test-only.
  */
 import Fastify from 'fastify';
-import { ClientResidencyOwnerClient } from '../../../contracts/imported/lk2-residency-consumer/d92b978/client-residency-owner-client.js';
-import { createResidencyOrderRuntime } from '../../../contracts/imported/lk2-residency-consumer/d92b978/client-residency-order-runtime.js';
-import { registerClientResidencyOrderRoutes } from '../../../contracts/imported/lk2-residency-consumer/d92b978/client-residency-order-routes.js';
+import { ClientResidencyOwnerClient } from '../../../contracts/imported/lk2-residency-consumer/965efa79/client-residency-owner-client.js';
+import { createResidencyOrderRuntime } from '../../../contracts/imported/lk2-residency-consumer/965efa79/client-residency-order-runtime.js';
+import { registerClientResidencyOrderRoutes } from '../../../contracts/imported/lk2-residency-consumer/965efa79/client-residency-order-routes.js';
 import { PadlHubApiClient } from '@phub/api-sdk';
 
 import {
   RESIDENCY_PRODUCT_ID,
   createResidencyLifecycle,
-} from '../../../contracts/imported/lk1-residency-lifecycle/4d04a05c/residency-lifecycle.mjs';
-import { createResidencyLifecycleApi } from '../../../contracts/imported/lk1-residency-lifecycle/4d04a05c/residency-lifecycle-http.mjs';
+} from '../../../contracts/imported/lk1-residency-lifecycle/93692e64/residency-lifecycle.mjs';
+import { createResidencyLifecycleApi } from '../../../contracts/imported/lk1-residency-lifecycle/93692e64/residency-lifecycle-http.mjs';
 import { moscowDay, type ResidencyGateway } from './residency-purchase.js';
 
 export const SYNTHETIC_BASE = 'https://lk2.synthetic.test';

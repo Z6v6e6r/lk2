@@ -454,8 +454,8 @@ function ResidencySession({
     if (
       !target.consent ||
       target.productId !== target.consent.productId ||
-      target.totalMinor > target.consent.expectedTotalMinor ||
-      target.totalMinor > attempt.confirmedPriceMinor ||
+      target.totalMinor !== target.consent.expectedTotalMinor ||
+      target.totalMinor !== attempt.confirmedPriceMinor ||
       target.mode !== attempt.mode ||
       (attempt.createPayload !== undefined &&
         target.consent.expectedTotalMinor !== attempt.createPayload.expectedTotalMinor) ||
@@ -795,8 +795,8 @@ function ResidencySession({
                     {renewing && view?.kind === 'active' && view.validUntil
                       ? ` Текущее резидентство действует до ${formatDay(view.validUntil)} Новый срок клуб подтвердит после оплаты.`
                       : ''}{' '}
-                    Оплата проходит на защищённой странице платёжного сервиса. Сумма может
-                    снизиться, но не превысит подтверждённую.
+                    Оплата проходит на защищённой странице платёжного сервиса. При изменении суммы
+                    потребуется новое подтверждение.
                   </p>
                   <button
                     type="button"

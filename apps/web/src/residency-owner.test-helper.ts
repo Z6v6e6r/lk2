@@ -19,8 +19,8 @@ function verifySnapshot(directory: string): readonly string[] {
     return name!;
   });
 }
-export const verifyOwnerSnapshot = () => verifySnapshot('lk1-residency-lifecycle/4d04a05c');
-export const verifyConsumerSnapshot = () => verifySnapshot('lk2-residency-consumer/d92b978');
+export const verifyOwnerSnapshot = () => verifySnapshot('lk1-residency-lifecycle/93692e64');
+export const verifyConsumerSnapshot = () => verifySnapshot('lk2-residency-consumer/965efa79');
 
 export const createOwnerWorld = (
   init: { readonly now?: number; readonly priceMinor?: number } = {},

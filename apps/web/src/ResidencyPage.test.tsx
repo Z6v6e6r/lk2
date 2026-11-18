@@ -79,7 +79,7 @@ async function buyAndOpenPayment(h: OwnerHarness, storage?: Storage) {
 afterEach(() => cleanup());
 
 describe('imported owner snapshot', () => {
-  it('pins actual consumer modules to #684 d92b978', () => {
+  it('pins actual consumer modules to #684 965efa79', () => {
     expect(verifyConsumerSnapshot()).toEqual([
       'client-residency-order-routes.ts',
       'client-residency-order-runtime.ts',
@@ -87,7 +87,7 @@ describe('imported owner snapshot', () => {
       'residency-owner-paths.ts',
     ]);
   });
-  it('is byte-identical to lk#443 @ 4d04a05c', () => {
+  it('is byte-identical to lk#443 @ 93692e64', () => {
     expect(verifyOwnerSnapshot()).toEqual([
       'residency-lifecycle.mjs',
       'residency-lifecycle-http.mjs',
@@ -559,17 +559,29 @@ describe('contract v2 composed chain: web → SDK → consumer routes/runtime/cl
     expect(await response.json()).toMatchObject({ code: 'RESIDENCY_PRICE_CONSENT_REQUIRED' });
     expect(h.world.providerCreates).toBe(0);
   });
-  it('accepts a decrease, keeps the original consent ceiling, and does not reprice replay', async () => {
+  it('requires fresh consent for a decrease, then replays the confirmed exact price unchanged', async () => {
     const h = createOwnerWorld();
     const m = mount(h);
     const button = await confirm();
     h.world.priceMinor = 69000;
     fireEvent.click(button);
-    await waitFor(() => expect(m.opened).toHaveLength(1));
-    const attempt = listResidencyAttempts(m.storage, userA)[0]!;
-    expect(attempt.createPayload).toEqual({
+    expect(await screen.findByRole('alert')).toHaveTextContent('Цена снизилась до 690 ₽');
+    expect(m.opened).toHaveLength(0);
+    expect(h.world.providerCreates).toBe(0);
+    expect(listResidencyAttempts(m.storage, userA)).toHaveLength(0);
+    const refused = posts(h, '/residency/orders')[0]!;
+    expect(refused.body).toEqual({
       mode: 'NEW',
       expectedTotalMinor: 79000,
+      expectedProductId: productId,
+    });
+    fireEvent.click(await confirm());
+    await waitFor(() => expect(m.opened).toHaveLength(1));
+    const attempt = listResidencyAttempts(m.storage, userA)[0]!;
+    expect(attempt.key).not.toBe(refused.key);
+    expect(attempt.createPayload).toEqual({
+      mode: 'NEW',
+      expectedTotalMinor: 69000,
       expectedProductId: productId,
     });
     h.world.priceMinor = 99000;
@@ -578,12 +590,13 @@ describe('contract v2 composed chain: web → SDK → consumer routes/runtime/cl
       .client.createResidencyOrder(attempt.createPayload!, attempt.key);
     expect(replay).toMatchObject({
       idempotentReplay: true,
-      order: { pricing: { totalMinor: 69000 }, consent: { expectedTotalMinor: 79000 } },
+      order: { pricing: { totalMinor: 69000 }, consent: { expectedTotalMinor: 69000 } },
     });
-    expect(posts(h, '/residency/orders').map((l) => l.body)).toEqual([
-      attempt.createPayload,
-      attempt.createPayload,
-    ]);
+    expect(
+      posts(h, '/residency/orders')
+        .slice(1)
+        .map((l) => l.body),
+    ).toEqual([attempt.createPayload, attempt.createPayload]);
     expect(h.world.providerCreates).toBe(1);
   });
   it('lost response replay uses the original payload after a catalog change', async () => {

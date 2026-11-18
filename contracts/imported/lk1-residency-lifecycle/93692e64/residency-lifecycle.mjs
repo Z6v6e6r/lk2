@@ -493,8 +493,11 @@ export function createResidencyLifecycle(deps) {
       fail(503, "RESIDENCY_PRICING_UNAVAILABLE", "Confirmed pricing is unavailable");
     }
     const pricing = ensurePricing(quote, product.priceMinor);
-    if (pricing.totalMinor > consent.expectedTotalMinor) {
-      fail(409, "RESIDENCY_PRICE_CHANGED", "The confirmed price is lower than the current price", {
+    // Consent is an exact total, not a ceiling: the user confirmed the amount shown by the
+    // catalog. A lower current total is also a change (a new discount can change the terms
+    // the user agreed to), so both directions are refused before the durable order.
+    if (pricing.totalMinor !== consent.expectedTotalMinor) {
+      fail(409, "RESIDENCY_PRICE_CHANGED", "The confirmed total no longer matches the current total", {
         expectedTotalMinor: consent.expectedTotalMinor, totalMinor: pricing.totalMinor,
         currency: product.currency, productId: product.productId,
       });
