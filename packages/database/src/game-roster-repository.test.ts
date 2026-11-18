@@ -901,6 +901,7 @@ describe('game roster repository', () => {
               user_id: playerId,
               state: 'ACTIVE',
               expires_at: '2026-08-01T09:59:00.000Z',
+              eligibility_decision_id: null,
             },
           ],
         };

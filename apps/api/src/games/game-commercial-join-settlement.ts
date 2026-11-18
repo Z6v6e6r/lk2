@@ -3,12 +3,12 @@ import {
   BOOKED_OPERATION_V3_PREFLIGHT_PATH,
   BOOKED_OPERATION_V3_READ_PREFIX,
   BOOKED_OPERATION_V3_CANCEL_PREFIX,
-} from '@phub/subscription-runtime-adapter';
+} from '../../../../packages/subscription-runtime-adapter/src/booked-operation-v3.js';
+import type { BookedOperationV3Client } from '../../../../packages/subscription-runtime-adapter/src/booked-operation-v3-client.js';
 import type {
-  BookedOperationV3Client,
   BookedOperationV3AdmissionRequest,
   BookedOperationV3PreflightRequest,
-} from '@phub/subscription-runtime-adapter';
+} from '../../../../packages/subscription-runtime-adapter/src/booked-operation-v3.js';
 import { createHash } from 'node:crypto';
 
 import type { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';

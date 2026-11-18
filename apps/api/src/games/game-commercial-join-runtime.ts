@@ -1,4 +1,5 @@
 import { createGameStationMembershipAdmission } from './game-station-membership.js';
+import { BookedOperationV3Client } from '../../../../packages/subscription-runtime-adapter/src/booked-operation-v3-client.js';
 import { createBookedOperationV3SettlementOwner } from './game-commercial-join-settlement.js';
 import { createHash } from 'node:crypto';
 
@@ -19,7 +20,6 @@ import {
   BookedOperationAdmissionClient,
   BookedOperationReadClient,
   BookedOperationReadError,
-  BookedOperationV3Client,
   bookedOperationAdmissionRequestSha256,
   type BookedOperationAdmissionRequest,
   type BookedOperationReadOutcome,
@@ -610,6 +610,9 @@ export function createGameCommercialJoinRuntime(
             }),
         })
       : undefined;
+  const ownerWithSettlement = settlementOwner
+    ? (Object.assign(owner, { settlementOwner }) as CommercialJoinOwnerPort)
+    : owner;
   return {
     ...(settlementOwner ? { settlementOwner } : {}),
     ...(stationMembership ? { stationMembership } : {}),
@@ -624,6 +627,6 @@ export function createGameCommercialJoinRuntime(
       }) => options.rosterRepository.markPaidJoinDispatched(input),
     } as unknown as GameCommercialJoinOptions['repository'],
     conditionsOwner: options.conditionsOwner,
-    owner,
+    owner: ownerWithSettlement,
   };
 }

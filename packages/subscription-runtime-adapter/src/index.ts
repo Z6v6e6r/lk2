@@ -1,6 +1,4 @@
 export * from './station-membership.js';
-export * from './booked-operation-v3.js';
-export * from './booked-operation-v3-client.js';
 export * from './booked-operation-read.js';
 export * from './booked-operation-admission.js';
 export * from './policy-usage-binding.js';

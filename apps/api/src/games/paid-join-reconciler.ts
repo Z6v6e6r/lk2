@@ -50,6 +50,13 @@ export async function runPaidJoinReconciliationCycle(input: {
     failed: 0,
   };
 
+  const settlementOwner =
+    input.settlementOwner ??
+    (
+      input.owner as CommercialJoinOwnerPort & {
+        readonly settlementOwner?: CommercialJoinSettlementOwner;
+      }
+    ).settlementOwner;
   const candidates = await input.repository.listPaidJoinReconciliationCandidates({
     tenantId: input.tenantId,
     limit,
@@ -73,7 +80,7 @@ export async function runPaidJoinReconciliationCycle(input: {
         {
           repository: input.repository as unknown as CommercialJoinRepositoryPort,
           owner: input.owner,
-          ...(input.settlementOwner ? { settlementOwner: input.settlementOwner } : {}),
+          ...(settlementOwner ? { settlementOwner } : {}),
           ...(input.now === undefined ? {} : { now: input.now }),
           onReconciliationFailure: (code) =>
             input.logger.warn(
