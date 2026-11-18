@@ -1754,7 +1754,14 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(diagnosticsRunner).toContain('stop_helper "$monitor_pid"');
     expect(diagnosticsRunner).toContain('setsid bash -c');
     expect(diagnosticsRunner).toContain('/proc/$helper_pid/stat');
-    expect(diagnosticsRunner).toContain('timeout --signal=KILL "$process_group_probe_timeout"');
+    expect(diagnosticsRunner).toContain('CI_TEST_FINALIZATION_BUDGET_SECONDS:-30');
+    expect(diagnosticsRunner).toContain('wait_for_process_group_exit');
+    expect(diagnosticsRunner).toContain('run_command_in_own_group_bounded');
+    expect(diagnosticsRunner).toContain('finalization_stage_timeout');
+    expect(diagnosticsRunner).toContain('finalization_budget_seconds=%s');
+    expect(diagnosticsRunner).toContain(
+      'timeout --signal=KILL "$(finalization_stage_timeout "$(milliseconds_from_duration "$process_group_probe_timeout")")"',
+    );
     expect(diagnosticsRunner).toContain('kill -TERM -- "-$helper_pid"');
     expect(diagnosticsRunner).toContain('kill -KILL -- "-$helper_pid"');
     expect(diagnosticsRunner).toContain('reason=finalization_budget_exceeded');
