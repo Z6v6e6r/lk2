@@ -2,6 +2,7 @@ import {
   BOOKED_OPERATION_V3_ADMISSION_PATH,
   BOOKED_OPERATION_V3_PREFLIGHT_PATH,
   BOOKED_OPERATION_V3_READ_PREFIX,
+  BOOKED_OPERATION_V3_CANCEL_PREFIX,
 } from '@phub/subscription-runtime-adapter';
 import type {
   BookedOperationV3Client,
@@ -27,7 +28,7 @@ const sha256 = (value: unknown): string =>
  * the explicit v3 flag is enabled; it never creates a checkout locally.
  */
 export function createBookedOperationV3SettlementOwner(options: {
-  readonly client: Pick<BookedOperationV3Client, 'preflight' | 'admit' | 'read'>;
+  readonly client: Pick<BookedOperationV3Client, 'preflight' | 'admit' | 'read' | 'cancel'>;
   readonly issuer: Pick<SubscriptionRuntimeActorDelegationIssuer, 'issueBookedOperationV3'>;
   readonly issueActorToken: (
     actor: CommercialJoinOwnerActor,
@@ -222,6 +223,43 @@ export function createBookedOperationV3SettlementOwner(options: {
       if (result.payment.state === 'OPEN' && result.payment.checkoutUrl)
         return { status: 'PAYMENT_REQUIRED', settlement: { ...input.settlement } };
       return { status: 'PENDING' };
+    },
+    async cancel(input) {
+      const actorToken = await actorTokenFor(input.actor, input.correlationId);
+      const context = await contextFor(input.actor);
+      const request = {
+        contractVersion: 3 as const,
+        operationId: input.operationId,
+        reason: 'USER_CANCEL' as const,
+      };
+      const requestSha256 = sha256(request);
+      const actorDelegation = await options.issuer.issueBookedOperationV3({
+        scope: 'cancel',
+        method: 'POST',
+        path: BOOKED_OPERATION_V3_CANCEL_PREFIX + input.operationId + '/cancel',
+        operationId: input.operationId,
+        tenantId: input.actor.tenantId,
+        tenantKey: input.actor.tenantKey,
+        userId: input.actor.userId,
+        sessionId: input.actor.sessionId,
+        providerClientId: context.providerClientId,
+        providerMappingId: context.providerMappingId,
+        correlationId: input.correlationId,
+        requestSha256,
+        actorToken,
+        quoteId: input.settlement.quoteId,
+      });
+      const result = await options.client.cancel(request, {
+        actorDelegation,
+        correlationId: input.correlationId,
+        operationId: input.operationId,
+        actorToken,
+      });
+      return {
+        status: result.status,
+        limitReleased: result.limitReleased,
+        visitReturned: result.visitReturned,
+      };
     },
   };
 }

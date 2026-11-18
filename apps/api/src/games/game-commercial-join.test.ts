@@ -4,6 +4,7 @@ import type { BookedOperationReceipt } from '@phub/subscription-runtime-adapter'
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  cancelCommercialJoinOperation,
   executeCommercialJoin,
   readCommercialJoinOperation,
   reconcileCommercialJoinOperation,
@@ -270,7 +271,7 @@ describe('commercial JOIN orchestration', () => {
 
     const result = await executeCommercialJoin(envelope, {
       ...dependencies(repo, ownerPort([]).owner, fixture),
-      settlementOwner: { prepare, execute, read: vi.fn() },
+      settlementOwner: { prepare, execute, read: vi.fn(), cancel: vi.fn() },
     });
     expect(result.kind).toBe('accepted');
     if (result.kind !== 'accepted') return;
@@ -300,7 +301,7 @@ describe('commercial JOIN orchestration', () => {
     const execute = vi.fn<CommercialJoinSettlementOwner['execute']>();
     const result = await executeCommercialJoin(envelope, {
       ...dependencies(repo, ownerPort([]).owner, fixture),
-      settlementOwner: { prepare, execute, read: vi.fn() },
+      settlementOwner: { prepare, execute, read: vi.fn(), cancel: vi.fn() },
     });
     expect(result).toMatchObject({ kind: 'failed', code: 'GAME_PRICE_CONFIRMATION_REQUIRED' });
     expect(execute).not.toHaveBeenCalled();
@@ -526,6 +527,85 @@ describe('commercial JOIN readback', () => {
     expect(body).toBeNull();
   });
 
+  it('cancels a pending v3 settlement only after the owner closes it', async () => {
+    const settlement = {
+      quoteId: fixtureId(121),
+      amountMinor: 70_000,
+      toPayMinor: 70_000,
+      checkoutUrl: 'https://padlhub.su/pay/synthetic-cancel',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestSha256: 'sha256:' + 'b'.repeat(64),
+    };
+    const failPaidJoinAttempt = vi.fn(() => resolved(undefined));
+    const body = await cancelCommercialJoinOperation(
+      {
+        tenantId: fixtureActor.tenantId,
+        tenantKey: 'synthetic',
+        actorUserId: fixtureActor.userId,
+        sessionId: fixtureActor.sessionId,
+        operationId,
+        correlationId: 'correlation-cancel-v3',
+      },
+      {
+        repository: {
+          getPaidJoinAttempt: () => resolved({ ...attemptBase, settlement }),
+          failPaidJoinAttempt,
+        },
+        settlementOwner: {
+          prepare: vi.fn(),
+          execute: vi.fn(),
+          read: vi.fn(),
+          cancel: vi.fn(() =>
+            resolved({ status: 'CLOSED' as const, limitReleased: true, visitReturned: false }),
+          ),
+        },
+      },
+    );
+    expect(body?.operation.status).toBe('FAILED');
+    expect(body?.operation.error?.code).toBe('GAME_JOIN_CANCELLED');
+    expect(failPaidJoinAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'GAME_JOIN_CANCELLED' }),
+    );
+  });
+
+  it('does not cancel a v3 attempt while the owner reports PAID', async () => {
+    const settlement = {
+      quoteId: fixtureId(122),
+      amountMinor: 70_000,
+      toPayMinor: 70_000,
+      checkoutUrl: 'https://padlhub.su/pay/synthetic-paid',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestSha256: 'sha256:' + 'c'.repeat(64),
+    };
+    const failPaidJoinAttempt = vi.fn();
+    const body = await cancelCommercialJoinOperation(
+      {
+        tenantId: fixtureActor.tenantId,
+        tenantKey: 'synthetic',
+        actorUserId: fixtureActor.userId,
+        sessionId: fixtureActor.sessionId,
+        operationId,
+        correlationId: 'correlation-cancel-paid',
+      },
+      {
+        repository: {
+          getPaidJoinAttempt: () => resolved({ ...attemptBase, settlement }),
+          failPaidJoinAttempt,
+        },
+        settlementOwner: {
+          prepare: vi.fn(),
+          execute: vi.fn(),
+          read: vi.fn(),
+          cancel: vi.fn(() =>
+            resolved({ status: 'PAID' as const, limitReleased: false, visitReturned: false }),
+          ),
+        },
+      },
+    );
+    expect(body?.operation.status).toBe('PROCESSING');
+    expect(failPaidJoinAttempt).not.toHaveBeenCalled();
+  });
+
   it('returns the v3 checkout for a pending settlement read', async () => {
     const settlement = {
       quoteId: fixtureId(120),
@@ -549,6 +629,7 @@ describe('commercial JOIN readback', () => {
         prepare: vi.fn(),
         execute: vi.fn(),
         read: vi.fn(() => resolved({ status: 'PAYMENT_REQUIRED' as const, settlement })),
+        cancel: vi.fn(),
       },
     });
     expect(body?.operation.nextAction).toEqual({

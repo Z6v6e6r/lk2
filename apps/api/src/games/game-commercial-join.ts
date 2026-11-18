@@ -58,7 +58,8 @@ export type CommercialJoinFailureCode =
   | 'GAME_ALREADY_JOINED'
   | 'GAME_PAYMENT_MODE_MISMATCH'
   | 'GAME_RESERVATION_EXPIRED'
-  | 'GAME_RESERVATION_NOT_FOUND';
+  | 'GAME_RESERVATION_NOT_FOUND'
+  | 'GAME_JOIN_CANCELLED';
 
 export interface CommercialJoinPrice {
   readonly amountMinor: number;
@@ -322,6 +323,16 @@ export interface CommercialJoinSettlementOwner {
     readonly correlationId: string;
     readonly settlement: CommercialJoinSettlement;
   }): Promise<CommercialJoinSettlementRead>;
+  cancel(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly settlement: CommercialJoinSettlement;
+  }): Promise<{
+    readonly status: 'CLOSING' | 'CLOSED' | 'PAID' | 'UNKNOWN';
+    readonly limitReleased: boolean;
+    readonly visitReturned: boolean;
+  }>;
 }
 
 export interface CommercialJoinCommandEnvelope {
@@ -409,6 +420,7 @@ const FAILURE_MESSAGES: Readonly<Record<CommercialJoinFailureCode, string>> = {
   GAME_PAYMENT_MODE_MISMATCH: 'У игры другой платёжный режим.',
   GAME_RESERVATION_EXPIRED: 'Резерв места истёк. Повторите проверку условий.',
   GAME_RESERVATION_NOT_FOUND: 'Резерв места не найден.',
+  GAME_JOIN_CANCELLED: 'Неоплаченная попытка отменена, место освобождается после подтверждения.',
 };
 
 export function commercialFailure(
@@ -1538,6 +1550,110 @@ export async function readCommercialJoinOperation(
       price,
       null,
       'GAME_RECONCILIATION_REQUIRED',
+    ),
+    replayed: true,
+  });
+}
+
+/** Explicit cancel of a pending v3 settlement. It never cancels a confirmed participation. */
+export async function cancelCommercialJoinOperation(
+  input: {
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly actorUserId: string;
+    readonly sessionId: string;
+    readonly operationId: string;
+    readonly correlationId: string;
+  },
+  dependencies: {
+    readonly repository: Pick<
+      CommercialJoinRepositoryPort,
+      'getPaidJoinAttempt' | 'failPaidJoinAttempt'
+    >;
+    readonly settlementOwner?: CommercialJoinSettlementOwner;
+    readonly now?: () => number;
+  },
+): Promise<CommercialJoinResponseBody | null> {
+  const attempt = await dependencies.repository.getPaidJoinAttempt({
+    tenantId: input.tenantId,
+    actorUserId: input.actorUserId,
+    operationId: input.operationId,
+  });
+  if (!attempt) return null;
+  const observedAt = new Date((dependencies.now ?? Date.now)()).toISOString();
+  if (attempt.state === 'COMPLETED' || attempt.receipt) {
+    return operationBody({
+      operationId: attempt.commandId,
+      status: 'SUCCEEDED',
+      gameId: attempt.gameId,
+      revision: attempt.result?.revision ?? null,
+      createdAt: attempt.result?.committedAt ?? observedAt,
+      updatedAt: attempt.receipt?.confirmedAt ?? observedAt,
+      commercial: attemptView('OWNER_CONFIRMED', attempt.reservation, null, attempt.receipt, null),
+      replayed: true,
+    });
+  }
+  if (!attempt.settlement || !dependencies.settlementOwner) return null;
+  let cancelled: Awaited<ReturnType<CommercialJoinSettlementOwner['cancel']>> | null;
+  try {
+    cancelled = await dependencies.settlementOwner.cancel({
+      actor: {
+        tenantId: input.tenantId,
+        tenantKey: input.tenantKey,
+        userId: input.actorUserId,
+        sessionId: input.sessionId,
+        gameId: attempt.gameId,
+        expectedRevision: 0,
+      },
+      operationId: input.operationId,
+      correlationId: input.correlationId,
+      settlement: { ...attempt.settlement, amountMinor: attempt.settlement.toPayMinor },
+    });
+  } catch {
+    cancelled = null;
+  }
+  if (cancelled?.status === 'CLOSED') {
+    try {
+      await dependencies.repository.failPaidJoinAttempt({
+        tenantId: input.tenantId,
+        actorUserId: input.actorUserId,
+        operationId: input.operationId,
+        gameId: attempt.gameId,
+        code: 'GAME_JOIN_CANCELLED',
+        correlationId: input.correlationId,
+      });
+    } catch {
+      // The owner already closed the attempt; the local failure is retried by readback.
+    }
+    return operationBody({
+      operationId: attempt.commandId,
+      status: 'FAILED',
+      gameId: attempt.gameId,
+      revision: null,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+      error: {
+        code: 'GAME_JOIN_CANCELLED',
+        message: FAILURE_MESSAGES.GAME_JOIN_CANCELLED,
+      },
+      commercial: attemptView('FAILED', attempt.reservation, null, null, 'GAME_JOIN_CANCELLED'),
+      replayed: true,
+    });
+  }
+  return operationBody({
+    operationId: attempt.commandId,
+    status: 'PROCESSING',
+    gameId: attempt.gameId,
+    revision: null,
+    createdAt: observedAt,
+    updatedAt: observedAt,
+    retryAfterSeconds: 5,
+    commercial: attemptView(
+      'OWNER_PENDING',
+      attempt.reservation,
+      null,
+      null,
+      cancelled?.status === 'PAID' ? 'GAME_RECONCILIATION_REQUIRED' : 'GAME_PAYMENT_REQUIRED',
     ),
     replayed: true,
   });

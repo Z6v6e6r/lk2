@@ -50,7 +50,8 @@ export type GameRosterCommandErrorCode =
   | 'GAME_PAYMENT_SNAPSHOT_MISSING'
   | 'GAME_RESERVATION_EXPIRED'
   | 'GAME_RESERVATION_NOT_FOUND'
-  | 'GAME_JOIN_NOT_DISPATCHED';
+  | 'GAME_JOIN_NOT_DISPATCHED'
+  | 'GAME_JOIN_CANCELLED';
 
 export type GameRosterCommandResult =
   | {

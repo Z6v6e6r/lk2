@@ -27,6 +27,7 @@ import {
 } from './game-create-commercial.js';
 import type { GameCommercialCreateOptions } from './game-create-commercial-runtime.js';
 import {
+  cancelCommercialJoinOperation,
   commercialJoinRequestHash,
   commercialOperationId,
   executeCommercialJoin,
@@ -221,6 +222,7 @@ const COMMERCIAL_FAILURE_STATUS: Readonly<Record<CommercialJoinFailureCode, numb
   GAME_PAYMENT_MODE_MISMATCH: 409,
   GAME_RESERVATION_EXPIRED: 409,
   GAME_RESERVATION_NOT_FOUND: 409,
+  GAME_JOIN_CANCELLED: 409,
 };
 
 /** Managed commercial CREATE failures reuse the existing stable codes and statuses. */
@@ -1123,6 +1125,72 @@ export function registerGameRoutes(
       return recovered;
     },
   );
+
+  // Explicit cancel of a pending settlement. It is idempotent by the same original key and never
+  // cancels a confirmed participation; PAID wins and is reported through readback.
+  app.post(
+    '/user/api/v1/:tenantKey/games/:gameId/join/cancel',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const currentGameId = gameId(request, reply);
+      if (!currentGameId) return reply;
+      const key = request.headers['idempotency-key'];
+      if (typeof key !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/.test(key)) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          'Передайте исходный Idempotency-Key операции.',
+        );
+      }
+      if (!options.commercialJoin) {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'GAME_PAYMENT_REQUIRED',
+          'Платёжный контур этой игры пока недоступен.',
+        );
+      }
+      const cancelled = await cancelCommercialJoinOperation(
+        {
+          tenantId: current.tenantId,
+          tenantKey: (request.params as { tenantKey: string }).tenantKey,
+          actorUserId: current.userId,
+          sessionId: sessionId(request),
+          operationId: commercialOperationId({
+            tenantId: current.tenantId,
+            userId: current.userId,
+            idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(key),
+          }),
+          correlationId: request.id,
+        },
+        {
+          repository: options.commercialJoin.repository,
+          ...(options.commercialJoin.settlementOwner
+            ? { settlementOwner: options.commercialJoin.settlementOwner }
+            : {}),
+        },
+      );
+      if (!cancelled || cancelled.operation.gameId !== currentGameId) {
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'GAME_OPERATION_NOT_FOUND',
+          'Операция не найдена.',
+        );
+      }
+      return reply.status(cancelled.operation.status === 'FAILED' ? 409 : 200).send(cancelled);
+    },
+  );
+
   command(
     'DELETE',
     '/user/api/v1/:tenantKey/games/:gameId/participants/me',
