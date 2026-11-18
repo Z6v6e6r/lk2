@@ -1999,6 +1999,19 @@ export class PadlHubApiClient {
     });
   }
 
+  /** Explicit cancel of the still-pending v3 payment. It is idempotent by the original key. */
+  public cancelPaidJoin(gameId: string, idempotencyKey: string): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(
+      '/games/' + encodeURIComponent(gameId) + '/join/cancel',
+      {
+        method: 'POST',
+        idempotencyKey,
+        retryOnUnauthorized: false,
+        cache: 'no-store',
+      },
+    );
+  }
+
   public listTrainingCatalogue(query: EventCatalogQuery): Promise<EventCatalogPage> {
     if (query.surface !== 'TRAININGS')
       return Promise.reject(new Error('TRAINING_CATALOGUE_INPUT_INVALID'));

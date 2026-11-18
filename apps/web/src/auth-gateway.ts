@@ -2924,6 +2924,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       }
     },
 
+    cancelPaidJoin(gameId: string, idempotencyKey: string) {
+      return client.cancelPaidJoin(gameId, idempotencyKey);
+    },
     joinGame(gameId, expectedRevision, invitationId) {
       return client.joinGame(gameId, expectedRevision, invitationId);
     },
