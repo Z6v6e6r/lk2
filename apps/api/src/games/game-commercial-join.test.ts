@@ -251,6 +251,58 @@ describe('commercial JOIN orchestration', () => {
     expect(owner.calls).toEqual(['execute']);
   });
 
+  it('routes a positive surcharge through the v3 settlement and returns checkout', async () => {
+    const fixture = createJoinConditionsFixture(70_000, 30_000, 120);
+    const { repository: repo } = repository();
+    const settlement = {
+      quoteId: fixtureId(110),
+      amountMinor: 70_000,
+      toPayMinor: 70_000,
+      checkoutUrl: 'https://padlhub.su/pay/synthetic',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestSha256: 'sha256:' + 'a'.repeat(64),
+    };
+    const prepare = vi.fn(() => resolved(settlement));
+    const execute = vi.fn(() => resolved({ status: 'PAYMENT_REQUIRED' as const, settlement }));
+
+    const result = await executeCommercialJoin(envelope, {
+      ...dependencies(repo, ownerPort([]).owner, fixture),
+      settlementOwner: { prepare, execute },
+    });
+    expect(result.kind).toBe('accepted');
+    if (result.kind !== 'accepted') return;
+    expect(result.body.operation.nextAction).toEqual({
+      type: 'OPEN_PAYMENT',
+      url: settlement.checkoutUrl,
+    });
+    expect(result.body.operation.status).toBe('PROCESSING');
+    const executeCall = execute.mock.calls[0]?.[0];
+    expect(executeCall?.settlement).toEqual(settlement);
+    expect(typeof executeCall?.reservationId).toBe('string');
+  });
+
+  it('refuses a v3 quote that differs from the server price before any durable attempt', async () => {
+    const fixture = createJoinConditionsFixture(70_000, 30_000, 120);
+    const { repository: repo } = repository();
+    const prepare = vi.fn(() =>
+      resolved({
+        quoteId: fixtureId(111),
+        amountMinor: 1,
+        toPayMinor: 1,
+        checkoutUrl: 'https://padlhub.su/pay/synthetic',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        requestSha256: 'sha256:' + 'a'.repeat(64),
+      }),
+    );
+    const execute = vi.fn();
+    const result = await executeCommercialJoin(envelope, {
+      ...dependencies(repo, ownerPort([]).owner, fixture),
+      settlementOwner: { prepare, execute },
+    });
+    expect(result).toMatchObject({ kind: 'failed', code: 'GAME_PRICE_CONFIRMATION_REQUIRED' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('writes the durable dispatch fence before the owner call', async () => {
     const { repository: repo } = repository();
     const order: string[] = [];

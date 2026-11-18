@@ -272,7 +272,16 @@ export interface PaidJoinActorContext {
   readonly providerClientSubscriptionId?: string;
 }
 
+export interface PaidJoinSettlementBinding {
+  readonly quoteId: string;
+  readonly toPayMinor: number;
+  readonly checkoutUrl: string;
+  readonly expiresAt: string;
+  readonly requestSha256: string;
+}
+
 export interface BeginPaidJoinInput {
+  readonly settlement?: PaidJoinSettlementBinding;
   readonly actorContext?: PaidJoinActorContext;
   readonly stationMembership?: StationMarker;
   readonly tenantId: string;
@@ -346,6 +355,7 @@ export type BeginPaidJoinResult =
   | { readonly outcome: 'reservation_conflict' };
 
 export interface PaidJoinAttemptView {
+  readonly settlement?: PaidJoinSettlementBinding;
   readonly requestHash?: string;
   readonly managedReceipt?: ManagedJoinReceipt;
   readonly providerBinding?: PaidJoinProviderBinding;
@@ -558,6 +568,7 @@ interface PaidJoinReservationRow extends QueryResultRow {
   readonly provider_binding?: PaidJoinProviderBinding;
   readonly binding_snapshot?: unknown;
   readonly reconciliation?: unknown;
+  readonly settlement?: unknown;
 }
 
 interface PaidJoinReservationLockRow extends QueryResultRow {
@@ -1730,6 +1741,7 @@ async function loadPaidJoinAttempt(
     `select reservation.id, reservation.state, reservation.payment_state,
             reservation.expires_at, snapshot.snapshot->'providerBinding' as provider_binding,
             snapshot.snapshot->'reconciliation' as reconciliation,
+            snapshot.snapshot->'settlement' as settlement,
             snapshot.snapshot as binding_snapshot
        from eligibility.payment_snapshots snapshot
        join games.seat_reservations reservation
@@ -1826,6 +1838,9 @@ async function loadPaidJoinAttempt(
     ...(bindingRefs ? { bindingRefs } : {}),
     ...(reservationRow?.provider_binding
       ? { providerBinding: reservationRow.provider_binding }
+      : {}),
+    ...(reservationRow?.settlement
+      ? { settlement: reservationRow.settlement as PaidJoinSettlementBinding }
       : {}),
     commandId: row.id,
     gameId: row.aggregate_id,
@@ -2346,6 +2361,7 @@ export function createGameRosterRepository(
               paymentMode: game.payment_mode,
               paidJoinLifecycleVersion: 1,
               subscriptionInstanceId: input.subscriptionInstanceId,
+              ...(input.settlement ? { settlement: input.settlement } : {}),
               ...(input.actorContext ? { actorContext: input.actorContext } : {}),
               ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
               ...(managedJoin ? { managedJoin } : {}),
