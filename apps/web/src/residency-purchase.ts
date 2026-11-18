@@ -211,7 +211,7 @@ export function parseResidencyPayment(v: unknown, orderId: string): ResidencyPay
       p.state === 'PENDING_PAYMENT' && p.paymentStatus === 'PENDING'
         ? httpsUrl(p.paymentUrl)
         : null,
-    expiresAt: (p.expiresAt) ?? null,
+    expiresAt: p.expiresAt ?? null,
   };
 }
 
