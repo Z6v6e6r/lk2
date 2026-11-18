@@ -14,7 +14,12 @@ const LEVEL_REFUSAL_MESSAGES: Readonly<Record<string, string>> = {
   ACTIVITY_LEVEL_UNDEFINED: 'Для этой активности не настроен диапазон уровней.',
   ACTIVITY_LEVEL_INVALID: 'Диапазон уровней этой активности настроен некорректно.',
   LEVEL_POLICY_MISCONFIGURED: 'Правило допуска по уровню временно настроено некорректно.',
+  LEGACY_LEVEL_CONSTRAINT: 'Ваш уровень не подходит под ограничения этой активности.',
 };
+
+/** A future server level code is still shown as a refusal, never as an unconfirmed result. */
+const UNKNOWN_LEVEL_REFUSAL_MESSAGE = 'Запись отклонена: ваш уровень не подходит под условия.';
+const LEVEL_CODE = /^[A-Z][A-Z0-9_]*LEVEL[A-Z0-9_]*$/;
 
 const LEVEL_SETUP_CODES = new Set([
   'PLAYER_LEVEL_REQUIRED',
@@ -38,7 +43,8 @@ function errorField(error: unknown, field: 'code' | 'status'): unknown {
 export function participationLevelRefusal(error: unknown): ParticipationLevelRefusal | null {
   const code = errorField(error, 'code');
   if (typeof code !== 'string' || errorField(error, 'status') !== 409) return null;
-  const message = LEVEL_REFUSAL_MESSAGES[code];
+  const message =
+    LEVEL_REFUSAL_MESSAGES[code] ?? (LEVEL_CODE.test(code) ? UNKNOWN_LEVEL_REFUSAL_MESSAGE : null);
   return message ? { code, message, needsLevel: LEVEL_SETUP_CODES.has(code) } : null;
 }
 

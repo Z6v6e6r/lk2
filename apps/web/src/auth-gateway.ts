@@ -191,6 +191,7 @@ export type {
   ActivityHistoryStatus,
 } from '@phub/api-sdk';
 import { maskPhone } from '@phub/auth';
+import type { ResidencyGateway } from './residency-purchase.js';
 import {
   ClientTransportError,
   createClientTransportExecutor,
@@ -614,6 +615,11 @@ export interface AuthGateway {
    */
   readonly createPaidGame?: PadlHubApiClient['createPaidGame'];
   readonly monthlyPurchase?: MonthlyPurchaseGateway;
+  /**
+   * Residency status read and purchase operations (docs/contracts/residency-purchase.md). Web
+   * only: native shells have no reviewed residency transport or payment handoff yet.
+   */
+  readonly residency?: ResidencyGateway;
   readonly quarterCreatePrincipal?: () => string | null;
   /** Close the quarter command before native async cleanup. */
   readonly closeQuarterCreate?: () => void;
@@ -1035,6 +1041,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     } finally {
       monthlyPending.delete(entry);
     }
+  }
+  /** A result that arrives after the account changed is discarded, never shown to the new one. */
+  async function residencyCall<T>(load: () => Promise<T>): Promise<T> {
+    const p = requireQuarterPrincipal();
+    const result = await load();
+    requireQuarterPrincipal(p);
+    return result;
   }
   const clientOptions = {
     baseUrl: options.baseUrl.replace(/\/$/, ''),
@@ -2836,6 +2849,26 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.createGame(input, options);
     },
 
+    ...(!options.nativeSessionTransport
+      ? {
+          residency: {
+            residencyPrincipal: quarterCreatePrincipal,
+            getClientResidency: () => residencyCall(() => client.getClientResidency()),
+            getResidencyPurchaseCapability: () =>
+              residencyCall(() => client.getResidencyPurchaseCapability()),
+            quoteResidencyPurchase: (offerId, key) =>
+              residencyCall(() => client.quoteResidencyPurchase(offerId, key)),
+            purchaseResidency: (input, key) =>
+              residencyCall(() => client.purchaseResidency(input, key)),
+            getResidencyPurchase: (key) => residencyCall(() => client.getResidencyPurchase(key)),
+            reconcileResidencyPurchase: (id, key) =>
+              residencyCall(() => client.reconcileResidencyPurchase(id, key)),
+            launchResidencyPayment: (id, key) =>
+              residencyCall(() => client.launchResidencyPayment(id, key)),
+            openResidencyPayment: (paymentUrl) => window.location.assign(paymentUrl),
+          } satisfies ResidencyGateway,
+        }
+      : {}),
     ...(options.nativeSessionTransport && options.openSubscriptionPayment
       ? {
           monthlyPurchase: {

@@ -146,6 +146,9 @@ const NotificationsPage = lazy(() =>
 const PushOptInPage = lazy(() =>
   import('./PushOptInPage.js').then((module) => ({ default: module.PushOptInPage })),
 );
+const ResidencyPage = lazy(() =>
+  import('./ResidencyPage.js').then((module) => ({ default: module.ResidencyPage })),
+);
 const SubscriptionsPage = lazy(() =>
   import('./SubscriptionsPage.js').then((module) => ({ default: module.SubscriptionsPage })),
 );
@@ -200,6 +203,7 @@ type ProtectedRoute =
   | { readonly kind: 'tournament-chat'; readonly tournamentId: string }
   | { readonly kind: 'subscriptions'; readonly subscriptionId?: string }
   | { readonly kind: 'gift-certificates' }
+  | { readonly kind: 'residency' }
   | { readonly kind: 'section'; readonly title: string }
   | { readonly kind: 'not-found' };
 
@@ -263,6 +267,7 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   if (subscriptionMatch?.[1])
     return { kind: 'subscriptions', subscriptionId: subscriptionMatch[1].toLowerCase() };
   if (normalizedPath === '/gift-certificates') return { kind: 'gift-certificates' };
+  if (normalizedPath === '/residency') return { kind: 'residency' };
   const gameMatch = normalizedPath.match(
     /^\/games\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
   );
@@ -3512,6 +3517,15 @@ export function App({
             }}
           />
         </>
+      );
+    }
+    if (protectedRoute.kind === 'residency') {
+      return (
+        <ResidencyPage
+          key={`${context.tenant.id}:${context.user.id}`}
+          {...(clientPlatform === 'web' && gateway.residency ? { gateway: gateway.residency } : {})}
+          principal={{ tenantId: context.tenant.id, userId: context.user.id }}
+        />
       );
     }
     if (protectedRoute.kind === 'gift-certificates') {

@@ -122,6 +122,40 @@ describe('rendered actual tournament registration panel', () => {
     expect(screen.queryByLabelText('Ваш уровень')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Записаться на турнир' })).toBeEnabled();
   });
+  it.each([
+    ['LEGACY_LEVEL_CONSTRAINT', 'Ваш уровень не подходит под ограничения этой активности.'],
+    ['FUTURE_LEVEL_RULE', 'Запись отклонена: ваш уровень не подходит под условия.'],
+  ])(
+    'server level refusal %s is shown as a refusal, not as an unconfirmed result',
+    async (code, text) => {
+      const gateway = {
+        tournamentPrincipal: () => `${id}:${id}:0:0`,
+        getTournamentRegistration: vi.fn(
+          async () => await Promise.resolve({ commandsEnabled: true, result: null }),
+        ),
+        commandTournament: vi.fn(async () => {
+          await Promise.resolve();
+          throw Object.assign(new Error('level'), { status: 409, code });
+        }),
+        retryTournament: vi.fn(),
+      } as unknown as AuthGateway;
+      const user = userEvent.setup();
+      render(
+        <TournamentRegistrationPanel
+          gateway={gateway}
+          principal={{ tenantId: id, userId: id }}
+          tournamentId={id}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Записаться на турнир' })).toBeEnabled(),
+      );
+      await user.click(screen.getByRole('button', { name: 'Записаться на турнир' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(text);
+      expect(screen.queryByText(/ожидает подтверждения/)).not.toBeInTheDocument();
+      expect(gateway.retryTournament).not.toHaveBeenCalled();
+    },
+  );
   it('UNKNOWN manual same-operation recovery, then exact original LEAVE', async () => {
     const gateway = {
       tournamentPrincipal: () => `${id}:${id}:0:0`,
