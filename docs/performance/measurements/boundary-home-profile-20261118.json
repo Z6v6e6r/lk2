@@ -15,10 +15,7 @@
     "cpuThrottle": 4,
     "network": "1.6Mbps down / 750kbps up, 150ms RTT",
     "repetitions": 1,
-    "scenarios": [
-      "home",
-      "profile"
-    ],
+    "scenarios": ["home", "profile"],
     "alternating": false,
     "variants": [
       {
@@ -46,90 +43,70 @@
             "median": 2519,
             "min": 2519,
             "max": 2519,
-            "values": [
-              2519
-            ]
+            "values": [2519]
           },
           "domAtMs": {
             "runs": 1,
             "median": 2374,
             "min": 2374,
             "max": 2374,
-            "values": [
-              2374
-            ]
+            "values": [2374]
           },
           "recommendationsDisplayedMs": {
             "runs": 1,
             "median": 3751,
             "min": 3751,
             "max": 3751,
-            "values": [
-              3751
-            ]
+            "values": [3751]
           },
           "requiredResponseEndMs": {
             "runs": 1,
             "median": 1850,
             "min": 1850,
             "max": 1850,
-            "values": [
-              1850
-            ]
+            "values": [1850]
           },
           "recommendationsResponseEndMs": {
             "runs": 1,
             "median": 3697,
             "min": 3697,
             "max": 3697,
-            "values": [
-              3697
-            ]
+            "values": [3697]
           },
           "sessionRestoreMs": {
             "runs": 1,
             "median": 1658,
             "min": 1658,
             "max": 1658,
-            "values": [
-              1658
-            ]
+            "values": [1658]
           },
           "firstApiRequestMs": {
             "runs": 1,
             "median": 1485,
             "min": 1485,
             "max": 1485,
-            "values": [
-              1485
-            ]
+            "values": [1485]
           },
           "lastApiResponseMs": {
             "runs": 1,
             "median": 3697,
             "min": 3697,
             "max": 3697,
-            "values": [
-              3697
-            ]
+            "values": [3697]
           },
           "renderAfterResponseEndMs": {
             "runs": 1,
             "median": 669,
             "min": 669,
             "max": 669,
-            "values": [
-              669
-            ]
+            "values": [669]
           },
           "enrichmentAfterRequiredResponseMs": {
             "runs": 1,
             "median": 1847,
             "min": 1847,
             "max": 1847,
-            "values": [
-              1847
-            ]
+            "values": [1847]
           },
           "apiPayloadBytes": {
             "runs": 1,
@@ -205,90 +182,70 @@
             "median": 2807,
             "min": 2807,
             "max": 2807,
-            "values": [
-              2807
-            ]
+            "values": [2807]
           },
           "domAtMs": {
             "runs": 1,
             "median": 2800,
             "min": 2800,
             "max": 2800,
-            "values": [
-              2800
-            ]
+            "values": [2800]
           },
           "profileReadyDisplayedMs": {
             "runs": 1,
             "median": 2807,
             "min": 2807,
             "max": 2807,
-            "values": [
-              2807
-            ]
+            "values": [2807]
           },
           "requiredResponseEndMs": {
             "runs": 1,
             "median": 2004,
             "min": 2004,
             "max": 2004,
-            "values": [
-              2004
-            ]
+            "values": [2004]
           },
           "profileReadyResponseEndMs": {
             "runs": 1,
             "median": 2004,
             "min": 2004,
             "max": 2004,
-            "values": [
-              2004
-            ]
+            "values": [2004]
           },
           "sessionRestoreMs": {
             "runs": 1,
             "median": 1641,
             "min": 1641,
             "max": 1641,
-            "values": [
-              1641
-            ]
+            "values": [1641]
           },
           "firstApiRequestMs": {
             "runs": 1,
             "median": 1474,
             "min": 1474,
             "max": 1474,
-            "values": [
-              1474
-            ]
+            "values": [1474]
           },
           "lastApiResponseMs": {
             "runs": 1,
             "median": 2004,
             "min": 2004,
             "max": 2004,
-            "values": [
-              2004
-            ]
+            "values": [2004]
           },
           "renderAfterResponseEndMs": {
             "runs": 1,
             "median": 803,
             "min": 803,
             "max": 803,
-            "values": [
-              803
-            ]
+            "values": [803]
           },
           "enrichmentAfterRequiredResponseMs": {
             "runs": 1,
             "median": 0,
             "min": 0,
             "max": 0,
-            "values": [
-              0
-            ]
+            "values": [0]
           },
           "apiPayloadBytes": {
             "runs": 1,
