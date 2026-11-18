@@ -1631,6 +1631,9 @@ describe('Timeweb amd64 publication workflow', () => {
         CI_TEST_WATCHDOG_SECONDS: '1380',
         CI_TEST_SKIP_PAUSED_RELEASE_TOOLING:
           "${{ needs.ci-plan.outputs.release_tooling_tests == 'false' && '1' || '0' }}",
+        CI_REQUIRE_QA_POSTGRES: '1',
+        GAME_CAPACITY_RACE_TEST_DATABASE_URL: '${{ env.DATABASE_URL }}',
+        SUBSCRIPTION_ACTIVATION_TEST_DATABASE_URL: '${{ env.DATABASE_URL }}',
       },
     });
     expect(artifactStep).toMatchObject({

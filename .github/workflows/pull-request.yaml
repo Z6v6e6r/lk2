@@ -254,7 +254,12 @@ jobs:
           CI_TEST_WATCHDOG_SECONDS: '1380'
           # A change that stays inside product areas skips scripts/paused-release-tooling-tests.txt.
           CI_TEST_SKIP_PAUSED_RELEASE_TOOLING: ${{ needs.ci-plan.outputs.release_tooling_tests == 'false' && '1' || '0' }}
+          CI_REQUIRE_QA_POSTGRES: '1'
+          GAME_CAPACITY_RACE_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          SUBSCRIPTION_ACTIVATION_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: scripts/run-ci-tests-with-diagnostics.sh
+      - name: Require all eight PostgreSQL QA scenarios without skips
+        run: python3 scripts/verify-required-qa-postgres.py .ci-artifacts/test-and-coverage/junit.xml
       - name: Verify closed 0103 and 0104 migration modes on PostgreSQL 16
         timeout-minutes: 3
         env:

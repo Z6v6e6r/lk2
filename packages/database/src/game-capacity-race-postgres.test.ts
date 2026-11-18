@@ -9,9 +9,9 @@
  * nearly-full game must admit exactly the free seats, reject the rest with GAME_FULL, leave the
  * roster equal to capacity, and leak no raw database error.
  *
- * This is the real-Postgres concurrency proof. It runs only when
- * GAME_CAPACITY_RACE_TEST_DATABASE_URL points at a disposable database and SKIPS (not fails)
- * otherwise; the QA run that produced the reported numbers pointed it at a disposable PostgreSQL 16.
+ * This is the real-Postgres concurrency proof. Local runs without a disposable database may skip.
+ * CI_REQUIRE_QA_POSTGRES=1 makes a missing URL an error; CI also verifies all three named cases
+ * actually passed in JUnit. Connection/schema errors are failures, never skips.
  *
  * Occupancy counts every ACTIVE participation, so the organizer written by `create()` takes one seat.
  * The fixtures below therefore fill to `capacity - 1` *including* the organizer.
@@ -26,6 +26,8 @@ import { createGameRepository } from './game-repository.js';
 import { createGameRosterRepository } from './game-roster-repository.js';
 
 const connectionString = process.env.GAME_CAPACITY_RACE_TEST_DATABASE_URL;
+if (process.env.CI_REQUIRE_QA_POSTGRES === '1' && !connectionString?.trim())
+  throw new Error('REQUIRED_QA_POSTGRES_MISSING_GAME_CAPACITY_RACE_TEST_DATABASE_URL');
 const describePostgres = connectionString ? describe : describe.skip;
 
 function hash(value: string): string {
@@ -36,7 +38,13 @@ describePostgres(
   'scenario 1: concurrent joins against real PostgreSQL capacity',
   { timeout: 30_000 },
   () => {
-    const pool = new Pool({ connectionString, max: 8 });
+    const pool = new Pool({
+      connectionString,
+      max: 8,
+      connectionTimeoutMillis: 5000,
+      statement_timeout: 10000,
+      query_timeout: 10000,
+    });
     const games = createGameRepository(pool);
     const roster = createGameRosterRepository(pool);
     const tenantId = randomUUID();

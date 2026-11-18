@@ -1,9 +1,8 @@
 /**
  * QA scenario 5 (authoritative) — activation confirmation must be idempotent.
  *
- * Which activation exists in LK2 today: there is no residency-pass activation on main (the
- * residency client surface is read-only: `GET /user/api/v1/:tenantKey/residency`), so the durable
- * "confirm and activate" write path in this repository is the monthly subscription purchase:
+ * This proves the existing monthly subscription purchase, not the LK1 residency owner (#443)
+ * or its separately prepared LK2 consumer (#684). The durable write path exercised here is:
  * a provider receipt is applied to `commerce.monthly_purchase_attempts`, moving the operation to
  * `PAID` and writing exactly one `SUBSCRIPTION_PURCHASE_STATE` audit row plus one outbox event
  * (packages/database/src/monthly-purchase-repository.ts:263-293, audit at :135-147).
@@ -12,8 +11,9 @@
  * provider callback or a double-clicked confirmation must not duplicate the transition, the audit
  * row, the outbox event, or the attempt row. This test pins that.
  *
- * Runs only when SUBSCRIPTION_ACTIVATION_TEST_DATABASE_URL points at a disposable database and
- * SKIPS otherwise — the case in this QA environment (no local Postgres).
+ * Local runs without SUBSCRIPTION_ACTIVATION_TEST_DATABASE_URL may skip. CI_REQUIRE_QA_POSTGRES=1
+ * refuses a missing URL; CI verifies all five named cases passed in JUnit. Unavailable databases
+ * and missing schemas fail normally rather than silently falling back to a skipped suite.
  */
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -33,6 +33,8 @@ import {
 } from './monthly-purchase-repository.js';
 
 const connectionString = process.env.SUBSCRIPTION_ACTIVATION_TEST_DATABASE_URL;
+if (process.env.CI_REQUIRE_QA_POSTGRES === '1' && !connectionString?.trim())
+  throw new Error('REQUIRED_QA_POSTGRES_MISSING_SUBSCRIPTION_ACTIVATION_TEST_DATABASE_URL');
 const describePostgres = connectionString ? describe : describe.skip;
 
 const TENANT_KEY = 'iSkq6G';
@@ -41,9 +43,15 @@ describePostgres(
   'scenario 5: subscription activation confirmation is idempotent',
   { timeout: 30_000 },
   () => {
-    const pool = new Pool({ connectionString, max: 6 });
+    const poolOptions = {
+      connectionString,
+      connectionTimeoutMillis: 5000,
+      statement_timeout: 10000,
+      query_timeout: 10000,
+    };
+    const pool = new Pool({ ...poolOptions, max: 6 });
     // Two pools: a retried provider callback lands on a different connection than the original.
-    const retryPool = new Pool({ connectionString, max: 2 });
+    const retryPool = new Pool({ ...poolOptions, max: 2 });
     const repository = createMonthlyPurchaseRepository(pool);
     const retryRepository = createMonthlyPurchaseRepository(retryPool);
     const tenantId = randomUUID();
