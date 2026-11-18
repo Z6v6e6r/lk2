@@ -83,6 +83,7 @@ describe('booked operation v3 client', () => {
       target,
       quote,
       settlement,
+      requestSha256: 'sha256:' + 'f'.repeat(64),
     });
     await expect(api.preflight(preflight, envelope)).resolves.toMatchObject({
       settlement: { toPayMinor: 50000, state: 'OPEN' },
@@ -101,12 +102,15 @@ describe('booked operation v3 client', () => {
     const { calls, client: api } = client({
       contractVersion: 3,
       operationId: id(3),
+      quoteId: id(2),
+      requestSha256: 'sha256:' + 'f'.repeat(64),
       status: 'PENDING',
       asOf: '2027-01-10T08:30:00.000Z',
       payment: { state: 'PAID', toPayMinor: 50000, paidMinor: 50000, checkoutUrl: null },
       booking: { state: 'PENDING' },
       visit: { state: 'CONSUMED', usageRef: 'usage-7' },
       reason: 'OWNER_PENDING',
+      receipt: null,
     });
     await expect(api.read(id(3), { ...envelopeWithoutToken })).resolves.toMatchObject({
       status: 'PENDING',
@@ -115,6 +119,26 @@ describe('booked operation v3 client', () => {
     });
     expect(calls[0]?.url).toBe('https://lk1.example/lk/integrations/v3/booked-operations/' + id(3));
     expect(new Headers(calls[0]?.init?.headers).get('X-Subscription-Actor-Token')).toBeNull();
+  });
+
+  it('opens the breaker after three transport failures without a fourth request', async () => {
+    const fetchImplementation = vi.fn(() => Promise.reject(new Error('synthetic network failure')));
+    const api = new BookedOperationV3Client({
+      baseUrl: 'https://lk1.example/',
+      timeoutMs: 1_000,
+      fetchImplementation,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(api.preflight(preflight, envelope)).rejects.toBeInstanceOf(
+        BookedOperationV3ClientError,
+      );
+    }
+    await expect(api.preflight(preflight, envelope)).rejects.toBeInstanceOf(
+      BookedOperationV3ClientError,
+    );
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
   });
 
   it('cancels idempotently and rejects a non-https owner or a missing actor token', async () => {

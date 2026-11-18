@@ -57,6 +57,19 @@ export interface BookedOperationV3Settlement {
   readonly state: BookedOperationV3PaymentState;
 }
 
+export interface BookedOperationV3Receipt {
+  readonly receiptId: string;
+  readonly confirmedAt: string;
+  readonly bookingRef: string;
+  readonly usageRef?: string;
+  readonly appliedRule: string;
+  readonly priceCharged: {
+    readonly amountMinor: number;
+    readonly currency: 'RUB';
+  };
+  readonly provider: 'VIVA';
+}
+
 export interface BookedOperationV3PreflightRequest {
   readonly contractVersion: 3;
   readonly action: BookedOperationV3Action;
@@ -72,19 +85,26 @@ export interface BookedOperationV3PreflightResult {
   readonly target: BookedOperationV3Target;
   readonly quote: BookedOperationV3Quote | null;
   readonly settlement: BookedOperationV3Settlement | null;
+  /** Binds the non-binding response to the signed request that produced it. */
+  readonly requestSha256: string;
 }
 
 export interface BookedOperationV3AdmissionRequest extends BookedOperationV3PreflightRequest {
+  readonly quoteId: string;
   readonly settlementConsent: {
     readonly quoteId: string;
     readonly amountMinor: number;
     readonly currency: 'RUB';
+    readonly expiresAt: string;
   };
 }
 
 export interface BookedOperationV3ReadOutcome {
   readonly contractVersion: 3;
   readonly operationId: string;
+  /** Echo of the quote this operation was admitted for; null for a legacy/read-only row. */
+  readonly quoteId: string | null;
+  readonly requestSha256: string;
   readonly status: 'PENDING' | 'UNKNOWN' | 'CONFIRMED' | 'CANCELLED';
   readonly asOf: string | null;
   readonly payment: {
@@ -102,6 +122,8 @@ export interface BookedOperationV3ReadOutcome {
     readonly usageRef?: string;
   };
   readonly reason: string | null;
+  /** Present only for a CONFIRMED operation; the only accepted proof of success. */
+  readonly receipt: BookedOperationV3Receipt | null;
 }
 
 export interface BookedOperationV3CancelRequest {
@@ -281,27 +303,44 @@ export function parseBookedOperationV3Settlement(value: unknown): BookedOperatio
 export function parseBookedOperationV3PreflightResult(
   value: unknown,
 ): BookedOperationV3PreflightResult {
-  if (!keys(value, 'contractVersion,nonBinding,operationId,action,target,quote,settlement'))
+  if (
+    !keys(
+      value,
+      'contractVersion,nonBinding,operationId,action,target,quote,settlement,requestSha256',
+    )
+  )
     invalidResult();
-  if (value.contractVersion !== 3 || value.nonBinding !== true || !uuid(value.operationId))
+  if (
+    value.contractVersion !== 3 ||
+    value.nonBinding !== true ||
+    !uuid(value.operationId) ||
+    typeof value.requestSha256 !== 'string' ||
+    !sha256Pattern.test(value.requestSha256)
+  )
     invalidResult();
   if (value.action !== 'JOIN_GAME' && value.action !== 'CREATE_GAME') invalidResult();
+  const quote = value.quote === null ? null : parseBookedOperationV3Quote(value.quote);
+  const settlement =
+    value.settlement === null ? null : parseBookedOperationV3Settlement(value.settlement);
+  if (quote && quote.operationId !== value.operationId) invalidResult();
+  if (quote && settlement && quote.surchargeMinor !== settlement.toPayMinor) invalidResult();
   return {
     contractVersion: 3,
     nonBinding: true,
     operationId: value.operationId,
     action: value.action,
     target: parseBookedOperationV3Target(value.target),
-    quote: value.quote === null ? null : parseBookedOperationV3Quote(value.quote),
-    settlement:
-      value.settlement === null ? null : parseBookedOperationV3Settlement(value.settlement),
+    quote,
+    settlement,
+    requestSha256: value.requestSha256,
   };
 }
 
 export function parseBookedOperationV3AdmissionRequest(
   value: unknown,
 ): BookedOperationV3AdmissionRequest {
-  if (!keys(value, 'contractVersion,action,target,paymentIntent,settlementConsent')) invalid();
+  if (!keys(value, 'contractVersion,action,target,paymentIntent,quoteId,settlementConsent'))
+    invalid();
   const base = parseBookedOperationV3PreflightRequest({
     contractVersion: value.contractVersion,
     action: value.action,
@@ -309,29 +348,79 @@ export function parseBookedOperationV3AdmissionRequest(
     paymentIntent: value.paymentIntent,
   });
   const consent = value.settlementConsent;
-  if (!keys(consent, 'quoteId,amountMinor,currency')) invalid();
+  if (!keys(consent, 'quoteId,amountMinor,currency,expiresAt')) invalid();
   if (
+    !uuid(value.quoteId) ||
     !uuid(consent.quoteId) ||
+    consent.quoteId !== value.quoteId ||
     !integer(consent.amountMinor, 0, Number.MAX_SAFE_INTEGER) ||
-    consent.currency !== 'RUB'
+    consent.currency !== 'RUB' ||
+    !instant(consent.expiresAt) ||
+    Date.parse(consent.expiresAt) <= Date.now()
   )
     invalid();
   return {
     ...base,
+    quoteId: value.quoteId,
     settlementConsent: {
       quoteId: consent.quoteId,
       amountMinor: Number(consent.amountMinor),
       currency: 'RUB',
+      expiresAt: consent.expiresAt,
     },
   };
 }
 
-export function parseBookedOperationV3ReadOutcome(value: unknown): BookedOperationV3ReadOutcome {
-  if (!keys(value, 'contractVersion,operationId,status,asOf,payment,booking,visit,reason'))
+export function parseBookedOperationV3Receipt(value: unknown): BookedOperationV3Receipt {
+  if (
+    !keysWithOptional(
+      value,
+      'receiptId,confirmedAt,bookingRef,appliedRule,priceCharged,provider',
+      'usageRef',
+    )
+  )
     invalidResult();
+  if (
+    !id(value.receiptId) ||
+    !instant(value.confirmedAt) ||
+    !id(value.bookingRef) ||
+    !id(value.appliedRule) ||
+    value.provider !== 'VIVA' ||
+    !keys(value.priceCharged, 'amountMinor,currency') ||
+    !integer(value.priceCharged.amountMinor, 0, Number.MAX_SAFE_INTEGER) ||
+    value.priceCharged.currency !== 'RUB' ||
+    (value.usageRef !== undefined && !id(value.usageRef))
+  )
+    invalidResult();
+  return {
+    receiptId: value.receiptId,
+    confirmedAt: value.confirmedAt,
+    bookingRef: value.bookingRef,
+    ...(value.usageRef === undefined ? {} : { usageRef: value.usageRef }),
+    appliedRule: value.appliedRule,
+    priceCharged: {
+      amountMinor: Number(value.priceCharged.amountMinor),
+      currency: 'RUB',
+    },
+    provider: 'VIVA',
+  };
+}
+
+export function parseBookedOperationV3ReadOutcome(value: unknown): BookedOperationV3ReadOutcome {
+  if (
+    !keys(
+      value,
+      'contractVersion,operationId,quoteId,requestSha256,status,asOf,payment,booking,visit,reason,receipt',
+    )
+  )
+    invalidResult();
+  const requestSha256 = value.requestSha256;
   if (
     value.contractVersion !== 3 ||
     !uuid(value.operationId) ||
+    (value.quoteId !== null && !uuid(value.quoteId)) ||
+    typeof requestSha256 !== 'string' ||
+    !sha256Pattern.test(requestSha256) ||
     !['PENDING', 'UNKNOWN', 'CONFIRMED', 'CANCELLED'].includes(String(value.status)) ||
     (value.asOf !== null && !instant(value.asOf)) ||
     !keys(value.payment, 'state,toPayMinor,paidMinor,checkoutUrl') ||
@@ -355,9 +444,13 @@ export function parseBookedOperationV3ReadOutcome(value: unknown): BookedOperati
     (value.visit.usageRef !== undefined && !id(value.visit.usageRef))
   )
     invalidResult();
+  const receipt = value.receipt === null ? null : parseBookedOperationV3Receipt(value.receipt);
+  if ((value.status === 'CONFIRMED') !== (receipt !== null)) invalidResult();
   return {
     contractVersion: 3,
     operationId: value.operationId,
+    quoteId: value.quoteId,
+    requestSha256,
     status: value.status as BookedOperationV3ReadOutcome['status'],
     asOf: value.asOf,
     payment: {
@@ -375,6 +468,7 @@ export function parseBookedOperationV3ReadOutcome(value: unknown): BookedOperati
       ...(value.visit.usageRef === undefined ? {} : { usageRef: value.visit.usageRef }),
     },
     reason: value.reason,
+    receipt,
   };
 }
 
@@ -396,7 +490,10 @@ export function parseBookedOperationV3CancelResult(value: unknown): BookedOperat
     !['CLOSING', 'CLOSED', 'PAID', 'UNKNOWN'].includes(String(value.status)) ||
     typeof value.cancelled !== 'boolean' ||
     typeof value.limitReleased !== 'boolean' ||
-    typeof value.visitReturned !== 'boolean'
+    typeof value.visitReturned !== 'boolean' ||
+    (value.status === 'CLOSED' && value.cancelled !== true) ||
+    (value.status !== 'CLOSED' && value.cancelled !== false) ||
+    (value.status !== 'CLOSED' && (value.limitReleased !== false || value.visitReturned !== false))
   )
     invalidResult();
   return {

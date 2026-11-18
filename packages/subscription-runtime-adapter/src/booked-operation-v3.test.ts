@@ -54,6 +54,7 @@ describe('booked operation v3 contract', () => {
         target,
         quote,
         settlement,
+        requestSha256: 'sha256:' + 'b'.repeat(64),
       }),
     ).toMatchObject({ operationId: id(3), quote: { durationMinutes: 120 }, settlement });
   });
@@ -74,13 +75,25 @@ describe('booked operation v3 contract', () => {
     expect(
       parseBookedOperationV3AdmissionRequest({
         ...preflight,
-        settlementConsent: { quoteId: id(2), amountMinor: 90000, currency: 'RUB' },
+        quoteId: id(2),
+        settlementConsent: {
+          quoteId: id(2),
+          amountMinor: 90000,
+          currency: 'RUB',
+          expiresAt: '2027-01-10T08:55:00.000Z',
+        },
       }),
     ).toMatchObject({ settlementConsent: { amountMinor: 90000 } });
     expect(() =>
       parseBookedOperationV3AdmissionRequest({
         ...preflight,
-        settlementConsent: { quoteId: 'not-a-uuid', amountMinor: 90000, currency: 'RUB' },
+        quoteId: id(2),
+        settlementConsent: {
+          quoteId: 'not-a-uuid',
+          amountMinor: 90000,
+          currency: 'RUB',
+          expiresAt: '2027-01-10T08:55:00.000Z',
+        },
       }),
     ).toThrow(BookedOperationV3ContractError);
   });
@@ -90,6 +103,8 @@ describe('booked operation v3 contract', () => {
       parseBookedOperationV3ReadOutcome({
         contractVersion: 3,
         operationId: id(3),
+        quoteId: id(2),
+        requestSha256: 'sha256:' + 'c'.repeat(64),
         status: 'PENDING',
         asOf: '2027-01-10T08:30:00.000Z',
         payment: {
@@ -101,6 +116,7 @@ describe('booked operation v3 contract', () => {
         booking: { state: 'PENDING' },
         visit: { state: 'CONSUMED', usageRef: 'usage-7' },
         reason: 'OWNER_PENDING',
+        receipt: null,
       }),
     ).toMatchObject({
       payment: { state: 'PAID' },
@@ -118,6 +134,7 @@ describe('booked operation v3 contract', () => {
         action: 'JOIN_GAME',
         target,
         quote,
+        requestSha256: 'sha256:' + 'd'.repeat(64),
         settlement: { ...settlement, checkoutUrl: 'http://padlhub.su/pay/abc' },
       }),
     ).toThrow(BookedOperationV3ContractError);
@@ -129,7 +146,62 @@ describe('booked operation v3 contract', () => {
         action: 'JOIN_GAME',
         target,
         quote,
+        requestSha256: 'sha256:' + 'd'.repeat(64),
         settlement: { ...settlement, expiresAt: null },
+      }),
+    ).toThrow(BookedOperationV3ContractError);
+  });
+
+  it('requires a bound receipt for CONFIRMED and rejects a missing one', () => {
+    const outcome = {
+      contractVersion: 3,
+      operationId: id(3),
+      quoteId: id(2),
+      requestSha256: 'sha256:' + 'e'.repeat(64),
+      status: 'CONFIRMED' as const,
+      asOf: '2027-01-10T08:40:00.000Z',
+      payment: { state: 'PAID' as const, toPayMinor: 90000, paidMinor: 90000, checkoutUrl: null },
+      booking: { state: 'CONFIRMED' as const, bookingRef: 'booking-7' },
+      visit: { state: 'CONSUMED' as const, usageRef: 'usage-7' },
+      reason: 'OWNER_BOOKING_CONFIRMED',
+      receipt: {
+        receiptId: 'receipt-7',
+        confirmedAt: '2027-01-10T08:40:00.000Z',
+        bookingRef: 'booking-7',
+        usageRef: 'usage-7',
+        appliedRule: 'rule-7',
+        priceCharged: { amountMinor: 90000, currency: 'RUB' as const },
+        provider: 'VIVA' as const,
+      },
+    };
+    expect(parseBookedOperationV3ReadOutcome(outcome)).toMatchObject({
+      status: 'CONFIRMED',
+      receipt: { receiptId: 'receipt-7', priceCharged: { amountMinor: 90000 } },
+    });
+    expect(() => parseBookedOperationV3ReadOutcome({ ...outcome, receipt: null })).toThrow(
+      BookedOperationV3ContractError,
+    );
+  });
+
+  it('rejects a cancel result that claims release facts before CLOSED', () => {
+    expect(() =>
+      parseBookedOperationV3CancelResult({
+        contractVersion: 3,
+        operationId: id(3),
+        status: 'CLOSING',
+        cancelled: false,
+        limitReleased: true,
+        visitReturned: false,
+      }),
+    ).toThrow(BookedOperationV3ContractError);
+    expect(() =>
+      parseBookedOperationV3CancelResult({
+        contractVersion: 3,
+        operationId: id(3),
+        status: 'CLOSED',
+        cancelled: false,
+        limitReleased: true,
+        visitReturned: false,
       }),
     ).toThrow(BookedOperationV3ContractError);
   });
