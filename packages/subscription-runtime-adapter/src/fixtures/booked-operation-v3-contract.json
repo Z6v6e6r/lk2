@@ -1,0 +1,135 @@
+{
+  "preflightRequest": {
+    "contractVersion": 3,
+    "action": "JOIN_GAME",
+    "target": {
+      "kind": "GAME",
+      "id": "00000000-0000-4000-8000-000000000001",
+      "expectedRevision": 7
+    },
+    "paymentIntent": "USE_SUBSCRIPTION"
+  },
+  "preflightResult": {
+    "contractVersion": 3,
+    "nonBinding": true,
+    "operationId": "00000000-0000-4000-8000-000000000003",
+    "action": "JOIN_GAME",
+    "target": {
+      "kind": "GAME",
+      "id": "00000000-0000-4000-8000-000000000001",
+      "expectedRevision": 7
+    },
+    "quote": {
+      "quoteId": "00000000-0000-4000-8000-000000000002",
+      "operationId": "00000000-0000-4000-8000-000000000003",
+      "basis": "SUBSCRIPTION",
+      "durationMinutes": 120,
+      "startsAt": "2027-01-10T09:00:00.000Z",
+      "endsAt": "2027-01-10T11:00:00.000Z",
+      "amountMinor": 90000,
+      "currency": "RUB",
+      "coveredMinutes": 60,
+      "surchargeMinor": 90000,
+      "expiresAt": "2027-01-10T08:55:00.000Z",
+      "policyVersion": "policy-7",
+      "priceDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "settlement": {
+      "mode": "SURCHARGE",
+      "currency": "RUB",
+      "toPayMinor": 90000,
+      "checkoutUrl": "https://padlhub.su/pay/abc",
+      "expiresAt": "2027-01-10T08:55:00.000Z",
+      "state": "OPEN"
+    },
+    "requestSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "admissionRequest": {
+    "contractVersion": 3,
+    "action": "JOIN_GAME",
+    "target": {
+      "kind": "GAME",
+      "id": "00000000-0000-4000-8000-000000000001",
+      "expectedRevision": 7
+    },
+    "paymentIntent": "USE_SUBSCRIPTION",
+    "quoteId": "00000000-0000-4000-8000-000000000002",
+    "settlementConsent": {
+      "quoteId": "00000000-0000-4000-8000-000000000002",
+      "amountMinor": 90000,
+      "currency": "RUB",
+      "expiresAt": "2027-01-10T08:55:00.000Z"
+    }
+  },
+  "readPending": {
+    "contractVersion": 3,
+    "operationId": "00000000-0000-4000-8000-000000000003",
+    "quoteId": "00000000-0000-4000-8000-000000000002",
+    "requestSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "status": "PENDING",
+    "asOf": "2027-01-10T08:30:00.000Z",
+    "payment": {
+      "state": "PAID",
+      "toPayMinor": 90000,
+      "paidMinor": 90000,
+      "checkoutUrl": "https://padlhub.su/pay/abc"
+    },
+    "booking": {
+      "state": "PENDING"
+    },
+    "visit": {
+      "state": "CONSUMED",
+      "usageRef": "usage-7"
+    },
+    "reason": "OWNER_PENDING",
+    "receipt": null
+  },
+  "readConfirmed": {
+    "contractVersion": 3,
+    "operationId": "00000000-0000-4000-8000-000000000003",
+    "quoteId": "00000000-0000-4000-8000-000000000002",
+    "requestSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "status": "CONFIRMED",
+    "asOf": "2027-01-10T08:40:00.000Z",
+    "payment": {
+      "state": "PAID",
+      "toPayMinor": 90000,
+      "paidMinor": 90000,
+      "checkoutUrl": null
+    },
+    "booking": {
+      "state": "CONFIRMED",
+      "bookingRef": "booking-7"
+    },
+    "visit": {
+      "state": "CONSUMED",
+      "usageRef": "usage-7"
+    },
+    "reason": "OWNER_BOOKING_CONFIRMED",
+    "receipt": {
+      "receiptId": "receipt-7",
+      "confirmedAt": "2027-01-10T08:40:00.000Z",
+      "bookingRef": "booking-7",
+      "usageRef": "usage-7",
+      "appliedRule": "rule-7",
+      "priceCharged": {
+        "amountMinor": 90000,
+        "currency": "RUB"
+      },
+      "provider": "VIVA"
+    }
+  },
+  "cancelRequest": {
+    "contractVersion": 3,
+    "operationId": "00000000-0000-4000-8000-000000000003",
+    "reason": "USER_CANCEL"
+  },
+  "cancelClosed": {
+    "contractVersion": 3,
+    "operationId": "00000000-0000-4000-8000-000000000003",
+    "status": "CLOSED",
+    "cancelled": true,
+    "limitReleased": true,
+    "visitReturned": false
+  }
+}

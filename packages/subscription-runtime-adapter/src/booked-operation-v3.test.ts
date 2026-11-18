@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import sharedProducerFixture from './fixtures/booked-operation-v3-contract.json';
 import {
   BookedOperationV3ContractError,
   parseBookedOperationV3AdmissionRequest,
@@ -43,6 +44,22 @@ const settlement = {
 };
 
 describe('booked operation v3 contract', () => {
+  it('accepts the same producer fixture as the LK1 contract test', () => {
+    expect(
+      parseBookedOperationV3PreflightResult(sharedProducerFixture.preflightResult),
+    ).toMatchObject({ quote: { durationMinutes: 120 }, settlement: { toPayMinor: 90000 } });
+    expect(
+      parseBookedOperationV3AdmissionRequest(sharedProducerFixture.admissionRequest),
+    ).toMatchObject({ settlementConsent: { amountMinor: 90000 } });
+    expect(parseBookedOperationV3ReadOutcome(sharedProducerFixture.readConfirmed)).toMatchObject({
+      receipt: { receiptId: 'receipt-7' },
+    });
+    expect(parseBookedOperationV3CancelResult(sharedProducerFixture.cancelClosed)).toMatchObject({
+      status: 'CLOSED',
+      limitReleased: true,
+    });
+  });
+
   it('accepts a 120-minute preflight and a surcharge settlement', () => {
     expect(parseBookedOperationV3PreflightRequest(preflight)).toEqual(preflight);
     expect(
