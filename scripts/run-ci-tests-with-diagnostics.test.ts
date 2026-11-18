@@ -1188,7 +1188,7 @@ describe('CI supervisor finalization primitives', () => {
     const result = await runSupervisorPrimitives(
       directory,
       [
-        "# Leader exits immediately, its same-group child keeps running for 0.3s.",
+        '# Leader exits immediately, its same-group child keeps running for 0.3s.',
         "set -m; bash -c 'sleep 0.3 & exit 0' & test_pgid=$!; set +m",
         'sleep 0.05',
         'started=$(now_milliseconds)',
