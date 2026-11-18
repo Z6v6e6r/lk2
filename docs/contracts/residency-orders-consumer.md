@@ -223,7 +223,7 @@ The equivalent owner-side suites are run in the LK1 checkout:
 cd "$LK1"
 LK_TEST_MONGO_URI="mongodb://127.0.0.1:27017/lk_residency_local" \
   npm run -s test:residency-lifecycle
-# 99 tests: 99 pass, 0 skipped against a disposable Mongo (9 real-server scenarios)
+# 101 tests: 101 pass, 0 skipped against a disposable Mongo (9 real-server scenarios)
 ```
 
 The mandatory LK1 CI job runs the same script against a disposable `mongo:8.0.5` service with
