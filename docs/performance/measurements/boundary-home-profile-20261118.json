@@ -1,0 +1,1830 @@
+{
+  "harness": "scenario-stand-2026-11-18",
+  "generatedAt": "2026-11-18T10:45:38.093Z",
+  "clock": {
+    "rule": "all durations come from the page performance timeline; Node wall clock only for run bookkeeping",
+    "documentNavigationOrigin": "performance entry startTime 0",
+    "inAppTransitionOrigin": "window.__PHUB_NAV_START captured at the user action"
+  },
+  "environment": {
+    "chrome": "Chrome/157.0.8103.79",
+    "viewport": {
+      "width": 412,
+      "height": 915
+    },
+    "cpuThrottle": 4,
+    "network": "1.6Mbps down / 750kbps up, 150ms RTT",
+    "repetitions": 1,
+    "scenarios": [
+      "home",
+      "profile"
+    ],
+    "alternating": false,
+    "variants": [
+      {
+        "name": "candidate",
+        "url": "http://127.0.0.1:4190"
+      }
+    ],
+    "stub": {
+      "candidate": {
+        "latencyMs": 120,
+        "dist": "apps/web/dist"
+      }
+    }
+  },
+  "series": {
+    "candidate": {
+      "home": {
+        "validRuns": 1,
+        "attempts": 1,
+        "excluded": [],
+        "stats": {
+          "runs": 1,
+          "displayedMs": {
+            "runs": 1,
+            "median": 2519,
+            "min": 2519,
+            "max": 2519,
+            "values": [
+              2519
+            ]
+          },
+          "domAtMs": {
+            "runs": 1,
+            "median": 2374,
+            "min": 2374,
+            "max": 2374,
+            "values": [
+              2374
+            ]
+          },
+          "recommendationsDisplayedMs": {
+            "runs": 1,
+            "median": 3751,
+            "min": 3751,
+            "max": 3751,
+            "values": [
+              3751
+            ]
+          },
+          "requiredResponseEndMs": {
+            "runs": 1,
+            "median": 1850,
+            "min": 1850,
+            "max": 1850,
+            "values": [
+              1850
+            ]
+          },
+          "recommendationsResponseEndMs": {
+            "runs": 1,
+            "median": 3697,
+            "min": 3697,
+            "max": 3697,
+            "values": [
+              3697
+            ]
+          },
+          "sessionRestoreMs": {
+            "runs": 1,
+            "median": 1658,
+            "min": 1658,
+            "max": 1658,
+            "values": [
+              1658
+            ]
+          },
+          "firstApiRequestMs": {
+            "runs": 1,
+            "median": 1485,
+            "min": 1485,
+            "max": 1485,
+            "values": [
+              1485
+            ]
+          },
+          "lastApiResponseMs": {
+            "runs": 1,
+            "median": 3697,
+            "min": 3697,
+            "max": 3697,
+            "values": [
+              3697
+            ]
+          },
+          "renderAfterResponseEndMs": {
+            "runs": 1,
+            "median": 669,
+            "min": 669,
+            "max": 669,
+            "values": [
+              669
+            ]
+          },
+          "enrichmentAfterRequiredResponseMs": {
+            "runs": 1,
+            "median": 1847,
+            "min": 1847,
+            "max": 1847,
+            "values": [
+              1847
+            ]
+          },
+          "apiPayloadBytes": {
+            "runs": 1,
+            "median": 5775,
+            "min": 5775,
+            "max": 5775
+          },
+          "lateCompletionsAfterClose": {
+            "runs": 1,
+            "total": 0,
+            "max": 0
+          },
+          "apiRequests": {
+            "runs": 1,
+            "median": 11,
+            "min": 11,
+            "max": 11
+          },
+          "networkBytes": {
+            "total": {
+              "runs": 1,
+              "median": 340743,
+              "min": 340743,
+              "max": 340743
+            },
+            "api": {
+              "runs": 1,
+              "median": 6776,
+              "min": 6776,
+              "max": 6776
+            },
+            "js": {
+              "runs": 1,
+              "median": 245173,
+              "min": 245173,
+              "max": 245173
+            },
+            "css": {
+              "runs": 1,
+              "median": 46831,
+              "min": 46831,
+              "max": 46831
+            },
+            "font": {
+              "runs": 1,
+              "median": 28304,
+              "min": 28304,
+              "max": 28304
+            },
+            "image": {
+              "runs": 1,
+              "median": 13046,
+              "min": 13046,
+              "max": 13046
+            },
+            "other": {
+              "runs": 1,
+              "median": 613,
+              "min": 613,
+              "max": 613
+            }
+          }
+        }
+      },
+      "profile": {
+        "validRuns": 1,
+        "attempts": 1,
+        "excluded": [],
+        "stats": {
+          "runs": 1,
+          "displayedMs": {
+            "runs": 1,
+            "median": 2807,
+            "min": 2807,
+            "max": 2807,
+            "values": [
+              2807
+            ]
+          },
+          "domAtMs": {
+            "runs": 1,
+            "median": 2800,
+            "min": 2800,
+            "max": 2800,
+            "values": [
+              2800
+            ]
+          },
+          "profileReadyDisplayedMs": {
+            "runs": 1,
+            "median": 2807,
+            "min": 2807,
+            "max": 2807,
+            "values": [
+              2807
+            ]
+          },
+          "requiredResponseEndMs": {
+            "runs": 1,
+            "median": 2004,
+            "min": 2004,
+            "max": 2004,
+            "values": [
+              2004
+            ]
+          },
+          "profileReadyResponseEndMs": {
+            "runs": 1,
+            "median": 2004,
+            "min": 2004,
+            "max": 2004,
+            "values": [
+              2004
+            ]
+          },
+          "sessionRestoreMs": {
+            "runs": 1,
+            "median": 1641,
+            "min": 1641,
+            "max": 1641,
+            "values": [
+              1641
+            ]
+          },
+          "firstApiRequestMs": {
+            "runs": 1,
+            "median": 1474,
+            "min": 1474,
+            "max": 1474,
+            "values": [
+              1474
+            ]
+          },
+          "lastApiResponseMs": {
+            "runs": 1,
+            "median": 2004,
+            "min": 2004,
+            "max": 2004,
+            "values": [
+              2004
+            ]
+          },
+          "renderAfterResponseEndMs": {
+            "runs": 1,
+            "median": 803,
+            "min": 803,
+            "max": 803,
+            "values": [
+              803
+            ]
+          },
+          "enrichmentAfterRequiredResponseMs": {
+            "runs": 1,
+            "median": 0,
+            "min": 0,
+            "max": 0,
+            "values": [
+              0
+            ]
+          },
+          "apiPayloadBytes": {
+            "runs": 1,
+            "median": 4168,
+            "min": 4168,
+            "max": 4168
+          },
+          "lateCompletionsAfterClose": {
+            "runs": 1,
+            "total": 0,
+            "max": 0
+          },
+          "apiRequests": {
+            "runs": 1,
+            "median": 12,
+            "min": 12,
+            "max": 12
+          },
+          "networkBytes": {
+            "total": {
+              "runs": 1,
+              "median": 302619,
+              "min": 302619,
+              "max": 302619
+            },
+            "api": {
+              "runs": 1,
+              "median": 6721,
+              "min": 6721,
+              "max": 6721
+            },
+            "js": {
+              "runs": 1,
+              "median": 232093,
+              "min": 232093,
+              "max": 232093
+            },
+            "css": {
+              "runs": 1,
+              "median": 50146,
+              "min": 50146,
+              "max": 50146
+            },
+            "font": {
+              "runs": 1,
+              "median": 0,
+              "min": 0,
+              "max": 0
+            },
+            "image": {
+              "runs": 1,
+              "median": 13046,
+              "min": 13046,
+              "max": 13046
+            },
+            "other": {
+              "runs": 1,
+              "median": 613,
+              "min": 613,
+              "max": 613
+            }
+          }
+        }
+      }
+    }
+  },
+  "deltas": {},
+  "chronologies": [
+    {
+      "variant": "candidate",
+      "scenario": "home",
+      "rep": 1,
+      "domAtMs": 2374,
+      "requiredResponseEndMs": 1850,
+      "displayedMs": 2519,
+      "renderAfterResponseEndMs": 669,
+      "valid": true,
+      "reason": null
+    },
+    {
+      "variant": "candidate",
+      "scenario": "profile",
+      "rep": 1,
+      "domAtMs": 2800,
+      "requiredResponseEndMs": 2004,
+      "displayedMs": 2807,
+      "renderAfterResponseEndMs": 803,
+      "valid": true,
+      "reason": null
+    }
+  ],
+  "attempts": [
+    {
+      "variant": "candidate",
+      "scenario": "home",
+      "rep": 1,
+      "runId": "run-216-1794998729297",
+      "label": "candidate:home:1",
+      "documentRunId": "run-216-1794998729297",
+      "valid": true,
+      "exclusionReason": null,
+      "wallClockStartedAt": 1794998730165,
+      "timeOrigin": 1794998730171.1,
+      "sinceMs": 0,
+      "boundary": {
+        "since": "document-navigation-start",
+        "pageNowMs": 3955,
+        "resourceEntries": "PerformanceResourceTiming entries with startTime inside the boundary"
+      },
+      "marker": {
+        "domAtMs": 2374,
+        "displayedMs": 2519,
+        "source": "document-navigation-start",
+        "signals": {
+          "displayed": {
+            "domAtMs": 2374,
+            "displayedMs": 2519
+          },
+          "recommendations": {
+            "domAtMs": 3726,
+            "displayedMs": 3751,
+            "empty": false
+          }
+        },
+        "recommendationsEmpty": false
+      },
+      "timings": {
+        "sessionRestoreMs": 1658,
+        "firstApiRequestMs": 1485,
+        "requiredResponseEndMs": 1850,
+        "recommendationsResponseEndMs": 3697,
+        "profileReadyResponseEndMs": null,
+        "lastApiResponseMs": 3697,
+        "renderAfterResponseEndMs": 669,
+        "enrichmentAfterRequiredResponseMs": 1847
+      },
+      "network": {
+        "total": 340743,
+        "api": {
+          "count": 11,
+          "transferBytes": 6776,
+          "encodedBytes": 3476
+        },
+        "js": {
+          "count": 26,
+          "transferBytes": 245173,
+          "encodedBytes": 237373
+        },
+        "css": {
+          "count": 4,
+          "transferBytes": 46831,
+          "encodedBytes": 45631
+        },
+        "font": {
+          "count": 1,
+          "transferBytes": 28304,
+          "encodedBytes": 28004
+        },
+        "image": {
+          "count": 3,
+          "transferBytes": 13046,
+          "encodedBytes": 12146
+        },
+        "other": {
+          "count": 1,
+          "transferBytes": 613,
+          "encodedBytes": 313
+        },
+        "source": "PerformanceResourceTiming.transferSize (headers included), same page clock"
+      },
+      "api": {
+        "requests": 11,
+        "completed": 11,
+        "inFlight": 0,
+        "payloadBytes": 5775,
+        "byEndpoint": {
+          "session-refresh": {
+            "endpoint": "session-refresh",
+            "count": 1,
+            "completed": 1,
+            "bytes": 430,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "routing-plan": {
+            "endpoint": "routing-plan",
+            "count": 1,
+            "completed": 1,
+            "bytes": 131,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "booking-preferences": {
+            "endpoint": "booking-preferences",
+            "count": 1,
+            "completed": 1,
+            "bytes": 207,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "home-base": {
+            "endpoint": "home-base",
+            "count": 1,
+            "completed": 1,
+            "bytes": 1641,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "notifications": {
+            "endpoint": "notifications",
+            "count": 1,
+            "completed": 1,
+            "bytes": 283,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "friend-requests": {
+            "endpoint": "friend-requests",
+            "count": 1,
+            "completed": 1,
+            "bytes": 12,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "self-profile": {
+            "endpoint": "self-profile",
+            "count": 1,
+            "completed": 1,
+            "bytes": 249,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "webpush-config": {
+            "endpoint": "webpush-config",
+            "count": 1,
+            "completed": 1,
+            "bytes": 49,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "communities-mine": {
+            "endpoint": "communities-mine",
+            "count": 1,
+            "completed": 1,
+            "bytes": 373,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "read-job-start": {
+            "endpoint": "read-job-start",
+            "count": 1,
+            "completed": 1,
+            "bytes": 200,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "read-job-complete": {
+            "endpoint": "read-job-complete",
+            "count": 1,
+            "completed": 1,
+            "bytes": 2200,
+            "statuses": {
+              "200": 1
+            }
+          }
+        },
+        "statuses": {
+          "200": 1
+        },
+        "lateCompletions": 0,
+        "lateCompletionsAfterClose": 0,
+        "lateStartsAfterClose": 0,
+        "liveCompletedAfterClose": 11,
+        "liveInFlightAfterClose": 0,
+        "resourceEntries": 11,
+        "countsMatchResources": true,
+        "requestCountsMatchResources": true,
+        "snapshotStable": true
+      },
+      "pageErrors": [],
+      "resources": [
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DmyinQmY.js",
+          "startTime": 181.80000000074506,
+          "responseEnd": 358.40000000037253,
+          "initiatorType": "other",
+          "transferSize": 801,
+          "encodedBodySize": 501,
+          "decodedBodySize": 501,
+          "startMs": 181.80000000074506,
+          "endMs": 358.40000000037253,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/app-DjBPKaXn.js",
+          "startTime": 181.80000000074506,
+          "responseEnd": 1344.1000000014901,
+          "initiatorType": "script",
+          "transferSize": 87025,
+          "encodedBodySize": 86725,
+          "decodedBodySize": 282621,
+          "startMs": 181.80000000074506,
+          "endMs": 1344.1000000014901,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DsMY7AFi.js",
+          "startTime": 181.90000000037253,
+          "responseEnd": 428.40000000037253,
+          "initiatorType": "other",
+          "transferSize": 3211,
+          "encodedBodySize": 2911,
+          "decodedBodySize": 7564,
+          "startMs": 181.90000000037253,
+          "endMs": 428.40000000037253,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-CMdm6Wks.js",
+          "startTime": 183,
+          "responseEnd": 378.90000000037253,
+          "initiatorType": "other",
+          "transferSize": 1161,
+          "encodedBodySize": 861,
+          "decodedBodySize": 1901,
+          "startMs": 183,
+          "endMs": 378.90000000037253,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-C7DydygI.js",
+          "startTime": 183,
+          "responseEnd": 406.6000000014901,
+          "initiatorType": "other",
+          "transferSize": 1865,
+          "encodedBodySize": 1565,
+          "decodedBodySize": 3972,
+          "startMs": 183,
+          "endMs": 406.6000000014901,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DaiEZNu2.js",
+          "startTime": 183,
+          "responseEnd": 414.2000000011176,
+          "initiatorType": "other",
+          "transferSize": 2434,
+          "encodedBodySize": 2134,
+          "decodedBodySize": 5456,
+          "startMs": 183,
+          "endMs": 414.2000000011176,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BiMmqDWG.js",
+          "startTime": 183.10000000149012,
+          "responseEnd": 549.8000000007451,
+          "initiatorType": "other",
+          "transferSize": 1032,
+          "encodedBodySize": 732,
+          "decodedBodySize": 1543,
+          "startMs": 183.10000000149012,
+          "endMs": 549.8000000007451,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-CGNm1ELW.js",
+          "startTime": 183.10000000149012,
+          "responseEnd": 607.8000000007451,
+          "initiatorType": "other",
+          "transferSize": 2144,
+          "encodedBodySize": 1844,
+          "decodedBodySize": 5444,
+          "startMs": 183.10000000149012,
+          "endMs": 607.8000000007451,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-D5NDQrT9.js",
+          "startTime": 183.10000000149012,
+          "responseEnd": 628.6000000014901,
+          "initiatorType": "other",
+          "transferSize": 2301,
+          "encodedBodySize": 2001,
+          "decodedBodySize": 6045,
+          "startMs": 183.10000000149012,
+          "endMs": 628.6000000014901,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DLOmM1Cf.js",
+          "startTime": 183.10000000149012,
+          "responseEnd": 758.5,
+          "initiatorType": "other",
+          "transferSize": 2864,
+          "encodedBodySize": 2564,
+          "decodedBodySize": 6226,
+          "startMs": 183.10000000149012,
+          "endMs": 758.5,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DsiMli8a.js",
+          "startTime": 183.10000000149012,
+          "responseEnd": 762.6000000014901,
+          "initiatorType": "other",
+          "transferSize": 10089,
+          "encodedBodySize": 9789,
+          "decodedBodySize": 47708,
+          "startMs": 183.10000000149012,
+          "endMs": 762.6000000014901,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DkaTSK_m.js",
+          "startTime": 183.2000000011176,
+          "responseEnd": 1308.1000000014901,
+          "initiatorType": "other",
+          "transferSize": 40667,
+          "encodedBodySize": 40367,
+          "decodedBodySize": 144941,
+          "startMs": 183.2000000011176,
+          "endMs": 1308.1000000014901,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-Di0B7ocW.js",
+          "startTime": 184,
+          "responseEnd": 799.7000000011176,
+          "initiatorType": "other",
+          "transferSize": 400,
+          "encodedBodySize": 100,
+          "decodedBodySize": 100,
+          "startMs": 184,
+          "endMs": 799.7000000011176,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/index-CrXuOo2A.css",
+          "startTime": 184,
+          "responseEnd": 1158.300000000745,
+          "initiatorType": "link",
+          "transferSize": 42461,
+          "encodedBodySize": 42161,
+          "decodedBodySize": 236173,
+          "startMs": 184,
+          "endMs": 1158.300000000745,
+          "group": "css"
+        },
+        {
+          "name": "http://127.0.0.1:4190/manifest.webmanifest",
+          "startTime": 195.7000000011176,
+          "responseEnd": 936.8000000007451,
+          "initiatorType": "link",
+          "transferSize": 613,
+          "encodedBodySize": 313,
+          "decodedBodySize": 582,
+          "startMs": 195.7000000011176,
+          "endMs": 936.8000000007451,
+          "group": "other"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/padlhub-logo-DAUGIFSR.svg",
+          "startTime": 1441.5,
+          "responseEnd": 1621,
+          "initiatorType": "img",
+          "transferSize": 3074,
+          "encodedBodySize": 2774,
+          "decodedBodySize": 7252,
+          "startMs": 1441.5,
+          "endMs": 1621,
+          "group": "image"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/auth/session/refresh",
+          "startTime": 1484.9000000003725,
+          "responseEnd": 1658.2000000011176,
+          "initiatorType": "fetch",
+          "transferSize": 730,
+          "encodedBodySize": 430,
+          "decodedBodySize": 430,
+          "startMs": 1484.9000000003725,
+          "endMs": 1658.2000000011176,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/phub-app-icon-192.png",
+          "startTime": 1487.6000000014901,
+          "responseEnd": 1679.1000000014901,
+          "initiatorType": "other",
+          "transferSize": 4986,
+          "encodedBodySize": 4686,
+          "decodedBodySize": 4887,
+          "startMs": 1487.6000000014901,
+          "endMs": 1679.1000000014901,
+          "group": "image"
+        },
+        {
+          "name": "http://127.0.0.1:4190/phub-app-icon-192.png",
+          "startTime": 1488.4000000003725,
+          "responseEnd": 1844.9000000003725,
+          "initiatorType": "other",
+          "transferSize": 4986,
+          "encodedBodySize": 4686,
+          "decodedBodySize": 4887,
+          "startMs": 1488.4000000003725,
+          "endMs": 1844.9000000003725,
+          "group": "image"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/routing-plan",
+          "startTime": 1669.300000000745,
+          "responseEnd": 1830.6000000014901,
+          "initiatorType": "fetch",
+          "transferSize": 431,
+          "encodedBodySize": 131,
+          "decodedBodySize": 131,
+          "startMs": 1669.300000000745,
+          "endMs": 1830.6000000014901,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/profile/booking-preferences",
+          "startTime": 1670.1000000014901,
+          "responseEnd": 1836.800000000745,
+          "initiatorType": "fetch",
+          "transferSize": 507,
+          "encodedBodySize": 207,
+          "decodedBodySize": 207,
+          "startMs": 1670.1000000014901,
+          "endMs": 1836.800000000745,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/home/base",
+          "startTime": 1672.2000000011176,
+          "responseEnd": 1850,
+          "initiatorType": "fetch",
+          "transferSize": 1092,
+          "encodedBodySize": 792,
+          "decodedBodySize": 1641,
+          "startMs": 1672.2000000011176,
+          "endMs": 1850,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/notifications?limit=50",
+          "startTime": 1686.4000000003725,
+          "responseEnd": 1856.800000000745,
+          "initiatorType": "fetch",
+          "transferSize": 583,
+          "encodedBodySize": 283,
+          "decodedBodySize": 283,
+          "startMs": 1686.4000000003725,
+          "endMs": 1856.800000000745,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/profile/friend-requests?limit=8&direction=incoming",
+          "startTime": 1686.6000000014901,
+          "responseEnd": 1866,
+          "initiatorType": "fetch",
+          "transferSize": 312,
+          "encodedBodySize": 12,
+          "decodedBodySize": 12,
+          "startMs": 1686.6000000014901,
+          "endMs": 1866,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/profile",
+          "startTime": 1841.2000000011176,
+          "responseEnd": 2008.2000000011176,
+          "initiatorType": "fetch",
+          "transferSize": 549,
+          "encodedBodySize": 249,
+          "decodedBodySize": 249,
+          "startMs": 1841.2000000011176,
+          "endMs": 2008.2000000011176,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BU8dBtB_.js",
+          "startTime": 1855.4000000003725,
+          "responseEnd": 2308.10000000149,
+          "initiatorType": "script",
+          "transferSize": 35379,
+          "encodedBodySize": 35079,
+          "decodedBodySize": 102132,
+          "startMs": 1855.4000000003725,
+          "endMs": 2308.10000000149,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BTSVOIXw.js",
+          "startTime": 1855.9000000003725,
+          "responseEnd": 2058.60000000149,
+          "initiatorType": "script",
+          "transferSize": 2028,
+          "encodedBodySize": 1728,
+          "decodedBodySize": 4300,
+          "startMs": 1855.9000000003725,
+          "endMs": 2058.60000000149,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BoNRTObZ.js",
+          "startTime": 1855.9000000003725,
+          "responseEnd": 2078.7000000011176,
+          "initiatorType": "script",
+          "transferSize": 4324,
+          "encodedBodySize": 4024,
+          "decodedBodySize": 11107,
+          "startMs": 1855.9000000003725,
+          "endMs": 2078.7000000011176,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-D6X247-Z.js",
+          "startTime": 1856,
+          "responseEnd": 2037,
+          "initiatorType": "script",
+          "transferSize": 1139,
+          "encodedBodySize": 839,
+          "decodedBodySize": 1513,
+          "startMs": 1856,
+          "endMs": 2037,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DhoicYlk.js",
+          "startTime": 1856.4000000003725,
+          "responseEnd": 2258.7000000011176,
+          "initiatorType": "script",
+          "transferSize": 4372,
+          "encodedBodySize": 4072,
+          "decodedBodySize": 10792,
+          "startMs": 1856.4000000003725,
+          "endMs": 2258.7000000011176,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/ParticipantAvatarStack-D1uxNHLA.css",
+          "startTime": 1857.9000000003725,
+          "responseEnd": 2053.800000000745,
+          "initiatorType": "link",
+          "transferSize": 1200,
+          "encodedBodySize": 900,
+          "decodedBodySize": 3605,
+          "startMs": 1857.9000000003725,
+          "endMs": 2053.800000000745,
+          "group": "css"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-CTE6QzgK.js",
+          "startTime": 1859.1000000014901,
+          "responseEnd": 2230.2000000011176,
+          "initiatorType": "script",
+          "transferSize": 496,
+          "encodedBodySize": 196,
+          "decodedBodySize": 196,
+          "startMs": 1859.1000000014901,
+          "endMs": 2230.2000000011176,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/HomeDashboardPage-ClNHfyf3.css",
+          "startTime": 1859.2000000011176,
+          "responseEnd": 2187.10000000149,
+          "initiatorType": "link",
+          "transferSize": 2493,
+          "encodedBodySize": 2193,
+          "decodedBodySize": 10946,
+          "startMs": 1859.2000000011176,
+          "endMs": 2187.10000000149,
+          "group": "css"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DSmoLxow2.js",
+          "startTime": 1884.5,
+          "responseEnd": 2386.7000000011176,
+          "initiatorType": "script",
+          "transferSize": 17542,
+          "encodedBodySize": 17242,
+          "decodedBodySize": 58958,
+          "startMs": 1884.5,
+          "endMs": 2386.7000000011176,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DQ37Qg5s.js",
+          "startTime": 1884.6000000014901,
+          "responseEnd": 2345.2000000011176,
+          "initiatorType": "script",
+          "transferSize": 1323,
+          "encodedBodySize": 1023,
+          "decodedBodySize": 2102,
+          "startMs": 1884.6000000014901,
+          "endMs": 2345.2000000011176,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/GameJoinSubscriptionPicker-Bk6Ik8PV.css",
+          "startTime": 1884.7000000011176,
+          "responseEnd": 2202.60000000149,
+          "initiatorType": "link",
+          "transferSize": 677,
+          "encodedBodySize": 377,
+          "decodedBodySize": 377,
+          "startMs": 1884.7000000011176,
+          "endMs": 2202.60000000149,
+          "group": "css"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BHkLhlVj.js",
+          "startTime": 1884.7000000011176,
+          "responseEnd": 2424.2000000011176,
+          "initiatorType": "script",
+          "transferSize": 6906,
+          "encodedBodySize": 6606,
+          "decodedBodySize": 22290,
+          "startMs": 1884.7000000011176,
+          "endMs": 2424.2000000011176,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BWK1YMGa.js",
+          "startTime": 1885.6000000014901,
+          "responseEnd": 2481.4000000003725,
+          "initiatorType": "script",
+          "transferSize": 10446,
+          "encodedBodySize": 10146,
+          "decodedBodySize": 36352,
+          "startMs": 1885.6000000014901,
+          "endMs": 2481.4000000003725,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-CiiQpDRU.js",
+          "startTime": 1885.7000000011176,
+          "responseEnd": 2445.2000000011176,
+          "initiatorType": "script",
+          "transferSize": 1572,
+          "encodedBodySize": 1272,
+          "decodedBodySize": 3133,
+          "startMs": 1885.7000000011176,
+          "endMs": 2445.2000000011176,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DUsXog6k.js",
+          "startTime": 1885.800000000745,
+          "responseEnd": 2487,
+          "initiatorType": "script",
+          "transferSize": 2240,
+          "encodedBodySize": 1940,
+          "decodedBodySize": 5152,
+          "startMs": 1885.800000000745,
+          "endMs": 2487,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-Zz0Hw8uM.js",
+          "startTime": 1886.2000000011176,
+          "responseEnd": 2501.60000000149,
+          "initiatorType": "script",
+          "transferSize": 1412,
+          "encodedBodySize": 1112,
+          "decodedBodySize": 3329,
+          "startMs": 1886.2000000011176,
+          "endMs": 2501.60000000149,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/notification-endpoints/web/config",
+          "startTime": 2376.2000000011176,
+          "responseEnd": 2553.2000000011176,
+          "initiatorType": "fetch",
+          "transferSize": 349,
+          "encodedBodySize": 49,
+          "decodedBodySize": 49,
+          "startMs": 2376.2000000011176,
+          "endMs": 2553.2000000011176,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/communities/mine?limit=10",
+          "startTime": 2379.10000000149,
+          "responseEnd": 2579.9000000003725,
+          "initiatorType": "fetch",
+          "transferSize": 673,
+          "encodedBodySize": 373,
+          "decodedBodySize": 373,
+          "startMs": 2379.10000000149,
+          "endMs": 2579.9000000003725,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/booking-screen-read-jobs",
+          "startTime": 2381.60000000149,
+          "responseEnd": 2608.2000000011176,
+          "initiatorType": "fetch",
+          "transferSize": 500,
+          "encodedBodySize": 200,
+          "decodedBodySize": 200,
+          "startMs": 2381.60000000149,
+          "endMs": 2608.2000000011176,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/rf-dewi-ultrabold-CuYRMp0D.woff2",
+          "startTime": 2388.2000000011176,
+          "responseEnd": 3495.300000000745,
+          "initiatorType": "css",
+          "transferSize": 28304,
+          "encodedBodySize": 28004,
+          "decodedBodySize": 27976,
+          "startMs": 2388.2000000011176,
+          "endMs": 3495.300000000745,
+          "group": "font"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/booking-screen-read-jobs/perf-read-job-FOR_ME-run-216-1794998729297-241/complete",
+          "startTime": 2611.300000000745,
+          "responseEnd": 3697.10000000149,
+          "initiatorType": "fetch",
+          "transferSize": 1050,
+          "encodedBodySize": 750,
+          "decodedBodySize": 2200,
+          "startMs": 2611.300000000745,
+          "endMs": 3697.10000000149,
+          "group": "api"
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "scenario": "profile",
+      "rep": 1,
+      "runId": "run-217-1794998734523",
+      "label": "candidate:profile:1",
+      "documentRunId": "run-217-1794998734523",
+      "valid": true,
+      "exclusionReason": null,
+      "wallClockStartedAt": 1794998734828,
+      "timeOrigin": 1794998734829.6,
+      "sinceMs": 0,
+      "boundary": {
+        "since": "document-navigation-start",
+        "pageNowMs": 3007,
+        "resourceEntries": "PerformanceResourceTiming entries with startTime inside the boundary"
+      },
+      "marker": {
+        "domAtMs": 2800,
+        "displayedMs": 2807,
+        "source": "document-navigation-start",
+        "signals": {
+          "displayed": {
+            "domAtMs": 2800,
+            "displayedMs": 2807
+          },
+          "profileReady": {
+            "domAtMs": 2800,
+            "displayedMs": 2807
+          }
+        },
+        "recommendationsEmpty": null
+      },
+      "timings": {
+        "sessionRestoreMs": 1641,
+        "firstApiRequestMs": 1474,
+        "requiredResponseEndMs": 2004,
+        "recommendationsResponseEndMs": null,
+        "profileReadyResponseEndMs": 2004,
+        "lastApiResponseMs": 2004,
+        "renderAfterResponseEndMs": 803,
+        "enrichmentAfterRequiredResponseMs": 0
+      },
+      "network": {
+        "total": 302619,
+        "api": {
+          "count": 12,
+          "transferBytes": 6721,
+          "encodedBytes": 3121
+        },
+        "js": {
+          "count": 21,
+          "transferBytes": 232093,
+          "encodedBytes": 225793
+        },
+        "css": {
+          "count": 4,
+          "transferBytes": 50146,
+          "encodedBytes": 48946
+        },
+        "font": {
+          "count": 0,
+          "transferBytes": 0,
+          "encodedBytes": 0
+        },
+        "image": {
+          "count": 3,
+          "transferBytes": 13046,
+          "encodedBytes": 12146
+        },
+        "other": {
+          "count": 1,
+          "transferBytes": 613,
+          "encodedBytes": 313
+        },
+        "source": "PerformanceResourceTiming.transferSize (headers included), same page clock"
+      },
+      "api": {
+        "requests": 12,
+        "completed": 12,
+        "inFlight": 0,
+        "payloadBytes": 4168,
+        "byEndpoint": {
+          "session-refresh": {
+            "endpoint": "session-refresh",
+            "count": 1,
+            "completed": 1,
+            "bytes": 430,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "profile-privacy": {
+            "endpoint": "profile-privacy",
+            "count": 1,
+            "completed": 1,
+            "bytes": 107,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "booking-preferences": {
+            "endpoint": "booking-preferences",
+            "count": 1,
+            "completed": 1,
+            "bytes": 207,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "routing-plan": {
+            "endpoint": "routing-plan",
+            "count": 1,
+            "completed": 1,
+            "bytes": 131,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "locations": {
+            "endpoint": "locations",
+            "count": 1,
+            "completed": 1,
+            "bytes": 206,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "communities-mine": {
+            "endpoint": "communities-mine",
+            "count": 1,
+            "completed": 1,
+            "bytes": 373,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "home-dashboard": {
+            "endpoint": "home-dashboard",
+            "count": 1,
+            "completed": 1,
+            "bytes": 2146,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "friends": {
+            "endpoint": "friends",
+            "count": 1,
+            "completed": 1,
+            "bytes": 12,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "friend-requests": {
+            "endpoint": "friend-requests",
+            "count": 2,
+            "completed": 2,
+            "bytes": 24,
+            "statuses": {
+              "200": 2
+            }
+          },
+          "notifications": {
+            "endpoint": "notifications",
+            "count": 1,
+            "completed": 1,
+            "bytes": 283,
+            "statuses": {
+              "200": 1
+            }
+          },
+          "self-profile": {
+            "endpoint": "self-profile",
+            "count": 1,
+            "completed": 1,
+            "bytes": 249,
+            "statuses": {
+              "200": 1
+            }
+          }
+        },
+        "statuses": {
+          "200": 1
+        },
+        "lateCompletions": 0,
+        "lateCompletionsAfterClose": 0,
+        "lateStartsAfterClose": 0,
+        "liveCompletedAfterClose": 12,
+        "liveInFlightAfterClose": 0,
+        "resourceEntries": 12,
+        "countsMatchResources": true,
+        "requestCountsMatchResources": true,
+        "snapshotStable": true
+      },
+      "pageErrors": [],
+      "resources": [
+        {
+          "name": "http://127.0.0.1:4190/assets/app-DjBPKaXn.js",
+          "startTime": 178.7999999988824,
+          "responseEnd": 1333.2999999988824,
+          "initiatorType": "script",
+          "transferSize": 87025,
+          "encodedBodySize": 86725,
+          "decodedBodySize": 282621,
+          "startMs": 178.7999999988824,
+          "endMs": 1333.2999999988824,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DmyinQmY.js",
+          "startTime": 179,
+          "responseEnd": 346.7999999988824,
+          "initiatorType": "other",
+          "transferSize": 801,
+          "encodedBodySize": 501,
+          "decodedBodySize": 501,
+          "startMs": 179,
+          "endMs": 346.7999999988824,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DsMY7AFi.js",
+          "startTime": 179.7999999988824,
+          "responseEnd": 418.7999999988824,
+          "initiatorType": "other",
+          "transferSize": 3211,
+          "encodedBodySize": 2911,
+          "decodedBodySize": 7564,
+          "startMs": 179.7999999988824,
+          "endMs": 418.7999999988824,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-CMdm6Wks.js",
+          "startTime": 179.89999999850988,
+          "responseEnd": 369.09999999962747,
+          "initiatorType": "other",
+          "transferSize": 1161,
+          "encodedBodySize": 861,
+          "decodedBodySize": 1901,
+          "startMs": 179.89999999850988,
+          "endMs": 369.09999999962747,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-C7DydygI.js",
+          "startTime": 179.89999999850988,
+          "responseEnd": 397,
+          "initiatorType": "other",
+          "transferSize": 1865,
+          "encodedBodySize": 1565,
+          "decodedBodySize": 3972,
+          "startMs": 179.89999999850988,
+          "endMs": 397,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DaiEZNu2.js",
+          "startTime": 179.89999999850988,
+          "responseEnd": 403.3999999985099,
+          "initiatorType": "other",
+          "transferSize": 2434,
+          "encodedBodySize": 2134,
+          "decodedBodySize": 5456,
+          "startMs": 179.89999999850988,
+          "endMs": 403.3999999985099,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BiMmqDWG.js",
+          "startTime": 179.89999999850988,
+          "responseEnd": 538.5,
+          "initiatorType": "other",
+          "transferSize": 1032,
+          "encodedBodySize": 732,
+          "decodedBodySize": 1543,
+          "startMs": 179.89999999850988,
+          "endMs": 538.5,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-CGNm1ELW.js",
+          "startTime": 179.89999999850988,
+          "responseEnd": 591,
+          "initiatorType": "other",
+          "transferSize": 2144,
+          "encodedBodySize": 1844,
+          "decodedBodySize": 5444,
+          "startMs": 179.89999999850988,
+          "endMs": 591,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-D5NDQrT9.js",
+          "startTime": 180.69999999925494,
+          "responseEnd": 618.0999999996275,
+          "initiatorType": "other",
+          "transferSize": 2301,
+          "encodedBodySize": 2001,
+          "decodedBodySize": 6045,
+          "startMs": 180.69999999925494,
+          "endMs": 618.0999999996275,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DLOmM1Cf.js",
+          "startTime": 180.69999999925494,
+          "responseEnd": 740.7999999988824,
+          "initiatorType": "other",
+          "transferSize": 2864,
+          "encodedBodySize": 2564,
+          "decodedBodySize": 6226,
+          "startMs": 180.69999999925494,
+          "endMs": 740.7999999988824,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DsiMli8a.js",
+          "startTime": 180.69999999925494,
+          "responseEnd": 745.5,
+          "initiatorType": "other",
+          "transferSize": 10089,
+          "encodedBodySize": 9789,
+          "decodedBodySize": 47708,
+          "startMs": 180.69999999925494,
+          "endMs": 745.5,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-Di0B7ocW.js",
+          "startTime": 180.7999999988824,
+          "responseEnd": 797.0999999996275,
+          "initiatorType": "other",
+          "transferSize": 400,
+          "encodedBodySize": 100,
+          "decodedBodySize": 100,
+          "startMs": 180.7999999988824,
+          "endMs": 797.0999999996275,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/index-CrXuOo2A.css",
+          "startTime": 180.7999999988824,
+          "responseEnd": 1154.5999999996275,
+          "initiatorType": "link",
+          "transferSize": 42461,
+          "encodedBodySize": 42161,
+          "decodedBodySize": 236173,
+          "startMs": 180.7999999988824,
+          "endMs": 1154.5999999996275,
+          "group": "css"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DkaTSK_m.js",
+          "startTime": 180.7999999988824,
+          "responseEnd": 1296.3999999985099,
+          "initiatorType": "other",
+          "transferSize": 40667,
+          "encodedBodySize": 40367,
+          "decodedBodySize": 144941,
+          "startMs": 180.7999999988824,
+          "endMs": 1296.3999999985099,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/manifest.webmanifest",
+          "startTime": 191.89999999850988,
+          "responseEnd": 919.7999999988824,
+          "initiatorType": "link",
+          "transferSize": 613,
+          "encodedBodySize": 313,
+          "decodedBodySize": 582,
+          "startMs": 191.89999999850988,
+          "endMs": 919.7999999988824,
+          "group": "other"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/padlhub-logo-DAUGIFSR.svg",
+          "startTime": 1430.0999999996275,
+          "responseEnd": 1612.5,
+          "initiatorType": "img",
+          "transferSize": 3074,
+          "encodedBodySize": 2774,
+          "decodedBodySize": 7252,
+          "startMs": 1430.0999999996275,
+          "endMs": 1612.5,
+          "group": "image"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/auth/session/refresh",
+          "startTime": 1474.199999999255,
+          "responseEnd": 1641.199999999255,
+          "initiatorType": "fetch",
+          "transferSize": 730,
+          "encodedBodySize": 430,
+          "decodedBodySize": 430,
+          "startMs": 1474.199999999255,
+          "endMs": 1641.199999999255,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/phub-app-icon-192.png",
+          "startTime": 1476.699999999255,
+          "responseEnd": 1661.2999999988824,
+          "initiatorType": "other",
+          "transferSize": 4986,
+          "encodedBodySize": 4686,
+          "decodedBodySize": 4887,
+          "startMs": 1476.699999999255,
+          "endMs": 1661.2999999988824,
+          "group": "image"
+        },
+        {
+          "name": "http://127.0.0.1:4190/phub-app-icon-192.png",
+          "startTime": 1477.699999999255,
+          "responseEnd": 1834.5999999996275,
+          "initiatorType": "other",
+          "transferSize": 4986,
+          "encodedBodySize": 4686,
+          "decodedBodySize": 4887,
+          "startMs": 1477.699999999255,
+          "endMs": 1834.5999999996275,
+          "group": "image"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/profile/privacy",
+          "startTime": 1651.5,
+          "responseEnd": 1814.199999999255,
+          "initiatorType": "fetch",
+          "transferSize": 407,
+          "encodedBodySize": 107,
+          "decodedBodySize": 107,
+          "startMs": 1651.5,
+          "endMs": 1814.199999999255,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/profile/booking-preferences",
+          "startTime": 1651.5999999996275,
+          "responseEnd": 1819.8999999985099,
+          "initiatorType": "fetch",
+          "transferSize": 507,
+          "encodedBodySize": 207,
+          "decodedBodySize": 207,
+          "startMs": 1651.5999999996275,
+          "endMs": 1819.8999999985099,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/routing-plan",
+          "startTime": 1653.3999999985099,
+          "responseEnd": 1828.2999999988824,
+          "initiatorType": "fetch",
+          "transferSize": 431,
+          "encodedBodySize": 131,
+          "decodedBodySize": 131,
+          "startMs": 1653.3999999985099,
+          "endMs": 1828.2999999988824,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/locations",
+          "startTime": 1660.7999999988824,
+          "responseEnd": 1841.199999999255,
+          "initiatorType": "fetch",
+          "transferSize": 506,
+          "encodedBodySize": 206,
+          "decodedBodySize": 206,
+          "startMs": 1660.7999999988824,
+          "endMs": 1841.199999999255,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/communities/mine?limit=20",
+          "startTime": 1661.7999999988824,
+          "responseEnd": 1849.5999999996275,
+          "initiatorType": "fetch",
+          "transferSize": 673,
+          "encodedBodySize": 373,
+          "decodedBodySize": 373,
+          "startMs": 1661.7999999988824,
+          "endMs": 1849.5999999996275,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/home",
+          "startTime": 1665.199999999255,
+          "responseEnd": 1970,
+          "initiatorType": "fetch",
+          "transferSize": 1399,
+          "encodedBodySize": 1099,
+          "decodedBodySize": 2146,
+          "startMs": 1665.199999999255,
+          "endMs": 1970,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/profile/friends?limit=8",
+          "startTime": 1667.3999999985099,
+          "responseEnd": 1978.199999999255,
+          "initiatorType": "fetch",
+          "transferSize": 312,
+          "encodedBodySize": 12,
+          "decodedBodySize": 12,
+          "startMs": 1667.3999999985099,
+          "endMs": 1978.199999999255,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/profile/friend-requests?limit=8&direction=incoming",
+          "startTime": 1668.5999999996275,
+          "responseEnd": 1982.7999999988824,
+          "initiatorType": "fetch",
+          "transferSize": 312,
+          "encodedBodySize": 12,
+          "decodedBodySize": 12,
+          "startMs": 1668.5999999996275,
+          "endMs": 1982.7999999988824,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/profile/friend-requests?limit=8&direction=outgoing",
+          "startTime": 1669.699999999255,
+          "responseEnd": 1991.0999999996275,
+          "initiatorType": "fetch",
+          "transferSize": 312,
+          "encodedBodySize": 12,
+          "decodedBodySize": 12,
+          "startMs": 1669.699999999255,
+          "endMs": 1991.0999999996275,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/notifications?limit=50",
+          "startTime": 1670.8999999985099,
+          "responseEnd": 1999.5,
+          "initiatorType": "fetch",
+          "transferSize": 583,
+          "encodedBodySize": 283,
+          "decodedBodySize": 283,
+          "startMs": 1670.8999999985099,
+          "endMs": 1999.5,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/user/api/v1/local-padel/profile",
+          "startTime": 1838.699999999255,
+          "responseEnd": 2004.2999999988824,
+          "initiatorType": "fetch",
+          "transferSize": 549,
+          "encodedBodySize": 249,
+          "decodedBodySize": 249,
+          "startMs": 1838.699999999255,
+          "endMs": 2004.2999999988824,
+          "group": "api"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-Ddw3PYsi2.js",
+          "startTime": 2011.2999999988824,
+          "responseEnd": 2549.5,
+          "initiatorType": "script",
+          "transferSize": 27775,
+          "encodedBodySize": 27475,
+          "decodedBodySize": 87155,
+          "startMs": 2011.2999999988824,
+          "endMs": 2549.5,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-DhoicYlk.js",
+          "startTime": 2012.2999999988824,
+          "responseEnd": 2263.0999999996275,
+          "initiatorType": "script",
+          "transferSize": 4372,
+          "encodedBodySize": 4072,
+          "decodedBodySize": 10792,
+          "startMs": 2012.2999999988824,
+          "endMs": 2263.0999999996275,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BTSVOIXw.js",
+          "startTime": 2013.199999999255,
+          "responseEnd": 2235.199999999255,
+          "initiatorType": "script",
+          "transferSize": 2028,
+          "encodedBodySize": 1728,
+          "decodedBodySize": 4300,
+          "startMs": 2013.199999999255,
+          "endMs": 2235.199999999255,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/ParticipantAvatarStack-D1uxNHLA.css",
+          "startTime": 2017.199999999255,
+          "responseEnd": 2199.5999999996275,
+          "initiatorType": "link",
+          "transferSize": 1200,
+          "encodedBodySize": 900,
+          "decodedBodySize": 3605,
+          "startMs": 2017.199999999255,
+          "endMs": 2199.5999999996275,
+          "group": "css"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BU8dBtB_.js",
+          "startTime": 2017.2999999988824,
+          "responseEnd": 2599.39999999851,
+          "initiatorType": "script",
+          "transferSize": 35379,
+          "encodedBodySize": 35079,
+          "decodedBodySize": 102132,
+          "startMs": 2017.2999999988824,
+          "endMs": 2599.39999999851,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-BoNRTObZ.js",
+          "startTime": 2018.0999999996275,
+          "responseEnd": 2278.7999999988824,
+          "initiatorType": "script",
+          "transferSize": 4324,
+          "encodedBodySize": 4024,
+          "decodedBodySize": 11107,
+          "startMs": 2018.0999999996275,
+          "endMs": 2278.7999999988824,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-D6X247-Z.js",
+          "startTime": 2018.199999999255,
+          "responseEnd": 2441.2999999988824,
+          "initiatorType": "script",
+          "transferSize": 1139,
+          "encodedBodySize": 839,
+          "decodedBodySize": 1513,
+          "startMs": 2018.199999999255,
+          "endMs": 2441.2999999988824,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-CTE6QzgK.js",
+          "startTime": 2018.199999999255,
+          "responseEnd": 2463.699999999255,
+          "initiatorType": "script",
+          "transferSize": 496,
+          "encodedBodySize": 196,
+          "decodedBodySize": 196,
+          "startMs": 2018.199999999255,
+          "endMs": 2463.699999999255,
+          "group": "js"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/HomeDashboardPage-ClNHfyf3.css",
+          "startTime": 2018.2999999988824,
+          "responseEnd": 2391.39999999851,
+          "initiatorType": "link",
+          "transferSize": 2493,
+          "encodedBodySize": 2193,
+          "decodedBodySize": 10946,
+          "startMs": 2018.2999999988824,
+          "endMs": 2391.39999999851,
+          "group": "css"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/ProfilePage-D9zes2G-.css",
+          "startTime": 2019.0999999996275,
+          "responseEnd": 2457.5,
+          "initiatorType": "link",
+          "transferSize": 3992,
+          "encodedBodySize": 3692,
+          "decodedBodySize": 16094,
+          "startMs": 2019.0999999996275,
+          "endMs": 2457.5,
+          "group": "css"
+        },
+        {
+          "name": "http://127.0.0.1:4190/assets/chunk-Dj_iB7CQ2.js",
+          "startTime": 2019.0999999996275,
+          "responseEnd": 2562.5999999996275,
+          "initiatorType": "script",
+          "transferSize": 586,
+          "encodedBodySize": 286,
+          "decodedBodySize": 286,
+          "startMs": 2019.0999999996275,
+          "endMs": 2562.5999999996275,
+          "group": "js"
+        }
+      ]
+    }
+  ]
+}
