@@ -1,0 +1,10 @@
+ok   run A snapshot keeps its slow request as in-flight
+ok   run A snapshot reports the in-flight request instead of dropping it
+ok   run B snapshot contains only its own request, not A’s late one
+ok   frozen snapshots are byte-identical after late completions
+ok   the late completion stays attributed to run A
+ok   run B has no late completions of its own
+ok   a request started in run C completes after its snapshot and is counted as C late
+ok   the shared counters cannot be reset by the measurement
+
+run isolation verified

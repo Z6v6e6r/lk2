@@ -860,6 +860,172 @@ describe('PadlHub web authentication', () => {
     expect(replaceState).toHaveBeenCalledWith({ test: true }, '', '/community-invite?source=share');
   });
 
+  it('renders the dashboard before the notification and friend-request badges', async () => {
+    // requestIdleCallback is stubbed so the deferred badge reads stay queued until this test
+    // releases them; jsdom otherwise falls back to a zero-delay timer.
+    const idleTasks: (() => void)[] = [];
+    vi.stubGlobal('requestIdleCallback', (task: () => void) => {
+      idleTasks.push(task);
+      return idleTasks.length;
+    });
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    const getHomeBase = vi.fn<AuthGateway['getHomeBase']>().mockResolvedValue(homeBase);
+    const listNotifications = vi
+      .fn<AuthGateway['listNotifications']>()
+      .mockResolvedValue(notificationInbox);
+    const listProfileFriendRequests = vi
+      .fn<AuthGateway['listProfileFriendRequests']>()
+      .mockResolvedValue({ items: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getHomeBase,
+      listNotifications,
+      listProfileFriendRequests,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Анна Петрова' }, { timeout: 3_000 }),
+    ).toBeVisible();
+    expect(getHomeBase).toHaveBeenCalled();
+    expect(listNotifications).not.toHaveBeenCalled();
+    expect(listProfileFriendRequests).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const task of idleTasks.splice(0)) task();
+    });
+
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    expect(listProfileFriendRequests).toHaveBeenCalled();
+  });
+
+  it('loads the profile card before its secondary blocks', async () => {
+    window.history.replaceState({}, '', '/profile');
+    const idleTasks: (() => void)[] = [];
+    vi.stubGlobal('requestIdleCallback', (task: () => void) => {
+      idleTasks.push(task);
+      return idleTasks.length;
+    });
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    const getPlayerProfile = vi
+      .fn<AuthGateway['getPlayerProfile']>()
+      .mockResolvedValue(userProfile);
+    const listMyCommunities = vi
+      .fn<AuthGateway['listMyCommunities']>()
+      .mockResolvedValue({ items: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getPlayerProfile,
+      listMyCommunities,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await waitFor(() => expect(getPlayerProfile).toHaveBeenCalled());
+    expect(listMyCommunities).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const task of idleTasks.splice(0)) task();
+    });
+
+    await waitFor(() => expect(listMyCommunities).toHaveBeenCalled());
+  });
+
+  it('shares one inbox read when a focus refresh overlaps the first read', async () => {
+    window.history.replaceState({}, '', '/notifications');
+    let resolveInbox: (page: typeof notificationInbox) => void = () => undefined;
+    const listNotifications = vi.fn<AuthGateway['listNotifications']>().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveInbox = resolve;
+        }),
+    );
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listNotifications,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await waitFor(() => expect(listNotifications).toHaveBeenCalledTimes(1));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    // The focus refresh must join the pending read instead of asking the API again.
+    expect(listNotifications).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      resolveInbox(notificationInbox);
+    });
+    expect(await screen.findByRole('heading', { name: 'Уведомления' })).toBeVisible();
+    expect(listNotifications).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds booking preference stations from the locations read, not 50 game cards', async () => {
+    window.history.replaceState({}, '', '/profile');
+    const listLocations = vi.fn<AuthGateway['listLocations']>().mockResolvedValue({
+      items: [
+        {
+          id: 'a8df730b-6a67-41a5-8772-48bca84f73bc',
+          title: 'Селигерская',
+          city: 'Москва',
+          courtCount: 3,
+          coverImageUrl: null,
+          route: '/locations/a8df730b-6a67-41a5-8772-48bca84f73bc',
+        },
+      ],
+    });
+    const listPublicGames = vi
+      .fn<AuthGateway['listPublicGames']>()
+      .mockResolvedValue({ items: [], nextCursor: null });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listLocations,
+      listPublicGames,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await waitFor(() => expect(listLocations).toHaveBeenCalled());
+    expect(listPublicGames).not.toHaveBeenCalled();
+  });
+
+  it('does not start deferred profile reads after the screen unmounts', async () => {
+    window.history.replaceState({}, '', '/profile');
+    const idleTasks: (() => void)[] = [];
+    vi.stubGlobal('requestIdleCallback', (task: () => void) => {
+      idleTasks.push(task);
+      return idleTasks.length;
+    });
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    const listMyCommunities = vi
+      .fn<AuthGateway['listMyCommunities']>()
+      .mockResolvedValue({ items: [] });
+    const listNotifications = vi
+      .fn<AuthGateway['listNotifications']>()
+      .mockResolvedValue(notificationInbox);
+    const listProfileFriends = vi
+      .fn<AuthGateway['listProfileFriends']>()
+      .mockResolvedValue({ items: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listMyCommunities,
+      listNotifications,
+      listProfileFriends,
+    });
+
+    const view = render(<App gateway={gateway} tenantKey="padlhub" />);
+    await waitFor(() => expect(gateway.getPlayerProfile).toHaveBeenCalled());
+    view.unmount();
+    act(() => {
+      for (const task of idleTasks.splice(0)) task();
+    });
+
+    expect(listMyCommunities).not.toHaveBeenCalled();
+    expect(listProfileFriends).not.toHaveBeenCalled();
+  });
+
   it('retries an initial Home projection read before showing the unavailable screen', async () => {
     const getHomeBase = vi
       .fn<AuthGateway['getHomeBase']>()

@@ -2267,6 +2267,7 @@ export function ProfilePage({
       <main
         className={`profile-page${isSelf ? ' profile-page--v2' : ''}`}
         style={pageStyle}
+        data-perf-screen={isSelf ? 'profile' : 'player-profile'}
         data-profile-level-theme={
           isSelf
             ? Object.hasOwn(levelAccents, displayLevel)
@@ -2316,7 +2317,11 @@ export function ProfilePage({
           )}
         </header>
 
-        <section className="profile-identity" aria-labelledby="profile-name">
+        <section
+          className="profile-identity"
+          aria-labelledby="profile-name"
+          data-perf-ready="profile"
+        >
           <div className="profile-avatar-stage">
             <PlayerLevelAvatar
               className="profile-level-avatar"

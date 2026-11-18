@@ -1542,7 +1542,7 @@ export function HomeDashboardPage({
 
   return (
     <div className={shellClassName}>
-      <main className="figma-home" aria-label="Главная">
+      <main className="figma-home" aria-label="Главная" data-perf-screen="home">
         <section
           ref={heroRef}
           className={`fh-hero${usesCompactHero ? ' fh-hero--v2' : ''}${

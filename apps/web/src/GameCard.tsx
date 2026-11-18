@@ -235,6 +235,7 @@ export function GameCard({
   return (
     <article
       className={`game-card game-card--${game.displayState.toLowerCase()}${compact ? ' is-compact' : ''}`}
+      data-game-id={game.id}
       data-display-state={game.displayState}
     >
       <div className="game-card__header">

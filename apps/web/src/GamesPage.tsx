@@ -2552,7 +2552,7 @@ function GamesPageContent({
   }
 
   return (
-    <main className="games-page">
+    <main className="games-page" data-perf-screen="games">
       <header className="games-header">
         <a className="games-back" href="/" aria-label="На Главную">
           ←
@@ -2905,6 +2905,7 @@ function GamesPageContent({
         className="games-list"
         aria-live="polite"
         aria-busy={tab === 'DISCOVER' ? catalogLoading : loading}
+        data-perf-ready={tab === 'DISCOVER' && catalogMetadata ? 'catalog' : undefined}
       >
         {(tab === 'DISCOVER' ? catalogLoading : loading) ? (
           <div className="games-loading" role="status">

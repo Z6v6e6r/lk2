@@ -559,7 +559,12 @@ export function BookingRecommendations({
 
   if (page.items.length === 0) {
     return (
-      <div className="booking-recommendations-empty" role="status">
+      <div
+        className="booking-recommendations-empty"
+        role="status"
+        data-perf-ready="recommendations-empty"
+        data-perf-items="0"
+      >
         <strong>Пока нет подходящих событий</strong>
         <p>Настройте любимые станции и удобное время или загляните позже.</p>
         <a href="/profile#booking-preferences-title">Настроить предпочтения</a>
@@ -583,6 +588,8 @@ export function BookingRecommendations({
             }`
           : 'booking-recommendations'
       }
+      data-perf-ready="recommendations"
+      data-perf-items={page.items.length}
     >
       {page.items.map((item, index) => {
         const key = recommendationKey(item);
