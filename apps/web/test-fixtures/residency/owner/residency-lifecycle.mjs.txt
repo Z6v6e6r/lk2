@@ -199,6 +199,18 @@ export function createResidencyLifecycle(deps) {
         action: "CONTACT_SUPPORT", retryable: false, since: order.updatedAt,
       };
     }
+    if ((order.state === ORDER_STATES.PAID || order.state === ORDER_STATES.ACTIVATION_PENDING)
+      && order.payment.status !== "PAID") {
+      // A paid phase without a confirmed payment is an ambiguous outcome, not a receipt.
+      // This shape can only be durable data written by an older build; it must never read
+      // as "payment received" and must never free the active slot.
+      return {
+        state: RECOVERY_STATES.UNKNOWN_OUTCOME, required: true,
+        reason: reason(order.payment?.lastErrorCode) || reason(order.activation?.lastErrorCode) || "PAYMENT_STATUS_UNKNOWN",
+        action: "RETRY_RECONCILE", retryable: true,
+        since: order.payment?.lastCheckedAt || order.updatedAt,
+      };
+    }
     if (order.state === ORDER_STATES.PAID || order.state === ORDER_STATES.ACTIVATION_PENDING) {
       return {
         state: RECOVERY_STATES.ACTIVATION_PENDING, required: true,
@@ -553,7 +565,7 @@ export function createResidencyLifecycle(deps) {
       if (rejected) {
         // The provider refused the request with a 4xx and created nothing: a confirmed
         // basis for a terminal local failure.
-        const failed = await transition(order, ORDER_STATES.PAYMENT_FAILED, {
+        const failed = await applyCreateOutcome(order, ORDER_STATES.PAYMENT_FAILED, {
           payment: { ...order.payment, status: "FAILED", paymentUrl: null, lastCheckedAt: nowIso(), lastErrorCode: code },
           activation: { ...order.activation, state: "NOT_STARTED", lastErrorCode: code },
         });
@@ -561,14 +573,14 @@ export function createResidencyLifecycle(deps) {
       }
       // The outcome is unknown. The order stays unresolved and keeps the active slot: no
       // delivered link does not prove that no financial operation exists.
-      const unresolved = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
+      const unresolved = await applyCreateOutcome(order, ORDER_STATES.PENDING_PAYMENT, {
         payment: { ...order.payment, status: "UNKNOWN", paymentUrl: null, lastCheckedAt: nowIso(), lastErrorCode: code },
         activation: { ...order.activation, state: "NOT_STARTED", lastErrorCode: "DISPATCH_OUTCOME_UNKNOWN" },
       });
       return { order: publicOrder(unresolved), idempotentReplay: false, recoveryRequired: true };
     }
     if (!payment || !["PENDING", "PAID", "UNCONFIRMED"].includes(payment.status)) {
-      const unresolved = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
+      const unresolved = await applyCreateOutcome(order, ORDER_STATES.PENDING_PAYMENT, {
         payment: { ...order.payment, status: "UNKNOWN", paymentUrl: null, lastCheckedAt: nowIso(), lastErrorCode: "PAYMENT_INVALID" },
         activation: { ...order.activation, state: "NOT_STARTED", lastErrorCode: "DISPATCH_OUTCOME_UNKNOWN" },
       });
@@ -578,7 +590,7 @@ export function createResidencyLifecycle(deps) {
       // The provider accepted the request but the result could not be verified. Keep the
       // transaction id that is already known so a later read recovers the late result.
       const transactionId = text(payment.providerTransactionId, 128) ? payment.providerTransactionId : null;
-      const unresolved = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
+      const unresolved = await applyCreateOutcome(order, ORDER_STATES.PENDING_PAYMENT, {
         payment: {
           ...order.payment, status: "UNKNOWN", providerTransactionId: transactionId, paymentUrl: null,
           lastCheckedAt: nowIso(), lastErrorCode: text(payment.reason, 64) ? payment.reason : "DISPATCH_OUTCOME_UNKNOWN",
@@ -588,7 +600,7 @@ export function createResidencyLifecycle(deps) {
       return { order: publicOrder(unresolved), idempotentReplay: false, recoveryRequired: true };
     }
     if (!money(payment.amountMinor) || payment.amountMinor !== pricing.totalMinor) {
-      const unresolved = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
+      const unresolved = await applyCreateOutcome(order, ORDER_STATES.PENDING_PAYMENT, {
         payment: { ...order.payment, status: "UNKNOWN",
           providerTransactionId: text(payment.providerTransactionId, 128) ? payment.providerTransactionId : null,
           paymentUrl: null, lastCheckedAt: nowIso(), lastErrorCode: "PAYMENT_AMOUNT_MISMATCH" },
@@ -599,7 +611,7 @@ export function createResidencyLifecycle(deps) {
     if (payment.status === "PENDING" && !text(payment.providerTransactionId, 128)) {
       // A payable link without a provider id cannot be verified, recovered or safely
       // voided. Keep the attempt unresolved instead of advertising an unverifiable link.
-      const unresolved = await transition(order, ORDER_STATES.PENDING_PAYMENT, {
+      const unresolved = await applyCreateOutcome(order, ORDER_STATES.PENDING_PAYMENT, {
         payment: { ...order.payment, status: "UNKNOWN", paymentUrl: null, lastCheckedAt: nowIso(), lastErrorCode: "TRANSACTION_ID_MISSING" },
         activation: { ...order.activation, state: "NOT_STARTED", lastErrorCode: "DISPATCH_OUTCOME_UNKNOWN" },
       });
@@ -607,7 +619,7 @@ export function createResidencyLifecycle(deps) {
     }
 
     const nextState = payment.status === "PAID" ? ORDER_STATES.PAID : ORDER_STATES.PENDING_PAYMENT;
-    const updated = await transition(order, nextState, {
+    const updated = await applyCreateOutcome(order, nextState, {
       payment: {
         status: payment.status,
         providerTransactionId: text(payment.providerTransactionId, 128) ? payment.providerTransactionId : null,
@@ -618,10 +630,6 @@ export function createResidencyLifecycle(deps) {
       },
       activation: { ...order.activation, state: "NOT_STARTED" },
     });
-    if (nextState === ORDER_STATES.PAID) {
-      const activated = await activate(updated);
-      return { order: publicOrder(activated), idempotentReplay: false };
-    }
     return { order: publicOrder(updated), idempotentReplay: false };
   }
 
@@ -768,24 +776,166 @@ export function createResidencyLifecycle(deps) {
     };
   }
 
-  async function transition(order, state, patch = {}) {
-    const resolved = [ORDER_STATES.ACTIVE, ORDER_STATES.PAYMENT_FAILED, ORDER_STATES.EXPIRED, ORDER_STATES.CANCELLED].includes(state);
+  const RESOLVED_STATES = [ORDER_STATES.ACTIVE, ORDER_STATES.PAYMENT_FAILED, ORDER_STATES.EXPIRED, ORDER_STATES.CANCELLED];
+  const PAID_PHASES = [ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING, ORDER_STATES.ACTIVATION_FAILED];
+
+  /** One CAS attempt that reports the conflict instead of hiding it behind the current row. */
+  async function attemptTransition(order, state, patch = {}) {
     const next = {
       ...order,
       ...patch,
       state,
-      activeSlot: resolved ? null : 1,
+      activeSlot: RESOLVED_STATES.includes(state) ? null : 1,
       updatedAt: nowIso(),
       revision: order.revision + 1,
     };
     const updated = await store.updateOrder(order.tenantId, order.orderId, order.revision, next);
-    if (!updated?.ok) {
-      // Another worker won the CAS. Return the durable row for an idempotent answer.
-      const current = await store.getOrder(order.tenantId, order.userId, order.orderId);
-      if (current) return current;
+    if (updated?.ok) return { applied: true, order: next };
+    // Another worker won the CAS. The durable row is returned for an idempotent answer.
+    return { applied: false, current: await store.getOrder(order.tenantId, order.userId, order.orderId) };
+  }
+
+  async function transition(order, state, patch = {}) {
+    const attempt = await attemptTransition(order, state, patch);
+    if (attempt.applied) return attempt.order;
+    if (attempt.current) return attempt.current;
+    fail(409, "RESIDENCY_ORDER_CONFLICT", "The order changed concurrently");
+  }
+
+  /**
+   * A create response is provider evidence about an operation that already exists. A
+   * concurrent reconcile can move the order while that POST is in flight, so losing the
+   * revision CAS must not drop the transaction id and the link: the durable row is
+   * re-read and the evidence is merged under explicit precedence.
+   *
+   *  - ACTIVE and PAID are monotonic; a late link never reopens a resolved payment.
+   *  - an existing transaction id is never overwritten by a contradicting one; the order
+   *    is held for review instead of silently rebinding the payment.
+   *  - an unresolved dispatch keeps its active slot: there is no second POST and an
+   *    indeterminate operation is never released by the passage of time.
+   */
+  function mergeCreateOutcome(current, state, patch) {
+    const evidence = patch.payment && typeof patch.payment === "object" ? patch.payment : {};
+    const late = text(evidence.providerTransactionId, 128) ? evidence.providerTransactionId : null;
+    const known = text(current.payment.providerTransactionId, 128) ? current.payment.providerTransactionId : null;
+    const conflict = Boolean(late && known && late !== known);
+    const marker = (type, extra) => ({ type, at: nowIso(), ...(extra || {}) });
+    const withMarker = (entry) => current.events.concat(entry).slice(-50);
+    // ACTIVE is settled, and a terminal or review row is already outside the payable path.
+    // None of them may change state or move the active slot because a create answered late.
+    const settled = RESOLVED_STATES.includes(current.state) || current.state === ORDER_STATES.PAID_REQUIRES_REVIEW;
+
+    if (settled) {
+      if (!late) return null;
+      const entry = marker(conflict ? "LATE_CREATE_TRANSACTION_CONFLICT" : "LATE_CREATE_EVIDENCE",
+        { providerTransactionId: late });
+      if (conflict && current.state === ORDER_STATES.ACTIVE) {
+        // The residency stays confirmed; the second provider reference is recorded, not bound.
+        return { state: current.state,
+          patch: { payment: { ...current.payment, lastErrorCode: "TRANSACTION_MISMATCH" }, events: withMarker(entry) } };
+      }
+      if (!conflict && !known) {
+        // A missing reference is durable evidence even for a settled row. A terminal row's
+        // client-visible reason comes from lastErrorCode, which this does not touch.
+        return { state: current.state,
+          patch: { payment: { ...current.payment, providerTransactionId: late }, events: withMarker(entry) } };
+      }
+      return { state: current.state, patch: { events: withMarker(entry) } };
+    }
+
+    if (conflict) {
+      // Two provider operations for one unresolved order is never resolved silently.
+      return {
+        state: ORDER_STATES.PAID_REQUIRES_REVIEW,
+        patch: {
+          payment: { ...current.payment, lastErrorCode: "TRANSACTION_MISMATCH" },
+          activation: { ...current.activation, state: "REQUIRES_REVIEW", lastErrorCode: "TRANSACTION_MISMATCH" },
+          events: withMarker(marker("LATE_CREATE_TRANSACTION_CONFLICT", { providerTransactionId: late })),
+        },
+      };
+    }
+
+    const confirmed = current.payment.status === "PAID" || PAID_PHASES.includes(current.state);
+    if (confirmed) {
+      // PAID is final: a late PENDING/UNKNOWN link never downgrades it.
+      if (!late || known) return null;
+      return {
+        state: current.state,
+        patch: { payment: { ...current.payment, providerTransactionId: late },
+          events: withMarker(marker("LATE_CREATE_EVIDENCE")) },
+      };
+    }
+
+    if (state === ORDER_STATES.PAYMENT_FAILED) {
+      // Only an explicit provider refusal reaches this branch. A concurrently recorded
+      // provider reference contradicts it, so the refusal is not applied.
+      if (known) return null;
+      return {
+        state: ORDER_STATES.PAYMENT_FAILED,
+        patch: {
+          payment: { ...current.payment, status: "FAILED", paymentUrl: null, lastCheckedAt: nowIso(),
+            lastErrorCode: text(evidence.lastErrorCode, 64) ? evidence.lastErrorCode : "PAYMENT_FAILED" },
+          activation: { ...current.activation, state: "NOT_STARTED",
+            lastErrorCode: text(evidence.lastErrorCode, 64) ? evidence.lastErrorCode : "PAYMENT_FAILED" },
+          events: withMarker(marker("LATE_CREATE_EVIDENCE")),
+        },
+      };
+    }
+
+    const payment = { ...current.payment, lastCheckedAt: nowIso() };
+    if (late) payment.providerTransactionId = late;
+    if (evidence.status === "PAID") {
+      payment.status = "PAID";
+      payment.paymentUrl = null;
+      payment.paidAt = iso(evidence.paidAt) ? evidence.paidAt : current.payment.paidAt || nowIso();
+      payment.lastErrorCode = null;
+    } else if (evidence.status === "PENDING") {
+      payment.status = "PENDING";
+      payment.paymentUrl = text(evidence.paymentUrl, 4096) ? evidence.paymentUrl : current.payment.paymentUrl;
+      payment.expiresAt = iso(evidence.expiresAt) ? evidence.expiresAt : current.payment.expiresAt;
+      payment.lastErrorCode = null;
+    } else {
+      payment.status = "UNKNOWN";
+      payment.paymentUrl = null;
+      payment.lastErrorCode = text(evidence.lastErrorCode, 64) ? evidence.lastErrorCode : "DISPATCH_OUTCOME_UNKNOWN";
+    }
+    // A concurrent activation claim is owned by that worker; do not overwrite it.
+    const activation = patch.activation && typeof patch.activation === "object"
+      && (!current.activation || ["NOT_STARTED", "DISPATCHING"].includes(current.activation.state))
+      ? { ...current.activation, ...patch.activation }
+      : null;
+    return {
+      state: payment.status === "PAID" ? ORDER_STATES.PAID : ORDER_STATES.PENDING_PAYMENT,
+      patch: { payment, ...(activation ? { activation } : {}), events: withMarker(marker("LATE_CREATE_EVIDENCE")) },
+    };
+  }
+
+  /**
+   * Applies the single provider create result. A lost CAS retries the merge against the
+   * fresh durable row a bounded number of times: the evidence is never dropped, and the
+   * provider is never called a second time.
+   */
+  async function applyCreateOutcome(order, state, patch) {
+    let attempt = await attemptTransition(order, state, patch);
+    // Each round re-reads the row and re-merges, so a merge is a fixed point once the
+    // evidence is durable (mergeCreateOutcome then returns null). The bound only stops a
+    // pathological writer that keeps winning the CAS; it never repeats the provider POST.
+    for (let round = 0; round < 8 && !attempt.applied; round += 1) {
+      const current = attempt.current;
+      if (!current) fail(409, "RESIDENCY_ORDER_CONFLICT", "The order changed concurrently");
+      const merged = mergeCreateOutcome(current, state, patch);
+      if (!merged) return current;
+      attempt = await attemptTransition(current, merged.state, merged.patch);
+    }
+    if (!attempt.applied) {
+      if (attempt.current) return attempt.current;
       fail(409, "RESIDENCY_ORDER_CONFLICT", "The order changed concurrently");
     }
-    return next;
+    const settled = attempt.order;
+    // A provider-confirmed PAID create starts activation; a late link on an order that
+    // is already paid is settled by that order's own reconcile.
+    if (settled.state === ORDER_STATES.PAID && state === ORDER_STATES.PAID) return activate(settled);
+    return settled;
   }
 
   function providerPaid(read) {
@@ -793,11 +943,41 @@ export function createResidencyLifecycle(deps) {
       && (read.providerTransactionId === undefined || read.providerTransactionId === null || text(read.providerTransactionId, 128));
   }
 
+  /**
+   * An unresolved dispatch is not proof of payment. Until the provider confirms PAID or
+   * the CUP owner returns an authoritative instance for this very order, the order stays
+   * in PENDING_PAYMENT with an UNKNOWN payment: it keeps its active slot, offers no
+   * second checkout and never claims that money was received.
+   */
+  function keepUnconfirmed(order, activationState) {
+    return transition(order, ORDER_STATES.PENDING_PAYMENT, {
+      payment: {
+        ...order.payment,
+        status: order.payment.status === "PAID" ? "PAID" : "UNKNOWN",
+        lastCheckedAt: nowIso(),
+        lastErrorCode: order.payment.lastErrorCode || "DISPATCH_OUTCOME_UNKNOWN",
+      },
+      activation: { ...order.activation, ...activationState },
+    });
+  }
+
+  function activationOutcome(order, paymentConfirmed, activationState) {
+    return paymentConfirmed
+      ? transition(order, ORDER_STATES.ACTIVATION_PENDING, {
+        activation: { ...order.activation, ...activationState },
+      })
+      : keepUnconfirmed(order, activationState);
+  }
+
   async function activate(order) {
     const eligible = [ORDER_STATES.PAID, ORDER_STATES.ACTIVATION_PENDING, ORDER_STATES.ACTIVATION_FAILED].includes(order.state)
       || (order.state === ORDER_STATES.PENDING_PAYMENT && ["DISPATCHING", "UNKNOWN"].includes(order.payment.status));
     if (!eligible) return order;
     if (order.state === ORDER_STATES.ACTIVE) return order;
+    // Only a confirmed PAID payment (or a paid phase already reached through provider/CUP
+    // evidence) may be presented as paid. A dispatch whose outcome is unknown is not proof
+    // that money was received.
+    const paymentConfirmed = order.payment.status === "PAID" || PAID_PHASES.includes(order.state);
     const inFlightSince = iso(order.activation.startedAt) ? Date.parse(order.activation.startedAt) : null;
     if (order.activation.state === "IN_FLIGHT" && inFlightSince !== null && clock.now() - inFlightSince < 120000) {
       // Another worker owns this activation. Do not call CUP twice.
@@ -823,23 +1003,21 @@ export function createResidencyLifecycle(deps) {
         paidAt: order.payment.paidAt,
       });
     } catch {
-      return transition(order, ORDER_STATES.ACTIVATION_PENDING, {
-        activation: { ...order.activation, state: "PENDING", lastErrorCode: "INSTANCE_LOOKUP_UNAVAILABLE" },
-      });
+      return activationOutcome(order, paymentConfirmed,
+        { state: "PENDING", lastErrorCode: "INSTANCE_LOOKUP_UNAVAILABLE" });
     }
     if (!instance || !text(instance.clientSubscriptionId, 128)) {
       // An absent instance is retryable: CUP must confirm the purchase first, and a
-      // later reconcile can see the issued instance without a second charge.
-      return transition(order, ORDER_STATES.ACTIVATION_PENDING, {
-        activation: { ...order.activation, state: "PENDING", lastErrorCode: "INSTANCE_NOT_FOUND" },
-      });
+      // later reconcile can see the issued instance without a second charge. For an
+      // unconfirmed dispatch the absence proves nothing about the payment either.
+      return activationOutcome(order, paymentConfirmed,
+        { state: "PENDING", lastErrorCode: "INSTANCE_NOT_FOUND" });
     }
     if (iso(instance.purchasedAt) && Date.parse(instance.purchasedAt) < Date.parse(order.createdAt)) {
       // An instance purchased before this order is not evidence for it. This is the
       // renewal guard against binding an old subscription to the new payment.
-      return transition(order, ORDER_STATES.ACTIVATION_PENDING, {
-        activation: { ...order.activation, state: "PENDING", lastErrorCode: "INSTANCE_BEFORE_ORDER" },
-      });
+      return activationOutcome(order, paymentConfirmed,
+        { state: "PENDING", lastErrorCode: "INSTANCE_BEFORE_ORDER" });
     }
     let result;
     try {
@@ -849,9 +1027,8 @@ export function createResidencyLifecycle(deps) {
         clientSubscriptionId: instance.clientSubscriptionId,
       });
     } catch {
-      return transition(order, ORDER_STATES.ACTIVATION_PENDING, {
-        activation: { ...order.activation, state: "PENDING", attempts: order.activation.attempts + 1, lastErrorCode: "ACTIVATION_UNAVAILABLE" },
-      });
+      return activationOutcome(order, paymentConfirmed,
+        { state: "PENDING", attempts: order.activation.attempts + 1, lastErrorCode: "ACTIVATION_UNAVAILABLE" });
     }
     if (result?.state === "ACTIVE" && iso(result.validFrom) && iso(result.validUntil)
       && Date.parse(result.validUntil) > Date.parse(result.validFrom)) {
@@ -887,20 +1064,19 @@ export function createResidencyLifecycle(deps) {
       });
     }
     if (result?.state === "REJECTED") {
-      return transition(order, ORDER_STATES.ACTIVATION_FAILED, {
-        activation: {
-          state: "REJECTED", attempts: order.activation.attempts + 1,
-          lastErrorCode: text(result.reason, 64) ? result.reason : "ACTIVATION_REJECTED",
-          clientSubscriptionId: instance.clientSubscriptionId,
-        },
-      });
-    }
-    return transition(order, ORDER_STATES.ACTIVATION_PENDING, {
-      activation: {
-        state: "PENDING", attempts: order.activation.attempts + 1,
-        lastErrorCode: text(result?.reason, 64) ? result.reason : "ACTIVATION_UNAVAILABLE",
+      const rejected = {
+        state: "REJECTED", attempts: order.activation.attempts + 1,
+        lastErrorCode: text(result.reason, 64) ? result.reason : "ACTIVATION_REJECTED",
         clientSubscriptionId: instance.clientSubscriptionId,
-      },
+      };
+      return paymentConfirmed
+        ? transition(order, ORDER_STATES.ACTIVATION_FAILED, { activation: { ...order.activation, ...rejected } })
+        : keepUnconfirmed(order, rejected);
+    }
+    return activationOutcome(order, paymentConfirmed, {
+      state: "PENDING", attempts: order.activation.attempts + 1,
+      lastErrorCode: text(result?.reason, 64) ? result.reason : "ACTIVATION_UNAVAILABLE",
+      clientSubscriptionId: instance.clientSubscriptionId,
     });
   }
 

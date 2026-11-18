@@ -1420,7 +1420,11 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       }
       window.sessionStorage.setItem(
         VIVA_REAUTH_ATTEMPT_STORAGE_KEY,
-        JSON.stringify({ principal: recoveryPrincipal, startedAt: Date.now() }),
+        JSON.stringify({
+          principal: recoveryPrincipal,
+          startedAt: Date.now(),
+          ...(userInitiated ? { residency: true } : {}),
+        }),
       );
     } catch {
       // The in-memory latch still prevents duplicate starts in this gateway instance.
@@ -1470,6 +1474,22 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       .finally(() => {
         vivaReauthorizationInFlight = false;
       });
+  }
+
+  function wasResidencyReauthorizationInterrupted(): boolean {
+    const principal = vivaRecoveryPrincipal();
+    if (!principal || vivaReauthorizationInFlight) return false;
+    try {
+      const path = window.sessionStorage.getItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
+      if (path !== `${window.location.pathname}${window.location.search}${window.location.hash}`)
+        return false;
+      const stored = window.sessionStorage.getItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
+      if (!stored) return false;
+      const attempt = JSON.parse(stored) as { principal?: unknown; residency?: unknown };
+      return attempt.principal === principal && attempt.residency === true;
+    } catch {
+      return false;
+    }
   }
 
   function restoreVivaReauthorizationReturnPath(): void {
@@ -2870,6 +2890,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             listUnresolvedResidencyOrders: () =>
               residencyCall(() => client.listUnresolvedResidencyOrders()),
             reauthorizeResidency: () => startAutomaticVivaReauthorization(true),
+            wasResidencyReauthorizationInterrupted,
             getResidencyOrder: (id) => residencyCall(() => client.getResidencyOrder(id)),
             getResidencyOrderPayment: (id) =>
               residencyCall(() => client.getResidencyOrderPayment(id)),

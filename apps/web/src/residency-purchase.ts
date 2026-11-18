@@ -19,6 +19,7 @@ export interface ResidencyGateway {
   readonly getResidencyCatalog: () => Promise<unknown>;
   readonly listUnresolvedResidencyOrders: () => Promise<unknown>;
   readonly reauthorizeResidency: () => Promise<void>;
+  readonly wasResidencyReauthorizationInterrupted?: () => boolean;
   readonly createResidencyOrder: (input: ResidencyCreateInput, key: string) => Promise<unknown>;
   readonly getResidencyOrder: (orderId: string) => Promise<unknown>;
   readonly getResidencyOrderPayment: (orderId: string) => Promise<unknown>;

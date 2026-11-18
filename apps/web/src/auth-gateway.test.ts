@@ -783,13 +783,20 @@ describe('browser auth gateway', () => {
       requestUrl(input).endsWith('/auth/viva/reauthorize'),
     );
     expect(recoveryCalls).toHaveLength(1);
+    expect(gateway.residency!.wasResidencyReauthorizationInterrupted?.()).toBe(false);
     await gateway.residency!.reauthorizeResidency();
+    expect(gateway.residency!.wasResidencyReauthorizationInterrupted?.()).toBe(true);
     expect(redirected).toHaveBeenCalledTimes(2);
     expect(JSON.parse(recoveryCalls[0]?.[1]?.body as string)).toEqual({ provider: 'yandex' });
     expect(redirected).toHaveBeenCalledWith('https://identity.example.test/yandex');
     expect(window.sessionStorage.getItem('phub.viva-reauth-return-path.v1')).toBe(
       '/games?event=fixture#section',
     );
+    window.history.replaceState({}, '', '/profile');
+    expect(gateway.residency!.wasResidencyReauthorizationInterrupted?.()).toBe(false);
+    window.history.replaceState({}, '', '/games?event=fixture#section');
+    window.sessionStorage.removeItem('phub.viva-reauth-return-path.v1');
+    expect(gateway.residency!.wasResidencyReauthorizationInterrupted?.()).toBe(false);
   });
 
   it('retries a busy Viva delegation refresh without starting OAuth recovery', async () => {

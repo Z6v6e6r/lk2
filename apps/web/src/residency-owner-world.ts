@@ -1,21 +1,22 @@
 /**
  * LOCAL composed chain: real screen/SDK → #684 routes/runtime/HTTP client → #443 HTTP/domain.
- * Pinned source bytes are checked in residency-owner.test-helper.ts. Fastify inject replaces
+ * Pinned source bytes are checked in residency-server-fixtures.test-helper.ts. Fastify inject replaces
  * the physical network; credential issuance/auth middleware, store, clock, status read and
  * Viva/CUP ports are synthetic. No live provider calls. This helper is test-only.
  */
 import Fastify from 'fastify';
-import { ClientResidencyOwnerClient } from '../../../contracts/imported/lk2-residency-consumer/965efa79/client-residency-owner-client.js';
-import { createResidencyOrderRuntime } from '../../../contracts/imported/lk2-residency-consumer/965efa79/client-residency-order-runtime.js';
-import { registerClientResidencyOrderRoutes } from '../../../contracts/imported/lk2-residency-consumer/965efa79/client-residency-order-routes.js';
 import { PadlHubApiClient } from '@phub/api-sdk';
 
-import {
-  RESIDENCY_PRODUCT_ID,
-  createResidencyLifecycle,
-} from '../../../contracts/imported/lk1-residency-lifecycle/93692e64/residency-lifecycle.mjs';
-import { createResidencyLifecycleApi } from '../../../contracts/imported/lk1-residency-lifecycle/93692e64/residency-lifecycle-http.mjs';
 import { moscowDay, type ResidencyGateway } from './residency-purchase.js';
+import { loadResidencyServerFixtures } from './residency-server-fixtures.test-helper.js';
+
+const {
+  owner: { RESIDENCY_PRODUCT_ID, createResidencyLifecycle },
+  ownerHttp: { createResidencyLifecycleApi },
+  consumerClient: { ClientResidencyOwnerClient },
+  consumerRuntime: { createResidencyOrderRuntime },
+  consumerRoutes: { registerClientResidencyOrderRoutes },
+} = loadResidencyServerFixtures();
 
 export const SYNTHETIC_BASE = 'https://lk2.synthetic.test';
 export const SYNTHETIC_TENANT_KEY = 'synthetic';
@@ -38,7 +39,7 @@ type Row = Record<string, unknown> & {
   revision: number;
   state: string;
   activeSlot?: number;
-  payment: { expiresAt?: string | null };
+  payment: { expiresAt?: string | null; status?: string; providerTransactionId?: string | null };
 };
 
 /** The owner's own in-memory store semantics (lk#443 tests), incl. the active-slot guard. */
@@ -143,6 +144,7 @@ export function createOwnerWorld(init: {
     bank: new Map<string, { status: 'PENDING' | 'PAID' | 'FAILED'; paidAt?: string }>(),
     /** The provider create never answers: the owner cannot know whether a payment exists. */
     providerCreateLost: false,
+    holdProviderCreate: null as (() => Promise<void>) | null,
     /** CUP refuses activation of a paid order (owner moves it to ACTIVATION_FAILED). */
     activationRejects: false,
     /** Residency truth at CUP per user, and the LK2 read (which may lag behind it). */
@@ -156,6 +158,8 @@ export function createOwnerWorld(init: {
     log: [] as TransportLog[],
     providerCreates: 0,
     reauthorizations: 0,
+    reauthorizationError: null as Error | null,
+    reauthorizationInterrupted: false,
     store: memoryStore(),
   };
   let txnSeq = 0;
@@ -219,18 +223,19 @@ export function createOwnerWorld(init: {
         },
       },
       payments: {
-        create: ({ amountMinor }: { amountMinor: number }) => {
+        create: async ({ amountMinor }: { amountMinor: number }) => {
           world.providerCreates += 1;
-          if (world.providerCreateLost) return Promise.reject(new Error('provider timeout'));
+          if (world.holdProviderCreate) await world.holdProviderCreate();
+          if (world.providerCreateLost) throw new Error('provider timeout');
           const id = 'txn-' + String(++txnSeq);
           world.bank.set(id, { status: 'PENDING' });
-          return Promise.resolve({
+          return {
             status: 'PENDING',
             providerTransactionId: id,
             paymentUrl: 'https://bank.example.test/pay/' + id,
             amountMinor,
             expiresAt: iso(world.now + 20 * 60_000),
-          });
+          };
         },
         read: ({
           providerTransactionId,
@@ -490,8 +495,11 @@ export function createOwnerWorld(init: {
         listUnresolvedResidencyOrders: () => client.listUnresolvedResidencyOrders(),
         reauthorizeResidency: () => {
           world.reauthorizations += 1;
-          return Promise.resolve();
+          return world.reauthorizationError
+            ? Promise.reject(world.reauthorizationError)
+            : Promise.resolve();
         },
+        wasResidencyReauthorizationInterrupted: () => world.reauthorizationInterrupted,
         getResidencyOrder: (id) => client.getResidencyOrder(id),
         getResidencyOrderPayment: (id) => client.getResidencyOrderPayment(id),
         reconcileResidencyOrder: (id, key) => client.reconcileResidencyOrder(id, key),

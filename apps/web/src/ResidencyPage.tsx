@@ -136,6 +136,7 @@ function ResidencySession({
   const [confirming, setConfirming] = useState(false);
   const [lookupReady, setLookupReady] = useState(false);
   const [reauth, setReauth] = useState(false);
+  const [reauthInterrupted, setReauthInterrupted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
@@ -176,11 +177,15 @@ function ResidencySession({
       const value = parseResidencyCatalog(await gateway.getResidencyCatalog());
       if (!sameAccount()) return null;
       setCatalog({ state: 'ready', value });
+      setReauthInterrupted(false);
       return value;
     } catch (e) {
       if (sameAccount()) {
         setCatalog({ state: 'error' });
-        if (residencyErrorCode(e) === 'RESIDENCY_REAUTH_REQUIRED') setReauth(true);
+        if (residencyErrorCode(e) === 'RESIDENCY_REAUTH_REQUIRED') {
+          setReauth(true);
+          setReauthInterrupted(gateway.wasResidencyReauthorizationInterrupted?.() === true);
+        }
       }
       return null;
     }
@@ -410,10 +415,15 @@ function ResidencySession({
     const foreground = () => {
       if (document.visibilityState === 'visible') void refresh('read');
     };
+    const returned = (event: PageTransitionEvent) => {
+      if (event.persisted && gateway.wasResidencyReauthorizationInterrupted?.()) void readCatalog();
+    };
     document.addEventListener('visibilitychange', foreground);
+    window.addEventListener('pageshow', returned);
     return () => {
       window.clearTimeout(initial);
       document.removeEventListener('visibilitychange', foreground);
+      window.removeEventListener('pageshow', returned);
     };
     // One account epoch per mount; handlers below always use the current render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -567,7 +577,26 @@ function ResidencySession({
       await readCatalog();
     });
 
+  const reauthorize = () =>
+    exclusive(async () => {
+      setReauthInterrupted(false);
+      try {
+        await gateway.reauthorizeResidency();
+      } catch (error) {
+        if (!sameAccount()) return;
+        const interrupted =
+          residencyErrorCode(error) === 'VIVA_OAUTH_CANCELLED' ||
+          (error instanceof Error && error.name === 'AbortError');
+        if (interrupted) setReauthInterrupted(true);
+        else
+          setError(
+            'Не удалось начать повторный вход через Viva. Операция сохранена, попробуйте позже.',
+          );
+      }
+    });
+
   const renewing = view?.kind === 'active';
+  const paymentConfirmed = order?.paymentStatus === 'PAID';
   const product = catalog.state === 'ready' ? catalog.value : null;
   const statusKnown = view !== null && view.kind !== 'unavailable';
   const reference = current?.attempt.orderId ? shortOrderReference(current.attempt.orderId) : null;
@@ -593,7 +622,8 @@ function ResidencySession({
         <section className="residency-result residency-success" role="status">
           <h2>{order.mode === 'RENEWAL' ? 'Резидентство продлено' : 'Резидентство активно'}</h2>
           <p>
-            Оплата подтверждена. Резидентство действует до {formatDay(order.residencyValidUntil)}
+            {paymentConfirmed ? 'Оплата подтверждена. ' : ''}Резидентство действует до{' '}
+            {formatDay(order.residencyValidUntil)}
           </p>
           <button
             type="button"
@@ -642,8 +672,10 @@ function ResidencySession({
         <section className="residency-result residency-failure" role="alert">
           <h2>Нужна проверка клуба</h2>
           <p>
-            Оплата получена, но резидентство не удалось активировать автоматически. Повторно платить
-            не нужно — клуб проверит заказ. Если вопрос не решится, напишите в поддержку.
+            {paymentConfirmed
+              ? 'Оплата получена. Клуб проверит, почему резидентство не активировалось.'
+              : 'Оплата пока не подтверждена. Клуб проверит заказ.'}{' '}
+            Новый платёж недоступен. Если вопрос не решится, напишите в поддержку.
           </p>
           {reference ? <p className="residency-note">Номер заказа: {reference}</p> : null}
           <button
@@ -663,7 +695,7 @@ function ResidencySession({
           <h2>Ожидает оплаты</h2>
           <p>
             {order?.mode === 'RENEWAL' ? 'Продление' : 'Заказ'}{' '}
-            {order ? `на ${formatRub(order.totalMinor)} ` : ''}ждёт оплаты . Если вы уже оплатили,
+            {order ? `на ${formatRub(order.totalMinor)} ` : ''}ждёт оплаты. Если вы уже оплатили,
             подтверждение придёт после ответа банка. Заказ остаётся открытым, пока результат не
             подтверждён.
           </p>
@@ -694,9 +726,9 @@ function ResidencySession({
                 ? 'Время ожидания истекло, но результат банка ещё не подтверждён. Заказ остаётся открытым; новый платёж недоступен.'
                 : order.state === 'ACTIVE'
                   ? 'Резидентство активировано. Ждём подтверждения нового срока в вашем статусе.'
-                  : order.state === 'PENDING_PAYMENT'
-                    ? 'Проверяем, создан ли платёж. Повторно платить не нужно.'
-                    : 'Оплата получена. Ждём активации резидентства клубом.'}
+                  : paymentConfirmed
+                    ? 'Оплата получена. Ждём активации резидентства клубом.'
+                    : 'Проверяем статус платежа. Новый платёж недоступен.'}
           </p>
           <button
             type="button"
@@ -853,18 +885,16 @@ function ResidencySession({
           type="button"
           className="residency-primary"
           disabled={busy}
-          onClick={() =>
-            void exclusive(async () => {
-              await gateway.reauthorizeResidency();
-            })
-          }
+          onClick={() => void reauthorize()}
         >
           Войти повторно через Viva
         </button>
       ) : null}
-      {error ? (
+      {reauthInterrupted || error ? (
         <p className="subscriptions-message subscriptions-error" role="alert">
-          {error}
+          {reauthInterrupted
+            ? 'Повторный вход через Viva прерван. Операция сохранена, можно попробовать снова.'
+            : error}
         </p>
       ) : null}
     </ResidencyShell>

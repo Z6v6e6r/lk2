@@ -4,11 +4,11 @@ Status: Draft #682; CRITICAL client custody of a payment operation. Source only,
 
 ## Compatible source set
 
-- Web/SDK baseline: `fb9fcbdb12cda0f25cc4e9c9795c6074cae1f2ab` in [lk2#682](https://github.com/Z6v6e6r/lk2/pull/682); this PR contains the v2 adaptation. Final web head is recorded in the PR (a commit cannot contain its own SHA).
-- Owner: [lk#443](https://github.com/Z6v6e6r/lk/pull/443), `93692e64853df63bb2165ddc54145d86cf8a078a`, contract `residency-lifecycle.v2`, schemaVersion 1.
-- Consumer: [lk2#684](https://github.com/Z6v6e6r/lk2/pull/684), `965efa7959d9ff4b402b4312a89b908bc6ca5707`.
+- Web/SDK: [lk2#682](https://github.com/Z6v6e6r/lk2/pull/682). This round starts at `09d488a3501eb359e311cd43fd5304219e770671`.
+- Owner: [lk#443](https://github.com/Z6v6e6r/lk/pull/443), `2f7c2d48251bc883cab9cf34a51492ba32be045e`, contract `residency-lifecycle.v2`, schemaVersion 1.
+- Consumer: [lk2#684](https://github.com/Z6v6e6r/lk2/pull/684), `7cd773f219290760cceedd98ee8bd2c47615b593`.
 
-The supplied heads matched at task start. A later recheck found owner 93692e64 and consumer 965efa79; their delta was read and these current heads are now pinned. Owner changed price consent from a ceiling to exact equality; consumer runtime bytes are unchanged, while its docs/tests and unrelated main CI tooling changed. Server sources remain owned by DeepSeek. Executable snapshots under `contracts/imported/lk1-residency-lifecycle/93692e64` and `contracts/imported/lk2-residency-consumer/965efa79` are byte-identical to those commits; `SOURCE.sha256` and tests verify contents. Local `.d.mts` declarations describe the imported JS test seam, not upstream executable code. The older adc9c644 snapshot is historical and no longer used by compatibility tests.
+The composed tests load the six upstream modules from `apps/web/test-fixtures/residency`. Each source file was compared against its upstream Git blob. `SOURCE.md` records the commit, original path and blob ID. The test loader verifies SHA-256 before materializing the owner JavaScript and compiling the consumer TypeScript in a temporary directory. The root ESLint configuration follows `main`. These fixtures live outside the runtime contracts tree and the production build.
 
 ## Surface and custody
 
@@ -51,7 +51,7 @@ The legacy availability codes are definitive only when directly emitted by the o
 
 The UI validates `catalog.renewal` (`eligible`, `reason`, `eligibleAt`, `currentValidUntil`, expected term/start/end). For ACTIVE status and ineligible renewal it displays the server reason and exact Moscow availability date/time, without a payment confirmation. It does not calculate transferred days. `RENEWAL_TOO_EARLY.details` uses the same explanation. CUP's window begins at paymentDate; only the owner decides eligibility.
 
-Order recovery (`state`, `required`, `reason`, `action`, `retryable`, `since`) and payment `overdue` are validated. `UNKNOWN_OUTCOME`, `AWAITING_CONFIRMATION`, `ACTIVATION_PENDING`, `REVIEW_REQUIRED` and overdue block payment and new purchase. Payment launch requires `AWAITING_PAYMENT/PAY`, PENDING, non-overdue and exact-consent/product checks. The local deadline never promises closure; the owner can retain PENDING/UNKNOWN indefinitely pending evidence. No cancellation is offered while bank outcome is unresolved.
+Order recovery (`state`, `required`, `reason`, `action`, `retryable`, `since`) and payment `overdue` are validated. `UNKNOWN_OUTCOME`, `AWAITING_CONFIRMATION`, `ACTIVATION_PENDING`, `REVIEW_REQUIRED` and overdue block payment and new purchase. Payment launch requires `AWAITING_PAYMENT/PAY`, PENDING, non-overdue and exact-consent/product checks. The local deadline never promises closure; the owner can retain PENDING/UNKNOWN indefinitely pending evidence. No cancellation is offered while bank outcome is unresolved. Club review keeps checkout unavailable. A message confirming receipt of payment requires the current order DTO to report `payment.status=PAID`. Cancelling explicit Viva reauthorization leaves the original key, orderId and consent intact and permits another sign-in attempt.
 
 Every load performs unresolved lookup, including on a new device. Purchase is unavailable until that read succeeds. Activation success requires **both** order ACTIVE and independent `GET /residency` ACTIVE covering the order's own end date in the Moscow calendar; an old ACTIVE read is insufficient. Reconciliation remains bounded (8 × 4 seconds plus explicit checks/foreground). Account epochs discard late results after account switches.
 
@@ -59,6 +59,6 @@ Every load performs unresolved lookup, including on a new device. Purchase is un
 
 LOCAL tests mount the real screen and real SDK and run the real #684 Fastify routes, runtime validation/error mapping and owner HTTP client, then #443 HTTP/domain modules. Synthetic: Fastify injected transport instead of sockets, authentication middleware and delegation issuance, clock, in-memory durable-store stand-in, independent status-read data and Viva/CUP ports. This does not prove real JWT/Keycloak delegation, Mongo durability, provider adapter behavior or a real payment.
 
-Regression scenarios cover NEW, missing consent, price increase/decrease, replay after catalog changes, early renewal with zero provider creates, unresolved recovery, lost success/refusal, unknown outcome, overdue, reauth, two visible windows, account isolation, HTML fallback, bounded wait and independent confirmation of the new term. Snapshot hashes are checked for both dependencies.
+The existing D1–D7 evidence covers exact price consent and refusal classification, early renewal, cross-tab recovery, unpaid and unresolved states, explicit Viva reauthorization and wall-clock delegation expiry. This round also covers a provider create response after a concurrent CAS, an unconfirmed payment through reconcile, a transaction ID conflict that puts the order into review, and one user's business refusals leaving another user's owner read available.
 
 CI is reported on the final #682 SHA in its PR. STAGING and PROVIDER are untested: owner install/indexes/flag, matching consumer product/config, lk2 return target and real delegated-token/provider acceptance remain external dependencies. No native purchase wiring, merge, deployment, live configuration or real payment is included.

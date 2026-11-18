@@ -81,14 +81,8 @@ proven), not `NONE`. A frozen or held instance is not active residency even if i
 5. Monitor the adapter metric `residency_subscriptions` and the service metric `client_residency`;
    a failed read must not be presented as absence.
 
-## Client presentation
-
-The web cabinet shows the status at `/residency` and drives purchase/renewal through the
-[residency purchase contract](../contracts/residency-purchase.md). A failed or `UNAVAILABLE` read is
-shown as "status unavailable", never as absence; activation is shown only after this read is `ACTIVE`.
-
 ## Out of scope
 
-Per-station product maps, persisted last-known observations and background synchronization are
-follow-ups. They require a separate product decision and, where persistence is
+Per-station product maps, persisted last-known observations, background synchronization and client
+presentation are follow-ups. They require a separate product decision and, where persistence is
 needed, an expand/contract migration.

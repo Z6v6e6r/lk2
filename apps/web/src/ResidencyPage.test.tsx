@@ -10,7 +10,11 @@ import {
   verifyConsumerSnapshot,
   type OwnerHarness,
 } from './residency-owner.test-helper.js';
-import { listResidencyAttempts } from './residency-purchase.js';
+import {
+  listResidencyAttempts,
+  parseResidencyOrder,
+  parseResidencyOrderEnvelope,
+} from './residency-purchase.js';
 
 // Every scenario below runs the real lk#443 owner state machine and HTTP contract (imported
 // byte-identical) behind actual #684 routes/runtime/HTTP client and the real @phub/api-sdk client.
@@ -41,6 +45,13 @@ class MemoryStorage implements Storage {
 }
 
 let uuidSeq = 0;
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 const randomUuid = () => `00000000-0000-4000-8000-${String(++uuidSeq).padStart(12, '0')}`;
 
 function mount(
@@ -79,7 +90,7 @@ async function buyAndOpenPayment(h: OwnerHarness, storage?: Storage) {
 afterEach(() => cleanup());
 
 describe('imported owner snapshot', () => {
-  it('pins actual consumer modules to #684 965efa79', () => {
+  it('pins actual consumer modules to #684 7cd773f21', () => {
     expect(verifyConsumerSnapshot()).toEqual([
       'client-residency-order-routes.ts',
       'client-residency-order-runtime.ts',
@@ -87,7 +98,7 @@ describe('imported owner snapshot', () => {
       'residency-owner-paths.ts',
     ]);
   });
-  it('is byte-identical to lk#443 @ 93692e64', () => {
+  it('is byte-identical to lk#443 @ 2f7c2d48', () => {
     expect(verifyOwnerSnapshot()).toEqual([
       'residency-lifecycle.mjs',
       'residency-lifecycle-http.mjs',
@@ -266,6 +277,7 @@ describe('order flow through the real owner', () => {
     const h = createOwnerWorld();
     await buyAndOpenPayment(h);
     expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
+    expect(screen.getByText(/ждёт оплаты\. Если вы уже оплатили/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Отменить заказ' })).not.toBeInTheDocument();
     expect(screen.queryByText(/закроется\s+автоматически/)).not.toBeInTheDocument();
     // Contract evidence: the real owner refuses to cancel an order whose payment is PENDING.
@@ -476,7 +488,15 @@ describe('uncertain payment and club review', () => {
     fireEvent.click(await confirm());
     expect(await screen.findByText('Результат оплаты не подтверждён')).toBeInTheDocument();
     const order = h.ordersOf('user-a')[0]!;
-    expect(order.state).toBe('PENDING_PAYMENT');
+    const reconciled = await h
+      .gateway(userA.userId)
+      .client.reconcileResidencyOrder(order.orderId, 'reconcile:' + randomUuid());
+    expect(parseResidencyOrderEnvelope(reconciled)).toMatchObject({
+      state: 'PENDING_PAYMENT',
+      paymentStatus: 'UNKNOWN',
+      recovery: { state: 'UNKNOWN_OUTCOME' },
+    });
+    expect(screen.queryByText(/Оплата получена|Оплата подтверждена/)).not.toBeInTheDocument();
     expect(screen.queryByText(/отклонил|не прошла|Заказ отменён/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /Оформить|Перейти к оплате/ }),
@@ -490,6 +510,87 @@ describe('uncertain payment and club review', () => {
     expect(posts(h, '/residency/orders')).toHaveLength(1);
   });
 
+  it.each(['reconciled', 'conflicting'] as const)(
+    'preserves a late create result after the %s revision wins CAS',
+    async (writer) => {
+      const h = createOwnerWorld();
+      const entered = deferred();
+      const provider = deferred();
+      h.world.holdProviderCreate = () => {
+        entered.resolve();
+        return provider.promise;
+      };
+      const m = mount(h);
+      fireEvent.click(await confirm());
+      await entered.promise;
+      const order = h.ordersOf(userA.userId)[0]!;
+      const { client } = h.gateway(userA.userId);
+      const conflicting = writer === 'conflicting';
+      let winningRevision: number;
+      try {
+        if (conflicting) {
+          // Simulate a concurrent writer that already stored a different transaction reference.
+          expect(
+            await h.world.store.updateOrder(order.tenantId, order.orderId, order.revision, {
+              ...order,
+              revision: order.revision + 1,
+              payment: {
+                ...order.payment,
+                status: 'PENDING',
+                providerTransactionId: 'txn-existing',
+              },
+            }),
+          ).toEqual({ ok: true });
+        } else {
+          const reconciled = await client.reconcileResidencyOrder(
+            order.orderId,
+            'reconcile:' + randomUuid(),
+          );
+          expect(parseResidencyOrderEnvelope(reconciled)).toMatchObject({
+            state: 'PENDING_PAYMENT',
+            paymentStatus: 'UNKNOWN',
+            recovery: { state: 'UNKNOWN_OUTCOME' },
+          });
+        }
+        winningRevision = h.ordersOf(userA.userId)[0]!.revision;
+        expect(winningRevision).toBeGreaterThan(order.revision);
+      } finally {
+        provider.resolve();
+      }
+
+      await screen.findByText(conflicting ? 'Нужна проверка клуба' : 'Ожидает оплаты');
+      const row = h.ordersOf(userA.userId)[0]!;
+      expect(row.revision).toBeGreaterThan(winningRevision);
+      expect(row.activeSlot).toBe(1);
+      expect(row.payment.providerTransactionId).toBe(
+        conflicting ? 'txn-existing' : [...h.world.bank.keys()][0],
+      );
+      const recovered = parseResidencyOrder(await client.getResidencyOrder(order.orderId));
+      expect(recovered).toMatchObject({
+        paymentStatus: 'PENDING',
+        recovery: { state: conflicting ? 'REVIEW_REQUIRED' : 'AWAITING_PAYMENT' },
+      });
+      if (conflicting) {
+        expect(recovered.activationErrorCode).toBe('TRANSACTION_MISMATCH');
+        expect(screen.getByText(/Оплата пока не подтверждена/)).toBeInTheDocument();
+        expect(screen.queryByText(/Оплата получена|Оплата подтверждена/)).not.toBeInTheDocument();
+        expect(
+          screen.queryByRole('button', { name: /Оформить|Перейти к оплате/ }),
+        ).not.toBeInTheDocument();
+        expect(m.opened).toHaveLength(0);
+      } else {
+        await waitFor(() => expect(m.opened).toEqual([recovered.paymentUrl]));
+      }
+      await expect(
+        client.createResidencyOrder(
+          { mode: 'NEW', expectedTotalMinor: 79000 },
+          'residency:' + randomUuid(),
+        ),
+      ).rejects.toMatchObject({ status: 409, code: 'RESIDENCY_ORDER_ALREADY_PENDING' });
+      expect(h.world.providerCreates).toBe(1);
+    },
+  );
+
   it('a paid order that needs club review offers no second payment after return', async () => {
     const h = createOwnerWorld();
     h.world.activationRejects = true;
@@ -498,6 +599,7 @@ describe('uncertain payment and club review', () => {
     h.bankSettles('PAID');
     mount(h, storage);
     expect(await screen.findByText('Нужна проверка клуба')).toBeInTheDocument();
+    expect(screen.getByText(/Оплата получена/)).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /Оформить|Перейти к оплате/ }),
     ).not.toBeInTheDocument();
@@ -517,6 +619,32 @@ describe('account boundaries', () => {
     expect(screen.queryByText('Ожидает оплаты')).not.toBeInTheDocument();
     expect(listResidencyAttempts(storage, userB)).toHaveLength(0);
     expect(listResidencyAttempts(storage, userA)).toHaveLength(1);
+  });
+
+  it('three price refusals for one user do not open the shared breaker for another', async () => {
+    const h = createOwnerWorld();
+    const a = h.gateway(userA.userId).client;
+    const b = h.gateway(userB.userId).client;
+    const created = parseResidencyOrderEnvelope(
+      await b.createResidencyOrder(
+        { mode: 'NEW', expectedTotalMinor: 79000 },
+        'residency:' + randomUuid(),
+      ),
+    );
+    for (let refusal = 0; refusal < 3; refusal += 1) {
+      await expect(
+        a.createResidencyOrder(
+          { mode: 'NEW', expectedTotalMinor: 69000 },
+          'residency:' + randomUuid(),
+        ),
+      ).rejects.toMatchObject({ status: 409, code: 'RESIDENCY_PRICE_CHANGED' });
+    }
+    expect(parseResidencyOrder(await b.getResidencyOrder(created.orderId))).toMatchObject({
+      orderId: created.orderId,
+      paymentStatus: 'PENDING',
+    });
+    expect(h.ordersOf(userA.userId)).toHaveLength(0);
+    expect(h.world.providerCreates).toBe(1);
   });
 
   it('discards results that arrive after the account changed', async () => {
@@ -684,6 +812,50 @@ describe('contract v2 composed chain: web → SDK → consumer routes/runtime/cl
     expect(posts(h, '/residency/orders').map((l) => l.key)).toEqual([original.key, original.key]);
     expect(h.world.providerCreates).toBe(1);
   });
+  it('cancelled Viva reauthorization keeps the key and the existing orderId', async () => {
+    const h = createOwnerWorld();
+    const { storage } = await buyAndOpenPayment(h);
+    const [original] = listResidencyAttempts(storage, userA);
+    expect(original?.orderId).toBe(h.ordersOf(userA.userId)[0]!.orderId);
+    cleanup();
+    h.world.consumer = 'reauth';
+    h.world.reauthorizationError = Object.assign(new Error('cancelled'), {
+      code: 'VIVA_OAUTH_CANCELLED',
+    });
+    mount(h, storage);
+    fireEvent.click(await screen.findByRole('button', { name: 'Войти повторно через Viva' }));
+    expect(await screen.findByText(/Повторный вход через Viva прерван/)).toBeInTheDocument();
+    expect(screen.queryByText(/Не удалось получить ответ сервера/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Войти повторно через Viva' })).toBeEnabled();
+    expect(listResidencyAttempts(storage, userA)).toEqual([original]);
+    expect(h.world.reauthorizations).toBe(1);
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
+  });
+
+  it.each(['page reload', 'browser back'] as const)(
+    'reports interrupted reauthorization on %s while Viva still requires sign-in',
+    async (returnMode) => {
+      const h = createOwnerWorld();
+      const { storage } = await buyAndOpenPayment(h);
+      const saved = listResidencyAttempts(storage, userA);
+      h.world.consumer = 'reauth';
+      h.world.reauthorizationInterrupted = true;
+      if (returnMode === 'browser back') {
+        fireEvent(window, new PageTransitionEvent('pageshow', { persisted: true }));
+      } else {
+        cleanup();
+        mount(h, storage);
+      }
+      expect(await screen.findByText(/Повторный вход через Viva прерван/)).toBeInTheDocument();
+      expect(
+        await screen.findByRole('button', { name: 'Войти повторно через Viva' }),
+      ).toBeEnabled();
+      expect(listResidencyAttempts(storage, userA)).toEqual(saved);
+      expect(h.world.reauthorizations).toBe(0);
+      expect(posts(h, '/residency/orders')).toHaveLength(1);
+    },
+  );
+
   it('legacy records never acquire consent from a fresh catalog and never replay a create', async () => {
     const h = createOwnerWorld();
     h.world.failBeforeOwner = (method, path) => method === 'POST' && path === '/residency/orders';
