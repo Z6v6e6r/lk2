@@ -5,17 +5,17 @@ import type { ClientResidencyStatus } from '@phub/api-sdk';
  *
  * - Status: the merged LK2 read `GET /residency` (ADR 0027).
  * - Orders: the LK2 surface of the LK1 residency lifecycle owner (Z6v6e6r/lk#443). Shapes follow
- *   that owner verbatim (docs/contracts/residency-purchase.md). Until the LK2 surface is deployed
- *   the catalog read fails and the screen says purchase is unavailable.
+ *   that owner verbatim (docs/contracts/residency-purchase.md). Until the LK2 consumer is
+ *   deployed the catalog read fails and the screen says purchase is unavailable.
  *
- * Nothing here is a mock: product, price, term, benefits, renewal rule, payment link and
- * activation are only ever rendered from validated server responses. Unknown extra fields are
- * ignored; every field the UI uses is validated.
+ * Nothing here is a mock: product, price, term, renewal rule, payment link and activation are
+ * only ever rendered from validated server responses. Unknown extra fields are ignored; every
+ * field the UI uses is validated, and a non-JSON or malformed body is never a success.
  */
 export interface ResidencyGateway {
   /** Stable account epoch; a change invalidates every in-flight command and its result. */
   readonly residencyPrincipal: () => string | null;
-  readonly getClientResidency: () => Promise<ClientResidencyStatus>;
+  readonly getClientResidency: () => Promise<unknown>;
   readonly getResidencyCatalog: () => Promise<unknown>;
   readonly createResidencyOrder: (mode: ResidencyOrderMode, key: string) => Promise<unknown>;
   readonly getResidencyOrder: (orderId: string) => Promise<unknown>;
@@ -34,7 +34,7 @@ export interface ResidencyCatalog {
   readonly termDays: number;
   readonly priceMinor: number;
   readonly currency: 'RUB';
-  /** Only plain-text server benefits are shown; the owner currently publishes none. */
+  /** Only plain-text server benefit lines are shown; structured codes are not invented into text. */
   readonly benefits: readonly string[];
   readonly checkedAt: string;
 }
@@ -51,6 +51,7 @@ export const RESIDENCY_ORDER_STATES = [
   'PAID_REQUIRES_REVIEW',
 ] as const;
 export type ResidencyOrderState = (typeof RESIDENCY_ORDER_STATES)[number];
+/** Public payment statuses. The owner normalizes its internal DISPATCHING to UNKNOWN. */
 const PAYMENT_STATUSES = ['NONE', 'PENDING', 'PAID', 'FAILED', 'UNKNOWN'] as const;
 export type ResidencyPaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
@@ -63,6 +64,7 @@ export interface ResidencyOrder {
   readonly paymentStatus: ResidencyPaymentStatus;
   readonly paymentUrl: string | null;
   readonly paymentExpiresAt: string | null;
+  readonly activationErrorCode: string | null;
   readonly residencyValidUntil: string | null;
 }
 export interface ResidencyPayment {
@@ -77,15 +79,19 @@ export interface ResidencyPrincipal {
   readonly userId: string;
 }
 /**
- * Only the idempotency key, the requested mode and the server order id are kept; never a price,
- * payment link or payment details. `orderId` is null until the create response arrives: a reload
- * then repeats the create with the same key, which the owner answers with the same order.
+ * One purchase attempt. Each attempt lives in its own storage entry named by its idempotency key,
+ * so concurrent tabs never overwrite or delete another attempt. Only the key, the requested
+ * mode, the server order id and the confirmed catalog price are kept; never a link or payment
+ * details. `orderId` is null until the create response arrives.
  */
-export interface ResidencyCustody extends ResidencyPrincipal {
-  readonly version: 2;
+export interface ResidencyAttempt extends ResidencyPrincipal {
+  readonly version: 3;
   readonly key: string;
   readonly mode: ResidencyOrderMode;
   readonly orderId: string | null;
+  /** The catalog price the user confirmed; the order total must match before payment opens. */
+  readonly confirmedPriceMinor: number;
+  readonly createdAt: string;
 }
 
 export class ResidencyContractError extends Error {
@@ -102,6 +108,10 @@ const text = (v: unknown, max = 200): v is string =>
   typeof v === 'string' && v.trim().length > 0 && v.length <= max;
 const instant = (v: unknown): v is string =>
   typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) && Number.isFinite(Date.parse(v));
+const isDay = (v: unknown): v is string =>
+  typeof v === 'string' &&
+  /^\d{4}-\d{2}-\d{2}$/.test(v) &&
+  Number.isFinite(Date.parse(v + 'T00:00:00Z'));
 const money = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
 const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T =>
   typeof v === 'string' && (list as readonly string[]).includes(v);
@@ -120,6 +130,21 @@ function httpsUrl(v: unknown): string | null {
   }
   if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return fail();
   return url.toString();
+}
+
+const STATUS_STATES = ['ACTIVE', 'NONE', 'UNAVAILABLE'] as const;
+/** Validates the ADR 0027 read; anything else (HTML, a proxy page, junk) is not a status. */
+export function parseClientResidencyStatus(v: unknown): ClientResidencyStatus {
+  const s = object(v);
+  if (
+    !oneOf(STATUS_STATES, s.state) ||
+    (s.validFrom !== null && !isDay(s.validFrom)) ||
+    (s.validUntil !== null && !isDay(s.validUntil)) ||
+    (s.checkedAt !== null && !instant(s.checkedAt)) ||
+    (s.unavailableReason !== null && typeof s.unavailableReason !== 'string')
+  )
+    return fail();
+  return s as unknown as ClientResidencyStatus;
 }
 
 export function parseResidencyCatalog(v: unknown): ResidencyCatalog {
@@ -154,6 +179,7 @@ export function parseResidencyOrder(v: unknown, expectedOrderId?: string): Resid
   const product = object(o.product);
   const pricing = object(o.pricing);
   const payment = object(o.payment);
+  const activation = o.activation === undefined ? {} : object(o.activation);
   const residency = o.residency === null ? null : object(o.residency);
   if (
     o.schemaVersion !== 1 ||
@@ -166,6 +192,9 @@ export function parseResidencyOrder(v: unknown, expectedOrderId?: string): Resid
     pricing.currency !== 'RUB' ||
     !oneOf(PAYMENT_STATUSES, payment.status) ||
     (payment.expiresAt !== null && !instant(payment.expiresAt)) ||
+    (activation.lastErrorCode !== undefined &&
+      activation.lastErrorCode !== null &&
+      !text(activation.lastErrorCode, 64)) ||
     // Only ACTIVE carries a residency window (owner contract).
     (o.state === 'ACTIVE' && (!residency || !instant(residency.validUntil))) ||
     (residency !== null && residency.validUntil !== null && !instant(residency.validUntil))
@@ -178,8 +207,12 @@ export function parseResidencyOrder(v: unknown, expectedOrderId?: string): Resid
     title: product.title,
     totalMinor: pricing.totalMinor,
     paymentStatus: payment.status,
-    paymentUrl: payment.status === 'PENDING' ? httpsUrl(payment.paymentUrl) : null,
+    paymentUrl:
+      o.state === 'PENDING_PAYMENT' && payment.status === 'PENDING'
+        ? httpsUrl(payment.paymentUrl)
+        : null,
     paymentExpiresAt: payment.expiresAt,
+    activationErrorCode: activation.lastErrorCode ?? null,
     residencyValidUntil: residency ? (residency.validUntil as string | null) : null,
   };
 }
@@ -215,62 +248,164 @@ export function parseResidencyPayment(v: unknown, orderId: string): ResidencyPay
   };
 }
 
-export const residencyStorageKey = (p: ResidencyPrincipal) =>
-  'phub.residency-order.v2:' + p.tenantId + ':' + p.userId;
+// ---------------------------------------------------------------------------------------------
+// Attempt storage. One entry per idempotency key: a tab only ever writes or removes its own key.
+// ---------------------------------------------------------------------------------------------
 
-export function loadResidencyCustody(
-  storage: Pick<Storage, 'getItem'>,
-  p: ResidencyPrincipal,
-): ResidencyCustody | null {
-  const raw = storage.getItem(residencyStorageKey(p));
-  if (raw === null) return null;
-  const c = object(JSON.parse(raw));
+const ATTEMPT_PREFIX = 'phub.residency-order.v3:';
+const attemptPrefix = (p: ResidencyPrincipal) => ATTEMPT_PREFIX + p.tenantId + ':' + p.userId + ':';
+export const residencyAttemptStorageKey = (a: ResidencyPrincipal & { readonly key: string }) =>
+  attemptPrefix(a) + a.key;
+/** Web Locks name serializing this account's commands across tabs where the browser has it. */
+export const residencyLockName = (p: ResidencyPrincipal) => attemptPrefix(p) + 'lock';
+
+function parseAttempt(raw: string, p: ResidencyPrincipal, storageKey: string): ResidencyAttempt {
+  const a = object(JSON.parse(raw));
   if (
-    c.version !== 2 ||
-    c.tenantId !== p.tenantId ||
-    c.userId !== p.userId ||
-    typeof c.key !== 'string' ||
-    !/^residency:[0-9a-f-]{36}$/.test(c.key) ||
-    !uuid(c.key.slice('residency:'.length)) ||
-    !oneOf(['NEW', 'RENEWAL'] as const, c.mode) ||
-    (c.orderId !== null && !uuid(c.orderId))
+    a.version !== 3 ||
+    a.tenantId !== p.tenantId ||
+    a.userId !== p.userId ||
+    typeof a.key !== 'string' ||
+    !/^residency:[0-9a-f-]{36}$/.test(a.key) ||
+    !uuid(a.key.slice('residency:'.length)) ||
+    storageKey !== attemptPrefix(p) + a.key ||
+    !oneOf(['NEW', 'RENEWAL'] as const, a.mode) ||
+    (a.orderId !== null && !uuid(a.orderId)) ||
+    !money(a.confirmedPriceMinor) ||
+    !instant(a.createdAt)
   )
     return fail();
   return {
-    version: 2,
+    version: 3,
     tenantId: p.tenantId,
     userId: p.userId,
-    key: c.key,
-    mode: c.mode,
-    orderId: c.orderId,
+    key: a.key,
+    mode: a.mode,
+    orderId: a.orderId,
+    confirmedPriceMinor: a.confirmedPriceMinor,
+    createdAt: a.createdAt,
   };
 }
 
-export function saveResidencyCustody(storage: Storage, c: ResidencyCustody): void {
-  const value = JSON.stringify(c);
-  storage.setItem(residencyStorageKey(c), value);
-  if (storage.getItem(residencyStorageKey(c)) !== value) fail();
+/** All attempts of this account, oldest first. A malformed entry fails closed. */
+export function listResidencyAttempts(storage: Storage, p: ResidencyPrincipal): ResidencyAttempt[] {
+  const prefix = attemptPrefix(p);
+  const keys: string[] = [];
+  for (let i = 0; i < storage.length; i += 1) {
+    const k = storage.key(i);
+    if (k !== null && k.startsWith(prefix)) keys.push(k);
+  }
+  return keys
+    .map((k) => parseAttempt(storage.getItem(k) ?? fail(), p, k))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.key.localeCompare(b.key));
 }
 
-export function clearResidencyCustody(storage: Storage, p: ResidencyPrincipal): void {
-  storage.removeItem(residencyStorageKey(p));
-  if (storage.getItem(residencyStorageKey(p)) !== null) fail();
+export function saveResidencyAttempt(storage: Storage, a: ResidencyAttempt): void {
+  const value = JSON.stringify(a);
+  storage.setItem(residencyAttemptStorageKey(a), value);
+  if (storage.getItem(residencyAttemptStorageKey(a)) !== value) fail();
 }
 
-export function newResidencyCustody(
+/** Removes exactly this attempt; another tab's attempt with a different key is untouched. */
+export function removeResidencyAttempt(storage: Storage, a: ResidencyAttempt): void {
+  storage.removeItem(residencyAttemptStorageKey(a));
+  if (storage.getItem(residencyAttemptStorageKey(a)) !== null) fail();
+}
+
+export function newResidencyAttempt(
   p: ResidencyPrincipal,
   mode: ResidencyOrderMode,
+  confirmedPriceMinor: number,
   randomUuid: () => string,
-): ResidencyCustody {
+  now: () => number = Date.now,
+): ResidencyAttempt {
   return {
-    version: 2,
+    version: 3,
     tenantId: p.tenantId,
     userId: p.userId,
     key: 'residency:' + randomUuid(),
     mode,
     orderId: null,
+    confirmedPriceMinor,
+    createdAt: new Date(now()).toISOString(),
   };
 }
+
+// ---------------------------------------------------------------------------------------------
+// Errors. A refusal is definitive only when the owner proves no order exists for this key.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Owner create refusals raised only after its idempotency lookup found no order for the key
+ * (lk#443 `createOrder`). They are definitive for this key, so its attempt may be removed.
+ * Everything else (network, HTML, 401/403, rate limit, IDEMPOTENCY_CONFLICT, ORDER_CONFLICT,
+ * 5xx from the consumer) is uncertain: the original key is kept for a same-key replay.
+ */
+const DEFINITIVE_CREATE_REFUSALS = new Set([
+  'RESIDENCY_ORDER_ALREADY_PENDING',
+  'RESIDENCY_RENEWAL_REQUIRED',
+  'RESIDENCY_RENEWAL_NOT_ELIGIBLE',
+  'RESIDENCY_STATUS_UNAVAILABLE',
+  'RESIDENCY_CATALOG_UNAVAILABLE',
+  'RESIDENCY_PRICING_UNAVAILABLE',
+  'RESIDENCY_PRICING_INVALID',
+  'RESIDENCY_MODE_INVALID',
+  'RESIDENCY_IDEMPOTENCY_KEY_REQUIRED',
+]);
+export function residencyErrorCode(error: unknown): string | null {
+  return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : null;
+}
+export function residencyErrorStatus(error: unknown): number | null {
+  return error && typeof error === 'object' && 'status' in error && typeof error.status === 'number'
+    ? error.status
+    : null;
+}
+export function isDefinitiveCreateRefusal(error: unknown): boolean {
+  const code = residencyErrorCode(error);
+  const status = residencyErrorStatus(error);
+  return (
+    code !== null &&
+    DEFINITIVE_CREATE_REFUSALS.has(code) &&
+    status !== null &&
+    status >= 400 &&
+    status < 600
+  );
+}
+
+/** Stable owner and consumer error codes the UI explains; anything else is generic. */
+const ORDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  RESIDENCY_ORDER_ALREADY_PENDING:
+    'У вас уже есть незавершённый заказ резидентства, начатый в другой вкладке или на другом устройстве. Завершите его там; новый заказ станет доступен, когда тот будет оплачен, отменён или истечёт.',
+  RESIDENCY_RENEWAL_REQUIRED:
+    'Резидентство уже активно, поэтому доступно только продление. Статус обновлён.',
+  RESIDENCY_RENEWAL_NOT_ELIGIBLE:
+    'Продление недоступно: активного резидентства нет. Статус обновлён.',
+  RESIDENCY_STATUS_UNAVAILABLE:
+    'Клуб не смог проверить ваш статус, поэтому заказ не создан. Попробуйте позже.',
+  RESIDENCY_CATALOG_UNAVAILABLE: 'Условия резидентства сейчас недоступны. Заказ не создан.',
+  RESIDENCY_PRICING_UNAVAILABLE: 'Не удалось подтвердить цену. Заказ не создан.',
+  RESIDENCY_PRICING_INVALID: 'Не удалось подтвердить цену. Заказ не создан.',
+  RESIDENCY_ORDER_PAID: 'Заказ уже оплачен и не может быть отменён. Ждём активации.',
+  RESIDENCY_ORDER_NOT_CANCELLABLE: 'Этот заказ уже нельзя отменить.',
+  RESIDENCY_PAYMENT_STATUS_UNKNOWN:
+    'Банк ещё не подтвердил статус оплаты, поэтому заказ не отменён. Попробуйте позже.',
+  RESIDENCY_PRODUCT_TERMS_MISMATCH: 'Условия резидентства изменились. Оформление приостановлено.',
+  RESIDENCY_RATE_LIMITED: 'Слишком много запросов. Попробуйте через минуту.',
+};
+export function residencyErrorMessage(error: unknown, fallback: string): string {
+  const code = residencyErrorCode(error);
+  const status = residencyErrorStatus(error);
+  if (code && ORDER_ERROR_MESSAGES[code]) return ORDER_ERROR_MESSAGES[code];
+  if (status === 401) return 'Сессия истекла. Войдите снова и проверьте заказ.';
+  if (status === 403) return 'Нет доступа к оформлению резидентства для этого аккаунта.';
+  return fallback;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------------------------
 
 /** The independent status read decides what the user currently has. */
 export type ResidencyStatusView =
@@ -283,16 +418,15 @@ export type ResidencyStatusView =
   | { readonly kind: 'none' }
   | { readonly kind: 'unavailable'; readonly reason: string | null };
 
-/** Today in the residency business calendar (Europe/Moscow, as in docs/domains/residency.md). */
-export function moscowToday(now = Date.now()): string {
+/** A calendar day in the residency business calendar (Europe/Moscow, docs/domains/residency.md). */
+export function moscowDay(at: number | string = Date.now()): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Europe/Moscow',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(new Date(now));
+  }).format(new Date(at));
 }
-const isDay = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 export function residencyStatusView(
   s: ClientResidencyStatus,
@@ -301,7 +435,7 @@ export function residencyStatusView(
   if (s.state === 'ACTIVE' && s.checkedAt)
     return { kind: 'active', validFrom: s.validFrom, validUntil: s.validUntil };
   if (s.state === 'NONE' && s.checkedAt) {
-    if (isDay(s.validUntil) && s.validUntil < moscowToday(now))
+    if (isDay(s.validUntil) && s.validUntil < moscowDay(now))
       return { kind: 'expired', validUntil: s.validUntil };
     return { kind: 'none' };
   }
@@ -311,15 +445,42 @@ export function residencyStatusView(
 
 /** What the order panel shows. Activation requires the order and the independent read. */
 export type ResidencyOrderPhase =
-  'idle' | 'creating' | 'payment-pending' | 'confirming' | 'review' | 'activated' | 'failed';
+  | 'idle'
+  | 'creating'
+  | 'payment-pending'
+  | 'confirming'
+  | 'uncertain'
+  | 'review'
+  | 'activated'
+  | 'failed';
+
+/** Owner activation codes of a create whose provider outcome is not known (lk#443). */
+const UNKNOWN_DISPATCH_CODES = new Set([
+  'DISPATCH_OUTCOME_UNKNOWN',
+  'DISPATCH_LEASE_EXPIRED',
+  'TRANSACTION_ID_MISSING',
+]);
+
+/**
+ * The independent read confirms *this* order: ACTIVE, and its end date is not earlier than the
+ * end the owner activated. An old ACTIVE read (before a renewal lands) is not confirmation.
+ */
+export function readConfirmsOrder(
+  status: ResidencyStatusView | null,
+  order: ResidencyOrder,
+): boolean {
+  if (status?.kind !== 'active' || !order.residencyValidUntil || !status.validUntil) return false;
+  return status.validUntil >= moscowDay(order.residencyValidUntil);
+}
 
 export function residencyOrderPhase(
-  custody: ResidencyCustody | null,
+  attempt: ResidencyAttempt | null,
   order: ResidencyOrder | null,
   status: ResidencyStatusView | null,
 ): ResidencyOrderPhase {
-  if (!custody) return 'idle';
-  if (!custody.orderId || !order) return 'creating';
+  if (!attempt) return 'idle';
+  if (!attempt.orderId) return 'creating';
+  if (!order) return 'confirming';
   switch (order.state) {
     case 'PENDING_PAYMENT':
       return order.paymentStatus === 'UNKNOWN' ? 'confirming' : 'payment-pending';
@@ -328,12 +489,20 @@ export function residencyOrderPhase(
       return 'confirming';
     case 'ACTIVE':
       // Neither a returned payment page nor the order alone is success: the independent
-      // residency read must confirm the active residency too.
-      return status?.kind === 'active' ? 'activated' : 'confirming';
+      // residency read must confirm this order's period too.
+      return readConfirmsOrder(status, order) ? 'activated' : 'confirming';
     case 'ACTIVATION_FAILED':
     case 'PAID_REQUIRES_REVIEW':
       return 'review';
     default:
+      // A terminal order whose provider outcome is unknown is not a failure and not a
+      // cancellation: the payment may exist. No new payment is offered until it is resolved.
+      if (
+        order.paymentStatus === 'UNKNOWN' ||
+        (order.activationErrorCode !== null &&
+          UNKNOWN_DISPATCH_CODES.has(order.activationErrorCode))
+      )
+        return 'uncertain';
       return 'failed';
   }
 }
@@ -345,31 +514,8 @@ export function residencyFailureMessage(order: ResidencyOrder | null): string {
     case 'CANCELLED':
       return 'Заказ отменён. Резидентство не оформлено.';
     default:
-      return 'Оплата не прошла. Резидентство не оформлено.';
+      return 'Банк отклонил оплату. Резидентство не оформлено.';
   }
-}
-
-/** Stable owner error codes the UI explains; anything else is a generic failure. */
-const ORDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
-  RESIDENCY_ORDER_ALREADY_PENDING:
-    'У вас уже есть неоплаченный заказ резидентства. Оплатите его или дождитесь, пока он истечёт.',
-  RESIDENCY_RENEWAL_REQUIRED: 'Резидентство уже активно — доступно продление.',
-  RESIDENCY_RENEWAL_NOT_ELIGIBLE: 'Продление недоступно: активного резидентства нет.',
-  RESIDENCY_ORDER_PAID: 'Заказ уже оплачен и не может быть отменён. Ждём активации.',
-  RESIDENCY_ORDER_NOT_CANCELLABLE: 'Этот заказ уже нельзя отменить.',
-  RESIDENCY_PAYMENT_STATUS_UNKNOWN:
-    'Банк ещё не подтвердил статус оплаты, поэтому заказ не отменён. Попробуйте позже.',
-  RESIDENCY_PRODUCT_TERMS_MISMATCH: 'Условия резидентства изменились. Оформление приостановлено.',
-  RESIDENCY_RATE_LIMITED: 'Слишком много запросов. Попробуйте через минуту.',
-};
-export function residencyErrorCode(error: unknown): string | null {
-  return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-    ? error.code
-    : null;
-}
-export function residencyErrorMessage(error: unknown, fallback: string): string {
-  const code = residencyErrorCode(error);
-  return (code ? ORDER_ERROR_MESSAGES[code] : undefined) ?? fallback;
 }
 
 const UNAVAILABLE_MESSAGES: Readonly<Record<string, string>> = {
@@ -413,4 +559,8 @@ export function formatTerm(days: number): string {
         ? 'дня'
         : 'дней';
   return `${days} ${word}`;
+}
+
+export function shortOrderReference(orderId: string): string {
+  return orderId.replace(/-/g, '').slice(-8).toUpperCase();
 }

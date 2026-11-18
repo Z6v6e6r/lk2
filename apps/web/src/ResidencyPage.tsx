@@ -1,28 +1,32 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import {
-  clearResidencyCustody,
   formatDay,
   formatRub,
   formatTerm,
-  loadResidencyCustody,
-  newResidencyCustody,
+  isDefinitiveCreateRefusal,
+  listResidencyAttempts,
+  newResidencyAttempt,
+  parseClientResidencyStatus,
   parseResidencyCatalog,
   parseResidencyOrder,
   parseResidencyOrderEnvelope,
   parseResidencyPayment,
+  removeResidencyAttempt,
   residencyErrorCode,
   residencyErrorMessage,
   residencyFailureMessage,
+  residencyLockName,
   residencyOrderPhase,
   residencyStatusView,
-  residencyStorageKey,
   residencyUnavailableMessage,
-  saveResidencyCustody,
+  saveResidencyAttempt,
+  shortOrderReference,
+  type ResidencyAttempt,
   type ResidencyCatalog,
-  type ResidencyCustody,
   type ResidencyGateway,
   type ResidencyOrder,
+  type ResidencyOrderPhase,
   type ResidencyPrincipal,
   type ResidencyStatusView,
 } from './residency-purchase.js';
@@ -38,6 +42,8 @@ export interface ResidencyPageProps {
   /** Bounded automatic reconciliation while a created order awaits payment or activation. */
   readonly pollIntervalMs?: number;
   readonly pollLimit?: number;
+  /** Test seam: absent Web Locks exercises the per-key storage fallback. */
+  readonly locks?: LockManager | null;
 }
 
 type Load<T> =
@@ -45,20 +51,29 @@ type Load<T> =
   | { readonly state: 'ready'; readonly value: T }
   | { readonly state: 'error' };
 
+interface Entry {
+  readonly attempt: ResidencyAttempt;
+  readonly order: ResidencyOrder | null;
+}
+
 const CONFIRM_ERROR =
   'Не удалось получить ответ сервера. Повторная оплата не создаётся: проверьте статус заказа.';
-/** Owner refusals that happen before any order or provider transaction exists for the key. */
-const REFUSED_BEFORE_ORDER = new Set([
-  'RESIDENCY_ORDER_ALREADY_PENDING',
+/** Keeps an API error (with its status and code) intact; anything else becomes an Error. */
+const asError = (e: unknown): Error => (e instanceof Error ? e : new Error('RESIDENCY_FAILED'));
+const PHASE_RANK: Readonly<Record<ResidencyOrderPhase, number>> = {
+  review: 0,
+  uncertain: 1,
+  'payment-pending': 2,
+  confirming: 3,
+  creating: 4,
+  activated: 5,
+  failed: 6,
+  idle: 7,
+};
+const STATUS_REFRESH_CODES = new Set([
   'RESIDENCY_RENEWAL_REQUIRED',
   'RESIDENCY_RENEWAL_NOT_ELIGIBLE',
-  'RESIDENCY_PRODUCT_TERMS_MISMATCH',
-  'RESIDENCY_CATALOG_UNAVAILABLE',
-  'RESIDENCY_PRICING_UNAVAILABLE',
-  'RESIDENCY_PRICING_INVALID',
   'RESIDENCY_STATUS_UNAVAILABLE',
-  'RESIDENCY_IDEMPOTENCY_CONFLICT',
-  'RESIDENCY_RATE_LIMITED',
 ]);
 
 export function ResidencyPage(props: ResidencyPageProps): React.JSX.Element {
@@ -106,14 +121,14 @@ function ResidencySession({
   randomUuid = () => crypto.randomUUID(),
   pollIntervalMs = 4000,
   pollLimit = 8,
+  locks,
 }: ResidencyPageProps & {
   readonly gateway: ResidencyGateway;
   readonly original: string | null;
 }): React.JSX.Element {
   const [status, setStatus] = useState<Load<ResidencyStatusView>>({ state: 'loading' });
   const [catalog, setCatalog] = useState<Load<ResidencyCatalog>>({ state: 'loading' });
-  const [custody, setCustody] = useState<ResidencyCustody | null>(null);
-  const [order, setOrder] = useState<ResidencyOrder | null>(null);
+  const [entries, setEntries] = useState<readonly Entry[]>([]);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,12 +151,17 @@ function ResidencySession({
     if (!sameAccount()) throw new Error('RESIDENCY_SESSION_CHANGED');
   }, [sameAccount]);
 
-  const readStatus = useCallback(async (): Promise<void> => {
+  const readStatus = useCallback(async (): Promise<ResidencyStatusView | null> => {
     try {
-      const view = residencyStatusView(await gateway.getClientResidency());
-      if (sameAccount()) setStatus({ state: 'ready', value: view });
+      const view = residencyStatusView(
+        parseClientResidencyStatus(await gateway.getClientResidency()),
+      );
+      if (!sameAccount()) return null;
+      setStatus({ state: 'ready', value: view });
+      return view;
     } catch {
       if (sameAccount()) setStatus({ state: 'error' });
+      return null;
     }
   }, [gateway, sameAccount]);
 
@@ -157,7 +177,11 @@ function ResidencySession({
     }
   }, [gateway, sameAccount]);
 
-  /** Serializes every command; a second tap while one runs is ignored, not queued. */
+  /**
+   * Serializes this tab's commands (a repeated tap is ignored, not queued) and, where the browser
+   * has Web Locks, this account's commands across tabs. Without Web Locks, concurrent tabs are
+   * safe because every attempt has its own storage entry and the owner admits one order.
+   */
   const exclusive = useCallback(
     async (work: (store: Storage) => Promise<void>): Promise<void> => {
       if (busyRef.current || !sameAccount()) return;
@@ -166,8 +190,13 @@ function ResidencySession({
       setError(null);
       try {
         const store = storage();
-        const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
-        if (locks) await locks.request(residencyStorageKey(principal), () => work(store));
+        const manager =
+          locks !== undefined
+            ? locks
+            : typeof navigator === 'undefined'
+              ? null
+              : (navigator.locks ?? null);
+        if (manager) await manager.request(residencyLockName(principal), () => work(store));
         else await work(store);
       } catch (e) {
         if (sameAccount()) setError(residencyErrorMessage(e, CONFIRM_ERROR));
@@ -178,13 +207,13 @@ function ResidencySession({
         }
       }
     },
-    [principal, sameAccount, storage],
+    [locks, principal, sameAccount, storage],
   );
 
-  const loadCustody = useCallback(
-    async (store: Storage): Promise<ResidencyCustody | null> => {
+  const loadAttempts = useCallback(
+    async (store: Storage): Promise<ResidencyAttempt[]> => {
       try {
-        return loadResidencyCustody(store, principal);
+        return listResidencyAttempts(store, principal);
       } catch (e) {
         // A broken local record is never silently replaced; the status is still shown.
         await readStatus();
@@ -194,33 +223,67 @@ function ResidencySession({
     [principal, readStatus],
   );
 
-  /** Restores the saved order (reopened app, reload or return from the payment page). */
+  const putEntry = useCallback((next: Entry) => {
+    setEntries((all) => {
+      const others = all.filter((e) => e.attempt.key !== next.attempt.key);
+      return [...others, next].sort((a, b) =>
+        a.attempt.createdAt.localeCompare(b.attempt.createdAt),
+      );
+    });
+  }, []);
+  const dropEntry = useCallback((key: string) => {
+    setEntries((all) => all.filter((e) => e.attempt.key !== key));
+  }, []);
+
+  /** Restores every saved attempt (reopened app, reload, new sign-in or return from payment). */
   const refresh = useCallback(
     (mode: 'read' | 'reconcile') =>
       exclusive(async (store) => {
-        const c = await loadCustody(store);
+        const attempts = await loadAttempts(store);
         check();
-        setCustody(c);
-        if (!c?.orderId) {
-          setOrder(null);
-          await readStatus();
-          return;
-        }
-        const next =
-          mode === 'reconcile'
-            ? parseResidencyOrderEnvelope(
+        const view = await readStatus();
+        const next: Entry[] = [];
+        let failure: unknown = null;
+        for (const attempt of attempts) {
+          if (!attempt.orderId) {
+            next.push({ attempt, order: null });
+            continue;
+          }
+          try {
+            let order = parseResidencyOrder(
+              await gateway.getResidencyOrder(attempt.orderId),
+              attempt.orderId,
+            );
+            check();
+            const phase = residencyOrderPhase(attempt, order, view);
+            if (
+              mode === 'reconcile' &&
+              (phase === 'payment-pending' ||
+                phase === 'confirming' ||
+                phase === 'review' ||
+                phase === 'uncertain')
+            ) {
+              order = parseResidencyOrderEnvelope(
                 await gateway.reconcileResidencyOrder(
-                  c.orderId,
+                  attempt.orderId,
                   'residency-reconcile:' + randomUuid(),
                 ),
-                c.orderId,
-              )
-            : parseResidencyOrder(await gateway.getResidencyOrder(c.orderId), c.orderId);
-        check();
-        setOrder(next);
-        await readStatus();
+                attempt.orderId,
+              );
+              check();
+            }
+            next.push({ attempt, order });
+          } catch (e) {
+            if (!sameAccount()) throw e;
+            failure = e;
+            next.push({ attempt, order: null });
+          }
+        }
+        setEntries(next);
+        if (mode === 'reconcile') await readStatus();
+        if (failure) throw asError(failure);
       }),
-    [check, exclusive, gateway, loadCustody, randomUuid, readStatus],
+    [check, exclusive, gateway, loadAttempts, randomUuid, readStatus, sameAccount],
   );
 
   useEffect(() => {
@@ -241,7 +304,12 @@ function ResidencySession({
   }, [gateway, original]);
 
   const view = status.state === 'ready' ? status.value : null;
-  const phase = residencyOrderPhase(custody, order, view);
+  const ranked = entries
+    .map((e) => ({ ...e, phase: residencyOrderPhase(e.attempt, e.order, view) }))
+    .sort((a, b) => PHASE_RANK[a.phase] - PHASE_RANK[b.phase]);
+  const current = ranked[0] ?? null;
+  const phase: ResidencyOrderPhase = current?.phase ?? 'idle';
+  const order = current?.order ?? null;
 
   // Bounded reconciliation after payment; never a create, never an endless loop. The owner
   // learns the payment outcome only through reconcile, so a returned user is not left waiting.
@@ -258,17 +326,57 @@ function ResidencySession({
     return () => window.clearTimeout(timer);
   }, [phase, busy, pollIntervalMs, pollLimit, refresh, order]);
 
-  const openPayment = async (c: ResidencyCustody, current: ResidencyOrder) => {
-    let url = current.state === 'PENDING_PAYMENT' ? current.paymentUrl : null;
-    if (!url && current.state === 'PENDING_PAYMENT') {
+  const openPayment = async (attempt: ResidencyAttempt, target: ResidencyOrder) => {
+    if (target.state !== 'PENDING_PAYMENT') return;
+    if (target.totalMinor !== attempt.confirmedPriceMinor) {
+      // The owner priced the order differently from the confirmed catalog: never open the
+      // payment silently; the user sees the order total and decides.
+      setError(
+        `Сумма заказа ${formatRub(target.totalMinor)} отличается от подтверждённой ${formatRub(attempt.confirmedPriceMinor)}. Проверьте сумму перед оплатой.`,
+      );
+      return;
+    }
+    let url = target.paymentUrl;
+    if (!url) {
       const payment = parseResidencyPayment(
-        await gateway.getResidencyOrderPayment(c.orderId!),
-        c.orderId!,
+        await gateway.getResidencyOrderPayment(attempt.orderId!),
+        attempt.orderId!,
       );
       check();
       url = payment.paymentUrl;
     }
     if (url) gateway.openResidencyPayment(url);
+  };
+
+  /**
+   * The one place that interprets a create outcome, for the first send and for every same-key
+   * replay. A definitive owner refusal removes only this attempt; anything uncertain keeps the
+   * original key so the same operation can be replayed.
+   */
+  const settle = async (
+    store: Storage,
+    attempt: ResidencyAttempt,
+  ): Promise<ResidencyOrder | null> => {
+    let created: ResidencyOrder;
+    try {
+      created = parseResidencyOrderEnvelope(
+        await gateway.createResidencyOrder(attempt.mode, attempt.key),
+      );
+    } catch (e) {
+      if (!sameAccount()) throw e;
+      if (isDefinitiveCreateRefusal(e)) {
+        removeResidencyAttempt(store, attempt);
+        dropEntry(attempt.key);
+        const code = residencyErrorCode(e);
+        if (code && STATUS_REFRESH_CODES.has(code)) await readStatus();
+      }
+      throw e;
+    }
+    check();
+    const next = { ...attempt, orderId: created.orderId };
+    saveResidencyAttempt(store, next);
+    putEntry({ attempt: next, order: created });
+    return created;
   };
 
   /** Re-reads the server price right before the user confirms. */
@@ -281,106 +389,82 @@ function ResidencySession({
 
   const create = () =>
     exclusive(async (store) => {
-      const existing = await loadCustody(store);
+      const existing = await loadAttempts(store);
       check();
-      if (existing) {
-        // Another tab or an earlier tap already owns an order; never start a second one.
-        setCustody(existing);
+      if (existing.length) {
+        // An earlier tap or another tab already owns an attempt; never start a second one here.
+        setEntries(existing.map((attempt) => ({ attempt, order: null })));
         setConfirming(false);
+        // Read their orders once this command releases the in-tab guard.
+        window.setTimeout(() => void refresh('read'), 0);
         return;
       }
-      if (status.state !== 'ready' || status.value.kind === 'unavailable') return;
+      if (catalog.state !== 'ready' || status.state !== 'ready') return;
+      if (status.value.kind === 'unavailable') return;
       const mode = status.value.kind === 'active' ? 'RENEWAL' : 'NEW';
       // Durable custody precedes the command: a lost response is recovered by the same key.
-      let c = newResidencyCustody(principal, mode, randomUuid);
-      saveResidencyCustody(store, c);
-      setCustody(c);
+      const attempt = newResidencyAttempt(principal, mode, catalog.value.priceMinor, randomUuid);
+      saveResidencyAttempt(store, attempt);
+      putEntry({ attempt, order: null });
       setConfirming(false);
-      let created: ResidencyOrder;
-      try {
-        created = parseResidencyOrderEnvelope(await gateway.createResidencyOrder(mode, c.key));
-      } catch (e) {
-        const code = residencyErrorCode(e);
-        if (code && REFUSED_BEFORE_ORDER.has(code)) {
-          clearResidencyCustody(store, principal);
-          setCustody(null);
-          if (code === 'RESIDENCY_RENEWAL_REQUIRED' || code === 'RESIDENCY_RENEWAL_NOT_ELIGIBLE')
-            await readStatus();
-        }
-        throw e;
-      }
-      check();
-      c = { ...c, orderId: created.orderId };
-      saveResidencyCustody(store, c);
-      setCustody(c);
-      setOrder(created);
-      await openPayment(c, created);
+      const created = await settle(store, attempt);
+      if (created) await openPayment({ ...attempt, orderId: created.orderId }, created);
     });
 
-  /** Replays the original create key after a lost response; the owner returns the same order. */
+  /** Replays every unanswered attempt with its original key; never a new key. */
   const recover = () =>
     exclusive(async (store) => {
-      let c = await loadCustody(store);
+      const attempts = (await loadAttempts(store)).filter((a) => !a.orderId);
       check();
-      if (!c) return;
-      if (c.orderId) {
-        setOrder(parseResidencyOrder(await gateway.getResidencyOrder(c.orderId), c.orderId));
-        return;
+      let failure: unknown = null;
+      for (const attempt of attempts) {
+        try {
+          await settle(store, attempt);
+        } catch (e) {
+          if (!sameAccount()) throw e;
+          failure = e;
+        }
       }
-      const recovered = parseResidencyOrderEnvelope(
-        await gateway.createResidencyOrder(c.mode, c.key),
-      );
-      check();
-      c = { ...c, orderId: recovered.orderId };
-      saveResidencyCustody(store, c);
-      setCustody(c);
-      setOrder(recovered);
+      if (failure) throw asError(failure);
     });
 
   const pay = () =>
-    exclusive(async (store) => {
-      const c = await loadCustody(store);
-      check();
-      if (!c?.orderId) return;
-      const current = parseResidencyOrder(await gateway.getResidencyOrder(c.orderId), c.orderId);
-      check();
-      setOrder(current);
-      await openPayment(c, current);
-    });
-
-  const cancel = () =>
-    exclusive(async (store) => {
-      const c = await loadCustody(store);
-      check();
-      if (!c?.orderId) return;
-      const next = parseResidencyOrderEnvelope(
-        await gateway.cancelResidencyOrder(c.orderId, 'residency-cancel:' + randomUuid()),
-        c.orderId,
+    exclusive(async () => {
+      if (!current?.attempt.orderId) return;
+      const target = parseResidencyOrder(
+        await gateway.getResidencyOrder(current.attempt.orderId),
+        current.attempt.orderId,
       );
       check();
-      setOrder(next);
+      putEntry({ attempt: current.attempt, order: target });
+      await openPayment(current.attempt, target);
     });
 
-  /** Clears the saved order only after the server shows it is finished. */
+  /** Clears this attempt only after a fresh server read shows it is finished and known. */
   const finish = () =>
     exclusive(async (store) => {
-      const c = await loadCustody(store);
-      check();
-      if (c?.orderId) {
-        const current = parseResidencyOrder(await gateway.getResidencyOrder(c.orderId), c.orderId);
+      if (!current) return;
+      const { attempt } = current;
+      if (attempt.orderId) {
+        const latest = parseResidencyOrder(
+          await gateway.getResidencyOrder(attempt.orderId),
+          attempt.orderId,
+        );
         check();
-        setOrder(current);
-        if (!['ACTIVE', 'PAYMENT_FAILED', 'EXPIRED', 'CANCELLED'].includes(current.state)) return;
+        const freshView = await readStatus();
+        putEntry({ attempt, order: latest });
+        const settled = residencyOrderPhase(attempt, latest, freshView);
+        if (settled !== 'activated' && settled !== 'failed') return;
       }
-      clearResidencyCustody(store, principal);
-      setCustody(null);
-      setOrder(null);
+      removeResidencyAttempt(store, attempt);
+      dropEntry(attempt.key);
       await readStatus();
     });
 
   const renewing = view?.kind === 'active';
   const product = catalog.state === 'ready' ? catalog.value : null;
   const statusKnown = view !== null && view.kind !== 'unavailable';
+  const reference = current?.attempt.orderId ? shortOrderReference(current.attempt.orderId) : null;
   const time = (value: string) =>
     new Date(value).toLocaleTimeString('ru-RU', {
       hour: '2-digit',
@@ -399,14 +483,11 @@ function ResidencySession({
         <StatusBlock status={status} onRetry={() => void refresh('read')} busy={busy} />
       </section>
 
-      {phase === 'activated' ? (
+      {phase === 'activated' && order?.residencyValidUntil ? (
         <section className="residency-result residency-success" role="status">
-          <h2>Резидентство активно</h2>
+          <h2>{order.mode === 'RENEWAL' ? 'Резидентство продлено' : 'Резидентство активно'}</h2>
           <p>
-            Оплата подтверждена, резидентство оформлено
-            {view?.kind === 'active' && view.validUntil
-              ? ` и действует до ${formatDay(view.validUntil)}`
-              : '.'}
+            Оплата подтверждена. Резидентство действует до {formatDay(order.residencyValidUntil)}.
           </p>
           <button
             type="button"
@@ -419,7 +500,7 @@ function ResidencySession({
         </section>
       ) : phase === 'failed' ? (
         <section className="residency-result residency-failure" role="alert">
-          <h2>{order?.state === 'CANCELLED' ? 'Заказ отменён' : 'Оплата не прошла'}</h2>
+          <h2>{order?.state === 'CANCELLED' ? 'Заказ отменён' : 'Резидентство не оформлено'}</h2>
           <p>{residencyFailureMessage(order)}</p>
           <button
             type="button"
@@ -430,6 +511,27 @@ function ResidencySession({
             Оформить заново
           </button>
         </section>
+      ) : phase === 'uncertain' ? (
+        <section className="residency-result residency-failure" role="alert">
+          <h2>Результат оплаты не подтверждён</h2>
+          <p>
+            Не удалось подтвердить, был ли создан платёж по этому заказу. Новый платёж недоступен,
+            пока клуб не выяснит результат. Если деньги списались, сообщите в поддержку номер
+            заказа.
+          </p>
+          {reference ? <p className="residency-note">Номер заказа: {reference}</p> : null}
+          <button
+            type="button"
+            className="residency-secondary"
+            disabled={busy}
+            onClick={() => void refresh('reconcile')}
+          >
+            Проверить снова
+          </button>
+          <a className="residency-secondary residency-link" href="/support">
+            Написать в поддержку
+          </a>
+        </section>
       ) : phase === 'review' ? (
         <section className="residency-result residency-failure" role="alert">
           <h2>Нужна проверка клуба</h2>
@@ -437,6 +539,7 @@ function ResidencySession({
             Оплата получена, но резидентство не удалось активировать автоматически. Повторно платить
             не нужно — клуб проверит заказ. Если вопрос не решится, напишите в поддержку.
           </p>
+          {reference ? <p className="residency-note">Номер заказа: {reference}</p> : null}
           <button
             type="button"
             className="residency-secondary"
@@ -453,9 +556,11 @@ function ResidencySession({
         <section className="residency-result" role="status">
           <h2>Ожидает оплаты</h2>
           <p>
-            Заказ {order ? `на ${formatRub(order.totalMinor)} ` : ''}создан и ждёт оплаты
+            {order?.mode === 'RENEWAL' ? 'Продление' : 'Заказ'}{' '}
+            {order ? `на ${formatRub(order.totalMinor)} ` : ''}ждёт оплаты
             {order?.paymentExpiresAt ? ` до ${time(order.paymentExpiresAt)} (МСК)` : ''}. Если вы
-            уже оплатили, подтверждение придёт после ответа банка.
+            уже оплатили, подтверждение придёт после ответа банка. Неоплаченный заказ закроется
+            автоматически по истечении этого времени.
           </p>
           <button
             type="button"
@@ -473,24 +578,18 @@ function ResidencySession({
           >
             Проверить оплату
           </button>
-          <button
-            type="button"
-            className="residency-secondary"
-            disabled={busy}
-            onClick={() => void cancel()}
-          >
-            Отменить заказ
-          </button>
         </section>
       ) : phase === 'confirming' ? (
         <section className="residency-result" role="status">
           <h2>Проверяем оплату</h2>
           <p>
-            {order?.state === 'ACTIVE'
-              ? 'Резидентство активировано. Ждём подтверждения статуса.'
-              : order && order.state !== 'PENDING_PAYMENT'
-                ? 'Оплата получена. Ждём активации резидентства клубом.'
-                : 'Ждём ответа банка. Повторно платить не нужно.'}
+            {!order
+              ? 'Не удалось прочитать заказ. Проверьте статус ещё раз.'
+              : order.state === 'ACTIVE'
+                ? 'Резидентство активировано. Ждём подтверждения нового срока в вашем статусе.'
+                : order.state === 'PENDING_PAYMENT'
+                  ? 'Проверяем, создан ли платёж. Повторно платить не нужно.'
+                  : 'Оплата получена. Ждём активации резидентства клубом.'}
           </p>
           <button
             type="button"
@@ -505,8 +604,8 @@ function ResidencySession({
         <section className="residency-result" role="status">
           <h2>Заказ отправлен</h2>
           <p>
-            Ответ сервера не получен. Проверьте заказ: будет найден тот же заказ, повторной оплаты
-            не будет.
+            Ответ сервера не получен. Нажмите «Проверить заказ»: будет повторён тот же запрос,
+            второй заказ не создаётся.
           </p>
           <button
             type="button"
@@ -555,6 +654,10 @@ function ResidencySession({
                 <div className="residency-confirm" aria-label="Подтверждение">
                   <dl className="subscriptions-facts">
                     <div>
+                      <dt>Тип</dt>
+                      <dd>{renewing ? 'Продление' : 'Новое оформление'}</dd>
+                    </div>
+                    <div>
                       <dt>К оплате</dt>
                       <dd>{formatRub(product.priceMinor)}</dd>
                     </div>
@@ -566,7 +669,7 @@ function ResidencySession({
                   <p className="residency-note">
                     Цена подтверждена клубом в {time(product.checkedAt)} (МСК).
                     {renewing && view?.kind === 'active' && view.validUntil
-                      ? ` Текущее резидентство действует до ${formatDay(view.validUntil)}; даты нового периода клуб определит после оплаты.`
+                      ? ` Текущее резидентство действует до ${formatDay(view.validUntil)}. Новый срок клуб подтвердит после оплаты.`
                       : ''}{' '}
                     Оплата проходит на защищённой странице платёжного сервиса.
                   </p>

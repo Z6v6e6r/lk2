@@ -1,25 +1,21 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ClientResidencyStatus } from '@phub/api-sdk';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { ResidencyPage } from './ResidencyPage.js';
 import {
-  residencyStorageKey,
-  type ResidencyGateway,
-  type ResidencyOrderState,
-} from './residency-purchase.js';
+  createOwnerWorld,
+  verifyOwnerSnapshot,
+  type OwnerHarness,
+} from './residency-owner.test-helper.js';
+import { listResidencyAttempts } from './residency-purchase.js';
 
-// Synthetic fixtures only. The fake owner mirrors the semantics of the LK1 residency lifecycle
-// contract (Z6v6e6r/lk#443): one key -> one order, one unresolved order per user, payment
-// outcome only through reconcile, ACTIVE carries the residency window.
-const principal = {
-  tenantId: '00000000-0000-4000-8000-0000000000a1',
-  userId: '00000000-0000-4000-8000-0000000000b1',
-};
-const other = { ...principal, userId: '00000000-0000-4000-8000-0000000000b2' };
-const PRODUCT = '00000000-0000-4000-8000-0000000000c1';
+// Every scenario below runs the real lk#443 owner state machine and HTTP contract (imported
+// byte-identical) behind a synthetic LK2 consumer transport and the real @phub/api-sdk client.
+// Viva/CUP ports, the clock and the order store are synthetic and in memory.
+const userA = { tenantId: 'synthetic-tenant', userId: 'user-a' };
+const userB = { tenantId: 'synthetic-tenant', userId: 'user-b' };
 
 class MemoryStorage implements Storage {
   private map = new Map<string, string>();
@@ -43,502 +39,494 @@ class MemoryStorage implements Storage {
   }
 }
 
-const status = (s: Partial<ClientResidencyStatus>): ClientResidencyStatus => ({
-  state: 'NONE',
-  validFrom: null,
-  validUntil: null,
-  checkedAt: '2026-11-18T08:00:00.000Z',
-  unavailableReason: null,
-  holder: null,
-  ...s,
-});
-const catalog = (priceMinor = 123400) => ({
-  schemaVersion: 1,
-  product: {
-    productId: PRODUCT,
-    title: 'Синтетический продукт',
-    termDays: 30,
-    priceMinor,
-    currency: 'RUB',
-    benefits: ['Синтетическое преимущество'],
-  },
-  renewalEligible: false,
-  checkedAt: '2026-11-18T09:00:00.000Z',
-});
-const apiError = (httpStatus: number, code: string) =>
-  Object.assign(new Error(code), { status: httpStatus, code, correlationId: 'corr-synthetic' });
-
-interface Order {
-  orderId: string;
-  mode: 'NEW' | 'RENEWAL';
-  state: ResidencyOrderState;
-  paymentStatus: 'NONE' | 'PENDING' | 'PAID' | 'FAILED' | 'UNKNOWN';
-  paymentUrl: string;
-}
-const UNRESOLVED: readonly ResidencyOrderState[] = [
-  'PENDING_PAYMENT',
-  'PAID',
-  'PAID_ACTIVATION_PENDING',
-];
-
-function fakeOwner(opts: { residency?: ClientResidencyStatus | Error; catalog?: unknown } = {}) {
-  let residency = opts.residency ?? status({});
-  let catalogBody: unknown = opts.catalog ?? catalog();
-  const orders = new Map<string, Order>(); // by idempotency key
-  let seq = 0;
-  let nextReconcile: Partial<Order> | null = null;
-  const view = (o: Order) => ({
-    schemaVersion: 1,
-    orderId: o.orderId,
-    mode: o.mode,
-    state: o.state,
-    product: { productId: PRODUCT, title: 'Синтетический продукт', termDays: 30, currency: 'RUB' },
-    pricing: { baseAmountMinor: 123400, discountLines: [], totalMinor: 123400, currency: 'RUB' },
-    payment: {
-      status: o.paymentStatus,
-      providerTransactionId: null,
-      paymentUrl: o.paymentStatus === 'PENDING' ? o.paymentUrl : null,
-      expiresAt: '2099-01-01T09:20:00.000Z',
-      instruction: null,
-    },
-    activation: { state: 'NOT_STARTED', attempts: 0, lastErrorCode: null },
-    residency:
-      o.state === 'ACTIVE'
-        ? {
-            state: 'ACTIVE',
-            validFrom: '2026-11-18T09:05:00.000Z',
-            validUntil: '2026-12-18T09:05:00.000Z',
-            source: 'CUP_RESIDENCY_POLICY',
-            observedAt: '2026-11-18T09:06:00.000Z',
-          }
-        : null,
-    createdAt: '2026-11-18T09:00:00.000Z',
-    updatedAt: '2026-11-18T09:00:00.000Z',
-    revision: 1,
-  });
-  const byId = (id: string) => {
-    const o = [...orders.values()].find((x) => x.orderId === id);
-    if (!o) throw apiError(404, 'RESIDENCY_ORDER_NOT_FOUND');
-    return o;
-  };
-  const gateway = {
-    residencyPrincipal: vi.fn(() => 'p1'),
-    getClientResidency: vi.fn(() =>
-      residency instanceof Error ? Promise.reject(residency) : Promise.resolve(residency),
-    ),
-    getResidencyCatalog: vi.fn(() =>
-      catalogBody instanceof Error ? Promise.reject(catalogBody) : Promise.resolve(catalogBody),
-    ),
-    createResidencyOrder: vi.fn((mode: 'NEW' | 'RENEWAL', key: string): Promise<unknown> => {
-      const replay = orders.get(key);
-      if (replay) {
-        if (replay.mode !== mode)
-          return Promise.reject(apiError(409, 'RESIDENCY_IDEMPOTENCY_CONFLICT'));
-        return Promise.resolve({ schemaVersion: 1, order: view(replay), idempotentReplay: true });
-      }
-      if ([...orders.values()].some((o) => UNRESOLVED.includes(o.state)))
-        return Promise.reject(apiError(409, 'RESIDENCY_ORDER_ALREADY_PENDING'));
-      seq += 1;
-      const orderId = `00000000-0000-4000-8000-${String(seq).padStart(12, '0')}`;
-      const o: Order = {
-        orderId,
-        mode,
-        state: 'PENDING_PAYMENT',
-        paymentStatus: 'PENDING',
-        paymentUrl: 'https://pay.example.test/s/' + orderId,
-      };
-      orders.set(key, o);
-      return Promise.resolve({ schemaVersion: 1, order: view(o), idempotentReplay: false });
-    }),
-    getResidencyOrder: vi.fn((id: string) => Promise.resolve(view(byId(id)))),
-    getResidencyOrderPayment: vi.fn((id: string) => {
-      const o = byId(id);
-      return Promise.resolve({
-        schemaVersion: 1,
-        orderId: id,
-        state: o.state,
-        paymentStatus: o.paymentStatus,
-        paymentUrl: o.paymentStatus === 'PENDING' ? o.paymentUrl : null,
-        expiresAt: '2099-01-01T09:20:00.000Z',
-        instruction: null,
-      });
-    }),
-    reconcileResidencyOrder: vi.fn((id: string) => {
-      const o = byId(id);
-      if (nextReconcile) Object.assign(o, nextReconcile);
-      return Promise.resolve({
-        schemaVersion: 1,
-        order: view(o),
-        idempotentReplay: false,
-        retryable: o.state !== 'ACTIVE',
-      });
-    }),
-    cancelResidencyOrder: vi.fn((id: string) => {
-      const o = byId(id);
-      if (o.paymentStatus === 'PAID') return Promise.reject(apiError(409, 'RESIDENCY_ORDER_PAID'));
-      o.state = 'CANCELLED';
-      o.paymentStatus = 'NONE';
-      return Promise.resolve({ schemaVersion: 1, order: view(o), idempotentReplay: false });
-    }),
-    openResidencyPayment: vi.fn(),
-  } satisfies ResidencyGateway;
-  return {
-    gateway,
-    orders,
-    setResidency(s: ClientResidencyStatus | Error) {
-      residency = s;
-    },
-    setCatalog(c: unknown) {
-      catalogBody = c;
-    },
-    /** What the provider says the next time the owner reconciles. */
-    onReconcile(change: Partial<Order>) {
-      nextReconcile = change;
-    },
-    /** The owner issues this link for the next order it creates. */
-    nextLink: (url: string) => {
-      const real = gateway.createResidencyOrder.getMockImplementation()!;
-      gateway.createResidencyOrder.mockImplementationOnce(async (mode, key) => {
-        await real(mode, key);
-        orders.get(key)!.paymentUrl = url;
-        return real(mode, key);
-      });
-    },
-  };
-}
-
 let uuidSeq = 0;
 const randomUuid = () => `00000000-0000-4000-8000-${String(++uuidSeq).padStart(12, '0')}`;
 
 function mount(
-  owner: ReturnType<typeof fakeOwner>,
-  storage = new MemoryStorage(),
-  who = principal,
+  h: OwnerHarness,
+  storage: Storage = new MemoryStorage(),
+  who = userA,
+  principal?: () => string | null,
 ) {
-  render(
+  const g = h.gateway(who.userId, principal);
+  const view = render(
     <ResidencyPage
-      gateway={owner.gateway}
+      gateway={g.gateway}
       principal={who}
       storage={() => storage}
       randomUuid={randomUuid}
       pollIntervalMs={20}
       pollLimit={3}
+      locks={null}
     />,
   );
-  return storage;
+  return { storage, opened: g.opened, view };
 }
-const saved = (storage: Storage, who = principal) => {
-  const raw = storage.getItem(residencyStorageKey(who));
-  return raw === null ? null : (JSON.parse(raw) as Record<string, unknown>);
-};
-async function confirmPurchase(label = 'Оформить резидентство') {
+const posts = (h: OwnerHarness, path: string) =>
+  h.world.log.filter((l) => l.method === 'POST' && l.path === path);
+async function confirm(label = 'Оформить резидентство') {
   fireEvent.click(await screen.findByRole('button', { name: label }));
   return screen.findByRole('button', { name: /^Подтвердить/ });
+}
+async function buyAndOpenPayment(h: OwnerHarness, storage?: Storage) {
+  const m = mount(h, storage);
+  fireEvent.click(await confirm());
+  await waitFor(() => expect(m.opened).toHaveLength(1));
+  return m;
 }
 
 afterEach(() => cleanup());
 
-describe('ResidencyPage status and catalog', () => {
-  it('shows loading, then no residency with the server product', async () => {
-    mount(fakeOwner());
+describe('imported owner snapshot', () => {
+  it('is byte-identical to lk#443 @ adc9c644', () => {
+    expect(verifyOwnerSnapshot()).toEqual([
+      'residency-lifecycle.mjs',
+      'residency-lifecycle-http.mjs',
+    ]);
+  });
+});
+
+describe('status, catalog and unavailable backend', () => {
+  it('shows the owner catalog and no residency', async () => {
+    mount(createOwnerWorld());
     expect(screen.getByText('Проверяем статус…')).toBeInTheDocument();
     expect(await screen.findByText('Нет резидентства')).toBeInTheDocument();
-    expect(await screen.findByText('Синтетический продукт')).toBeInTheDocument();
+    expect(await screen.findByText('Резидентство (синтетика)')).toBeInTheDocument();
+    expect(screen.getByText('790 ₽')).toBeInTheDocument();
     expect(screen.getByText('30 дней')).toBeInTheDocument();
-    expect(screen.getByText('1 234 ₽')).toBeInTheDocument();
-    expect(screen.getByText('Синтетическое преимущество')).toBeInTheDocument();
+    // Structured owner benefits ({code, percent}) are not turned into invented text.
+    expect(screen.queryByLabelText('Преимущества')).not.toBeInTheDocument();
   });
 
-  it('shows active residency with its end date and offers renewal', async () => {
-    mount(fakeOwner({ residency: status({ state: 'ACTIVE', validUntil: '2026-11-30' }) }));
+  it('offers renewal for an active residency', async () => {
+    const h = createOwnerWorld();
+    h.setResidency('user-a', {
+      state: 'ACTIVE',
+      validFrom: '2026-11-01T09:00:00.000Z',
+      validUntil: '2026-12-01T09:00:00.000Z',
+    });
+    mount(h);
     expect(await screen.findByText('Активно')).toBeInTheDocument();
-    expect(screen.getByText('30 ноября 2026 г.')).toBeInTheDocument();
+    expect(screen.getByText('1 декабря 2026 г.')).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Продлить резидентство' })).toBeEnabled();
   });
 
-  it('shows an expired residency distinctly from none', async () => {
-    mount(fakeOwner({ residency: status({ state: 'NONE', validUntil: '2026-10-01' }) }));
-    expect(await screen.findByText('Истёк срок')).toBeInTheDocument();
-  });
-
-  it('never presents a failed status read as absence and offers no purchase', async () => {
-    mount(fakeOwner({ residency: new Error('network') }));
+  it('never shows a failed status read as absence and offers no purchase', async () => {
+    const h = createOwnerWorld();
+    h.setResidency('user-a', { state: 'UNAVAILABLE' });
+    mount(h);
     expect(await screen.findByText(/Не удалось проверить статус/)).toBeInTheDocument();
     expect(screen.queryByText('Нет резидентства')).not.toBeInTheDocument();
     expect(await screen.findByText(/станет доступно, когда удастся проверить/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Оформить резидентство' })).not.toBeInTheDocument();
-    cleanup();
-    mount(
-      fakeOwner({
-        residency: status({
-          state: 'UNAVAILABLE',
-          checkedAt: null,
-          unavailableReason: 'SOURCE_TIMEOUT',
-        }),
-      }),
-    );
+  });
+
+  it.each(['absent', 'disabled', 'forbidden'] as const)(
+    'consumer %s keeps the honest unavailable state',
+    async (mode) => {
+      const h = createOwnerWorld();
+      h.world.consumer = mode;
+      mount(h);
+      expect(
+        await screen.findByText(/Оформление резидентства пока недоступно/),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Оформить резидентство' }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it('a 200 text/html SPA fallback is neither a status, a catalog nor an order (D-2)', async () => {
+    const h = createOwnerWorld();
+    h.world.consumer = 'html';
+    mount(h);
     expect(await screen.findByText(/Не удалось проверить статус/)).toBeInTheDocument();
-    expect(screen.queryByText('Нет резидентства')).not.toBeInTheDocument();
-  });
-
-  it('says purchase is unavailable when the order API is absent, inventing no product', async () => {
-    mount(fakeOwner({ catalog: apiError(404, 'NOT_FOUND') }));
     expect(await screen.findByText(/Оформление резидентства пока недоступно/)).toBeInTheDocument();
-    expect(screen.queryByText('Синтетический продукт')).not.toBeInTheDocument();
+    expect(screen.queryByText('Активно')).not.toBeInTheDocument();
+    expect(screen.queryByText('Резидентство активно')).not.toBeInTheDocument();
   });
 
-  it('rejects an invalid catalog instead of rendering it', async () => {
-    mount(
-      fakeOwner({ catalog: { ...catalog(), product: { ...catalog().product, priceMinor: 0 } } }),
-    );
-    expect(await screen.findByText(/Оформление резидентства пока недоступно/)).toBeInTheDocument();
-  });
-
-  it('renders the native fallback without a gateway', () => {
-    render(<ResidencyPage principal={principal} />);
+  it('renders the web-only message without a gateway (native shells)', () => {
+    render(<ResidencyPage principal={userA} />);
     expect(screen.getByText(/в приложении пока недоступно/)).toBeInTheDocument();
   });
 });
 
-describe('ResidencyPage order flow', () => {
-  it('re-reads the server price, creates one order on repeated taps and opens the server link', async () => {
-    const owner = fakeOwner();
-    const storage = mount(owner);
-    await screen.findByText('Синтетический продукт');
-    owner.setCatalog(catalog(150000));
-    const confirm = await confirmPurchase();
-    expect(owner.gateway.getResidencyCatalog).toHaveBeenCalledTimes(2);
-    expect(screen.getAllByText('1 500 ₽').length).toBeGreaterThan(0);
-    fireEvent.click(confirm);
-    fireEvent.click(confirm);
-    fireEvent.click(confirm);
-    await waitFor(() => expect(owner.gateway.openResidencyPayment).toHaveBeenCalledTimes(1));
-    expect(owner.gateway.createResidencyOrder).toHaveBeenCalledTimes(1);
-    expect(owner.gateway.createResidencyOrder).toHaveBeenCalledWith(
-      'NEW',
-      expect.stringMatching(/^residency:/),
-    );
-    expect(owner.gateway.openResidencyPayment.mock.calls[0]![0]).toMatch(
-      /^https:\/\/pay\.example\.test\//,
-    );
-    const c = saved(storage)!;
-    expect(Object.keys(c).sort()).toEqual([
-      'key',
-      'mode',
-      'orderId',
-      'tenantId',
-      'userId',
-      'version',
-    ]);
-    expect(JSON.stringify(c)).not.toMatch(/pay\.example|1234|1500/);
+describe('order flow through the real owner', () => {
+  it('confirms the server price, creates exactly one order on repeated taps and opens the owner link', async () => {
+    const h = createOwnerWorld();
+    const m = mount(h);
+    const button = await confirm();
+    expect(screen.getByText('Новое оформление')).toBeInTheDocument();
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(m.opened).toHaveLength(1));
+    expect(m.opened[0]).toMatch(/^https:\/\/bank\.example\.test\/pay\//);
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
+    expect(posts(h, '/residency/orders')[0]!.key).toMatch(/^residency:/);
+    expect(h.world.providerCreates).toBe(1);
+    const [attempt] = listResidencyAttempts(m.storage, userA);
+    expect(attempt!.orderId).toBe(h.ordersOf('user-a')[0]!.orderId);
+    expect(JSON.stringify(attempt)).not.toMatch(/bank\.example|txn-/);
     expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
   });
 
-  it('after returning from payment reconciles and shows success only when the read is ACTIVE', async () => {
-    const owner = fakeOwner();
-    const storage = mount(owner);
-    fireEvent.click(await confirmPurchase());
-    await waitFor(() => expect(owner.gateway.openResidencyPayment).toHaveBeenCalled());
+  it('return from payment: reconcile, wait for the independent read, then success with the order period', async () => {
+    const h = createOwnerWorld();
+    h.world.lk2ReadLags = true;
+    const { storage } = await buyAndOpenPayment(h);
     cleanup();
-
-    // Return to /residency: bank confirmed and CUP activated, but the LK2 read is not ACTIVE yet.
-    owner.onReconcile({ state: 'ACTIVE', paymentStatus: 'PAID' });
-    mount(owner, storage);
-    await waitFor(() => expect(owner.gateway.reconcileResidencyOrder).toHaveBeenCalled());
-    expect(await screen.findByText('Проверяем оплату')).toBeInTheDocument();
-    expect(screen.queryByText('Резидентство активно')).not.toBeInTheDocument();
-
-    owner.setResidency(
-      status({ state: 'ACTIVE', validFrom: '2026-11-18', validUntil: '2026-12-17' }),
-    );
-    expect(await screen.findByText('Резидентство активно')).toBeInTheDocument();
-    expect(screen.getByText(/действует до 17 декабря 2026 г\./)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Готово' }));
-    await waitFor(() => expect(saved(storage)).toBeNull());
-    expect(owner.gateway.createResidencyOrder).toHaveBeenCalledTimes(1);
-  });
-
-  it('a delayed bank confirmation keeps an honest, bounded waiting state', async () => {
-    const owner = fakeOwner();
-    const storage = mount(owner);
-    fireEvent.click(await confirmPurchase());
-    await waitFor(() => expect(owner.gateway.openResidencyPayment).toHaveBeenCalled());
-    cleanup();
-    owner.onReconcile({ state: 'PAID_ACTIVATION_PENDING', paymentStatus: 'PAID' });
-    mount(owner, storage);
+    h.bankSettles('PAID');
+    mount(h, storage);
     expect(
-      await screen.findByText('Оплата получена. Ждём активации резидентства клубом.'),
+      await screen.findByText(
+        'Резидентство активировано. Ждём подтверждения нового срока в вашем статусе.',
+      ),
     ).toBeInTheDocument();
-    await waitFor(() => expect(owner.gateway.reconcileResidencyOrder).toHaveBeenCalledTimes(3));
-    await new Promise((r) => setTimeout(r, 120));
-    expect(owner.gateway.reconcileResidencyOrder).toHaveBeenCalledTimes(3);
-    expect(screen.getByText('Проверяем оплату')).toBeInTheDocument();
+    expect(
+      posts(h, `/residency/orders/${h.ordersOf('user-a')[0]!.orderId}/reconcile`).length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByText('Резидентство активно')).not.toBeInTheDocument();
+    h.syncLk2Read('user-a');
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить статус' }));
+    expect(await screen.findByText('Резидентство активно')).toBeInTheDocument();
+    expect(screen.getByText(/действует до 18 декабря 2026 г\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Готово' }));
+    await waitFor(() => expect(listResidencyAttempts(storage, userA)).toHaveLength(0));
+    expect(h.world.providerCreates).toBe(1);
   });
 
-  it('a reload during pending payment restores the same order without a new create', async () => {
-    const owner = fakeOwner();
-    const storage = mount(owner);
-    fireEvent.click(await confirmPurchase());
-    await waitFor(() => expect(owner.gateway.openResidencyPayment).toHaveBeenCalledTimes(1));
+  it('renewal: an old ACTIVE read never stands in for the renewed period', async () => {
+    const h = createOwnerWorld();
+    h.setResidency('user-a', {
+      state: 'ACTIVE',
+      validFrom: '2026-11-01T09:00:00.000Z',
+      validUntil: '2026-12-01T09:00:00.000Z',
+    });
+    h.world.lk2ReadLags = true;
+    const m = mount(h);
+    const button = await confirm('Продлить резидентство');
+    expect(button).toHaveTextContent('Подтвердить продление и оплатить');
+    expect(screen.getAllByText('Продление')).toHaveLength(2); // heading and order type
+    expect(screen.getByText(/Новый срок клуб подтвердит после оплаты/)).toBeInTheDocument();
+    fireEvent.click(button);
+    await waitFor(() => expect(m.opened).toHaveLength(1));
+    expect(h.ordersOf('user-a')[0]!.mode).toBe('RENEWAL');
     cleanup();
-    mount(owner, storage);
+    h.bankSettles('PAID');
+    mount(h, m.storage);
+    // The owner activated the extension, but the LK2 read still shows the old end date.
+    expect(await screen.findByText(/Ждём подтверждения нового срока/)).toBeInTheDocument();
+    expect(screen.getByText('1 декабря 2026 г.')).toBeInTheDocument();
+    expect(screen.queryByText('Резидентство продлено')).not.toBeInTheDocument();
+    h.syncLk2Read('user-a');
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить статус' }));
+    expect(await screen.findByText('Резидентство продлено')).toBeInTheDocument();
+    expect(screen.getByText(/действует до 31 декабря 2026 г\./)).toBeInTheDocument();
+  });
+
+  it('a delayed bank confirmation keeps an honest, bounded wait', async () => {
+    const h = createOwnerWorld();
+    const { storage } = await buyAndOpenPayment(h);
+    cleanup();
+    mount(h, storage);
+    expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
+    const orderId = h.ordersOf('user-a')[0]!.orderId;
+    await waitFor(() => expect(posts(h, `/residency/orders/${orderId}/reconcile`)).toHaveLength(3));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(posts(h, `/residency/orders/${orderId}/reconcile`)).toHaveLength(3);
+    expect(screen.getByText('Ожидает оплаты')).toBeInTheDocument();
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
+  });
+
+  it('reload and reopen restore the pending order without a new create', async () => {
+    const h = createOwnerWorld();
+    const { storage, opened } = await buyAndOpenPayment(h);
+    cleanup();
+    const again = mount(h, storage);
     expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Перейти к оплате' }));
-    await waitFor(() => expect(owner.gateway.openResidencyPayment).toHaveBeenCalledTimes(2));
-    expect(owner.gateway.createResidencyOrder).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(again.opened).toHaveLength(1));
+    expect(again.opened[0]).toBe(opened[0]);
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
   });
 
-  it('a lost create response is recovered with the same key and yields the same order', async () => {
-    const owner = fakeOwner();
-    const real = owner.gateway.createResidencyOrder.getMockImplementation()!;
-    owner.gateway.createResidencyOrder.mockImplementationOnce(async (mode, key) => {
-      await real(mode, key); // reached the owner, response lost
-      throw new Error('network');
-    });
-    const storage = mount(owner);
-    fireEvent.click(await confirmPurchase());
-    expect(await screen.findByText('Заказ отправлен')).toBeInTheDocument();
-    expect(saved(storage)!.orderId).toBeNull();
-    cleanup();
-    mount(owner, storage); // reload: no automatic POST
-    expect(await screen.findByText('Заказ отправлен')).toBeInTheDocument();
-    expect(owner.gateway.createResidencyOrder).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Проверить заказ' }));
+  it('offers no cancel while the bank still holds the payment (owner refuses it)', async () => {
+    const h = createOwnerWorld();
+    await buyAndOpenPayment(h);
     expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
-    const keys = owner.gateway.createResidencyOrder.mock.calls.map((c) => c[1]);
-    expect(keys).toHaveLength(2);
-    expect(keys[0]).toBe(keys[1]);
-    expect(owner.orders.size).toBe(1);
-    expect(saved(storage)!.orderId).toBe([...owner.orders.values()][0]!.orderId);
+    expect(screen.queryByRole('button', { name: 'Отменить заказ' })).not.toBeInTheDocument();
+    expect(screen.getByText(/закроется\s+автоматически/)).toBeInTheDocument();
+    // Contract evidence: the real owner refuses to cancel an order whose payment is PENDING.
+    const { client } = h.gateway('user-a');
+    const orderId = h.ordersOf('user-a')[0]!.orderId;
+    await expect(
+      client.cancelResidencyOrder(orderId, 'residency-cancel:00000000-0000-4000-8000-00000000ca01'),
+    ).rejects.toMatchObject({ status: 409, code: 'RESIDENCY_PAYMENT_STATUS_UNKNOWN' });
+    expect(h.ordersOf('user-a')[0]!.state).toBe('PENDING_PAYMENT');
   });
 
-  it('a second tab cannot start a second order', async () => {
-    const owner = fakeOwner();
-    const storage = new MemoryStorage();
-    mount(owner, storage);
-    const confirm = await confirmPurchase();
-    // Another tab already created an order under this account.
-    storage.setItem(
-      residencyStorageKey(principal),
-      JSON.stringify({
-        version: 2,
-        ...principal,
-        key: 'residency:00000000-0000-4000-8000-0000000000ff',
-        mode: 'NEW',
-        orderId: null,
-      }),
-    );
-    fireEvent.click(confirm);
-    expect(await screen.findByText('Заказ отправлен')).toBeInTheDocument();
-    expect(owner.gateway.createResidencyOrder).not.toHaveBeenCalled();
-  });
-
-  it('a pending order from another device is explained, not duplicated', async () => {
-    const owner = fakeOwner();
-    await owner.gateway.createResidencyOrder('NEW', 'residency:other-device-key-0001');
-    owner.gateway.createResidencyOrder.mockClear();
-    const storage = mount(owner);
-    fireEvent.click(await confirmPurchase());
-    expect(await screen.findByRole('alert')).toHaveTextContent('уже есть неоплаченный заказ');
-    expect(saved(storage)).toBeNull();
-    expect(owner.orders.size).toBe(1);
-  });
-
-  it('renewal uses the server rule and is refused cleanly when not eligible', async () => {
-    const owner = fakeOwner({ residency: status({ state: 'ACTIVE', validUntil: '2026-11-30' }) });
-    owner.gateway.createResidencyOrder.mockRejectedValueOnce(
-      apiError(409, 'RESIDENCY_RENEWAL_NOT_ELIGIBLE'),
-    );
-    const storage = mount(owner);
-    const confirm = await confirmPurchase('Продлить резидентство');
-    expect(confirm).toHaveTextContent('Подтвердить продление и оплатить');
-    expect(screen.getByText(/даты нового периода клуб определит после оплаты/)).toBeInTheDocument();
-    fireEvent.click(confirm);
-    expect(await screen.findByRole('alert')).toHaveTextContent('Продление недоступно');
-    expect(owner.gateway.createResidencyOrder).toHaveBeenCalledWith('RENEWAL', expect.any(String));
-    expect(saved(storage)).toBeNull();
-  });
-
-  it('shows a payment failure and lets the user start over', async () => {
-    const owner = fakeOwner();
-    const storage = mount(owner);
-    fireEvent.click(await confirmPurchase());
-    await waitFor(() => expect(owner.gateway.openResidencyPayment).toHaveBeenCalled());
+  it('a declined payment is a known failure and allows a new attempt', async () => {
+    const h = createOwnerWorld();
+    const { storage } = await buyAndOpenPayment(h);
     cleanup();
-    owner.onReconcile({ state: 'PAYMENT_FAILED', paymentStatus: 'FAILED' });
-    mount(owner, storage);
-    expect(await screen.findByText('Оплата не прошла')).toBeInTheDocument();
+    h.bankSettles('FAILED');
+    mount(h, storage);
+    expect(
+      await screen.findByText('Банк отклонил оплату. Резидентство не оформлено.'),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Оформить заново' }));
     expect(
       await screen.findByRole('button', { name: 'Оформить резидентство' }),
     ).toBeInTheDocument();
-    expect(saved(storage)).toBeNull();
   });
 
-  it('a paid order that needs review never offers a second payment', async () => {
-    const owner = fakeOwner();
-    const storage = mount(owner);
-    fireEvent.click(await confirmPurchase());
-    await waitFor(() => expect(owner.gateway.openResidencyPayment).toHaveBeenCalled());
+  it('every command carries an Idempotency-Key and no POST is retried by the transport', async () => {
+    const h = createOwnerWorld();
+    await buyAndOpenPayment(h);
+    fireEvent.click(await screen.findByRole('button', { name: 'Проверить оплату' }));
+    await waitFor(() => expect(h.world.log.some((l) => l.path.endsWith('/reconcile'))).toBe(true));
+    const commands = h.world.log.filter((l) => l.method === 'POST');
+    expect(commands.length).toBeGreaterThanOrEqual(2);
+    expect(commands.every((l) => typeof l.key === 'string' && l.key.length >= 16)).toBe(true);
+    expect(new Set(commands.map((l) => l.key)).size).toBe(commands.length);
+  });
+});
+
+describe('lost responses and recovery', () => {
+  it('a lost successful create is recovered with the same key after reload; one order, one charge', async () => {
+    const h = createOwnerWorld();
+    h.world.dropResponse = (method, path) => method === 'POST' && path === '/residency/orders';
+    const storage = new MemoryStorage();
+    mount(h, storage);
+    fireEvent.click(await confirm());
+    expect(await screen.findByText('Заказ отправлен')).toBeInTheDocument();
+    expect(listResidencyAttempts(storage, userA)[0]!.orderId).toBeNull();
     cleanup();
-    owner.onReconcile({ state: 'PAID_REQUIRES_REVIEW', paymentStatus: 'PAID' });
-    mount(owner, storage);
+    h.world.dropResponse = null;
+    mount(h, storage); // reload: no automatic POST
+    expect(await screen.findByText('Заказ отправлен')).toBeInTheDocument();
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить заказ' }));
+    expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
+    const keys = posts(h, '/residency/orders').map((l) => l.key);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+    expect(h.ordersOf('user-a')).toHaveLength(1);
+    expect(h.world.providerCreates).toBe(1);
+    expect(listResidencyAttempts(storage, userA)[0]!.orderId).toBe(
+      h.ordersOf('user-a')[0]!.orderId,
+    );
+  });
+
+  it('a lost definitive refusal is settled on recovery after reopen, not left as "sent"', async () => {
+    const h = createOwnerWorld();
+    // The client last read NONE, but CUP already sees ACTIVE: the owner refuses NEW.
+    h.world.lk2ReadLags = true;
+    h.setResidency('user-a', {
+      state: 'ACTIVE',
+      validFrom: '2026-11-01T09:00:00.000Z',
+      validUntil: '2026-12-01T09:00:00.000Z',
+    });
+    h.world.dropResponse = (method, path) => method === 'POST' && path === '/residency/orders';
+    const storage = new MemoryStorage();
+    mount(h, storage);
+    fireEvent.click(await confirm());
+    expect(await screen.findByText('Заказ отправлен')).toBeInTheDocument();
+    expect(h.world.log.at(-1)!.status).toBe('network');
+    cleanup();
+    h.world.dropResponse = null;
+    h.syncLk2Read('user-a');
+    mount(h, storage); // reopen
+    expect(await screen.findByText('Заказ отправлен')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить заказ' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('доступно только продление');
+    expect(listResidencyAttempts(storage, userA)).toHaveLength(0);
+    expect(
+      await screen.findByRole('button', { name: 'Продлить резидентство' }),
+    ).toBeInTheDocument();
+    expect(posts(h, '/residency/orders').map((l) => l.key)).toEqual([
+      posts(h, '/residency/orders')[0]!.key,
+      posts(h, '/residency/orders')[0]!.key,
+    ]);
+    expect(h.ordersOf('user-a')).toHaveLength(0);
+    expect(h.world.providerCreates).toBe(0);
+  });
+
+  it('a transport failure before the owner is not retried and keeps the key', async () => {
+    const h = createOwnerWorld();
+    h.world.failBeforeOwner = (method, path) => method === 'POST' && path === '/residency/orders';
+    const storage = new MemoryStorage();
+    mount(h, storage);
+    fireEvent.click(await confirm());
+    expect(await screen.findByText('Заказ отправлен')).toBeInTheDocument();
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
+    expect(h.world.providerCreates).toBe(0);
+    h.world.failBeforeOwner = null;
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить заказ' }));
+    expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
+    expect(new Set(posts(h, '/residency/orders').map((l) => l.key)).size).toBe(1);
+    expect(h.world.providerCreates).toBe(1);
+  });
+
+  it.each([
+    ['unauthorized', 'Сессия истекла'],
+    ['forbidden', 'Нет доступа'],
+  ] as const)(
+    'a %s create keeps the original attempt for the same operation',
+    async (mode, text) => {
+      const h = createOwnerWorld();
+      const storage = new MemoryStorage();
+      mount(h, storage);
+      const button = await confirm();
+      h.world.consumer = mode;
+      fireEvent.click(button);
+      expect(await screen.findByRole('alert')).toHaveTextContent(text);
+      expect(screen.getByText('Заказ отправлен')).toBeInTheDocument();
+      const [kept] = listResidencyAttempts(storage, userA);
+      expect(kept!.orderId).toBeNull();
+      h.world.consumer = 'ok';
+      // A 401 ends the in-memory session; the user signs in again and reopens the screen.
+      cleanup();
+      mount(h, storage);
+      fireEvent.click(await screen.findByRole('button', { name: 'Проверить заказ' }));
+      expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
+      expect(posts(h, '/residency/orders').at(-1)!.key).toBe(kept!.key);
+    },
+  );
+
+  it('a total that differs from the confirmed price never opens payment silently', async () => {
+    const h = createOwnerWorld();
+    const m = mount(h);
+    const button = await confirm();
+    h.world.priceMinor = 99_000;
+    fireEvent.click(button);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Сумма заказа 990 ₽ отличается от подтверждённой 790 ₽',
+    );
+    expect(m.opened).toHaveLength(0);
+  });
+});
+
+describe('concurrent tabs without Web Locks', () => {
+  it('two tabs that both read an empty store keep the order of the tab that won', async () => {
+    const h = createOwnerWorld();
+    const storage = new MemoryStorage();
+    let release!: () => void;
+    const both = new Promise<void>((r) => (release = r));
+    let arrived = 0;
+    h.world.gate = async (method, path) => {
+      if (method !== 'POST' || path !== '/residency/orders') return;
+      arrived += 1;
+      if (arrived === 2) release();
+      await both;
+    };
+    const tab1 = mount(h, storage);
+    const tab2 = mount(h, storage);
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Оформить резидентство' })).toHaveLength(2),
+    );
+    const buttons1 = screen.getAllByRole('button', { name: 'Оформить резидентство' });
+    fireEvent.click(buttons1[0]!);
+    fireEvent.click(buttons1[1]!);
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Подтвердить и оплатить' })).toHaveLength(2),
+    );
+    const confirms = screen.getAllByRole('button', { name: 'Подтвердить и оплатить' });
+    // Both clicks land before either tab has written: both read an empty store.
+    await act(async () => {
+      fireEvent.click(confirms[0]!);
+      fireEvent.click(confirms[1]!);
+      await both;
+    });
+    await waitFor(() => expect(tab1.opened.length + tab2.opened.length).toBe(1));
+    const sent = posts(h, '/residency/orders');
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.key).not.toBe(sent[1]!.key);
+    expect(sent.map((l) => l.status).sort()).toEqual([200, 409]);
+    expect(h.ordersOf('user-a')).toHaveLength(1);
+    expect(h.world.providerCreates).toBe(1);
+    await waitFor(() =>
+      expect(screen.getAllByRole('alert')[0]).toHaveTextContent('незавершённый заказ'),
+    );
+    // The refused tab removed only its own attempt; the winner's order is still recoverable.
+    const left = listResidencyAttempts(storage, userA);
+    expect(left).toHaveLength(1);
+    expect(left[0]!.orderId).toBe(h.ordersOf('user-a')[0]!.orderId);
+    cleanup();
+    mount(h, storage);
+    expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
+  });
+});
+
+describe('uncertain payment and club review', () => {
+  it('an unknown provider outcome is not "failed", blocks a new payment and survives reload', async () => {
+    const h = createOwnerWorld();
+    h.world.providerCreateLost = true;
+    const storage = new MemoryStorage();
+    const m = mount(h, storage);
+    fireEvent.click(await confirm());
+    expect(await screen.findByText('Результат оплаты не подтверждён')).toBeInTheDocument();
+    const order = h.ordersOf('user-a')[0]!;
+    expect(order.state).toBe('CANCELLED');
+    expect(screen.queryByText(/отклонил|не прошла|Заказ отменён/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Оформить|Перейти к оплате/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/Номер заказа:/)).toBeInTheDocument();
+    expect(m.opened).toHaveLength(0);
+    cleanup();
+    mount(h, storage); // reload / new sign-in: GET order, not the create response flag
+    expect(await screen.findByText('Результат оплаты не подтверждён')).toBeInTheDocument();
+    expect(listResidencyAttempts(storage, userA)).toHaveLength(1);
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
+  });
+
+  it('a paid order that needs club review offers no second payment after return', async () => {
+    const h = createOwnerWorld();
+    h.world.activationRejects = true;
+    const { storage } = await buyAndOpenPayment(h);
+    cleanup();
+    h.bankSettles('PAID');
+    mount(h, storage);
     expect(await screen.findByText('Нужна проверка клуба')).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /Оформить|Перейти к оплате/ }),
     ).not.toBeInTheDocument();
-    expect(saved(storage)).not.toBeNull();
+    expect(listResidencyAttempts(storage, userA)).toHaveLength(1);
   });
+});
 
-  it('cancels an unpaid order through the owner', async () => {
-    const owner = fakeOwner();
-    const storage = mount(owner);
-    fireEvent.click(await confirmPurchase());
-    await waitFor(() => expect(owner.gateway.openResidencyPayment).toHaveBeenCalled());
-    fireEvent.click(await screen.findByRole('button', { name: 'Отменить заказ' }));
-    expect(await screen.findByText('Заказ отменён')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Оформить заново' }));
-    await waitFor(() => expect(saved(storage)).toBeNull());
-  });
-
-  it('does not open a non-https payment link', async () => {
-    const owner = fakeOwner();
-    owner.nextLink('javascript:alert(1)');
-    mount(owner);
-    fireEvent.click(await confirmPurchase());
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
-    expect(owner.gateway.openResidencyPayment).not.toHaveBeenCalled();
-  });
-
+describe('account boundaries', () => {
   it('a saved order of one account is never shown to another account', async () => {
-    const owner = fakeOwner();
-    const storage = mount(owner);
-    fireEvent.click(await confirmPurchase());
-    await waitFor(() => expect(owner.gateway.openResidencyPayment).toHaveBeenCalled());
+    const h = createOwnerWorld();
+    const { storage } = await buyAndOpenPayment(h);
     cleanup();
-    mount(owner, storage, other);
+    mount(h, storage, userB);
     expect(
       await screen.findByRole('button', { name: 'Оформить резидентство' }),
     ).toBeInTheDocument();
     expect(screen.queryByText('Ожидает оплаты')).not.toBeInTheDocument();
-    expect(saved(storage, other)).toBeNull();
-    expect(saved(storage)).not.toBeNull();
+    expect(listResidencyAttempts(storage, userB)).toHaveLength(0);
+    expect(listResidencyAttempts(storage, userA)).toHaveLength(1);
   });
 
   it('discards results that arrive after the account changed', async () => {
-    const owner = fakeOwner();
-    let resolve!: (v: unknown) => void;
-    owner.gateway.getClientResidency.mockImplementation(
-      () => new Promise((r) => (resolve = r)) as never,
-    );
-    mount(owner);
-    await waitFor(() => expect(owner.gateway.getClientResidency).toHaveBeenCalled());
-    owner.gateway.residencyPrincipal.mockReturnValue('p2');
-    await act(() => {
-      resolve(status({ state: 'ACTIVE', validUntil: '2026-12-01' }));
-      return Promise.resolve();
+    const h = createOwnerWorld();
+    h.setResidency('user-a', {
+      state: 'ACTIVE',
+      validFrom: '2026-11-01T09:00:00.000Z',
+      validUntil: '2026-12-01T09:00:00.000Z',
     });
+    let epoch = 'epoch-1';
+    mount(h, new MemoryStorage(), userA, () => epoch);
+    // The account changes before the first status and catalog responses are applied.
+    epoch = 'epoch-2';
+    await waitFor(() =>
+      expect(h.world.log.filter((l) => l.method === 'GET').length).toBeGreaterThanOrEqual(1),
+    );
+    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText('Активно')).not.toBeInTheDocument();
+    expect(screen.queryByText('Резидентство (синтетика)')).not.toBeInTheDocument();
   });
 });

@@ -14,6 +14,8 @@ export default tseslint.config(
       'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs',
       'deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
       'packages/api-contracts/src/generated*.ts',
+      // Byte-identical snapshots of other repositories; verified by hash, not re-linted here.
+      'contracts/imported/**',
     ],
   },
   eslint.configs.recommended,
