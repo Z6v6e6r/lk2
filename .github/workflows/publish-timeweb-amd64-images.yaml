@@ -446,9 +446,12 @@ jobs:
               (.subject[0].digest | keys) == ["sha256"] and
               .subject[0].digest.sha256 == $runtimeSha
             ) and
-            (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
-            $sbom.SPDXID == "SPDXRef-DOCUMENT" and
-            ($sbom.packages | type == "array" and length > 0)
+            (
+              (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
+              (($sbom | type) == "object") and
+              $sbom.SPDXID == "SPDXRef-DOCUMENT" and
+              ($sbom.packages | type == "array" and length > 0)
+            )
           ' publication-evidence/"$SERVICE"-attestation-statements/*.json >/dev/null
           mapfile -t provenance_statements < <(
             for statement in publication-evidence/"$SERVICE"-attestation-statements/*.json; do
