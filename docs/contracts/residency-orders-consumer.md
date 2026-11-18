@@ -10,15 +10,15 @@ the server boundary and the exact request/response surface the cabinet may rely 
 
 Prefix `/user/api/v1/{tenantKey}`; PadlHub JWT; `Cache-Control: private, no-store`.
 
-| Method | Path | Body | Idempotency-Key |
-| --- | --- | --- | --- |
-| GET | `/residency/catalog` | — | — |
-| GET | `/residency/orders?state=unresolved` | — | — |
-| POST | `/residency/orders` | `{ mode, expectedTotalMinor, expectedProductId? }` | required |
-| GET | `/residency/orders/{orderId}` | — | — |
-| GET | `/residency/orders/{orderId}/payment` | — | — |
-| POST | `/residency/orders/{orderId}/reconcile` | `{ eventId? }` | required |
-| POST | `/residency/orders/{orderId}/cancel` | — | required |
+| Method | Path                                    | Body                                               | Idempotency-Key |
+| ------ | --------------------------------------- | -------------------------------------------------- | --------------- |
+| GET    | `/residency/catalog`                    | —                                                  | —               |
+| GET    | `/residency/orders?state=unresolved`    | —                                                  | —               |
+| POST   | `/residency/orders`                     | `{ mode, expectedTotalMinor, expectedProductId? }` | required        |
+| GET    | `/residency/orders/{orderId}`           | —                                                  | —               |
+| GET    | `/residency/orders/{orderId}/payment`   | —                                                  | —               |
+| POST   | `/residency/orders/{orderId}/reconcile` | `{ eventId? }`                                     | required        |
+| POST   | `/residency/orders/{orderId}/cancel`    | —                                                  | required        |
 
 `Idempotency-Key`: 16..128 printable ASCII characters, no spaces. The value is forwarded to the
 owner unchanged.
@@ -45,19 +45,19 @@ All v1 fields stay. The following fields are additive and are parsed by the cabi
 
 - `order.recovery`: `{ state, required, reason, action, retryable, since }` with states
   `NONE | AWAITING_PAYMENT | AWAITING_CONFIRMATION | UNKNOWN_OUTCOME | ACTIVATION_PENDING |
-  REVIEW_REQUIRED | TERMINAL` and actions `NONE | PAY | RETRY_RECONCILE | CONTACT_SUPPORT |
-  START_NEW_ORDER`.
+REVIEW_REQUIRED | TERMINAL` and actions `NONE | PAY | RETRY_RECONCILE | CONTACT_SUPPORT |
+START_NEW_ORDER`.
 - `order.consent`: `{ expectedTotalMinor, productId, acceptedAt }` or `null`.
 - `order.renewal`: `{ baseValidUntil, minimumValidUntil }` or `null` (mode `RENEWAL` only).
 - `order.terminal`, `order.terminalReason`.
 - `order.payment.overdue` and `order.payment.instruction`.
 - `catalog.renewal`: `{ eligible, reason, eligibleAt, currentValidUntil, expected: { termDays,
-  startsAt: "PAYMENT_DATE", earliestValidUntil } }`; `catalog.renewalEligible` mirrors
+startsAt: "PAYMENT_DATE", earliestValidUntil } }`; `catalog.renewalEligible` mirrors
   `renewal.eligible`.
 - `payment` endpoint: same normalized `paymentStatus` vocabulary as the order plus `overdue`,
   `recovery`, `terminal`, `terminalReason`. `DISPATCHING` is never returned.
 - Create/reconcile/cancel envelope: `{ schemaVersion, order, idempotentReplay, recovery,
-  recoveryRequired?, retryable?, reviewRequired? }`.
+recoveryRequired?, retryable?, reviewRequired? }`.
 
 ## Error codes (stable)
 

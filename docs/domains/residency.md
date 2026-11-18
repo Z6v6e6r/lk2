@@ -88,15 +88,15 @@ The cabinet buys and renews residency only through the LK1 owner
 `residency-lifecycle.v2`; see `docs/residency-lifecycle.md` in that repository). LK2 is a
 consumer: it keeps no order row, no local price and no independent entitlement model.
 
-| Method | LK2 path (`/user/api/v1/{tenantKey}`) | Owner path | Idempotency-Key |
-| --- | --- | --- | --- |
-| GET | `/residency/catalog` | `GET /lk/residency/catalog` | — |
-| GET | `/residency/orders?state=unresolved` | `GET /lk/residency/orders?state=unresolved` | — |
-| POST | `/residency/orders` | `POST /lk/residency/orders` | required |
-| GET | `/residency/orders/{orderId}` | `GET /lk/residency/orders/{orderId}` | — |
-| GET | `/residency/orders/{orderId}/payment` | `GET /lk/residency/orders/{orderId}/payment` | — |
-| POST | `/residency/orders/{orderId}/reconcile` | `POST /lk/residency/orders/{orderId}/reconcile` | required |
-| POST | `/residency/orders/{orderId}/cancel` | `POST /lk/residency/orders/{orderId}/cancel` | required |
+| Method | LK2 path (`/user/api/v1/{tenantKey}`)   | Owner path                                      | Idempotency-Key |
+| ------ | --------------------------------------- | ----------------------------------------------- | --------------- |
+| GET    | `/residency/catalog`                    | `GET /lk/residency/catalog`                     | —               |
+| GET    | `/residency/orders?state=unresolved`    | `GET /lk/residency/orders?state=unresolved`     | —               |
+| POST   | `/residency/orders`                     | `POST /lk/residency/orders`                     | required        |
+| GET    | `/residency/orders/{orderId}`           | `GET /lk/residency/orders/{orderId}`            | —               |
+| GET    | `/residency/orders/{orderId}/payment`   | `GET /lk/residency/orders/{orderId}/payment`    | —               |
+| POST   | `/residency/orders/{orderId}/reconcile` | `POST /lk/residency/orders/{orderId}/reconcile` | required        |
+| POST   | `/residency/orders/{orderId}/cancel`    | `POST /lk/residency/orders/{orderId}/cancel`    | required        |
 
 The existing `GET /residency` stays an independent status read (ADR 0027); it is not the
 purchase state.
@@ -133,12 +133,12 @@ purchase state.
 
 ### Configuration
 
-| Variable | Meaning |
-| --- | --- |
-| `RESIDENCY_ORDER_ENABLED` | Default off. Enabling requires the LK1 owner URL, Viva OAuth, tenant `iSkq6G`, `VIVA_MODE=sandbox\|production` and `VIVA_RESIDENCY_PRODUCT_ID`. |
-| `RESIDENCY_OWNER_BASE_URL` | LK1 origin. Production must be exactly `https://padlhub.su/`. |
-| `RESIDENCY_OWNER_TIMEOUT_MS` | One-shot owner timeout, 100..10000 ms, default 8000. |
-| `VIVA_RESIDENCY_PRODUCT_ID` | The same exact product the owner is configured with. |
+| Variable                     | Meaning                                                                                                                                         |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RESIDENCY_ORDER_ENABLED`    | Default off. Enabling requires the LK1 owner URL, Viva OAuth, tenant `iSkq6G`, `VIVA_MODE=sandbox\|production` and `VIVA_RESIDENCY_PRODUCT_ID`. |
+| `RESIDENCY_OWNER_BASE_URL`   | LK1 origin. Production must be exactly `https://padlhub.su/`.                                                                                   |
+| `RESIDENCY_OWNER_TIMEOUT_MS` | One-shot owner timeout, 100..10000 ms, default 8000.                                                                                            |
+| `VIVA_RESIDENCY_PRODUCT_ID`  | The same exact product the owner is configured with.                                                                                            |
 
 ### Evidence status
 

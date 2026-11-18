@@ -179,9 +179,7 @@ async function chain() {
       });
     if (url.endsWith('/transactions') && !url.includes('/api/v1/transactions/')) {
       state.createCalls += 1;
-      state.lastCreateBody = JSON.parse(
-        typeof init?.body === 'string' ? init.body : 'null',
-      );
+      state.lastCreateBody = JSON.parse(typeof init?.body === 'string' ? init.body : 'null');
       if (state.createMode === 'throw') throw new Error('socket hang up');
       if (state.createMode === 'unconfirmed')
         return response({ paid: true, toPay: 79000, id: TXN });
