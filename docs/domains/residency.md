@@ -129,6 +129,14 @@ purchase state.
   `RESIDENCY_STATUS_UNAVAILABLE`, term mismatch) becomes
   `503 RESIDENCY_OWNER_CONFIGURATION_INVALID` with `details.ownerCode`; the client keeps its
   key and may repeat the same operation.
+- The one-shot client keeps a **shared** availability breaker (three consecutive owner
+  availability failures open it for 30 s). Only transport errors, timeouts, 5xx and
+  non-contract upstream answers feed it. A correct business refusal (stable 4xx) proves the
+  owner answered, so it resets the counter instead of counting towards it, and a user-specific
+  delegation failure counts neither way. Three refusals for one user therefore cannot stop a
+  read or an allowed command for another user, and the cooldown restores traffic. The fix adds
+  no retry: every command is still exactly one owner request, and a timed-out POST is never
+  replayed automatically.
 - The order DTO carries a durable `recovery` block (`NONE`, `AWAITING_PAYMENT`,
   `AWAITING_CONFIRMATION`, `UNKNOWN_OUTCOME`, `ACTIVATION_PENDING`, `REVIEW_REQUIRED`,
   `TERMINAL`). It is derived by the owner from stored fields, so it is identical after a
@@ -154,7 +162,7 @@ purchase state.
 ### Evidence status
 
 The consumer, its tests and a composed chain test against the real LK1 owner modules are
-LOCAL: `LK1_RESIDENCY_MODULES_ROOT=<lk@4d04a05c> npx vitest run
+LOCAL: `LK1_RESIDENCY_MODULES_ROOT=<lk@a25db7b1> npx vitest run
 apps/api/src/residency/client-residency-owner-chain.test.ts` (see
 `docs/contracts/residency-orders-consumer.md#reproducible-composed-test-for-the-websdk-pr-682`).
 The Viva/CUP transport in that test is synthetic; it is not PROVIDER evidence. The LK1 owner is

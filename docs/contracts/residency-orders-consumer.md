@@ -192,8 +192,11 @@ use it as a sandbox payment or Viva readback.
 # Consumer checkout at this PR head; owner checkout at the compatible LK1 PR head.
 LK2="${LK2:?path to the lk2 checkout at this PR head}"
 LK1="${LK1:?path to the lk checkout at Z6v6e6r/lk#443}"
-EXPECTED_OWNER_SHA=93692e64853df63bb2165ddc54145d86cf8a078a
+EXPECTED_OWNER_SHA=a25db7b15f097d00abbd4cbb99895ab556bff12a
 
+# Use the canonical path: the LK1 HTTP layer recognises its own error class by identity, and
+# a symlinked checkout (for example /tmp on macOS) can load the module twice and lose details.
+LK1="$(cd "$LK1" && pwd -P)"
 test "$(git -C "$LK1" rev-parse HEAD)" = "$EXPECTED_OWNER_SHA" || {
   echo "owner checkout is not the reviewed head"; exit 2; }
 
@@ -202,21 +205,29 @@ LK1_RESIDENCY_MODULES_ROOT="$LK1" \
   npx vitest run apps/api/src/residency/client-residency-owner-chain.test.ts
 ```
 
-Expected: 7 tests pass (catalog/renewal, purchase + exact-total refusal + replay, unknown
-outcome, paid create with a failed Admin read, overdue/TTL for PENDING and UNKNOWN, previous-format
-recovery, reauth/owner-unavailable/product mismatch). The original reviewed pair was LK1
-`4d04a05c05561047fb4293498812c6d8af38b88c` + LK2 `d92b978221f8800521583b5926402a3c2a593dd3`.
-This handoff adds the exact-total rule at LK1
-`93692e64853df63bb2165ddc54145d86cf8a078a` and the consumer commit on this branch; the test
-asserts the behavior rather than a stale tree.
+Expected: `Test Files 1 passed (1)` and `Tests 7 passed (7)` — seven executed composed
+scenarios, zero skipped. A missing `LK1_RESIDENCY_MODULES_ROOT` makes the file report
+`7 skipped`, which is not acceptable evidence.
+
+The seven scenarios: catalog/renewal, purchase + exact-total refusal + replay, unknown outcome,
+paid create with a failed Admin read, overdue/TTL for PENDING and UNKNOWN, previous-format
+recovery, reauth/owner-unavailable/product mismatch. The original reviewed pair was LK1
+`4d04a05c05561047fb4293498812c6d8af38b88c` + LK2 `d92b978221f8800521583b5926402a3c2a593dd3`;
+the previous handoff pinned LK1 `93692e64853df63bb2165ddc54145d86cf8a078a`. This handoff pins LK1
+`a25db7b15f097d00abbd4cbb99895ab556bff12a` (late create evidence and unconfirmed-payment
+projection) with the consumer commit on this branch; the test asserts behavior, not a stale tree.
 
 The equivalent owner-side suites are run in the LK1 checkout:
 
 ```bash
 cd "$LK1"
-npm run -s test:residency-lifecycle
-# 90 tests: 82 pass, 8 real-Mongo tests skipped when LK_TEST_MONGO_URI is unset
+LK_TEST_MONGO_URI="mongodb://127.0.0.1:27017/lk_residency_local" \
+  npm run -s test:residency-lifecycle
+# 99 tests: 99 pass, 0 skipped against a disposable Mongo (9 real-server scenarios)
 ```
+
+The mandatory LK1 CI job runs the same script against a disposable `mongo:8.0.5` service with
+`LK_TEST_MONGO_REQUIRED=1`; there a missing database is a failure, never a skip.
 
 Not PROVIDER evidence: no real Viva transaction, Admin read, CUP refresh, sandbox card payment or
 Node-RED install is performed by either command.

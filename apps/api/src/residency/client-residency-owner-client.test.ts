@@ -171,4 +171,132 @@ describe('client residency owner client', () => {
         }),
     ).not.toThrow();
   });
+
+  it('keeps three business refusals from opening the shared breaker for another user', async () => {
+    const owners: string[] = [];
+    const fetchImplementation = vi.fn(async (url: unknown, init?: RequestInit) => {
+      const value = String(url);
+      owners.push(String((init?.headers as Record<string, string>).Authorization));
+      if (value.endsWith('/orders/reconcile') || value.endsWith('/reconcile'))
+        return jsonResponse({ schemaVersion: 1 });
+      if (value.endsWith('/orders'))
+        return jsonResponse({ code: 'RESIDENCY_RENEWAL_TOO_EARLY', message: 'too early' }, 409);
+      return jsonResponse({ orderId: ORDER_ID, state: 'PENDING_PAYMENT' });
+    });
+    const client = build(fetchImplementation);
+    const userA = {
+      credential: { token: 'viva-actor-a-' + 'a'.repeat(30), expiresAt: credential.expiresAt },
+      correlationId: 'corr-12345678',
+      idempotencyKey: 'residency-key-0001',
+    };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        client.createOrder(userA, { mode: 'NEW', expectedTotalMinor: 79000 }),
+      ).rejects.toMatchObject({ status: 409, code: 'RESIDENCY_RENEWAL_TOO_EARLY' });
+    }
+    // One provider command per call: a refusal is never retried.
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+
+    // User B is unaffected: both a read and an allowed command still reach the owner.
+    const userB = {
+      credential: { token: 'viva-actor-b-' + 'b'.repeat(30), expiresAt: credential.expiresAt },
+      correlationId: 'corr-87654321',
+      idempotencyKey: 'residency-key-0002',
+    };
+    await expect(client.readOrder(userB, ORDER_ID)).resolves.toMatchObject({ orderId: ORDER_ID });
+    await expect(client.reconcileOrder(userB, ORDER_ID, {})).resolves.toMatchObject({
+      schemaVersion: 1,
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(5);
+    expect(owners.filter((header) => header.endsWith('a'.repeat(30)))).toHaveLength(3);
+    expect(owners.filter((header) => header.endsWith('b'.repeat(30)))).toHaveLength(2);
+  });
+
+  it('still opens the breaker on availability failures and recovers after the cooldown', async () => {
+    const clock = { now: Date.parse('2026-11-18T09:00:00.000Z') };
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    try {
+      let reachable = false;
+      let calls = 0;
+      const fetchImplementation = vi.fn(async () => {
+        calls += 1;
+        if (!reachable) throw Object.assign(new Error('ECONNRESET'), { name: 'TypeError' });
+        return jsonResponse({ schemaVersion: 1 });
+      });
+      const client = build(fetchImplementation);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(
+          client.catalog({ credential, correlationId: 'corr-12345678' }),
+        ).rejects.toMatchObject({ status: 503, code: 'RESIDENCY_OWNER_UNAVAILABLE' });
+      }
+      expect(calls).toBe(3);
+      // Open: the owner is not called even though it is reachable again.
+      reachable = true;
+      await expect(
+        client.catalog({ credential, correlationId: 'corr-12345678' }),
+      ).rejects.toMatchObject({ status: 503, code: 'RESIDENCY_OWNER_UNAVAILABLE' });
+      expect(calls).toBe(3);
+      // After the 30s cooldown the next call is attempted and the breaker closes.
+      clock.now += 31_000;
+      await expect(
+        client.catalog({ credential, correlationId: 'corr-12345678' }),
+      ).resolves.toMatchObject({ schemaVersion: 1 });
+      expect(calls).toBe(4);
+      await expect(
+        client.catalog({ credential, correlationId: 'corr-12345678' }),
+      ).resolves.toMatchObject({ schemaVersion: 1 });
+      expect(calls).toBe(5);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not let a user-specific delegation failure open the breaker for everyone', async () => {
+    const fetchImplementation = vi.fn(async () => jsonResponse({ schemaVersion: 1 }));
+    const client = build(fetchImplementation);
+    const expired = { token: TOKEN, expiresAt: new Date(Date.now() - 1_000).toISOString() };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        client.catalog({ credential: expired, correlationId: 'corr-12345678' }),
+      ).rejects.toMatchObject({ status: 409, code: 'RESIDENCY_REAUTH_REQUIRED' });
+    }
+    await expect(
+      client.catalog({ credential, correlationId: 'corr-12345678' }),
+    ).resolves.toMatchObject({ schemaVersion: 1 });
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
+
+  it('still counts structured 503 and untyped upstream answers as an owner outage', async () => {
+    for (const { answer, code } of [
+      {
+        answer: async () =>
+          jsonResponse({ code: 'RESIDENCY_CATALOG_UNAVAILABLE', message: 'no catalog' }, 503),
+        code: 'RESIDENCY_CATALOG_UNAVAILABLE',
+      },
+      {
+        answer: async () => new Response('unauthorized', { status: 401 }),
+        code: 'RESIDENCY_OWNER_UNAVAILABLE',
+      },
+      {
+        answer: async () => new Response('<html>bad gateway</html>', { status: 502 }),
+        code: 'RESIDENCY_OWNER_UNAVAILABLE',
+      },
+    ]) {
+      let calls = 0;
+      const client = build(async () => {
+        calls += 1;
+        return await answer();
+      });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(
+          client.catalog({ credential, correlationId: 'corr-12345678' }),
+        ).rejects.toMatchObject({ status: 503, code });
+      }
+      // The third failure opened the breaker, so the fourth call is refused locally.
+      await expect(
+        client.catalog({ credential, correlationId: 'corr-12345678' }),
+      ).rejects.toMatchObject({ status: 503, code: 'RESIDENCY_OWNER_UNAVAILABLE' });
+      expect(calls).toBe(3);
+    }
+  });
 });
