@@ -319,13 +319,153 @@ function readJsonBody(request) {
   });
 }
 
-const stats = new Map();
-function record(name, method, url, bytes) {
-  const key = `${method} ${url.split('?')[0]}`;
-  const entry = stats.get(key) ?? { key, endpoint: name, count: 0, bytes: 0 };
+// ---------------------------------------------------------------------------------------------
+// Run-epoch accounting.
+//
+// A request belongs to the run that was open when the request STARTED. Each run gets its own list,
+// and `end` freezes a snapshot: a response that arrives later still belongs to its original run, but
+// it cannot change a snapshot that was already taken. Cumulative counters are never reset; the
+// measurement reads per-run snapshots instead of clearing global state.
+// ---------------------------------------------------------------------------------------------
+const runs = new Map();
+const cumulative = { requests: 0, bytes: 0, byEndpoint: new Map() };
+let runSequence = 0;
+let currentRunId = null;
+let requestSequence = 0;
+const unattributed = [];
+
+function beginRun(label) {
+  const id = `run-${++runSequence}-${Date.now()}`;
+  runs.set(id, {
+    id,
+    label: String(label ?? ''),
+    openedAt: Date.now(),
+    closed: false,
+    closedAt: null,
+    requests: [],
+    snapshot: null,
+    lateCompletions: 0,
+  });
+  currentRunId = id;
+  return id;
+}
+
+function runAggregates(run) {
+  const byEndpoint = new Map();
+  for (const request of run.requests) {
+    const entry = byEndpoint.get(request.endpoint) ?? {
+      endpoint: request.endpoint,
+      count: 0,
+      completed: 0,
+      bytes: 0,
+      statuses: {},
+    };
+    entry.count += 1;
+    if (request.completed) {
+      entry.completed += 1;
+      entry.bytes += request.bytes;
+      entry.statuses[String(request.status)] = (entry.statuses[String(request.status)] ?? 0) + 1;
+    }
+    byEndpoint.set(request.endpoint, entry);
+  }
+  return {
+    requests: run.requests.length,
+    completed: run.requests.filter((request) => request.completed).length,
+    inFlight: run.requests.filter((request) => !request.completed).length,
+    bytes: run.requests.reduce((total, request) => total + (request.bytes ?? 0), 0),
+    byEndpoint: Object.fromEntries(byEndpoint),
+  };
+}
+
+function freezeRun(id) {
+  const run = runs.get(id);
+  if (!run) return undefined;
+  if (run.snapshot) return run.snapshot;
+  run.closed = true;
+  run.closedAt = Date.now();
+  run.snapshot = {
+    id: run.id,
+    label: run.label,
+    openedAt: run.openedAt,
+    closedAt: run.closedAt,
+    requests: run.requests.map((request) => ({ ...request })),
+    aggregates: runAggregates(run),
+    lateCompletions: run.lateCompletions,
+  };
+  return run.snapshot;
+}
+
+function runLive(run) {
+  return {
+    id: run.id,
+    label: run.label,
+    openedAt: run.openedAt,
+    closedAt: run.closedAt,
+    requests: run.requests.map((request) => ({ ...request })),
+    aggregates: runAggregates(run),
+    lateCompletions: run.lateCompletions,
+    snapshotTaken: Boolean(run.snapshot),
+  };
+}
+
+function runView(id) {
+  const run = runs.get(id);
+  if (!run) return undefined;
+  if (run.snapshot) return run.snapshot;
+  return {
+    id: run.id,
+    label: run.label,
+    openedAt: run.openedAt,
+    closedAt: run.closedAt,
+    requests: run.requests.map((request) => ({ ...request })),
+    aggregates: runAggregates(run),
+    lateCompletions: run.lateCompletions,
+  };
+}
+
+function startRequest({ endpoint, method, path }) {
+  const runId = currentRunId;
+  const request = {
+    id: `request-${++requestSequence}`,
+    runId,
+    endpoint,
+    method,
+    path,
+    startedAt: Date.now(),
+    endAt: null,
+    completed: false,
+    status: null,
+    bytes: 0,
+  };
+  const run = runId ? runs.get(runId) : undefined;
+  if (run) run.requests.push(request);
+  else unattributed.push(request);
+  return request;
+}
+
+function completeRequest(request, { status, bytes }) {
+  request.completed = true;
+  request.endAt = Date.now();
+  request.status = status;
+  request.bytes = bytes;
+  cumulative.requests += 1;
+  cumulative.bytes += bytes;
+  const key = `${request.method} ${request.path}`;
+  const entry = cumulative.byEndpoint.get(key) ?? { count: 0, bytes: 0 };
   entry.count += 1;
   entry.bytes += bytes;
-  stats.set(key, entry);
+  cumulative.byEndpoint.set(key, entry);
+  const run = request.runId ? runs.get(request.runId) : undefined;
+  if (run && run.closed) run.lateCompletions += 1;
+}
+
+function cumulativeSnapshot() {
+  return {
+    requests: cumulative.requests,
+    bytes: cumulative.bytes,
+    byEndpoint: Object.fromEntries(cumulative.byEndpoint),
+    unattributed: unattributed.length,
+  };
 }
 
 const MIME = {
@@ -384,23 +524,84 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
   const path = url.pathname;
 
-  if (path === '/__perf/stats') {
-    const body = Buffer.from(JSON.stringify({ latencyMs, requests: [...stats.values()] }));
+  if (path === '/__perf/run/begin') {
+    const body = await readJsonBody(request);
+    const runId = beginRun(body?.label);
     return send(
       response,
       200,
       { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
-      body,
+      Buffer.from(JSON.stringify({ runId })),
+    );
+  }
+  const runEnd = path.match(/^\/__perf\/run\/([^/]+)\/end$/);
+  if (runEnd) {
+    const snapshot = freezeRun(decodeURIComponent(runEnd[1]));
+    if (!snapshot) {
+      return send(
+        response,
+        404,
+        { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
+        Buffer.from(JSON.stringify({ code: 'RUN_NOT_FOUND' })),
+      );
+    }
+    return send(
+      response,
+      200,
+      { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
+      Buffer.from(JSON.stringify(snapshot)),
+    );
+  }
+  const runGet = path.match(/^\/__perf\/run\/([^/]+)$/);
+  if (runGet) {
+    const view = runView(decodeURIComponent(runGet[1]));
+    if (!view) {
+      return send(
+        response,
+        404,
+        { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
+        Buffer.from(JSON.stringify({ code: 'RUN_NOT_FOUND' })),
+      );
+    }
+    return send(
+      response,
+      200,
+      { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
+      Buffer.from(JSON.stringify(view)),
+    );
+  }
+  if (path === '/__perf/meta') {
+    return send(
+      response,
+      200,
+      { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
+      Buffer.from(JSON.stringify({ latencyMs, dist })),
+    );
+  }
+  if (path === '/__perf/runs') {
+    // Diagnostic view only: measurement reads the frozen snapshot, never this live view.
+    return send(
+      response,
+      200,
+      { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
+      Buffer.from(JSON.stringify({ runs: [...runs.values()].map((run) => runLive(run)) })),
+    );
+  }
+  if (path === '/__perf/cumulative') {
+    return send(
+      response,
+      200,
+      { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
+      Buffer.from(JSON.stringify(cumulativeSnapshot())),
     );
   }
   if (path === '/__perf/reset') {
-    stats.clear();
-    const body = Buffer.from('{}');
+    // Measurement must not clear shared counters; a run is isolated by its own snapshot instead.
     return send(
       response,
-      200,
+      409,
       { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
-      body,
+      Buffer.from(JSON.stringify({ code: 'RESET_DISABLED', use: '/__perf/run/begin' })),
     );
   }
 
@@ -413,9 +614,14 @@ const server = createServer(async (request, response) => {
   if (route) {
     const [, , handler, name] = route;
     const requestBody = await readJsonBody(request);
-    await new Promise((resolve) => setTimeout(resolve, latencyMs));
+    // The run is claimed at request start, before any latency, so a slow response cannot be
+    // attributed to the next run.
+    const tracked = startRequest({ endpoint: name, method: request.method, path });
+    const delayOverride = Number(url.searchParams.get('perfDelayMs'));
+    const delay = Number.isFinite(delayOverride) && delayOverride > 0 ? delayOverride : latencyMs;
+    await new Promise((resolve) => setTimeout(resolve, delay));
     const body = Buffer.from(JSON.stringify(handler(request, requestBody)));
-    record(name, request.method, path, body.length);
+    completeRequest(tracked, { status: 200, bytes: body.length });
     return send(
       response,
       200,
@@ -437,11 +643,12 @@ const server = createServer(async (request, response) => {
     path.startsWith('/public/api/') ||
     path.startsWith('/admin/api/')
   ) {
+    const tracked = startRequest({ endpoint: 'unimplemented', method: request.method, path });
     await new Promise((resolve) => setTimeout(resolve, latencyMs));
     const body = Buffer.from(
       JSON.stringify({ code: 'STUB_NOT_IMPLEMENTED', message: 'No fixture for this read.' }),
     );
-    record('unimplemented', request.method, path, body.length);
+    completeRequest(tracked, { status: 404, bytes: body.length });
     return send(
       response,
       404,

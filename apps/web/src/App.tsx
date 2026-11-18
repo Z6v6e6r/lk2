@@ -5,6 +5,7 @@ import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
 import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
 import type { GameDetailTab } from './GameDetailView.js';
 import { deferRead, runWhenIdle } from './deferred-idle.js';
+import { prefetchPrimaryScreens } from './prefetch-screens.js';
 import { createReadCoalescer } from './read-coalescer.js';
 import { handleGameDetailBack } from './game-detail-navigation.js';
 import { normalizePhoneE164 } from '@phub/auth';
@@ -980,6 +981,8 @@ export function App({
   // One screen can have several effects that poll the same list (badges, the notifications page,
   // the unread-chat badge). They share an in-flight read instead of issuing the same request twice.
   const coalescedReads = useMemo(() => createReadCoalescer(), []);
+  const screenPrefetchStarted = useRef(false);
+  const cancelScreenPrefetch = useRef<(() => void) | undefined>(undefined);
   const sessionPrincipal = state.session
     ? `${state.session.context.tenant.id}:${state.session.context.user.id}`
     : 'anonymous';
@@ -2168,6 +2171,12 @@ export function App({
             homeLoaded = true;
             setHomeBase(dashboard);
             setHomeError(null);
+            // After the first data lands, warm the chunks the bottom navigation can open next. Doing
+            // this earlier would compete with the entry chunk and the first reads on a slow link.
+            if (!screenPrefetchStarted.current) {
+              screenPrefetchStarted.current = true;
+              cancelScreenPrefetch.current = prefetchPrimaryScreens();
+            }
           }
         },
         () => {
@@ -2218,6 +2227,10 @@ export function App({
     return () => {
       active = false;
       cancelDeferredBadges();
+      if (cancelScreenPrefetch.current) {
+        cancelScreenPrefetch.current();
+        cancelScreenPrefetch.current = undefined;
+      }
       if (homeRetryTimer !== undefined) window.clearTimeout(homeRetryTimer);
       window.clearInterval(homeRefreshInterval);
       window.clearInterval(notificationRefreshInterval);

@@ -1,135 +1,164 @@
-# LK2 client load: measured scenarios, limits, and the next step
+# LK2 client load — measurement report (2026-11-18)
 
-Date: 2026-11-18. Branch: codex/lk2-performance-client, split out of PR #670.
-Companion API change: codex/lk2-performance-media (conditional GET for public media, PR #679).
+Branch: `codex/lk2-performance-client` (PR #678), split out of #670. Companion API change:
+`codex/lk2-performance-media` (PR #679).
 
-## Evidence level
+## 1. What is proven
 
-Everything here is **LOCAL** evidence: synthetic, reproducible client timings of the built web shell
-against scripts/perf/stub-lk2-api.js with fixtures derived from the UI tests. It is
+On the repaired stand, with 7 alternating valid runs per variant and scenario:
 
-- **not** a user measurement,
-- **not** STAGING or PRODUCTION evidence,
-- **not** a run of the installed Android application. The mobile bundle in Chromium is a WebView-asset
-  proxy at best and is labelled that way where it appears.
+- **Home**: first useful screen 2805 → 2643 ms median (**-5.8%**), data applied 2136 → 1870 ms
+  (**-12.5%**), total network +2.6% (the next-screen prefetch runs after the first data arrives).
+- **Home → Games transition**: 2420 → 1884 ms median (**-22.1%**); the gamified transition window
+  transfers no JS because the games chunk is warmed after the first screen.
+- **Profile**: 6033 → 5990 ms (parity), API payload -12.1%, total network -10.1% (the 50-game read is
+  replaced by the locations read).
+- **Games**: parity (+0.8%), total network -4.0%.
+- **Repeat open**: parity this series (-2.7%).
+- **Background return**: the refresh request leaves the client within 1-2 ms of the focus event in
+  both variants; this measures request scheduling, not data refresh completion (see gaps).
 
-The earlier auth/shell numbers from PR #670 were renamed precisely and are kept as a **preliminary
-signal** (5 cold runs is not a p95): web shell 1927/1964 -> 1666/1720 ms; mobile WebView assets in
-Chromium 2071/2089 -> 1860/1891 ms.
+Byte effects are reported separately from time and are not presented as speed. CSS was measured in a
+separate experiment and **reverted** — see [css-experiment-2026-11-18.md](css-experiment-2026-11-18.md).
 
-## The stand (2026-11-18 revision)
+The absolute values describe a synthetic API and a throttled headless browser. They are LOCAL
+evidence, not user measurements, not STAGING, and not the installed Android application.
 
-The scenario harness in this revision addresses the stand defects found in review:
+## 2. Frozen comparison inputs
 
-| Was                                                                          | Now                                                                                                                    |
-| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Mixed clocks: Node Date.now() for requests, performance.now() for the marker | **One clock**: page timeOrigin; waterfall and marker share the document timeline                                       |
-| Marker could flip on a shared header before the screen's own data arrived    | Marker = DOM signal **and** the read that owns it completed (games: cards rendered)                                    |
-| Stub returned no stations, so the builds compared different station data     | locations fixture exposes exactly the station id/name used by the game cards                                           |
-| Games cards unmeasurable (catalog is a read job)                             | Stub implements the **read-job protocol locally** (start -> complete with a local EVENT_CATALOG page); no Viva, no LK1 |
-| One byte number mixed API payload and static shell                           | apiPayloadBytes vs networkTransferBytes / staticTransferBytes (resource timings)                                       |
-| No per-request detail                                                        | waterfall: per-endpoint start/end/bytes on the same clock                                                              |
-| No style data                                                                | --css-coverage reports used vs total CSS bytes; --trace=<file> writes a Chrome trace                                   |
+| Item                       | Value                                                                                                           |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Baseline                   | `origin/main` worktree at `adfb7d4c76fc742d6d286eeca990de07dd0b5431`, built `apps/web` (production build)       |
+| Candidate                  | PR #678 head (see the PR for the exact SHA), same build command                                                 |
+| Variants                   | baseline = plain main; candidate = #678 only; no media branch, no server change                                 |
+| Browser                    | Chrome/157.0.8103.79, headless                                                                                  |
+| Stand                      | `scripts/perf/measure-app-scenarios.js` (harness `scenario-stand-2026-11-18`)                                   |
+| Viewport                   | 412×915, device scale 2.625 (screenshots additionally at 390 and 1280 wide)                                     |
+| CPU                        | 4× throttle                                                                                                     |
+| Network                    | 1.6 Mbit/s down, 750 kbit/s up, 150 ms RTT                                                                      |
+| Stub API                   | `scripts/perf/stub-lk2-api.js`, fixed 120 ms per read, fixtures from `apps/web/src/App.test.tsx`                |
+| Runs                       | 7 repetitions per variant and scenario, alternating variant order                                               |
+| Session                    | one synthetic session restored through `/auth/session/refresh`; same account and tenant in every run            |
+| Cache, cold scenario       | `Network.clearBrowserCache` before every run; no Service Worker controls pages; no application-level data cache |
+| Cache, repeat scenario     | one full cold Home load, then the measured open with the HTTP cache kept                                        |
+| Cache, transition scenario | cache cleared, Home loaded, 1 s settle, then the in-app action; the clock starts at the action                  |
 
-Conditions, identical before and after: headless Chrome, 412x915, CPU throttled 4x, network
-1.6 Mbit/s down / 750 kbit/s up with 150 ms RTT, HTTP cache cleared before every cold run, same
-fixtures, same stub latency (120 ms per read), same machine, **7 runs per scenario**. Raw results:
+Raw data: [series-final JSON](measurements/series-final-20261118.json),
+[series-final CSV](measurements/series-final-20261118.csv),
+[CSS series JSON](measurements/series-css-20261118.json),
+[CSS series CSV](measurements/series-css-20261118.csv),
+[CSS coverage](measurements/css-coverage-20261118.json),
+[run isolation proof](measurements/run-isolation-20261118.txt).
 
-- [scenarios-before](measurements/scenarios-before-20261118.json) / [scenarios-after](measurements/scenarios-after-20261118.json)
-- [summary](measurements/scenarios-summary-20261118.json)
-- [CSS coverage before](measurements/css-coverage-before-20261118.json) / [after](measurements/css-coverage-after-20261118.json)
-- [Home trace summary](measurements/home-trace-summary-20261118.json) (raw trace regenerable with --trace)
+Reproduce with:
 
-## What each scenario measures
+```
+npm run build -w @phub/web
+PHUB_STUB_PORT=4181 PHUB_STUB_LATENCY_MS=120 node scripts/perf/stub-lk2-api.js <baseline-dist> &
+PHUB_STUB_PORT=4180 PHUB_STUB_LATENCY_MS=120 node scripts/perf/stub-lk2-api.js apps/web/dist &
+node scripts/perf/verify-run-isolation.js http://127.0.0.1:4180
+node scripts/perf/measure-app-scenarios.js --baseline=http://127.0.0.1:4181 \
+  --candidate=http://127.0.0.1:4180 --runs=7 --scenarios=home,profile,games,repeat,nav,background
+```
 
-| Scenario    | Stop condition                                                                   |
-| ----------- | -------------------------------------------------------------------------------- |
-| home        | .fh-bottom-nav present, a heading with the viewer name, and /home/base completed |
-| profile     | #profile-name present, the balance block visible, and a profile read completed   |
-| profile-nav | same, after an in-app pushState to /profile from a loaded Home                   |
-| games       | at least one .game-card rendered from the read-job catalog                       |
-| repeat      | Home loaded once to warm the cache, then the measured Home open                  |
-| background  | a /home/base request leaving the client after a focus event                      |
+## 3. The stand: one clock, typed markers, isolated runs
 
-## Results (7 runs each, p50/p95)
+**One clock.** Every duration in the output is page time. For a document navigation the origin is the
+navigation entry (`startTime` 0); for the in-app transition it is `window.__PHUB_NAV_START`, captured
+in the page at the moment of the action. Request, marker and paint times all come from
+`performance.getEntriesByType(...)`/`performance.now()` on that timeline. Node wall clock appears only
+in run bookkeeping (`wallClockStartedAt`) and is never used in a duration.
 
-| Scenario                   | Before first data | After first data | API payload p50 | Network transfer p50 |
-| -------------------------- | ----------------- | ---------------- | --------------- | -------------------- |
-| Home                       | 4365 / 10266 ms   | 4569 / 5644 ms   | 3723 -> 4096 B  | 302 373 -> 267 933 B |
-| Profile cold               | 4081 / 5519 ms    | 4490 / 5758 ms   | 5043 -> 4168 B  | 336 673 -> 302 422 B |
-| Profile from Home          | 3393 / 3571 ms    | 2817 / 6840 ms   | 5917 -> 2281 B  | 36 726 -> 33 234 B   |
-| Games until cards          | 3836 / 4061 ms    | 3808 / 7271 ms   | 2913 -> 2913 B  | 321 029 -> 308 222 B |
-| Repeat open                | 904 / 1547 ms     | 909 / 1752 ms    | 2953 -> 4878 B  | 9254 -> 9803 B       |
-| Background refresh request | 8 / 17 ms         | 8 / 13 ms        | -               | -                    |
+**Markers** (each fires once per run; the clock stops on the double `requestAnimationFrame` after the
+DOM condition, so the value is a displayed time, not a state update):
 
-### What these numbers do and do not show
+| Metric                                                       | Condition                                                                            |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `displayedMs` (Home)                                         | `.fh-bottom-nav` present, a heading with the viewer name, and `/home/base` completed |
+| `displayedMs` (Profile)                                      | `#profile-name` present, the balance block visible, and a profile read completed     |
+| `displayedMs` (Games)                                        | at least one `.game-card` rendered from the catalog read job                         |
+| `displayedMs` (nav)                                          | same games condition, after the in-app transition, clock from the action mark        |
+| `requiredDataAppliedMs`                                      | maximum `responseEnd` of the reads that own the marker, on the same clock            |
+| `renderAfterDataMs`                                          | `displayedMs - requiredDataAppliedMs` (processing + paint after data)                |
+| `sessionRestoreMs`, `firstApiRequestMs`, `lastApiResponseMs` | derived from the same resource entries                                               |
+| `refreshRequestMs` (background)                              | focus event → next `/home/base` request start, page clock                            |
 
-- **No confirmed first-screen win.** For Home, Profile and Games the p50/p95 differences are inside
-  the run-to-run spread (before Home p95 was 10 266 ms, after 5 644 ms; the p50 moved the other way by
-  4%). The honest statement is: this batch reduced bytes, not first-data time in this synthetic
-  profile.
-- **Bytes did fall where expected.** Static transfer on Home 297 147 -> 263 380 B (-11%), consistent
-  with the bundle closure (238 454 -> 193 185 B gzip). Profile API payload fell 5043 -> 4168 B because
-  the 50-game read is gone; the in-app profile navigation moved 5917 -> 2281 B of API payload.
-- **The repeat open and the background refresh are unchanged** at this sample size.
-- **API payload is a small part of the network.** On Home the API is ~3.7 KB against ~268 KB of shell
-  transfer, so read-side tuning alone cannot move first paint much.
-- **Main-thread work is not the bottleneck at this throttle.** The captured Home trace has one
-  191 ms task above 50 ms; boot time is dominated by downloading and parsing the shell.
-- **CSS is almost entirely unused at first paint.** Of the single eager stylesheet, Home uses
-  ~16.0 of 250.7 KB (6.4%), Profile ~25.2 of 255.8 KB (9.9%), Games ~16.0 of 239.8 KB (6.7%).
-  Identical before and after, because this batch did not touch the stylesheet.
+No application-level profile/games cache exists in this build, so a "cached data confirmed" marker
+is not applicable and is not reported; the repeat scenario measures the HTTP-cache path instead.
 
-## Client safety checks
+**Run isolation.** Each run opens an epoch on the stub before navigation and freezes a snapshot after
+the marker. A request is attributed to the run that was open when it **started**; a response that
+arrives later stays in that run and cannot change a frozen snapshot. `verify-run-isolation.js` checks
+this with direct HTTP (no browser):
 
-- DeferredScreen: a parent re-render does not remount the loaded screen; a rejected chunk load
-  reaches an error boundary. The existing vite:preloadError reload-once handler still covers a stale
-  chunk.
-- Deferred reads: none starts after unmount or a session change (shouldStart, now also on the friends
-  read); a focus refresh joins the pending inbox read.
-- Command invalidation: read-coalescer.invalidate(prefix) drops pending entries after
-  markNotificationsRead (single and all), markConversationRead and friend-request accept/decline, so
-  the post-command read is never answered by a request that started before the command. Keys are
-  scoped by tenant + user + parameters and cleared on session change.
-- CREATE PR #669: no file overlap; its five web files applied on top of this branch left App.test.tsx
-  at 113/113 including the lazy quarter-panel mount. Its own CREATE suites fail identically on
-  pristine origin/main in this Node 26 + jsdom environment (39/39), so the failures are
-  environmental, not caused by the lazy boundary.
+- run A's slow request is in A's snapshot as in-flight; run B's snapshot contains only B's request;
+- frozen snapshots are byte-identical after late completions; late completion is counted in A;
+- the shared counters cannot be reset (`/__perf/reset` returns 409);
+- **all 8 checks pass** — see [run-isolation-20261118.txt](measurements/run-isolation-20261118.txt).
 
-## Gaps
+The final series itself passed the same integrity gates: **84/84 attempts valid**, 0 page errors,
+0 `displayed-before-data`, 0 late completions, all API responses 200, and every attempt that has a
+frozen snapshot (70 of 84; the 14 background attempts do not take one) reports it unchanged.
 
-- No installed-Android measurement and no API/PostgreSQL/Redis/Viva timing. The server critical-path
-  plan and the exact missing evidence are below: a running API with a disposable local database
-  (needs explicit authority) or STAGING read access, plus VIVA_MODE=mock.
-- The games read-job protocol is reproduced locally with a fixed page; it does not measure Viva/LK1
-  latency, only the client's handling of that protocol.
+## 4. Results (median [min..max], 7 valid runs each)
 
-## Next step with the greatest confirmed effect
+| Scenario     | metric          | baseline          | candidate         | delta                         |
+| ------------ | --------------- | ----------------- | ----------------- | ----------------------------- |
+| Home         | displayed       | 2805 [2696..3066] | 2643 [2569..2894] | **-162 ms / -5.8%**           |
+| Home         | data applied    | 2136 [2077..2180] | 1870 [1842..2160] | -266 ms / -12.5%              |
+| Home         | total network   | 302 847 B         | 310 816 B         | +2.6% (prefetch tail)         |
+| Profile      | displayed       | 6033 [3797..6277] | 5990 [5480..6249] | -43 ms / -0.7%                |
+| Profile      | data applied    | 5163 [2911..5466] | 5068 [4591..5211] | -95 ms / -1.8%                |
+| Profile      | API payload     | 7217 B            | 6342 B            | **-12.1%**                    |
+| Profile      | total network   | 336 673 B         | 302 546 B         | **-10.1%**                    |
+| Games        | displayed       | 4376 [3029..4661] | 4411 [4368..5310] | +35 ms / +0.8% (parity)       |
+| Repeat open  | displayed       | 2548 [2129..3239] | 2479 [2308..2796] | -69 ms / -2.7% (parity)       |
+| Home → Games | displayed       | 2420 [765..3335]  | 1884 [903..2931]  | **-536 ms / -22.1%**          |
+| Home → Games | window network  | 24 181 B          | 3 055 B           | -87.4% (chunk already warmed) |
+| Background   | refresh request | 2 [1..2] ms       | 1 [1..2] ms       | floor measurement             |
 
-Evidence points at the **eager shell**, not at reads:
+Request counts (median): Home 10/10, Profile 13/13, Games 4/4, Repeat 10/9, transition 4/5.
+API payload medians: Home 3549/3549 B, Games 2913/2913 B, transition 4657/4831 B.
 
-1. static transfer dominates the network (98% of Home bytes) and the captured trace shows no
-   main-thread hotspot above ~200 ms;
-2. the single global stylesheet is 6-10% used on the first screens and is parsed on every launch.
+### How to read the result
 
-So the next optimization is to **split the global stylesheet**: keep shell/auth/Home styles in the
-initial CSS and move chats, communities, games catalog, profile-v2 and detail styles into the chunks
-they belong to (the lazy screens already carry their own CSS where it was extracted). Acceptance is
-measured on the same stand: lowered static transfer and first-data time on Home/Games without a flash
-of unstyled content and with the existing visual tests still green.
+- **Acceleration is confirmed for Home and for the Home → Games transition.** Home applies data 12.5%
+  earlier and displays 5.8% earlier; the transition is 22.1% faster at the median, and its window
+  carries no JS because the games chunk is warmed after the first screen.
+- **Profile is byte parity, not a time win**: payload and total network drop by 10-12%, time is flat
+  within the spread (its ranges overlap heavily).
+- **Games and repeat are parity at this sample size.** A single earlier series showed a larger repeat
+  win; it is not carried here because it was produced before the final build.
+- **The prefetch costs bytes**: Home total network rises 2.6% because the next screen's chunk is
+  fetched after the first data. The first screen itself is not delayed (it is faster).
+- Seven runs give a median and a range, not a p95. Slow values are kept in the CSV, not deleted.
 
-## Server critical path: plan and missing evidence
+## 5. What changed in the client (PR #678)
 
-Intended measurement for one cold open: client mark when the refresh request starts, then each
-/home/base, /profile and catalog call resolves (already in the waterfall); API request duration with
-internal spans for the same correlation id (handler, DB queries with EXPLAIN (ANALYZE, BUFFERS),
-Redis calls, LK1/Viva round trips); client mark when the screen applies the data. Missing: a running
-API with a disposable local database or STAGING read access, plus VIVA_MODE=mock. Until then no
-server p95 claim is made.
+1. Lazy screens with their own Suspense boundary (game detail, tournament chat, native join/leave,
+   quarter create, monthly purchase).
+2. Startup priority for badge and secondary profile reads, with `shouldStart` so a read never starts
+   after unmount or a session change.
+3. A read coalescer that shares one pending read per tenant+user+parameters, invalidated after the
+   commands that change those lists (notifications marked read, conversation read, friend request).
+4. Booking preference stations from `listLocations()` instead of a 50-game read.
+5. A post-paint prefetch of the games chunk, so the first tap does not pay the split cost.
 
-## Android persistent profile/games cache: follow-up task definition
+## 6. Gaps and limits
 
-Separate task after a device/emulator measurement. Fixed in advance: tenant+user cache keys; fresh
-window plus a hard maximum age; an entry is dropped when the session is revoked or logout runs; a
-cached price, permission, free-seat count or entitlement is display-only and never authorizes a
-commercial operation; bounded byte budget with least-recently-used eviction.
+- No installed Android or iOS measurement; the mobile WebView bundle is not the app.
+- No API/PostgreSQL/Redis/Viva timing: no live or staging access in this task, and the local Docker
+  daemon is unavailable. The server critical-path plan stays a plan.
+- Background return measures when the refresh request leaves the client, not when refreshed data is
+  displayed; a data-refresh marker would need a cache-aware identity signal that this build has not.
+- The media conditional-GET change is verified at handler level only; no proxy/real-path 200/304
+  measurement was possible without a running API.
+- The games catalog read-job latency is local (stub), not Viva/LK1.
+
+## 7. Media and CSS status
+
+- Media (#679): code, route tests and parser boundaries are in place; the contract gate is BLOCKED on
+  an owner decision and its CI has one unrelated infrastructure failure. Details are in
+  [lk2-media-cache-2026-11-17.md](lk2-media-cache-2026-11-17.md).
+- CSS: measured and reverted; details and screenshots are in
+  [css-experiment-2026-11-18.md](css-experiment-2026-11-18.md).
