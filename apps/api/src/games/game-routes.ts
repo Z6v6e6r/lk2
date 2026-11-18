@@ -1106,6 +1106,9 @@ export function registerGameRoutes(
         {
           repository: options.commercialJoin.repository,
           owner: options.commercialJoin.owner,
+          ...(options.commercialJoin.settlementOwner
+            ? { settlementOwner: options.commercialJoin.settlementOwner }
+            : {}),
         },
       );
       if (!recovered || recovered.operation.gameId !== currentGameId) {
@@ -1175,6 +1178,9 @@ export function registerGameRoutes(
         {
           repository: options.commercialJoin.repository,
           owner: options.commercialJoin.owner,
+          ...(options.commercialJoin.settlementOwner
+            ? { settlementOwner: options.commercialJoin.settlementOwner }
+            : {}),
           onReconciliationFailure: (code) =>
             app.log.warn(
               { operationId, code },

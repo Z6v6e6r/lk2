@@ -93,7 +93,7 @@ function owner(overrides: { preflight?: unknown; admit?: unknown } = {}) {
     preflight,
     admit,
     owner: createBookedOperationV3SettlementOwner({
-      client: { preflight, admit },
+      client: { preflight, admit, read: vi.fn() },
       issuer: { issueBookedOperationV3 },
       issueActorToken: () =>
         Promise.resolve({

@@ -276,6 +276,23 @@ export interface CommercialJoinSettlement {
   readonly requestSha256: string;
 }
 
+export interface CommercialJoinSettlementReceipt {
+  readonly receiptId: string;
+  readonly confirmedAt: string;
+  readonly bookingRef: string;
+  readonly usageRef?: string;
+  readonly appliedRule: string;
+  readonly priceCharged: { readonly amountMinor: number; readonly currency: 'RUB' };
+  readonly provider: 'VIVA';
+}
+
+export type CommercialJoinSettlementRead =
+  | { readonly status: 'PAYMENT_REQUIRED'; readonly settlement: CommercialJoinSettlement }
+  | { readonly status: 'PENDING' }
+  | { readonly status: 'CONFIRMED'; readonly receipt: CommercialJoinSettlementReceipt }
+  | { readonly status: 'CANCELLED' }
+  | { readonly status: 'UNKNOWN' };
+
 export interface CommercialJoinSettlementOwner {
   prepare(input: {
     readonly actor: CommercialJoinOwnerActor;
@@ -299,6 +316,12 @@ export interface CommercialJoinSettlementOwner {
     | { readonly status: 'UNKNOWN' }
     | { readonly status: 'REJECTED'; readonly code: 'GAME_PAYMENT_REQUIRED' }
   >;
+  read(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly settlement: CommercialJoinSettlement;
+  }): Promise<CommercialJoinSettlementRead>;
 }
 
 export interface CommercialJoinCommandEnvelope {
@@ -1263,6 +1286,13 @@ function unresolvedBoundJoinOperation(
   });
 }
 
+function unresolvedSettlementOperation(
+  attempt: CommercialJoinAttemptView,
+  now: () => number,
+): CommercialJoinResponseBody {
+  return unresolvedBoundJoinOperation(attempt, now);
+}
+
 /**
  * Readback of a commercial operation. Read-only: it never reserves, confirms, releases or fails.
  */
@@ -1275,7 +1305,10 @@ export async function readCommercialJoinOperation(
     readonly operationId: string;
     readonly correlationId: string;
   },
-  dependencies: Pick<CommercialJoinDependencies, 'repository' | 'owner' | 'now'>,
+  dependencies: Pick<
+    CommercialJoinDependencies,
+    'repository' | 'owner' | 'now' | 'settlementOwner'
+  >,
 ): Promise<CommercialJoinResponseBody | null> {
   const now = dependencies.now ?? Date.now;
   const attempt = await dependencies.repository.getPaidJoinAttempt({
@@ -1292,6 +1325,125 @@ export async function readCommercialJoinOperation(
     !attempt.managedReceipt
   )
     return unresolvedBoundJoinOperation(attempt, now);
+  if (attempt.settlement && dependencies.settlementOwner && attempt.state === 'IN_PROGRESS') {
+    let read: Awaited<ReturnType<CommercialJoinSettlementOwner['read']>>;
+    try {
+      read = await dependencies.settlementOwner.read({
+        actor: {
+          tenantId: input.tenantId,
+          tenantKey: input.tenantKey,
+          userId: input.actorUserId,
+          sessionId: input.sessionId,
+          gameId: attempt.gameId,
+          expectedRevision: 0,
+        },
+        operationId: input.operationId,
+        correlationId: input.correlationId,
+        settlement: { ...attempt.settlement, amountMinor: attempt.settlement.toPayMinor },
+      });
+    } catch {
+      read = { status: 'UNKNOWN' };
+    }
+    if (read.status === 'CONFIRMED') {
+      const receipt = read.receipt;
+      const evidenceHash = createHash('sha256')
+        .update(JSON.stringify(Object.entries(receipt).sort(([a], [b]) => a.localeCompare(b))))
+        .digest('hex');
+      if (!dependencies.repository.confirmPayment)
+        return unresolvedSettlementOperation(attempt, now);
+      let confirmed: GameRosterCommandResult;
+      try {
+        confirmed = await dependencies.repository.confirmPayment({
+          tenantId: input.tenantId,
+          actorUserId: input.actorUserId,
+          gameId: attempt.gameId,
+          reservationId: attempt.reservation?.id ?? attempt.commandId,
+          correlationId: input.correlationId,
+          idempotencyKey: `join-reconcile:${input.operationId}`,
+          requestHash: evidenceHash,
+          evidence: {
+            provider: 'VIVA',
+            operationType: 'SUBSCRIPTION_BOOKING',
+            operationId: input.operationId,
+            bookingId: receipt.bookingRef,
+            evidenceHash,
+            verifiedAt: receipt.confirmedAt,
+            verifiedBy: 'LK1_OWNER_V3',
+          },
+        });
+      } catch {
+        return unresolvedSettlementOperation(attempt, now);
+      }
+      if (confirmed.outcome === 'applied') {
+        return operationBody({
+          operationId: attempt.commandId,
+          status: 'SUCCEEDED',
+          gameId: attempt.gameId,
+          revision: confirmed.revision,
+          createdAt: confirmed.committedAt,
+          updatedAt: confirmed.committedAt,
+          commercial: attemptView(
+            'OWNER_CONFIRMED',
+            attempt.reservation,
+            null,
+            { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: receipt.confirmedAt },
+            null,
+          ),
+          replayed: true,
+        });
+      }
+      return unresolvedSettlementOperation(attempt, now);
+    }
+    if (read.status === 'PAYMENT_REQUIRED' && read.settlement.checkoutUrl) {
+      return operationBody({
+        operationId: attempt.commandId,
+        status: 'PROCESSING',
+        gameId: attempt.gameId,
+        revision: null,
+        createdAt: new Date(now()).toISOString(),
+        updatedAt: new Date(now()).toISOString(),
+        nextAction: { type: 'OPEN_PAYMENT', url: read.settlement.checkoutUrl },
+        commercial: attemptView('OWNER_PENDING', attempt.reservation, null, null, null),
+        replayed: true,
+      });
+    }
+    if (read.status === 'CANCELLED') {
+      return operationBody({
+        operationId: attempt.commandId,
+        status: 'FAILED',
+        gameId: attempt.gameId,
+        revision: null,
+        createdAt: new Date(now()).toISOString(),
+        updatedAt: new Date(now()).toISOString(),
+        error: {
+          code: 'GAME_RESERVATION_EXPIRED',
+          message: FAILURE_MESSAGES.GAME_RESERVATION_EXPIRED,
+        },
+        commercial: attemptView(
+          'FAILED',
+          attempt.reservation,
+          null,
+          null,
+          'GAME_RESERVATION_EXPIRED',
+        ),
+        replayed: true,
+      });
+    }
+    if (read.status === 'PENDING') {
+      return operationBody({
+        operationId: attempt.commandId,
+        status: 'PROCESSING',
+        gameId: attempt.gameId,
+        revision: null,
+        createdAt: new Date(now()).toISOString(),
+        updatedAt: new Date(now()).toISOString(),
+        commercial: attemptView('OWNER_PENDING', attempt.reservation, null, null, null),
+        replayed: true,
+      });
+    }
+    return unresolvedSettlementOperation(attempt, now);
+  }
+
   const updatedAt = attempt.receipt?.confirmedAt ?? new Date(now()).toISOString();
   const price: CommercialJoinCommercialView['price'] = null;
 

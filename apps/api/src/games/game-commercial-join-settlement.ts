@@ -1,6 +1,7 @@
 import {
   BOOKED_OPERATION_V3_ADMISSION_PATH,
   BOOKED_OPERATION_V3_PREFLIGHT_PATH,
+  BOOKED_OPERATION_V3_READ_PREFIX,
 } from '@phub/subscription-runtime-adapter';
 import type {
   BookedOperationV3Client,
@@ -26,7 +27,7 @@ const sha256 = (value: unknown): string =>
  * the explicit v3 flag is enabled; it never creates a checkout locally.
  */
 export function createBookedOperationV3SettlementOwner(options: {
-  readonly client: Pick<BookedOperationV3Client, 'preflight' | 'admit'>;
+  readonly client: Pick<BookedOperationV3Client, 'preflight' | 'admit' | 'read'>;
   readonly issuer: Pick<SubscriptionRuntimeActorDelegationIssuer, 'issueBookedOperationV3'>;
   readonly issueActorToken: (
     actor: CommercialJoinOwnerActor,
@@ -180,6 +181,43 @@ export function createBookedOperationV3SettlementOwner(options: {
       });
       if (result.status === 'CANCELLED')
         return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
+      if (result.status === 'UNKNOWN') return { status: 'UNKNOWN' };
+      if (result.payment.state === 'OPEN' && result.payment.checkoutUrl)
+        return { status: 'PAYMENT_REQUIRED', settlement: { ...input.settlement } };
+      return { status: 'PENDING' };
+    },
+    async read(input) {
+      const actorToken = await actorTokenFor(input.actor, input.correlationId);
+      const context = await contextFor(input.actor);
+      const requestSha256 = sha256({
+        operationId: input.operationId,
+        quoteId: input.settlement.quoteId,
+      });
+      const actorDelegation = await options.issuer.issueBookedOperationV3({
+        scope: 'read',
+        method: 'GET',
+        path: BOOKED_OPERATION_V3_READ_PREFIX + input.operationId,
+        operationId: input.operationId,
+        tenantId: input.actor.tenantId,
+        tenantKey: input.actor.tenantKey,
+        userId: input.actor.userId,
+        sessionId: input.actor.sessionId,
+        providerClientId: context.providerClientId,
+        providerMappingId: context.providerMappingId,
+        correlationId: input.correlationId,
+        requestSha256,
+        actorToken,
+        quoteId: input.settlement.quoteId,
+      });
+      const result = await options.client.read(input.operationId, {
+        actorDelegation,
+        correlationId: input.correlationId,
+        operationId: input.operationId,
+        actorToken,
+      });
+      if (result.status === 'CONFIRMED' && result.receipt)
+        return { status: 'CONFIRMED', receipt: result.receipt };
+      if (result.status === 'CANCELLED') return { status: 'CANCELLED' };
       if (result.status === 'UNKNOWN') return { status: 'UNKNOWN' };
       if (result.payment.state === 'OPEN' && result.payment.checkoutUrl)
         return { status: 'PAYMENT_REQUIRED', settlement: { ...input.settlement } };

@@ -270,7 +270,7 @@ describe('commercial JOIN orchestration', () => {
 
     const result = await executeCommercialJoin(envelope, {
       ...dependencies(repo, ownerPort([]).owner, fixture),
-      settlementOwner: { prepare, execute },
+      settlementOwner: { prepare, execute, read: vi.fn() },
     });
     expect(result.kind).toBe('accepted');
     if (result.kind !== 'accepted') return;
@@ -300,7 +300,7 @@ describe('commercial JOIN orchestration', () => {
     const execute = vi.fn<CommercialJoinSettlementOwner['execute']>();
     const result = await executeCommercialJoin(envelope, {
       ...dependencies(repo, ownerPort([]).owner, fixture),
-      settlementOwner: { prepare, execute },
+      settlementOwner: { prepare, execute, read: vi.fn() },
     });
     expect(result).toMatchObject({ kind: 'failed', code: 'GAME_PRICE_CONFIRMATION_REQUIRED' });
     expect(execute).not.toHaveBeenCalled();
@@ -524,6 +524,37 @@ describe('commercial JOIN readback', () => {
       readbackDependencies(null),
     );
     expect(body).toBeNull();
+  });
+
+  it('returns the v3 checkout for a pending settlement read', async () => {
+    const settlement = {
+      quoteId: fixtureId(120),
+      amountMinor: 70_000,
+      toPayMinor: 70_000,
+      checkoutUrl: 'https://padlhub.su/pay/synthetic-read',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestSha256: 'sha256:' + 'a'.repeat(64),
+    };
+    const input = {
+      tenantId: fixtureActor.tenantId,
+      tenantKey: 'synthetic',
+      actorUserId: fixtureActor.userId,
+      sessionId: fixtureActor.sessionId,
+      operationId,
+      correlationId: 'correlation-read-v3',
+    };
+    const body = await readCommercialJoinOperation(input, {
+      ...readbackDependencies({ ...attemptBase, settlement }),
+      settlementOwner: {
+        prepare: vi.fn(),
+        execute: vi.fn(),
+        read: vi.fn(() => resolved({ status: 'PAYMENT_REQUIRED' as const, settlement })),
+      },
+    });
+    expect(body?.operation.nextAction).toEqual({
+      type: 'OPEN_PAYMENT',
+      url: settlement.checkoutUrl,
+    });
   });
 
   it('reports SUCCEEDED only with a trusted receipt', async () => {

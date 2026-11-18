@@ -114,7 +114,7 @@ export interface ConfirmGamePaymentInput extends GameRosterUserCommandInput {
     readonly clientPhoneE164?: string;
     readonly evidenceHash: string;
     readonly verifiedAt: string;
-    readonly verifiedBy: 'LEGACY_NODE_RED';
+    readonly verifiedBy: 'LEGACY_NODE_RED' | 'LK1_OWNER_V3';
     readonly amountMinor?: number;
     readonly currency?: string;
   };
