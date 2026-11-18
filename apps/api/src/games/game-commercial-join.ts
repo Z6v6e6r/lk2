@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import type {
   PaidJoinProviderBinding,
   PaidJoinSettlementBinding,
+  FailPaidJoinResult,
   ConfirmGamePaymentInput,
   GameRosterCommandResult,
 } from '@phub/database';
@@ -131,7 +132,7 @@ export interface CommercialJoinRepositoryPort {
     readonly gameId: string;
     readonly code: string;
     readonly correlationId: string;
-  }): Promise<unknown>;
+  }): Promise<FailPaidJoinResult | undefined>;
 }
 
 export interface CommercialJoinAppliedResult {
@@ -1433,8 +1434,11 @@ export async function readCommercialJoinOperation(
       });
     }
     if (read.status === 'CANCELLED') {
+      let localCancel: Awaited<
+        ReturnType<CommercialJoinRepositoryPort['failPaidJoinAttempt']>
+      > | null;
       try {
-        await dependencies.repository.failPaidJoinAttempt({
+        localCancel = await dependencies.repository.failPaidJoinAttempt({
           tenantId: input.tenantId,
           actorUserId: input.actorUserId,
           operationId: input.operationId,
@@ -1443,8 +1447,34 @@ export async function readCommercialJoinOperation(
           correlationId: input.correlationId,
         });
       } catch {
-        // The owner is closed but the local write failed. Keep the operation unresolved so the next
-        // readback retries the local completion without any new financial dispatch.
+        localCancel = null;
+      }
+      if (!localCancel?.transitioned || localCancel.state !== 'FAILED') {
+        const current = await dependencies.repository
+          .getPaidJoinAttempt({
+            tenantId: input.tenantId,
+            actorUserId: input.actorUserId,
+            operationId: input.operationId,
+          })
+          .catch(() => null);
+        if (current?.state === 'COMPLETED' && current.result) {
+          return operationBody({
+            operationId: current.commandId,
+            status: 'SUCCEEDED',
+            gameId: current.result.gameId,
+            revision: current.result.revision,
+            createdAt: current.result.committedAt,
+            updatedAt: current.result.committedAt,
+            commercial: attemptView(
+              'OWNER_CONFIRMED',
+              current.reservation,
+              null,
+              current.receipt,
+              null,
+            ),
+            replayed: true,
+          });
+        }
         return unresolvedSettlementOperation(attempt, now);
       }
       return operationBody({
@@ -1636,7 +1666,7 @@ export async function cancelCommercialJoinOperation(
   if (cancelled?.status === 'CLOSED') {
     let localClosed = false;
     try {
-      await dependencies.repository.failPaidJoinAttempt({
+      const local = await dependencies.repository.failPaidJoinAttempt({
         tenantId: input.tenantId,
         actorUserId: input.actorUserId,
         operationId: input.operationId,
@@ -1644,7 +1674,7 @@ export async function cancelCommercialJoinOperation(
         code: 'GAME_JOIN_CANCELLED',
         correlationId: input.correlationId,
       });
-      localClosed = true;
+      localClosed = local?.transitioned === true && local.state === 'FAILED';
     } catch {
       // The owner is closed but the local write failed. Do not report a terminal cancel; the next
       // readback retries the local completion and never sends another owner cancel.

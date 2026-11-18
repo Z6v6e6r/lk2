@@ -494,7 +494,7 @@ describe('commercial JOIN readback', () => {
       getPaidJoinAttempt() {
         return resolved(attempt);
       },
-      failPaidJoinAttempt(): Promise<unknown> {
+      failPaidJoinAttempt(): Promise<never> {
         return Promise.reject(new Error('readback must not write'));
       },
       markDispatchStarted(): Promise<boolean> {
@@ -536,7 +536,14 @@ describe('commercial JOIN readback', () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       requestSha256: 'sha256:' + 'b'.repeat(64),
     };
-    const failPaidJoinAttempt = vi.fn(() => resolved(undefined));
+    const failPaidJoinAttempt = vi.fn(() =>
+      resolved({
+        operationId,
+        state: 'FAILED' as const,
+        reservationState: 'CANCELLED' as const,
+        transitioned: true,
+      }),
+    );
     const body = await cancelCommercialJoinOperation(
       {
         tenantId: fixtureActor.tenantId,
@@ -580,7 +587,12 @@ describe('commercial JOIN readback', () => {
     const failPaidJoinAttempt = vi
       .fn()
       .mockRejectedValueOnce(new Error('synthetic database failure'))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({
+        operationId,
+        state: 'FAILED',
+        reservationState: 'CANCELLED',
+        transitioned: true,
+      });
     const settlementOwner = {
       prepare: vi.fn(),
       execute: vi.fn(),

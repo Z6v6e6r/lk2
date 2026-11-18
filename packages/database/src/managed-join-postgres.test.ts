@@ -718,6 +718,105 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
     expect(attempted?.reconciliation).toMatchObject({ attempts: 3, escalated: false });
   });
 
+  it('rejects legacy, wrong-amount and foreign-operation proof for a stored v3 attempt', async () => {
+    const game = await fixtureGame();
+    const operationId = randomUUID();
+    await repo1.beginPaidJoin({
+      tenantId,
+      actorUserId: player1,
+      gameId: game.gameId,
+      operationId,
+      idempotencyKey: `v3-negative:${operationId}`,
+      correlationId: `v3-negative:${operationId}`,
+      expectedRevision: 1,
+      subscriptionInstanceId: randomUUID(),
+      reservationTtlSeconds: 600,
+      settlement: {
+        quoteId: randomUUID(),
+        toPayMinor: 90_000,
+        checkoutUrl: 'https://padlhub.su/pay/v3-negative',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        requestSha256: `sha256:${hash('v3-negative-preflight:' + operationId)}`,
+      },
+      settlementActor: { tenantKey: `managed-join-${tenantId}`, sessionId: randomUUID() },
+      requestHash: hash('v3-negative-admission:' + operationId),
+      price: {
+        amountMinor: 90_000,
+        currency: 'RUB',
+        basePriceMinor: 90_000,
+        freeMinutes: 60,
+        paidMinutes: 60,
+        evaluatedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      },
+    });
+    const evidence = {
+      provider: 'VIVA' as const,
+      operationType: 'SUBSCRIPTION_BOOKING' as const,
+      operationId,
+      bookingId: `viva-booking:${operationId}`,
+      evidenceHash: hash('v3-negative-receipt:' + operationId),
+      verifiedAt: new Date().toISOString(),
+      verifiedBy: 'LK1_OWNER_V3' as const,
+      amountMinor: 90_000,
+      currency: 'RUB',
+    };
+    const attempt = await repo1.getPaidJoinAttempt({
+      tenantId,
+      actorUserId: player1,
+      operationId,
+    });
+    if (!attempt?.reservation) throw new Error('SYNTHETIC_RESERVATION_EXPECTED');
+    const variants: ConfirmGamePaymentInput[] = [
+      {
+        tenantId,
+        actorUserId: player1,
+        gameId: game.gameId,
+        reservationId: attempt.reservation.id,
+        idempotencyKey: `v3-negative-legacy:${operationId}`,
+        requestHash: evidence.evidenceHash,
+        correlationId: `v3-negative-legacy:${operationId}`,
+        evidence: { ...evidence, verifiedBy: 'LEGACY_NODE_RED' },
+      },
+      {
+        tenantId,
+        actorUserId: player1,
+        gameId: game.gameId,
+        reservationId: attempt.reservation.id,
+        idempotencyKey: `v3-negative-amount:${operationId}`,
+        requestHash: evidence.evidenceHash + '-amount',
+        correlationId: `v3-negative-amount:${operationId}`,
+        evidence: { ...evidence, amountMinor: 1 },
+      },
+      {
+        tenantId,
+        actorUserId: player1,
+        gameId: game.gameId,
+        reservationId: attempt.reservation.id,
+        idempotencyKey: `v3-negative-operation:${operationId}`,
+        requestHash: evidence.evidenceHash + '-operation',
+        correlationId: `v3-negative-operation:${operationId}`,
+        evidence: { ...evidence, operationId: randomUUID() },
+      },
+    ];
+    for (const variant of variants) {
+      await expect(repo2.confirmPayment(variant)).resolves.toMatchObject({
+        outcome: 'rejected',
+      });
+    }
+    expect(await counts(game.gameId)).toMatchObject({
+      players: 0,
+      applied: 0,
+      confirmedEvents: 0,
+    });
+    const stored = await repo2.getPaidJoinAttempt({
+      tenantId,
+      actorUserId: player1,
+      operationId,
+    });
+    expect(stored?.state).toBe('IN_PROGRESS');
+  });
+
   it('runs the API readback through the real repository and confirms once', async () => {
     const game = await fixtureGame();
     const input: BeginPaidJoinInput = {

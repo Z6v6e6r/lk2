@@ -112,6 +112,8 @@ export interface BookedOperationV3ReadOutcome {
     readonly toPayMinor: number;
     readonly paidMinor: number;
     readonly checkoutUrl: string | null;
+    /** Authoritative payment deadline; null only when no checkout is required. */
+    readonly expiresAt: string | null;
   };
   readonly booking: {
     readonly state: BookedOperationV3BookingState;
@@ -423,7 +425,7 @@ export function parseBookedOperationV3ReadOutcome(value: unknown): BookedOperati
     !sha256Pattern.test(requestSha256) ||
     !['PENDING', 'UNKNOWN', 'CONFIRMED', 'CANCELLED'].includes(String(value.status)) ||
     (value.asOf !== null && !instant(value.asOf)) ||
-    !keys(value.payment, 'state,toPayMinor,paidMinor,checkoutUrl') ||
+    !keys(value.payment, 'state,toPayMinor,paidMinor,checkoutUrl,expiresAt') ||
     !keysWithOptional(value.booking, 'state', 'bookingRef') ||
     !keysWithOptional(value.visit, 'state', 'usageRef') ||
     (value.reason !== null && !id(value.reason))
@@ -434,6 +436,7 @@ export function parseBookedOperationV3ReadOutcome(value: unknown): BookedOperati
     !integer(value.payment.toPayMinor, 0, Number.MAX_SAFE_INTEGER) ||
     !integer(value.payment.paidMinor, 0, Number.MAX_SAFE_INTEGER) ||
     (value.payment.checkoutUrl !== null && !httpsUrl(value.payment.checkoutUrl)) ||
+    (value.payment.expiresAt !== null && !instant(value.payment.expiresAt)) ||
     !['NONE', 'PENDING', 'CONFIRMED', 'CANCELLED', 'UNKNOWN'].includes(
       String(value.booking.state),
     ) ||
@@ -458,6 +461,7 @@ export function parseBookedOperationV3ReadOutcome(value: unknown): BookedOperati
       toPayMinor: Number(value.payment.toPayMinor),
       paidMinor: Number(value.payment.paidMinor),
       checkoutUrl: value.payment.checkoutUrl,
+      expiresAt: value.payment.expiresAt,
     },
     booking: {
       state: value.booking.state as BookedOperationV3BookingState,

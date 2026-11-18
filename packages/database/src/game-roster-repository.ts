@@ -2792,20 +2792,22 @@ export function createGameRosterRepository(
               ? (replaySnapshot.settlement as Record<string, unknown>)
               : null;
           const v3Replay =
-            input.evidence.verifiedBy === 'LK1_OWNER_V3' &&
             replaySettlement?.toPayMinor === input.evidence.amountMinor &&
             input.evidence.currency === 'RUB' &&
-            replaySnapshot.managedJoin === undefined &&
-            replaySnapshot.providerBinding === undefined;
-          if (input.evidence.verifiedBy === 'LK1_OWNER_V3') {
-            if (!v3Replay) {
+            !replaySnapshot.managedJoin &&
+            !replaySnapshot.providerBinding;
+          if (replaySettlement !== null) {
+            if (input.evidence.verifiedBy !== 'LK1_OWNER_V3' || !v3Replay) {
               return {
                 outcome: 'rejected' as const,
                 code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
                 replayed: true,
               };
             }
-          } else if (!(await managedConfirmationMatches(snapshot.binding_snapshot, input, true))) {
+          } else if (
+            input.evidence.verifiedBy === 'LK1_OWNER_V3' ||
+            !(await managedConfirmationMatches(snapshot.binding_snapshot, input, true))
+          ) {
             return {
               outcome: 'rejected' as const,
               code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
@@ -2887,8 +2889,12 @@ export function createGameRosterRepository(
           paidSnapshot.settlement.toPayMinor === input.evidence.amountMinor &&
           paidSnapshot.settlement.requestSha256 !== undefined &&
           input.evidence.currency === 'RUB';
-        if (input.evidence.verifiedBy === 'LK1_OWNER_V3') {
-          if (!v3Confirmation) {
+        const snapshotIsV3 =
+          paidSnapshot?.settlement !== null && paidSnapshot?.settlement !== undefined;
+        if (snapshotIsV3) {
+          // The stored attempt decides the proof mode. A legacy bridge cannot downgrade a v3
+          // settlement, even if it supplies a plausible legacy receipt.
+          if (input.evidence.verifiedBy !== 'LK1_OWNER_V3' || !v3Confirmation) {
             return {
               outcome: 'rejected' as const,
               code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
@@ -2897,6 +2903,7 @@ export function createGameRosterRepository(
             };
           }
         } else if (
+          input.evidence.verifiedBy === 'LK1_OWNER_V3' ||
           !(await managedConfirmationMatches(paidSnapshot?.binding_snapshot, input, false))
         ) {
           return {

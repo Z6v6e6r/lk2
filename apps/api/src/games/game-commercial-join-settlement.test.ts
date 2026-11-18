@@ -20,6 +20,15 @@ const settlement = {
   expiresAt: new Date(Date.now() + 60_000).toISOString(),
   requestSha256: 'sha256:' + 'a'.repeat(64),
 };
+const preflightRequest = {
+  contractVersion: 3 as const,
+  action: 'JOIN_GAME' as const,
+  target: { kind: 'GAME' as const, id: actor.gameId, expectedRevision: 8 },
+  paymentIntent: 'USE_SUBSCRIPTION' as const,
+};
+const preflightHash =
+  'sha256:' + createHash('sha256').update(JSON.stringify(preflightRequest)).digest('hex');
+settlement.requestSha256 = preflightHash;
 const price = {
   amountMinor: 90000,
   currency: 'RUB' as const,
@@ -65,7 +74,7 @@ function owner(overrides: { preflight?: unknown; admit?: unknown } = {}) {
         target: { kind: 'GAME' as const, id: actor.gameId, expectedRevision: 8 },
         quote,
         settlement: settlementResult,
-        requestSha256: settlement.requestSha256,
+        requestSha256: preflightHash,
       },
   );
   const admit = vi.fn(
@@ -82,6 +91,7 @@ function owner(overrides: { preflight?: unknown; admit?: unknown } = {}) {
           toPayMinor: 90000,
           paidMinor: 0,
           checkoutUrl: settlement.checkoutUrl,
+          expiresAt: settlement.expiresAt,
         },
         booking: { state: 'PENDING' as const },
         visit: { state: 'CONSUMED' as const, usageRef: 'usage-7' },
@@ -89,12 +99,34 @@ function owner(overrides: { preflight?: unknown; admit?: unknown } = {}) {
         receipt: null,
       },
   );
+  const read = vi.fn(() =>
+    Promise.resolve({
+      contractVersion: 3 as const,
+      operationId: id(20),
+      quoteId: quote.quoteId,
+      requestSha256: settlement.requestSha256,
+      status: 'CANCELLED' as const,
+      asOf: new Date().toISOString(),
+      payment: {
+        state: 'PAID' as const,
+        toPayMinor: 90000,
+        paidMinor: 90000,
+        checkoutUrl: null,
+        expiresAt: null,
+      },
+      booking: { state: 'CONFIRMED' as const, bookingRef: 'booking-7' },
+      visit: { state: 'CONSUMED' as const, usageRef: 'usage-7' },
+      reason: null,
+      receipt: null,
+    }),
+  );
   return {
     issueBookedOperationV3,
     preflight,
     admit,
+    read,
     owner: createBookedOperationV3SettlementOwner({
-      client: { preflight, admit, read: vi.fn(), cancel: vi.fn() },
+      client: { preflight, admit, read, cancel: vi.fn() },
       issuer: { issueBookedOperationV3 },
       issueActorToken: () =>
         Promise.resolve({
@@ -127,6 +159,18 @@ describe('v3 settlement owner adapter', () => {
     expect(fixture.issueBookedOperationV3).toHaveBeenCalledWith(
       expect.objectContaining({ scope: 'preflight', operationId: id(20) }),
     );
+  });
+
+  it('keeps a contradictory CANCELLED/PAID read unresolved', async () => {
+    const fixture = owner();
+    await expect(
+      fixture.owner.read({
+        actor,
+        operationId: id(20),
+        correlationId: 'corr-v3-contradictory-cancel',
+        settlement,
+      }),
+    ).resolves.toEqual({ status: 'UNKNOWN' });
   });
 
   it('refuses a quote that differs from the server price', async () => {
@@ -191,6 +235,7 @@ describe('v3 settlement owner adapter', () => {
         toPayMinor: prepared.toPayMinor,
         paidMinor: 0,
         checkoutUrl: prepared.checkoutUrl,
+        expiresAt: prepared.expiresAt,
       },
       booking: { state: 'PENDING' },
       visit: { state: 'CONSUMED', usageRef: 'usage-7' },

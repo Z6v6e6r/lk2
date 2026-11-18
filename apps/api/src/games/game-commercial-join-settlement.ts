@@ -114,6 +114,7 @@ export function createBookedOperationV3SettlementOwner(options: {
         result.target.expectedRevision !== input.actor.expectedRevision ||
         !result.quote ||
         result.quote.operationId !== input.operationId ||
+        result.requestSha256 !== requestSha256 ||
         !result.settlement ||
         result.settlement.mode !== 'SURCHARGE' ||
         result.settlement.state !== 'OPEN' ||
@@ -197,7 +198,10 @@ export function createBookedOperationV3SettlementOwner(options: {
         return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
       if (result.status === 'UNKNOWN') return { status: 'UNKNOWN' };
       if (result.payment.state === 'OPEN' && result.payment.checkoutUrl) {
-        if (result.payment.checkoutUrl !== input.settlement.checkoutUrl)
+        if (
+          result.payment.checkoutUrl !== input.settlement.checkoutUrl ||
+          result.payment.expiresAt !== input.settlement.expiresAt
+        )
           throw new Error('COMMERCIAL_JOIN_V3_CHECKOUT_CHANGED');
         return { status: 'PAYMENT_REQUIRED', settlement: { ...input.settlement } };
       }
@@ -235,6 +239,7 @@ export function createBookedOperationV3SettlementOwner(options: {
       if (
         result.operationId !== input.operationId ||
         result.quoteId !== input.settlement.quoteId ||
+        result.requestSha256 !== input.settlement.requestSha256 ||
         result.payment.toPayMinor !== input.settlement.toPayMinor
       )
         throw new Error('COMMERCIAL_JOIN_V3_READ_MISMATCH');
@@ -251,10 +256,22 @@ export function createBookedOperationV3SettlementOwner(options: {
           throw new Error('COMMERCIAL_JOIN_V3_RECEIPT_MISMATCH');
         return { status: 'CONFIRMED', receipt: result.receipt };
       }
-      if (result.status === 'CANCELLED') return { status: 'CANCELLED' };
+      if (result.status === 'CANCELLED') {
+        if (
+          result.payment.state === 'PAID' ||
+          result.booking.state === 'CONFIRMED' ||
+          result.visit.state === 'CONSUMED' ||
+          result.receipt !== null
+        )
+          return { status: 'UNKNOWN' };
+        return { status: 'CANCELLED' };
+      }
       if (result.status === 'UNKNOWN') return { status: 'UNKNOWN' };
       if (result.payment.state === 'OPEN' && result.payment.checkoutUrl) {
-        if (result.payment.checkoutUrl !== input.settlement.checkoutUrl)
+        if (
+          result.payment.checkoutUrl !== input.settlement.checkoutUrl ||
+          result.payment.expiresAt !== input.settlement.expiresAt
+        )
           throw new Error('COMMERCIAL_JOIN_V3_CHECKOUT_CHANGED');
         return { status: 'PAYMENT_REQUIRED', settlement: { ...input.settlement } };
       }
