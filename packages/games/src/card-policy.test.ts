@@ -187,6 +187,22 @@ describe('GameCard display policy', () => {
     expect(card.viewerRelation).toBe('NONE');
   });
 
+  it('keeps an expired processing seat reserved until the owner outcome is known', () => {
+    const input = game({
+      seatReservations: [
+        {
+          id: IDS.reservation,
+          userId: IDS.outsider,
+          expiresAt: '2026-08-01T09:59:59+03:00',
+          paymentState: 'PROCESSING',
+        },
+      ],
+    });
+    const card = projectGameCard(input, cardContext({ viewerUserId: IDS.outsider }));
+    expect(card.capacity).toMatchObject({ occupied: 1, reserved: 1, open: 2 });
+    expect(card.viewerRelation).toBe('SEAT_RESERVED');
+  });
+
   it('shows starting soon using server policy time', () => {
     const card = projectGameCard(
       game({ startsAt: '2026-08-01T11:00:00+03:00', endsAt: '2026-08-01T12:30:00+03:00' }),

@@ -118,6 +118,31 @@ describe('one owner-resolved existing JOIN advisory', () => {
       paidMinutes: 60,
     });
   });
+  it('accepts a 120-minute game and its two-visit quote', async () => {
+    const current = owner({
+      quotes: [
+        {
+          ...quote,
+          amountMinor: 0,
+          selectionKey: JSON.stringify([
+            'EXISTING_GAME',
+            selection.legacyGameId,
+            selection.startsAt,
+            120,
+          ]),
+          freeMinutes: 120,
+          paidMinutes: 0,
+        },
+      ],
+    });
+    current.resolveSelection.mockResolvedValue({ ...selection, durationMinutes: 120 });
+    expect(await readGameJoinConditions(current, actor, actor.correlationId)).toMatchObject({
+      price: { amountMinor: 0, confirmed: false },
+      freeMinutes: 120,
+      paidMinutes: 0,
+    });
+  });
+
   it('accepts MAX_SAFE_INTEGER revision and refuses overflow before owner work', async () => {
     const app = Fastify();
     apps.push(app);

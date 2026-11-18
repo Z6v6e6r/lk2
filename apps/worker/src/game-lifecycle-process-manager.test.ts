@@ -11,19 +11,30 @@ const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
 const startCommandId = '0ef0247c-cae5-4e38-b4bf-1caf19e66746';
 const finishCommandId = '1ef0247c-cae5-4e38-b4bf-1caf19e66746';
 const promoteCommandId = '2ef0247c-cae5-4e38-b4bf-1caf19e66746';
+const expiryCommandId = '4ef0247c-cae5-4e38-b4bf-1caf19e66746';
 const waitlistEntryId = '3ef0247c-cae5-4e38-b4bf-1caf19e66746';
+const reservationId = '5ef0247c-cae5-4e38-b4bf-1caf19e66746';
 const eventId = '7d04d95e-cfb9-40a1-a0a7-f8d03c5d385c';
 
 function command(
   id: string,
-  type: 'game.lifecycle.start.v1' | 'game.lifecycle.finish.v1' | 'game.waitlist.promote.v1',
+  type:
+    | 'game.lifecycle.start.v1'
+    | 'game.lifecycle.finish.v1'
+    | 'game.waitlist.promote.v1'
+    | 'game.reservation.expire.v1',
 ) {
   return {
     id,
     gameId,
     commandType: type,
     expectedRevision: type === 'game.lifecycle.start.v1' ? 5 : 6,
-    payload: type === 'game.waitlist.promote.v1' ? { waitlistEntryId } : { gameId },
+    payload:
+      type === 'game.waitlist.promote.v1'
+        ? { waitlistEntryId }
+        : type === 'game.reservation.expire.v1'
+          ? { reservationId }
+          : { gameId },
     attempts: 1,
   } as const;
 }
@@ -97,7 +108,7 @@ describe('Games lifecycle process manager', () => {
           completeScheduledCommand: vi.fn(),
           retryScheduledCommand: vi.fn(),
         },
-        rosterRepository: { promoteWaitlist: vi.fn() },
+        rosterRepository: { promoteWaitlist: vi.fn(), expireReservation: vi.fn() },
         tenantId,
         workerId: 'games-process-manager-test',
         logger,
@@ -121,6 +132,7 @@ describe('Games lifecycle process manager', () => {
           'game.lifecycle.start.v1',
           'game.lifecycle.finish.v1',
           'game.waitlist.promote.v1',
+          'game.reservation.expire.v1',
         ],
       }),
     );
@@ -148,7 +160,7 @@ describe('Games lifecycle process manager', () => {
           completeScheduledCommand: vi.fn(),
           retryScheduledCommand,
         },
-        rosterRepository: { promoteWaitlist: vi.fn() },
+        rosterRepository: { promoteWaitlist: vi.fn(), expireReservation: vi.fn() },
         tenantId,
         workerId: 'games-process-manager-test',
         logger,
@@ -191,7 +203,7 @@ describe('Games lifecycle process manager', () => {
           completeScheduledCommand,
           retryScheduledCommand: vi.fn(),
         },
-        rosterRepository: { promoteWaitlist },
+        rosterRepository: { promoteWaitlist, expireReservation: vi.fn() },
         tenantId,
         workerId: 'games-process-manager-test',
         logger,
@@ -238,6 +250,7 @@ describe('Games lifecycle process manager', () => {
             revision: 7,
             replayed: true,
           }),
+          expireReservation: vi.fn(),
         },
         tenantId,
         workerId: 'games-process-manager-test',
@@ -247,5 +260,88 @@ describe('Games lifecycle process manager', () => {
     ).resolves.toMatchObject({ claimed: 1, applied: 0, alreadyApplied: 1 });
 
     expect(completeScheduledCommand).toHaveBeenCalledOnce();
+  });
+
+  it('completes a reservation expiry command after the repository decides', async () => {
+    const completeScheduledCommand = vi.fn().mockResolvedValue(true);
+    const expireReservation = vi.fn().mockResolvedValue({
+      outcome: 'applied',
+      commandId: expiryCommandId,
+      gameId,
+      revision: 7,
+      replayed: false,
+    });
+
+    await expect(
+      runGameLifecycleProcessManagerCycle({
+        repository: {
+          claimScheduledCommands: vi
+            .fn()
+            .mockResolvedValueOnce([command(expiryCommandId, 'game.reservation.expire.v1')])
+            .mockResolvedValueOnce([]),
+          executeLifecycleCommand: vi.fn(),
+          completeScheduledCommand,
+          retryScheduledCommand: vi.fn(),
+        },
+        rosterRepository: { promoteWaitlist: vi.fn(), expireReservation },
+        tenantId,
+        workerId: 'games-process-manager-test',
+        logger,
+        batchSize: 10,
+        now: () => new Date('2026-07-30T10:00:00.000Z'),
+      }),
+    ).resolves.toMatchObject({ claimed: 1, applied: 1, retryScheduled: 0 });
+
+    expect(expireReservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandId: expiryCommandId,
+        reservationId,
+        gameId,
+      }),
+    );
+    expect(completeScheduledCommand).toHaveBeenCalledWith({
+      tenantId,
+      workerId: 'games-process-manager-test',
+      commandId: expiryCommandId,
+    });
+  });
+
+  it('defers an expiry command while the owner outcome needs reconciliation', async () => {
+    const availableAt = '2026-07-30T10:00:30.000Z';
+    const completeScheduledCommand = vi.fn();
+    const retryScheduledCommand = vi.fn().mockResolvedValue('retry_scheduled');
+    const expireReservation = vi.fn().mockResolvedValue({
+      outcome: 'not_due',
+      availableAt,
+    });
+
+    await expect(
+      runGameLifecycleProcessManagerCycle({
+        repository: {
+          claimScheduledCommands: vi
+            .fn()
+            .mockResolvedValueOnce([command(expiryCommandId, 'game.reservation.expire.v1')])
+            .mockResolvedValueOnce([]),
+          executeLifecycleCommand: vi.fn(),
+          completeScheduledCommand,
+          retryScheduledCommand,
+        },
+        rosterRepository: { promoteWaitlist: vi.fn(), expireReservation },
+        tenantId,
+        workerId: 'games-process-manager-test',
+        logger,
+        batchSize: 10,
+        now: () => new Date('2026-07-30T10:00:00.000Z'),
+      }),
+    ).resolves.toMatchObject({ claimed: 1, applied: 0, retryScheduled: 1 });
+
+    expect(retryScheduledCommand).toHaveBeenCalledWith({
+      tenantId,
+      workerId: 'games-process-manager-test',
+      commandId: expiryCommandId,
+      errorCode: 'GAME_RESERVATION_RECONCILIATION_DUE',
+      availableAt,
+    });
+    expect(completeScheduledCommand).not.toHaveBeenCalled();
   });
 });

@@ -31,6 +31,7 @@ function rosterRepository() {
     beginPaidJoin: () => Promise.reject(new Error('must not be called')),
     getPaidJoinAttempt: () => Promise.resolve(null),
     failPaidJoinAttempt: () => Promise.reject(new Error('must not be called')),
+    markPaidJoinDispatched: () => Promise.resolve(true),
   };
 }
 
@@ -40,7 +41,7 @@ function boundary(
     readonly mapped?: boolean;
     readonly providerSubscriptionId?: string | undefined;
     readonly issued?: unknown[];
-    readonly durationMinutes?: 60 | 90;
+    readonly durationMinutes?: 60 | 90 | 120;
     readonly startsAt?: string;
   } = {},
 ) {
@@ -615,6 +616,7 @@ describe('60-minute second participant through the real commercial runtime', () 
             expiresAt: new Date(now + 900_000).toISOString(),
           },
           receipt: null,
+          reconciliation: null,
         };
         return {
           outcome: 'reserved',
@@ -684,7 +686,11 @@ describe('60-minute second participant through the real commercial runtime', () 
         priceConsent: { amountMinor, currency: 'RUB' as const },
       };
       const input = { ...command, requestHash: commercialJoinRequestHash(command) };
-      const deps = { repository: repo, conditionsOwner: fixture.owner, owner: runtime.owner };
+      const deps = {
+        repository: runtime.repository,
+        conditionsOwner: fixture.owner,
+        owner: runtime.owner,
+      };
       expect(await executeCommercialJoin(input, deps)).toMatchObject({ kind: 'accepted' });
       expect(order).toEqual(
         amountMinor === 0 ? ['preflight', 'reserve', 'owner'] : ['reserve', 'owner'],

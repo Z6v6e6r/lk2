@@ -29,7 +29,7 @@ describe('production resolver with inert SQL and provider transports', () => {
     expect(fixture.calls.filter((call) => call.kind === 'LK1_ADVISORY_READ')).toHaveLength(1);
     expect(fixture.calls.filter((call) => call.kind === 'GET')).toHaveLength(4);
   });
-  it.each([59, 61, 89, 91, 120, 60.5, 0, -60])(
+  it.each([59, 61, 89, 91, 119, 121, 60.5, 0, -60])(
     'refuses unsupported stored duration %s before provider reads',
     async (minutes) => {
       const fixture = createJoinConditionsFixture(0, 30000, 60);

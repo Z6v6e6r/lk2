@@ -796,6 +796,7 @@ describe('paid JOIN reconciliation HTTP boundary', () => {
           beginPaidJoin,
           getPaidJoinAttempt: vi.fn().mockResolvedValue(null),
           failPaidJoinAttempt: vi.fn(),
+          markDispatchStarted: vi.fn().mockResolvedValue(true),
         },
         conditionsOwner: {
           ...fixture.owner,
@@ -881,6 +882,7 @@ describe('paid JOIN reconciliation HTTP boundary', () => {
           getPaidJoinAttempt,
           failPaidJoinAttempt: vi.fn(),
           confirmPayment,
+          markDispatchStarted: vi.fn().mockResolvedValue(true),
         },
         conditionsOwner: createJoinConditionsFixture().owner,
         owner: { read, execute },

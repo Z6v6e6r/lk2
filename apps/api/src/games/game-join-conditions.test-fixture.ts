@@ -19,7 +19,7 @@ export const fixtureActor = {
 export function createJoinConditionsFixture(
   amountMinor = 70_000,
   ttlMs = 30_000,
-  durationMinutes: 60 | 90 = 90,
+  durationMinutes: 60 | 90 | 120 = 90,
 ) {
   const raw = 'pay_synthetic_existing_game';
   const version = 'synthetic-owner-source-1';
