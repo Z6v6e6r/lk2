@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/require-await */
 import { describe, expect, it, vi } from 'vitest';
 
+import { ResidencyOwnerError as OwnerError } from './client-residency-owner-client.js';
 import {
   ResidencyOrderError,
   createResidencyOrderRuntime,
@@ -240,6 +241,36 @@ describe('residency order runtime', () => {
     await expect(broken.runtime.listUnresolved(actor)).rejects.toMatchObject({
       code: 'RESIDENCY_OWNER_RESPONSE_INVALID',
     });
+  });
+
+  it('surfaces an owner configuration refusal as a retryable availability failure', async () => {
+    const broken = build({
+      client: {
+        createOrder: async () => {
+          throw new OwnerError(400, 'RESIDENCY_RETURN_TARGET_INVALID', 'invalid', undefined);
+        },
+      },
+    });
+    await expect(
+      broken.runtime.create(actor, KEY, { mode: 'NEW', expectedTotalMinor: 79000 }),
+    ).rejects.toMatchObject({
+      code: 'RESIDENCY_OWNER_CONFIGURATION_INVALID',
+      status: 503,
+      details: { ownerCode: 'RESIDENCY_RETURN_TARGET_INVALID' },
+    });
+    // A genuine owner refusal keeps its own code.
+    const refused = build({
+      client: {
+        createOrder: async () => {
+          throw new OwnerError(409, 'RESIDENCY_RENEWAL_TOO_EARLY', 'too early', {
+            eligibleAt: 'x',
+          });
+        },
+      },
+    });
+    await expect(
+      refused.runtime.create(actor, KEY, { mode: 'RENEWAL', expectedTotalMinor: 79000 }),
+    ).rejects.toMatchObject({ code: 'RESIDENCY_RENEWAL_TOO_EARLY', status: 409 });
   });
 
   it('reports its own capability without exposing any credential', async () => {

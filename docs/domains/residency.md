@@ -121,8 +121,11 @@ purchase state.
   owner cannot describe different products.
 - Owner 4xx refusals are passed through with the stable `RESIDENCY_*` code, HTTP status,
   `correlationId` and, for structured refusals, `details`. Timeouts, transport errors, an
-  unusable answer and unexpected 5xx become retryable `503 RESIDENCY_OWNER_UNAVAILABLE`; the
-  client keeps its key and may repeat the same operation.
+  unusable answer and unexpected 5xx become retryable `503 RESIDENCY_OWNER_UNAVAILABLE`; an
+  owner refusal that describes its own configuration (`RESIDENCY_RETURN_TARGET_INVALID`,
+  `RESIDENCY_STATUS_UNAVAILABLE`, term mismatch) becomes
+  `503 RESIDENCY_OWNER_CONFIGURATION_INVALID` with `details.ownerCode`; the client keeps its
+  key and may repeat the same operation.
 - The order DTO carries a durable `recovery` block (`NONE`, `AWAITING_PAYMENT`,
   `AWAITING_CONFIRMATION`, `UNKNOWN_OUTCOME`, `ACTIVATION_PENDING`, `REVIEW_REQUIRED`,
   `TERMINAL`). It is derived by the owner from stored fields, so it is identical after a

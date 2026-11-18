@@ -24,6 +24,16 @@ const OWNER_STATES = new Set([
 ]);
 const OWNER_PAYMENT_STATUS = new Set(['NONE', 'PENDING', 'PAID', 'FAILED', 'UNKNOWN']);
 const IDEMPOTENCY_KEY = /^[!-~]{16,128}$/;
+// Owner refusals that describe its own configuration, not the caller's request. They are
+// surfaced as a retryable availability failure instead of a user error.
+const OWNER_CONFIGURATION_CODES = new Set([
+  'RESIDENCY_RETURN_TARGET_INVALID',
+  'RESIDENCY_PRODUCT_TERMS_MISMATCH',
+  'RESIDENCY_PRODUCT_NOT_CONFIGURED',
+  'RESIDENCY_CATALOG_UNAVAILABLE',
+  'RESIDENCY_PRICING_UNAVAILABLE',
+  'RESIDENCY_STATUS_UNAVAILABLE',
+]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 export class ResidencyOrderError extends Error {
@@ -115,6 +125,19 @@ export function createResidencyOrderRuntime(options: ResidencyOrderRuntimeOption
       throw new ResidencyOrderError('RESIDENCY_TENANT_NOT_SUPPORTED', 503);
   };
 
+  const ownerCall = async <T>(operation: () => Promise<T>): Promise<T> => {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof ResidencyOwnerError && OWNER_CONFIGURATION_CODES.has(error.code)) {
+        throw new ResidencyOrderError('RESIDENCY_OWNER_CONFIGURATION_INVALID', 503, {
+          ownerCode: error.code,
+        });
+      }
+      throw error;
+    }
+  };
+
   const credential = async (actor: ResidencyOrderActor): Promise<ResidencyOwnerCredential> => {
     let issued: ResidencyOwnerCredential;
     try {
@@ -146,9 +169,11 @@ export function createResidencyOrderRuntime(options: ResidencyOrderRuntimeOption
     if (!isOrderId(orderId)) throw new ResidencyOrderError('RESIDENCY_ORDER_NOT_FOUND', 404);
     gate(actor);
     const credentialValue = await credential(actor);
-    const value = await options.client!.readOrder(
-      { credential: credentialValue, correlationId: actor.correlationId },
-      orderId,
+    const value = await ownerCall(() =>
+      options.client!.readOrder(
+        { credential: credentialValue, correlationId: actor.correlationId },
+        orderId,
+      ),
     );
     return assertOrderView(value, options.productId);
   };
@@ -157,10 +182,12 @@ export function createResidencyOrderRuntime(options: ResidencyOrderRuntimeOption
     async catalog(actor: ResidencyOrderActor): Promise<unknown> {
       gate(actor);
       const credentialValue = await credential(actor);
-      const value = await options.client!.catalog({
-        credential: credentialValue,
-        correlationId: actor.correlationId,
-      });
+      const value = await ownerCall(() =>
+        options.client!.catalog({
+          credential: credentialValue,
+          correlationId: actor.correlationId,
+        }),
+      );
       if (!isRecord(value) || value.schemaVersion !== 1) return badAnswer();
       const product = isRecord(value.product) ? value.product : null;
       if (!product || product.productId !== options.productId)
@@ -171,10 +198,12 @@ export function createResidencyOrderRuntime(options: ResidencyOrderRuntimeOption
     async listUnresolved(actor: ResidencyOrderActor): Promise<unknown> {
       gate(actor);
       const credentialValue = await credential(actor);
-      const value = await options.client!.listOrders({
-        credential: credentialValue,
-        correlationId: actor.correlationId,
-      });
+      const value = await ownerCall(() =>
+        options.client!.listOrders({
+          credential: credentialValue,
+          correlationId: actor.correlationId,
+        }),
+      );
       if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.orders))
         return badAnswer();
       for (const order of value.orders) assertOrderView(order, options.productId);
@@ -188,9 +217,11 @@ export function createResidencyOrderRuntime(options: ResidencyOrderRuntimeOption
       if (!isOrderId(orderId)) throw new ResidencyOrderError('RESIDENCY_ORDER_NOT_FOUND', 404);
       gate(actor);
       const credentialValue = await credential(actor);
-      const value = await options.client!.readPayment(
-        { credential: credentialValue, correlationId: actor.correlationId },
-        orderId,
+      const value = await ownerCall(() =>
+        options.client!.readPayment(
+          { credential: credentialValue, correlationId: actor.correlationId },
+          orderId,
+        ),
       );
       if (!isRecord(value) || value.schemaVersion !== 1 || value.orderId !== orderId)
         return badAnswer();
@@ -211,9 +242,11 @@ export function createResidencyOrderRuntime(options: ResidencyOrderRuntimeOption
       if (!isRecord(parsed) || !IDEMPOTENCY_KEY.test(idempotencyKey))
         throw new ResidencyOrderError('RESIDENCY_IDEMPOTENCY_KEY_REQUIRED', 400);
       const credentialValue = await credential(actor);
-      const value = await options.client!.createOrder(
-        { credential: credentialValue, correlationId: actor.correlationId, idempotencyKey },
-        parsed,
+      const value = await ownerCall(() =>
+        options.client!.createOrder(
+          { credential: credentialValue, correlationId: actor.correlationId, idempotencyKey },
+          parsed,
+        ),
       );
       return assertEnvelope(value, options.productId);
     },
@@ -230,10 +263,12 @@ export function createResidencyOrderRuntime(options: ResidencyOrderRuntimeOption
       if (!IDEMPOTENCY_KEY.test(idempotencyKey))
         throw new ResidencyOrderError('RESIDENCY_IDEMPOTENCY_KEY_REQUIRED', 400);
       const credentialValue = await credential(actor);
-      const value = await options.client!.reconcileOrder(
-        { credential: credentialValue, correlationId: actor.correlationId, idempotencyKey },
-        orderId,
-        parsed,
+      const value = await ownerCall(() =>
+        options.client!.reconcileOrder(
+          { credential: credentialValue, correlationId: actor.correlationId, idempotencyKey },
+          orderId,
+          parsed,
+        ),
       );
       return assertEnvelope(value, options.productId);
     },
@@ -248,9 +283,11 @@ export function createResidencyOrderRuntime(options: ResidencyOrderRuntimeOption
       if (!IDEMPOTENCY_KEY.test(idempotencyKey))
         throw new ResidencyOrderError('RESIDENCY_IDEMPOTENCY_KEY_REQUIRED', 400);
       const credentialValue = await credential(actor);
-      const value = await options.client!.cancelOrder(
-        { credential: credentialValue, correlationId: actor.correlationId, idempotencyKey },
-        orderId,
+      const value = await ownerCall(() =>
+        options.client!.cancelOrder(
+          { credential: credentialValue, correlationId: actor.correlationId, idempotencyKey },
+          orderId,
+        ),
       );
       return assertEnvelope(value, options.productId);
     },
