@@ -1032,53 +1032,42 @@ export class PadlHubApiClient {
   }
 
   /**
-   * Residency purchase (provisional contract, see docs/contracts/residency-purchase.md). The
-   * server owns offers, prices, validity and the payment outcome; responses are returned as
-   * `unknown` and must be validated by the caller. The caller owns the idempotency key: a lost
-   * response is recovered by reading the same key, never by a new POST with a different key.
+   * Residency order operations: the LK2 surface of the LK1 residency lifecycle owner
+   * (Z6v6e6r/lk#443, docs/contracts/residency-purchase.md). The server owns the product, price,
+   * renewal rule, payment link and activation; responses are `unknown` and validated by the
+   * caller. Create/reconcile/cancel carry the caller's Idempotency-Key; a lost create response is
+   * recovered by repeating the same key, never by a new key.
    */
-  public getResidencyPurchaseCapability(): Promise<unknown> {
-    return this.request<unknown>('/residency-purchase-operations/capability', {
+  public getResidencyCatalog(): Promise<unknown> {
+    return this.request<unknown>('/residency/catalog', {
       cache: 'no-store',
       retryOnUnauthorized: false,
     });
   }
-  public quoteResidencyPurchase(offerId: string, key: string): Promise<unknown> {
-    return this.request<unknown>('/residency-purchase-operations/quote', {
+  public createResidencyOrder(mode: 'NEW' | 'RENEWAL', key: string): Promise<unknown> {
+    return this.request<unknown>('/residency/orders', {
       method: 'POST',
       idempotencyKey: key,
-      body: jsonRequestBody({ offerId }),
+      body: jsonRequestBody({ mode }),
       cache: 'no-store',
       retryOnUnauthorized: false,
     });
   }
-  public purchaseResidency(
-    input: {
-      readonly offerId: string;
-      readonly expectedRevision: string;
-      readonly amountMinor: number;
-      readonly currency: 'RUB';
-    },
-    key: string,
-  ): Promise<unknown> {
-    return this.request<unknown>('/residency-purchase-operations', {
-      method: 'POST',
-      idempotencyKey: key,
-      body: jsonRequestBody(input),
+  public getResidencyOrder(orderId: string): Promise<unknown> {
+    return this.request<unknown>('/residency/orders/' + encodeURIComponent(orderId), {
       cache: 'no-store',
       retryOnUnauthorized: false,
     });
   }
-  public getResidencyPurchase(key: string): Promise<unknown> {
-    return this.request<unknown>('/residency-purchase-operations/by-key', {
-      headers: { 'Idempotency-Key': key },
+  public getResidencyOrderPayment(orderId: string): Promise<unknown> {
+    return this.request<unknown>('/residency/orders/' + encodeURIComponent(orderId) + '/payment', {
       cache: 'no-store',
       retryOnUnauthorized: false,
     });
   }
-  public reconcileResidencyPurchase(id: string, key: string): Promise<unknown> {
+  public reconcileResidencyOrder(orderId: string, key: string): Promise<unknown> {
     return this.request<unknown>(
-      '/residency-purchase-operations/' + encodeURIComponent(id) + '/reconcile',
+      '/residency/orders/' + encodeURIComponent(orderId) + '/reconcile',
       {
         method: 'POST',
         idempotencyKey: key,
@@ -1088,17 +1077,14 @@ export class PadlHubApiClient {
       },
     );
   }
-  public launchResidencyPayment(id: string, key: string): Promise<unknown> {
-    return this.request<unknown>(
-      '/residency-purchase-operations/' + encodeURIComponent(id) + '/payment-launch',
-      {
-        method: 'POST',
-        idempotencyKey: key,
-        body: jsonRequestBody({}),
-        cache: 'no-store',
-        retryOnUnauthorized: false,
-      },
-    );
+  public cancelResidencyOrder(orderId: string, key: string): Promise<unknown> {
+    return this.request<unknown>('/residency/orders/' + encodeURIComponent(orderId) + '/cancel', {
+      method: 'POST',
+      idempotencyKey: key,
+      body: jsonRequestBody({}),
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
   }
 
   public async syncUserProfilePhoto(input: {

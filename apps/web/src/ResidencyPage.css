@@ -156,3 +156,9 @@
 .residency-result .residency-primary + .residency-secondary {
   margin-top: 0;
 }
+.residency-link {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  text-decoration: none;
+}

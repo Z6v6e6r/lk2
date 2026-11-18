@@ -2854,17 +2854,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           residency: {
             residencyPrincipal: quarterCreatePrincipal,
             getClientResidency: () => residencyCall(() => client.getClientResidency()),
-            getResidencyPurchaseCapability: () =>
-              residencyCall(() => client.getResidencyPurchaseCapability()),
-            quoteResidencyPurchase: (offerId, key) =>
-              residencyCall(() => client.quoteResidencyPurchase(offerId, key)),
-            purchaseResidency: (input, key) =>
-              residencyCall(() => client.purchaseResidency(input, key)),
-            getResidencyPurchase: (key) => residencyCall(() => client.getResidencyPurchase(key)),
-            reconcileResidencyPurchase: (id, key) =>
-              residencyCall(() => client.reconcileResidencyPurchase(id, key)),
-            launchResidencyPayment: (id, key) =>
-              residencyCall(() => client.launchResidencyPayment(id, key)),
+            getResidencyCatalog: () => residencyCall(() => client.getResidencyCatalog()),
+            createResidencyOrder: (mode, key) =>
+              residencyCall(() => client.createResidencyOrder(mode, key)),
+            getResidencyOrder: (id) => residencyCall(() => client.getResidencyOrder(id)),
+            getResidencyOrderPayment: (id) =>
+              residencyCall(() => client.getResidencyOrderPayment(id)),
+            reconcileResidencyOrder: (id, key) =>
+              residencyCall(() => client.reconcileResidencyOrder(id, key)),
+            cancelResidencyOrder: (id, key) =>
+              residencyCall(() => client.cancelResidencyOrder(id, key)),
             openResidencyPayment: (paymentUrl) => window.location.assign(paymentUrl),
           } satisfies ResidencyGateway,
         }

@@ -1,92 +1,91 @@
 import type { ClientResidencyStatus } from '@phub/api-sdk';
 
 /**
- * Typed client adapter for residency. The status read is the merged server method
- * `GET /residency` (ADR 0027). The purchase operations follow the provisional contract in
- * docs/contracts/residency-purchase.md; until the server owner is deployed the capability read
- * fails or answers `available: false` and the UI says so. Nothing here is a mock: offers, prices,
- * validity and payment outcome are only ever rendered from validated server responses.
+ * Typed client adapter for residency.
+ *
+ * - Status: the merged LK2 read `GET /residency` (ADR 0027).
+ * - Orders: the LK2 surface of the LK1 residency lifecycle owner (Z6v6e6r/lk#443). Shapes follow
+ *   that owner verbatim (docs/contracts/residency-purchase.md). Until the LK2 surface is deployed
+ *   the catalog read fails and the screen says purchase is unavailable.
+ *
+ * Nothing here is a mock: product, price, term, benefits, renewal rule, payment link and
+ * activation are only ever rendered from validated server responses. Unknown extra fields are
+ * ignored; every field the UI uses is validated.
  */
 export interface ResidencyGateway {
   /** Stable account epoch; a change invalidates every in-flight command and its result. */
   readonly residencyPrincipal: () => string | null;
   readonly getClientResidency: () => Promise<ClientResidencyStatus>;
-  readonly getResidencyPurchaseCapability: () => Promise<unknown>;
-  readonly quoteResidencyPurchase: (offerId: string, key: string) => Promise<unknown>;
-  readonly purchaseResidency: (input: ResidencyPurchaseConsent, key: string) => Promise<unknown>;
-  readonly getResidencyPurchase: (key: string) => Promise<unknown>;
-  readonly reconcileResidencyPurchase: (operationId: string, key: string) => Promise<unknown>;
-  readonly launchResidencyPayment: (operationId: string, key: string) => Promise<unknown>;
+  readonly getResidencyCatalog: () => Promise<unknown>;
+  readonly createResidencyOrder: (mode: ResidencyOrderMode, key: string) => Promise<unknown>;
+  readonly getResidencyOrder: (orderId: string) => Promise<unknown>;
+  readonly getResidencyOrderPayment: (orderId: string) => Promise<unknown>;
+  readonly reconcileResidencyOrder: (orderId: string, key: string) => Promise<unknown>;
+  readonly cancelResidencyOrder: (orderId: string, key: string) => Promise<unknown>;
   /** Leaves the app for the server-issued payment page. Never receives payment details. */
   readonly openResidencyPayment: (paymentUrl: string) => void;
 }
 
-export interface ResidencyOffer {
-  readonly offerId: string;
+export type ResidencyOrderMode = 'NEW' | 'RENEWAL';
+
+export interface ResidencyCatalog {
+  readonly productId: string;
   readonly title: string;
-  readonly description: string | null;
-  readonly durationLabel: string;
-  readonly amountMinor: number;
+  readonly termDays: number;
+  readonly priceMinor: number;
   readonly currency: 'RUB';
+  /** Only plain-text server benefits are shown; the owner currently publishes none. */
   readonly benefits: readonly string[];
+  readonly checkedAt: string;
 }
-export interface ResidencyCapability {
-  readonly available: boolean;
-  readonly offers: readonly ResidencyOffer[];
-}
-export interface ResidencyQuote {
-  readonly contractVersion: 1;
-  readonly operationId: string;
-  readonly offerId: string;
-  readonly title: string;
-  readonly revision: string;
-  readonly amountMinor: number;
-  readonly currency: 'RUB';
-  readonly validFrom: string;
-  readonly validUntil: string;
-  readonly expiresAt: string;
-}
-export const RESIDENCY_OPERATION_STATUSES = [
-  'QUOTED',
-  'PAYMENT_PENDING',
-  'CONFIRMING',
-  'ACTIVATED',
+
+export const RESIDENCY_ORDER_STATES = [
+  'PENDING_PAYMENT',
   'PAYMENT_FAILED',
   'EXPIRED',
-  'UNKNOWN',
+  'CANCELLED',
+  'PAID',
+  'PAID_ACTIVATION_PENDING',
+  'ACTIVE',
+  'ACTIVATION_FAILED',
+  'PAID_REQUIRES_REVIEW',
 ] as const;
-export type ResidencyOperationStatus = (typeof RESIDENCY_OPERATION_STATUSES)[number];
-export interface ResidencyPurchaseResult {
-  readonly operationId: string;
-  readonly offerId: string;
-  readonly status: ResidencyOperationStatus;
-  readonly amountMinor: number | null;
-  readonly currency: 'RUB';
-  readonly canOpenPayment: boolean;
+export type ResidencyOrderState = (typeof RESIDENCY_ORDER_STATES)[number];
+const PAYMENT_STATUSES = ['NONE', 'PENDING', 'PAID', 'FAILED', 'UNKNOWN'] as const;
+export type ResidencyPaymentStatus = (typeof PAYMENT_STATUSES)[number];
+
+export interface ResidencyOrder {
+  readonly orderId: string;
+  readonly mode: ResidencyOrderMode;
+  readonly state: ResidencyOrderState;
+  readonly title: string;
+  readonly totalMinor: number;
+  readonly paymentStatus: ResidencyPaymentStatus;
+  readonly paymentUrl: string | null;
   readonly paymentExpiresAt: string | null;
-  readonly failureCode: string | null;
+  readonly residencyValidUntil: string | null;
 }
-export interface ResidencyPurchaseConsent {
-  readonly offerId: string;
-  readonly expectedRevision: string;
-  readonly amountMinor: number;
-  readonly currency: 'RUB';
-}
-export interface ResidencyPaymentLaunch {
-  readonly operationId: string;
-  readonly paymentUrl: string;
-  readonly expiresAt: string;
+export interface ResidencyPayment {
+  readonly orderId: string;
+  readonly state: ResidencyOrderState;
+  readonly paymentStatus: ResidencyPaymentStatus;
+  readonly paymentUrl: string | null;
+  readonly expiresAt: string | null;
 }
 export interface ResidencyPrincipal {
   readonly tenantId: string;
   readonly userId: string;
 }
-/** Only the idempotency key and the server quote are kept; no payment details ever. */
+/**
+ * Only the idempotency key, the requested mode and the server order id are kept; never a price,
+ * payment link or payment details. `orderId` is null until the create response arrives: a reload
+ * then repeats the create with the same key, which the owner answers with the same order.
+ */
 export interface ResidencyCustody extends ResidencyPrincipal {
-  readonly version: 1;
+  readonly version: 2;
   readonly key: string;
-  readonly submitted: boolean;
-  readonly quote: ResidencyQuote | null;
+  readonly mode: ResidencyOrderMode;
+  readonly orderId: string | null;
 }
 
 export class ResidencyContractError extends Error {
@@ -97,199 +96,127 @@ export class ResidencyContractError extends Error {
 const fail = (): never => {
   throw new ResidencyContractError();
 };
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const uuid = (v: unknown): v is string => typeof v === 'string' && UUID.test(v);
 const text = (v: unknown, max = 200): v is string =>
   typeof v === 'string' && v.trim().length > 0 && v.length <= max;
 const instant = (v: unknown): v is string =>
-  typeof v === 'string' && Number.isFinite(Date.parse(v)) && new Date(v).toISOString() === v;
-const day = (v: unknown): v is string =>
-  typeof v === 'string' &&
-  /^\d{4}-\d{2}-\d{2}$/.test(v) &&
-  new Date(v + 'T00:00:00.000Z').toISOString().slice(0, 10) === v;
+  typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) && Number.isFinite(Date.parse(v));
 const money = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
-function exact(v: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (
-    !v ||
-    typeof v !== 'object' ||
-    Array.isArray(v) ||
-    Object.keys(v).sort().join() !== [...keys].sort().join()
-  )
-    return fail();
+const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T =>
+  typeof v === 'string' && (list as readonly string[]).includes(v);
+function object(v: unknown): Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return fail();
   return v as Record<string, unknown>;
 }
-
-export function parseResidencyCapability(v: unknown): ResidencyCapability {
-  const c = exact(v, ['contractVersion', 'available', 'offers']);
-  if (c.contractVersion !== 1 || typeof c.available !== 'boolean' || !Array.isArray(c.offers))
-    return fail();
-  if (c.offers.length > 20) return fail();
-  const ids = new Set<string>();
-  const offers = c.offers.map((raw): ResidencyOffer => {
-    const o = exact(raw, [
-      'offerId',
-      'title',
-      'description',
-      'durationLabel',
-      'amountMinor',
-      'currency',
-      'benefits',
-    ]);
-    if (
-      !uuid(o.offerId) ||
-      ids.has(o.offerId) ||
-      !text(o.title) ||
-      (o.description !== null && !text(o.description, 1000)) ||
-      !text(o.durationLabel, 80) ||
-      !money(o.amountMinor) ||
-      o.currency !== 'RUB' ||
-      !Array.isArray(o.benefits) ||
-      o.benefits.length > 20 ||
-      !o.benefits.every((b) => text(b, 300))
-    )
-      return fail();
-    ids.add(o.offerId);
-    return {
-      offerId: o.offerId,
-      title: o.title,
-      description: o.description,
-      durationLabel: o.durationLabel,
-      amountMinor: o.amountMinor,
-      currency: 'RUB',
-      benefits: o.benefits,
-    };
-  });
-  // An enabled purchase without a single offer is not trustworthy; an offer list on a disabled
-  // capability is still shown as conditions only.
-  if (c.available && offers.length === 0) return fail();
-  return { available: c.available, offers };
-}
-
-export function parseResidencyQuote(v: unknown, offerId?: string): ResidencyQuote {
-  const q = exact(v, [
-    'contractVersion',
-    'operationId',
-    'offerId',
-    'title',
-    'revision',
-    'amountMinor',
-    'currency',
-    'validFrom',
-    'validUntil',
-    'expiresAt',
-  ]);
-  if (
-    q.contractVersion !== 1 ||
-    !uuid(q.operationId) ||
-    !uuid(q.offerId) ||
-    (offerId !== undefined && q.offerId !== offerId) ||
-    !text(q.title) ||
-    !text(q.revision, 200) ||
-    !money(q.amountMinor) ||
-    q.currency !== 'RUB' ||
-    !day(q.validFrom) ||
-    !day(q.validUntil) ||
-    q.validUntil < q.validFrom ||
-    !instant(q.expiresAt)
-  )
-    return fail();
-  return {
-    contractVersion: 1,
-    operationId: q.operationId,
-    offerId: q.offerId,
-    title: q.title,
-    revision: q.revision,
-    amountMinor: q.amountMinor,
-    currency: 'RUB',
-    validFrom: q.validFrom,
-    validUntil: q.validUntil,
-    expiresAt: q.expiresAt,
-  };
-}
-
-export function parseResidencyResult(
-  v: unknown,
-  custody: ResidencyCustody,
-): ResidencyPurchaseResult {
-  const r = exact(v, [
-    'contractVersion',
-    'operationId',
-    'offerId',
-    'status',
-    'amountMinor',
-    'currency',
-    'canOpenPayment',
-    'paymentExpiresAt',
-    'failureCode',
-  ]);
-  const status = r.status as ResidencyOperationStatus;
-  if (
-    r.contractVersion !== 1 ||
-    !uuid(r.operationId) ||
-    !uuid(r.offerId) ||
-    (custody.quote &&
-      (r.operationId !== custody.quote.operationId || r.offerId !== custody.quote.offerId)) ||
-    !RESIDENCY_OPERATION_STATUSES.includes(status) ||
-    r.currency !== 'RUB' ||
-    (r.amountMinor !== null && !money(r.amountMinor)) ||
-    (custody.quote && r.amountMinor !== null && r.amountMinor !== custody.quote.amountMinor) ||
-    typeof r.canOpenPayment !== 'boolean' ||
-    (r.paymentExpiresAt !== null && !instant(r.paymentExpiresAt)) ||
-    (r.canOpenPayment && (status !== 'PAYMENT_PENDING' || r.paymentExpiresAt === null)) ||
-    (r.failureCode !== null &&
-      (typeof r.failureCode !== 'string' || !/^[A-Z][A-Z0-9_]{1,63}$/.test(r.failureCode)))
-  )
-    return fail();
-  return {
-    operationId: r.operationId,
-    offerId: r.offerId,
-    status,
-    amountMinor: r.amountMinor,
-    currency: 'RUB',
-    canOpenPayment: r.canOpenPayment,
-    paymentExpiresAt: r.paymentExpiresAt,
-    failureCode: r.failureCode,
-  };
-}
-
-export function parseResidencyLaunch(
-  v: unknown,
-  custody: ResidencyCustody,
-  now = Date.now(),
-): ResidencyPaymentLaunch {
-  const r = exact(v, ['contractVersion', 'operationId', 'paymentUrl', 'expiresAt']);
-  let url: URL | null;
+function httpsUrl(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'string') return fail();
+  let url: URL;
   try {
-    url = typeof r.paymentUrl === 'string' ? new URL(r.paymentUrl) : null;
+    url = new URL(v);
   } catch {
-    url = null;
-  }
-  if (
-    r.contractVersion !== 1 ||
-    !uuid(r.operationId) ||
-    r.operationId !== custody.quote?.operationId ||
-    !url ||
-    url.protocol !== 'https:' ||
-    url.username !== '' ||
-    url.password !== '' ||
-    !instant(r.expiresAt) ||
-    Date.parse(r.expiresAt) <= now
-  )
     return fail();
-  return { operationId: r.operationId, paymentUrl: url.toString(), expiresAt: r.expiresAt };
+  }
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return fail();
+  return url.toString();
 }
 
-export function residencyConsent(q: ResidencyQuote): ResidencyPurchaseConsent {
+export function parseResidencyCatalog(v: unknown): ResidencyCatalog {
+  const c = object(v);
+  const p = object(c.product);
+  if (
+    c.schemaVersion !== 1 ||
+    !uuid(p.productId) ||
+    !text(p.title) ||
+    !Number.isSafeInteger(p.termDays) ||
+    (p.termDays as number) <= 0 ||
+    !money(p.priceMinor) ||
+    p.currency !== 'RUB' ||
+    !Array.isArray(p.benefits) ||
+    p.benefits.length > 20 ||
+    !instant(c.checkedAt)
+  )
+    return fail();
   return {
-    offerId: q.offerId,
-    expectedRevision: q.revision,
-    amountMinor: q.amountMinor,
+    productId: p.productId,
+    title: p.title,
+    termDays: p.termDays as number,
+    priceMinor: p.priceMinor,
     currency: 'RUB',
+    benefits: p.benefits.filter((b): b is string => text(b, 300)),
+    checkedAt: c.checkedAt,
+  };
+}
+
+export function parseResidencyOrder(v: unknown, expectedOrderId?: string): ResidencyOrder {
+  const o = object(v);
+  const product = object(o.product);
+  const pricing = object(o.pricing);
+  const payment = object(o.payment);
+  const residency = o.residency === null ? null : object(o.residency);
+  if (
+    o.schemaVersion !== 1 ||
+    !uuid(o.orderId) ||
+    (expectedOrderId !== undefined && o.orderId.toLowerCase() !== expectedOrderId.toLowerCase()) ||
+    !oneOf(['NEW', 'RENEWAL'] as const, o.mode) ||
+    !oneOf(RESIDENCY_ORDER_STATES, o.state) ||
+    !text(product.title) ||
+    !money(pricing.totalMinor) ||
+    pricing.currency !== 'RUB' ||
+    !oneOf(PAYMENT_STATUSES, payment.status) ||
+    (payment.expiresAt !== null && !instant(payment.expiresAt)) ||
+    // Only ACTIVE carries a residency window (owner contract).
+    (o.state === 'ACTIVE' && (!residency || !instant(residency.validUntil))) ||
+    (residency !== null && residency.validUntil !== null && !instant(residency.validUntil))
+  )
+    return fail();
+  return {
+    orderId: o.orderId.toLowerCase(),
+    mode: o.mode,
+    state: o.state,
+    title: product.title,
+    totalMinor: pricing.totalMinor,
+    paymentStatus: payment.status,
+    paymentUrl: payment.status === 'PENDING' ? httpsUrl(payment.paymentUrl) : null,
+    paymentExpiresAt: payment.expiresAt,
+    residencyValidUntil: residency ? (residency.validUntil as string | null) : null,
+  };
+}
+
+/** `POST /orders`, `/reconcile` and `/cancel` wrap the order: `{ schemaVersion, order, ... }`. */
+export function parseResidencyOrderEnvelope(v: unknown, expectedOrderId?: string): ResidencyOrder {
+  const e = object(v);
+  if (e.schemaVersion !== 1) return fail();
+  return parseResidencyOrder(e.order, expectedOrderId);
+}
+
+export function parseResidencyPayment(v: unknown, orderId: string): ResidencyPayment {
+  const p = object(v);
+  if (
+    p.schemaVersion !== 1 ||
+    !uuid(p.orderId) ||
+    p.orderId.toLowerCase() !== orderId.toLowerCase() ||
+    !oneOf(RESIDENCY_ORDER_STATES, p.state) ||
+    !oneOf(PAYMENT_STATUSES, p.paymentStatus) ||
+    (p.expiresAt !== null && p.expiresAt !== undefined && !instant(p.expiresAt))
+  )
+    return fail();
+  return {
+    orderId: p.orderId.toLowerCase(),
+    state: p.state,
+    paymentStatus: p.paymentStatus,
+    // A link is usable only for an unpaid pending order; a stale link is never opened.
+    paymentUrl:
+      p.state === 'PENDING_PAYMENT' && p.paymentStatus === 'PENDING'
+        ? httpsUrl(p.paymentUrl)
+        : null,
+    expiresAt: (p.expiresAt) ?? null,
   };
 }
 
 export const residencyStorageKey = (p: ResidencyPrincipal) =>
-  'phub.residency-purchase.v1:' + p.tenantId + ':' + p.userId;
+  'phub.residency-order.v2:' + p.tenantId + ':' + p.userId;
 
 export function loadResidencyCustody(
   storage: Pick<Storage, 'getItem'>,
@@ -297,25 +224,25 @@ export function loadResidencyCustody(
 ): ResidencyCustody | null {
   const raw = storage.getItem(residencyStorageKey(p));
   if (raw === null) return null;
-  const c = exact(JSON.parse(raw), ['version', 'tenantId', 'userId', 'key', 'submitted', 'quote']);
+  const c = object(JSON.parse(raw));
   if (
-    c.version !== 1 ||
+    c.version !== 2 ||
     c.tenantId !== p.tenantId ||
     c.userId !== p.userId ||
     typeof c.key !== 'string' ||
     !/^residency:[0-9a-f-]{36}$/.test(c.key) ||
     !uuid(c.key.slice('residency:'.length)) ||
-    typeof c.submitted !== 'boolean' ||
-    (c.submitted && c.quote === null)
+    !oneOf(['NEW', 'RENEWAL'] as const, c.mode) ||
+    (c.orderId !== null && !uuid(c.orderId))
   )
     return fail();
   return {
-    version: 1,
+    version: 2,
     tenantId: p.tenantId,
     userId: p.userId,
     key: c.key,
-    submitted: c.submitted,
-    quote: c.quote === null ? null : parseResidencyQuote(c.quote),
+    mode: c.mode,
+    orderId: c.orderId,
   };
 }
 
@@ -332,19 +259,20 @@ export function clearResidencyCustody(storage: Storage, p: ResidencyPrincipal): 
 
 export function newResidencyCustody(
   p: ResidencyPrincipal,
+  mode: ResidencyOrderMode,
   randomUuid: () => string,
 ): ResidencyCustody {
   return {
-    version: 1,
+    version: 2,
     tenantId: p.tenantId,
     userId: p.userId,
     key: 'residency:' + randomUuid(),
-    submitted: false,
-    quote: null,
+    mode,
+    orderId: null,
   };
 }
 
-/** The residency read decides what the user currently has. */
+/** The independent status read decides what the user currently has. */
 export type ResidencyStatusView =
   | {
       readonly kind: 'active';
@@ -364,6 +292,7 @@ export function moscowToday(now = Date.now()): string {
     day: '2-digit',
   }).format(new Date(now));
 }
+const isDay = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 export function residencyStatusView(
   s: ClientResidencyStatus,
@@ -372,7 +301,7 @@ export function residencyStatusView(
   if (s.state === 'ACTIVE' && s.checkedAt)
     return { kind: 'active', validFrom: s.validFrom, validUntil: s.validUntil };
   if (s.state === 'NONE' && s.checkedAt) {
-    if (s.validUntil && day(s.validUntil) && s.validUntil < moscowToday(now))
+    if (isDay(s.validUntil) && s.validUntil < moscowToday(now))
       return { kind: 'expired', validUntil: s.validUntil };
     return { kind: 'none' };
   }
@@ -380,48 +309,65 @@ export function residencyStatusView(
   return { kind: 'unavailable', reason: s.unavailableReason };
 }
 
-/** What the purchase panel shows. Activation requires the server operation and the status read. */
-export type ResidencyPurchasePhase =
-  'idle' | 'quoted' | 'payment-pending' | 'confirming' | 'activated' | 'failed';
+/** What the order panel shows. Activation requires the order and the independent read. */
+export type ResidencyOrderPhase =
+  'idle' | 'creating' | 'payment-pending' | 'confirming' | 'review' | 'activated' | 'failed';
 
-export function residencyPurchasePhase(
+export function residencyOrderPhase(
   custody: ResidencyCustody | null,
-  result: ResidencyPurchaseResult | null,
+  order: ResidencyOrder | null,
   status: ResidencyStatusView | null,
-): ResidencyPurchasePhase {
+): ResidencyOrderPhase {
   if (!custody) return 'idle';
-  if (!custody.submitted) return custody.quote ? 'quoted' : 'idle';
-  if (!result) return 'confirming';
-  switch (result.status) {
-    case 'PAYMENT_PENDING':
-      return 'payment-pending';
-    case 'ACTIVATED':
-      // A returned payment page or a server ACTIVATED alone is not shown as success until the
-      // independent residency read confirms the active residency.
-      return status?.kind === 'active' ? 'activated' : 'confirming';
-    case 'PAYMENT_FAILED':
-    case 'EXPIRED':
-      return 'failed';
-    case 'QUOTED':
-      return 'quoted';
-    default:
+  if (!custody.orderId || !order) return 'creating';
+  switch (order.state) {
+    case 'PENDING_PAYMENT':
+      return order.paymentStatus === 'UNKNOWN' ? 'confirming' : 'payment-pending';
+    case 'PAID':
+    case 'PAID_ACTIVATION_PENDING':
       return 'confirming';
+    case 'ACTIVE':
+      // Neither a returned payment page nor the order alone is success: the independent
+      // residency read must confirm the active residency too.
+      return status?.kind === 'active' ? 'activated' : 'confirming';
+    case 'ACTIVATION_FAILED':
+    case 'PAID_REQUIRES_REVIEW':
+      return 'review';
+    default:
+      return 'failed';
   }
 }
 
-const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
-  PAYMENT_DECLINED: 'Платёж отклонён банком. Резидентство не оформлено.',
-  PAYMENT_CANCELLED: 'Оплата отменена.',
-  PAYMENT_EXPIRED: 'Время на оплату истекло.',
-  QUOTE_EXPIRED: 'Предложение устарело. Запросите стоимость заново.',
-  OFFER_UNAVAILABLE: 'Это предложение больше недоступно.',
+export function residencyFailureMessage(order: ResidencyOrder | null): string {
+  switch (order?.state) {
+    case 'EXPIRED':
+      return 'Время на оплату истекло. Резидентство не оформлено.';
+    case 'CANCELLED':
+      return 'Заказ отменён. Резидентство не оформлено.';
+    default:
+      return 'Оплата не прошла. Резидентство не оформлено.';
+  }
+}
+
+/** Stable owner error codes the UI explains; anything else is a generic failure. */
+const ORDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  RESIDENCY_ORDER_ALREADY_PENDING:
+    'У вас уже есть неоплаченный заказ резидентства. Оплатите его или дождитесь, пока он истечёт.',
+  RESIDENCY_RENEWAL_REQUIRED: 'Резидентство уже активно — доступно продление.',
+  RESIDENCY_RENEWAL_NOT_ELIGIBLE: 'Продление недоступно: активного резидентства нет.',
+  RESIDENCY_ORDER_PAID: 'Заказ уже оплачен и не может быть отменён. Ждём активации.',
+  RESIDENCY_ORDER_NOT_CANCELLABLE: 'Этот заказ уже нельзя отменить.',
+  RESIDENCY_PRODUCT_TERMS_MISMATCH: 'Условия резидентства изменились. Оформление приостановлено.',
+  RESIDENCY_RATE_LIMITED: 'Слишком много запросов. Попробуйте через минуту.',
 };
-export function residencyFailureMessage(result: ResidencyPurchaseResult | null): string {
-  if (result?.status === 'EXPIRED') return 'Время на оплату истекло. Резидентство не оформлено.';
-  return (
-    (result?.failureCode ? FAILURE_MESSAGES[result.failureCode] : undefined) ??
-    'Оплата не прошла. Резидентство не оформлено.'
-  );
+export function residencyErrorCode(error: unknown): string | null {
+  return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : null;
+}
+export function residencyErrorMessage(error: unknown, fallback: string): string {
+  const code = residencyErrorCode(error);
+  return (code ? ORDER_ERROR_MESSAGES[code] : undefined) ?? fallback;
 }
 
 const UNAVAILABLE_MESSAGES: Readonly<Record<string, string>> = {
@@ -444,11 +390,25 @@ export function formatRub(amountMinor: number): string {
   }).format(amountMinor / 100);
 }
 
+/** Accepts a business day (`YYYY-MM-DD`) or an instant; renders the Moscow calendar day. */
 export function formatDay(value: string): string {
-  return new Date(value + 'T12:00:00.000Z').toLocaleDateString('ru-RU', {
+  const date = isDay(value) ? new Date(value + 'T12:00:00.000Z') : new Date(value);
+  return date.toLocaleDateString('ru-RU', {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
     timeZone: 'Europe/Moscow',
   });
+}
+
+export function formatTerm(days: number): string {
+  const mod10 = days % 10,
+    mod100 = days % 100;
+  const word =
+    mod10 === 1 && mod100 !== 11
+      ? 'день'
+      : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)
+        ? 'дня'
+        : 'дней';
+  return `${days} ${word}`;
 }

@@ -83,7 +83,7 @@ proven), not `NONE`. A frozen or held instance is not active residency even if i
 
 ## Client presentation
 
-The web cabinet shows the status at `/residency` and drives purchase/renewal through the provisional
+The web cabinet shows the status at `/residency` and drives purchase/renewal through the
 [residency purchase contract](../contracts/residency-purchase.md). A failed or `UNAVAILABLE` read is
 shown as "status unavailable", never as absence; activation is shown only after this read is `ACTIVE`.
 
