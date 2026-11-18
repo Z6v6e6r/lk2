@@ -170,9 +170,13 @@ const trainingPage = {
   staleAt: '2026-07-29T09:05:00.000Z',
 };
 
-const jobsByScreen = new Map();
-const readJobFor = (screen) => ({
-  jobId: `perf-read-job-${screen}`,
+// A job id is unique per run: a delayed /complete from an earlier document keeps its originating
+// run even when a later epoch is already open. The measurement uses this to prove that a Home
+// read-job continuation cannot land in the cold Profile run.
+const jobsById = new Map();
+let jobSequence = 0;
+const readJobFor = (screen, runId) => ({
+  jobId: `perf-read-job-${screen}-${runId ?? 'detached'}-${++jobSequence}`,
   screen,
   state: 'READY',
   commands: [],
@@ -239,10 +243,10 @@ const routes = [
   [
     'POST',
     /\/booking-screen-read-jobs$/,
-    (_request, body) => {
+    (_request, body, context) => {
       const screen = typeof body?.screen === 'string' ? body.screen : 'FOR_ME';
-      const job = readJobFor(screen);
-      jobsByScreen.set(job.jobId, screen);
+      const job = readJobFor(screen, context?.runId);
+      jobsById.set(job.jobId, { screen, runId: context?.runId ?? null });
       return job;
     },
     'read-job-start',
@@ -250,7 +254,14 @@ const routes = [
   [
     'GET',
     /\/booking-screen-read-jobs\/[^/]+$/,
-    (request) => readJobFor(jobsByScreen.get(request.url.split('/').at(-1)) ?? 'FOR_ME'),
+    (request) => {
+      const jobId = request.url.split('/').at(-1) ?? '';
+      const record = jobsById.get(jobId);
+      return {
+        ...readJobFor(record?.screen ?? 'FOR_ME', record?.runId ?? 'poll'),
+        jobId,
+      };
+    },
     'read-job-poll',
   ],
   [
@@ -258,7 +269,8 @@ const routes = [
     /\/booking-screen-read-jobs\/[^/]+\/complete$/,
     (request) => {
       const jobId = request.url.split('/').at(-2) ?? '';
-      const screen = jobsByScreen.get(jobId) ?? 'FOR_ME';
+      const record = jobsById.get(jobId);
+      const screen = record?.screen ?? 'FOR_ME';
       const completion = { jobId, screen, state: 'READY' };
       if (screen === 'EVENT_CATALOG') return { ...completion, catalog: eventCatalogPage };
       if (screen === 'GROUP_TRAININGS') return { ...completion, trainings: trainingPage };
@@ -322,10 +334,14 @@ function readJsonBody(request) {
 // ---------------------------------------------------------------------------------------------
 // Run-epoch accounting.
 //
-// A request belongs to the run that was open when the request STARTED. Each run gets its own list,
+// A request belongs to the document/run that issued it. The page sends its own run id in
+// `X-Perf-Run-Id`, and a booking-screen read-job carries its origin run in the job id; those are
+// resolved at request arrival, before any `await` (including the POST body read). Only a request
+// without either signal falls back to the epoch that is open at arrival. Each run gets its own list,
 // and `end` freezes a snapshot: a response that arrives later still belongs to its original run, but
-// it cannot change a snapshot that was already taken. Cumulative counters are never reset; the
-// measurement reads per-run snapshots instead of clearing global state.
+// it cannot change a snapshot that was already taken, and a live readback exposes the late change.
+// Cumulative counters are never reset; the measurement reads per-run snapshots instead of clearing
+// global state.
 // ---------------------------------------------------------------------------------------------
 const runs = new Map();
 const cumulative = { requests: 0, bytes: 0, byEndpoint: new Map() };
@@ -344,6 +360,7 @@ function beginRun(label) {
     closedAt: null,
     requests: [],
     snapshot: null,
+    lateStarts: 0,
     lateCompletions: 0,
   });
   currentRunId = id;
@@ -390,6 +407,7 @@ function freezeRun(id) {
     closedAt: run.closedAt,
     requests: run.requests.map((request) => ({ ...request })),
     aggregates: runAggregates(run),
+    lateStarts: run.lateStarts,
     lateCompletions: run.lateCompletions,
   };
   return run.snapshot;
@@ -403,8 +421,10 @@ function runLive(run) {
     closedAt: run.closedAt,
     requests: run.requests.map((request) => ({ ...request })),
     aggregates: runAggregates(run),
+    lateStarts: run.lateStarts,
     lateCompletions: run.lateCompletions,
     snapshotTaken: Boolean(run.snapshot),
+    snapshotTakenAt: run.snapshot ? run.snapshot.closedAt : null,
   };
 }
 
@@ -423,11 +443,32 @@ function runView(id) {
   };
 }
 
-function startRequest({ endpoint, method, path }) {
-  const runId = currentRunId;
+// Resolved synchronously at request arrival, before the body read or any other await.
+function attributeRequest(request, path) {
+  const jobId = readJobIdFromPath(path);
+  const jobRunId = jobId ? jobsById.get(jobId)?.runId : undefined;
+  if (jobRunId && runs.has(jobRunId)) return { runId: jobRunId, attributedBy: 'read-job-origin' };
+  const header = request.headers['x-perf-run-id'];
+  const headerRunId = Array.isArray(header) ? header[0] : header;
+  if (headerRunId && runs.has(headerRunId)) {
+    return { runId: headerRunId, attributedBy: 'document-header' };
+  }
+  if (currentRunId && runs.has(currentRunId)) {
+    return { runId: currentRunId, attributedBy: 'open-epoch' };
+  }
+  return { runId: null, attributedBy: 'unattributed' };
+}
+
+function readJobIdFromPath(path) {
+  const match = path.match(/\/booking-screen-read-jobs\/([^/]+)(?:\/complete|\/results\/[^/]+)?$/);
+  return match ? decodeURIComponent(match[1]) : undefined;
+}
+
+function startRequest({ endpoint, method, path, runId, attributedBy }) {
   const request = {
     id: `request-${++requestSequence}`,
     runId,
+    attributedBy,
     endpoint,
     method,
     path,
@@ -438,16 +479,21 @@ function startRequest({ endpoint, method, path }) {
     bytes: 0,
   };
   const run = runId ? runs.get(runId) : undefined;
-  if (run) run.requests.push(request);
-  else unattributed.push(request);
+  if (run) {
+    run.requests.push(request);
+    if (run.closed) run.lateStarts += 1;
+  } else {
+    unattributed.push(request);
+  }
   return request;
 }
 
-function completeRequest(request, { status, bytes }) {
+function completeRequest(request, { status, bytes, meta }) {
   request.completed = true;
   request.endAt = Date.now();
   request.status = status;
   request.bytes = bytes;
+  if (meta) request.meta = meta;
   cumulative.requests += 1;
   cumulative.bytes += bytes;
   const key = `${request.method} ${request.path}`;
@@ -519,6 +565,33 @@ function serveStatic(request, response, pathname) {
   );
 }
 
+// Served beside the body, not inside it: the harness checks the completed job's screen and the ids
+// it returned against the DOM the page actually rendered.
+function responseMeta(name, request, body) {
+  if (name === 'read-job-start' || name === 'read-job-poll') {
+    const record = jobsById.get(body?.jobId);
+    return { jobId: body?.jobId, screen: body?.screen, jobRunId: record?.runId ?? null };
+  }
+  if (name === 'read-job-complete') {
+    const jobId = request.url.split('/').at(-2) ?? '';
+    const record = jobsById.get(jobId);
+    const catalogItemIds = (body?.catalog?.items ?? [])
+      .map((item) => item?.game?.id)
+      .filter((id) => typeof id === 'string');
+    const recommendationIds = (body?.page?.items ?? [])
+      .map((item) => item?.game?.id)
+      .filter((id) => typeof id === 'string');
+    return {
+      jobId,
+      screen: body?.screen,
+      jobRunId: record?.runId ?? null,
+      catalogItemIds,
+      recommendationIds,
+    };
+  }
+  return undefined;
+}
+
 const server = createServer(async (request, response) => {
   response.req = request;
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -550,6 +623,26 @@ const server = createServer(async (request, response) => {
       200,
       { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
       Buffer.from(JSON.stringify(snapshot)),
+    );
+  }
+  const runLiveGet = path.match(/^\/__perf\/run\/([^/]+)\/live$/);
+  if (runLiveGet) {
+    // Live readback after the snapshot: it exposes completions that arrived after the freeze without
+    // changing the frozen snapshot returned by /__perf/run/:id.
+    const run = runs.get(decodeURIComponent(runLiveGet[1]));
+    if (!run) {
+      return send(
+        response,
+        404,
+        { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
+        Buffer.from(JSON.stringify({ code: 'RUN_NOT_FOUND' })),
+      );
+    }
+    return send(
+      response,
+      200,
+      { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' },
+      Buffer.from(JSON.stringify(runLive(run))),
     );
   }
   const runGet = path.match(/^\/__perf\/run\/([^/]+)$/);
@@ -613,15 +706,27 @@ const server = createServer(async (request, response) => {
     : undefined;
   if (route) {
     const [, , handler, name] = route;
+    // Attribution is fixed here, at arrival, before the POST body is read: a later epoch cannot move
+    // this request, and a slow body read cannot either.
+    const attribution = attributeRequest(request, path);
+    const tracked = startRequest({
+      endpoint: name,
+      method: request.method,
+      path,
+      runId: attribution.runId,
+      attributedBy: attribution.attributedBy,
+    });
     const requestBody = await readJsonBody(request);
-    // The run is claimed at request start, before any latency, so a slow response cannot be
-    // attributed to the next run.
-    const tracked = startRequest({ endpoint: name, method: request.method, path });
     const delayOverride = Number(url.searchParams.get('perfDelayMs'));
     const delay = Number.isFinite(delayOverride) && delayOverride > 0 ? delayOverride : latencyMs;
     await new Promise((resolve) => setTimeout(resolve, delay));
-    const body = Buffer.from(JSON.stringify(handler(request, requestBody)));
-    completeRequest(tracked, { status: 200, bytes: body.length });
+    const responseBody = handler(request, requestBody, { runId: attribution.runId });
+    const body = Buffer.from(JSON.stringify(responseBody));
+    completeRequest(tracked, {
+      status: 200,
+      bytes: body.length,
+      meta: responseMeta(name, request, responseBody),
+    });
     return send(
       response,
       200,
@@ -643,7 +748,14 @@ const server = createServer(async (request, response) => {
     path.startsWith('/public/api/') ||
     path.startsWith('/admin/api/')
   ) {
-    const tracked = startRequest({ endpoint: 'unimplemented', method: request.method, path });
+    const attribution = attributeRequest(request, path);
+    const tracked = startRequest({
+      endpoint: 'unimplemented',
+      method: request.method,
+      path,
+      runId: attribution.runId,
+      attributedBy: attribution.attributedBy,
+    });
     await new Promise((resolve) => setTimeout(resolve, latencyMs));
     const body = Buffer.from(
       JSON.stringify({ code: 'STUB_NOT_IMPLEMENTED', message: 'No fixture for this read.' }),

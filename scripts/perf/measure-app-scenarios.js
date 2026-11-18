@@ -55,39 +55,81 @@ const variants =
       ];
 const alternating = variants.length === 2;
 
-// A required read is the data the marker must wait for. Optional enrichment is measured separately.
+// A required read is a completed response the marker owns; every entry must be present, otherwise
+// the required boundary is not observed. `screen` additionally pins the booking-screen read job.
+// The frozen baseline build has no `data-perf-*` instrumentation; each condition keeps the
+// equivalent pre-existing DOM as a fallback, so both variants are judged on the same render event.
+const BASE_HOME_DOM =
+  '(document.querySelector(\'[data-perf-screen="home"]\') !== null || ' +
+  "document.querySelector('.figma-home') !== null) && " +
+  "document.querySelector('.fh-bottom-nav') !== null && " +
+  "Array.from(document.querySelectorAll('h1,h2')).some((node) => node.textContent.trim() === 'Анна Петрова')";
+const GAMES_LIST_DOM =
+  'document.querySelector(\'[data-perf-screen="games"] .games-list [data-game-id], .games-page .games-list .game-card\') !== null';
 const SCENARIOS = {
   home: {
     path: '/',
-    dom:
-      "document.querySelector('.fh-bottom-nav') !== null && " +
-      "Array.from(document.querySelectorAll('h1,h2')).some((node) => node.textContent.trim() === 'Анна Петрова')",
-    required: ['/home/base'],
-    recommendation:
-      "document.querySelector('.booking-recommendation, .game-card') !== null || " +
-      "document.querySelector('.booking-recommendations-empty') !== null",
+    // The displayed signal is the existing Home metric (reported as «базовый Home»). The
+    // recommendations signal is separate: first recommendations applied, or a confirmed empty page.
+    signals: [
+      { name: 'displayed', condition: BASE_HOME_DOM },
+      {
+        name: 'recommendations',
+        condition:
+          'document.querySelector(\'[data-perf-ready="recommendations"], [data-perf-ready="recommendations-empty"], .booking-recommendations, .booking-recommendations-empty\') !== null',
+        empty:
+          'document.querySelector(\'[data-perf-ready="recommendations-empty"], .booking-recommendations-empty\') !== null',
+      },
+    ],
+    required: [
+      { path: '/home/base', for: ['displayed'] },
+      {
+        path: '/booking-screen-read-jobs',
+        screen: 'FOR_ME',
+        for: ['recommendations'],
+        presenceOnly: true,
+      },
+      { path: '/complete', screen: 'FOR_ME', for: ['recommendations'] },
+    ],
   },
   profile: {
     path: '/profile',
-    dom:
-      "document.querySelector('#profile-name') !== null && " +
-      "document.body.innerText.includes('Баланс')",
-    required: ['/profile'],
-    recommendation: 'false',
+    signals: [
+      {
+        name: 'displayed',
+        condition:
+          "document.querySelector('#profile-name') !== null && " +
+          "document.body.innerText.includes('Баланс')",
+      },
+      {
+        name: 'profileReady',
+        condition:
+          'document.querySelector(\'[data-perf-screen="profile"] [data-perf-ready="profile"], #profile-name\') !== null',
+      },
+    ],
+    required: [{ path: '/profile', for: ['displayed', 'profileReady'] }],
   },
   games: {
     path: '/games',
-    dom: "document.querySelectorAll('.game-card').length > 0",
-    required: ['/booking-screen-read-jobs', '/complete'],
-    recommendation: "document.querySelectorAll('.game-card').length > 0",
+    signals: [
+      { name: 'displayed', condition: GAMES_LIST_DOM },
+      {
+        name: 'catalog',
+        condition:
+          'document.querySelector(\'[data-perf-ready="catalog"], .games-page .games-list .game-card\') !== null',
+      },
+    ],
+    required: [
+      { path: '/booking-screen-read-jobs', screen: 'EVENT_CATALOG', for: ['displayed', 'catalog'] },
+      { path: '/complete', screen: 'EVENT_CATALOG', for: ['displayed', 'catalog'] },
+    ],
+    cardScreen: 'games',
   },
   repeat: {
     path: '/',
     warm: 'home',
-    dom:
-      "document.querySelector('.fh-bottom-nav') !== null && " +
-      "Array.from(document.querySelectorAll('h1,h2')).some((node) => node.textContent.trim() === 'Анна Петрова')",
-    required: ['/home/base'],
+    signals: [{ name: 'displayed', condition: BASE_HOME_DOM }],
+    required: [{ path: '/home/base', for: ['displayed'] }],
   },
   nav: {
     // Home is loaded first, then an in-app transition to Games, whose cards need a data read. The
@@ -95,8 +137,19 @@ const SCENARIOS = {
     path: '/',
     warm: 'home',
     spaPath: '/games',
-    dom: "document.querySelectorAll('.game-card').length > 0",
-    required: ['/complete'],
+    signals: [
+      { name: 'displayed', condition: GAMES_LIST_DOM },
+      {
+        name: 'catalog',
+        condition:
+          'document.querySelector(\'[data-perf-ready="catalog"], .games-page .games-list .game-card\') !== null',
+      },
+    ],
+    required: [
+      { path: '/booking-screen-read-jobs', screen: 'EVENT_CATALOG', for: ['displayed', 'catalog'] },
+      { path: '/complete', screen: 'EVENT_CATALOG', for: ['displayed', 'catalog'] },
+    ],
+    cardScreen: 'games',
   },
 };
 
@@ -235,6 +288,44 @@ const INSTRUMENT =
   'try { new PerformanceObserver((list) => { const entries = list.getEntries(); if (entries.length) window.__PHUB_MARKS.lcp = entries[entries.length - 1].startTime; }).observe({ type: "largest-contentful-paint", buffered: true }); } catch (error) {}' +
   '})();';
 
+// The stand owns one explicit provenance signal: every request from this document carries the run
+// id captured here, and the in-page transition switches it at the action mark. The stub resolves it
+// at arrival, so a new epoch cannot re-attribute an old document's continuation.
+function requestAttributionScript(runId) {
+  return (
+    'window.__PHUB_RUN_ID = ' +
+    JSON.stringify(runId) +
+    ';' +
+    'window.__PHUB_REQUEST_RUN_ID = ' +
+    JSON.stringify(runId) +
+    ';' +
+    'window.__PHUB_SIGNALS = {};' +
+    'window.__PHUB_NAV_START = 0;' +
+    '(() => {' +
+    'const phubRunHeader = () => window.__PHUB_REQUEST_RUN_ID || window.__PHUB_RUN_ID;' +
+    'const phubOriginalFetch = window.fetch.bind(window);' +
+    'window.fetch = function (input, init) {' +
+    '  const options = init || {};' +
+    '  const baseHeaders = options.headers || ' +
+    '(typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined);' +
+    '  const headers = new Headers(baseHeaders);' +
+    '  headers.set("X-Perf-Run-Id", phubRunHeader());' +
+    '  return phubOriginalFetch(input, Object.assign({}, options, { headers }));' +
+    '};' +
+    'const phubSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;' +
+    'XMLHttpRequest.prototype.setRequestHeader = function (name, value) {' +
+    '  if (String(name).toLowerCase() === "x-perf-run-id") return;' +
+    '  return phubSetRequestHeader.call(this, name, value);' +
+    '};' +
+    'const phubSend = XMLHttpRequest.prototype.send;' +
+    'XMLHttpRequest.prototype.send = function (body) {' +
+    '  try { phubSetRequestHeader.call(this, "X-Perf-Run-Id", phubRunHeader()); } catch (error) {}' +
+    '  return phubSend.call(this, body);' +
+    '};' +
+    '})();'
+  );
+}
+
 const PAGE_STATE =
   '(() => {' +
   'const navigation = performance.getEntriesByType("navigation")[0];' +
@@ -245,44 +336,77 @@ const PAGE_STATE =
   '}));' +
   'return {' +
   '  timeOrigin: performance.timeOrigin,' +
+  '  now: performance.now(),' +
   '  navigationStart: navigation ? navigation.startTime : 0,' +
   '  domContentLoaded: navigation ? navigation.domContentLoadedEventEnd : null,' +
   '  loadEvent: navigation ? navigation.loadEventEnd : null,' +
   '  lcp: window.__PHUB_MARKS ? window.__PHUB_MARKS.lcp : null,' +
-  '  mark: window.__PHUB_MARK ?? null,' +
+  '  signals: window.__PHUB_SIGNALS ?? {},' +
   '  errors: window.__PHUB_ERRORS ?? [],' +
   '  resources' +
   '};' +
   '})()';
 
+// Each signal records its own DOM-at time and its own double-rAF displayed time. The base signal is
+// the existing displayed metric; the extra signals are separate readiness markers.
 function markerExpression(runId, scenario) {
-  const config = SCENARIOS[scenario];
+  const signals = SCENARIOS[scenario].signals;
+  let body = '';
+  signals.forEach((signal, index) => {
+    const ref = 'signal' + String(index);
+    body +=
+      'let ' +
+      ref +
+      ' = window.__PHUB_SIGNALS.' +
+      signal.name +
+      ';' +
+      'if (!' +
+      ref +
+      ') {' +
+      '  if (' +
+      signal.condition +
+      ') {' +
+      '    ' +
+      ref +
+      ' = window.__PHUB_SIGNALS.' +
+      signal.name +
+      ' = {' +
+      '      domAt: performance.now(), displayedAt: null' +
+      (signal.empty ? ', empty: Boolean(' + signal.empty + ')' : '') +
+      '    };' +
+      '    requestAnimationFrame(() => requestAnimationFrame(() => {' +
+      '      ' +
+      ref +
+      '.displayedAt = performance.now();' +
+      '      ' +
+      ref +
+      '.lcpAfterDisplay = window.__PHUB_MARKS ? window.__PHUB_MARKS.lcp : null;' +
+      '    }));' +
+      '  }' +
+      '}' +
+      'if (!' +
+      ref +
+      ' || ' +
+      ref +
+      '.displayedAt === null) all = false;' +
+      'result.' +
+      signal.name +
+      ' = ' +
+      ref +
+      ' ?? null;';
+  });
   return (
     '(() => {' +
-    'if (window.__PHUB_RUN_ID !== "' +
-    runId +
-    '") return { ok: false, reason: "stale-document" };' +
-    'const dom = (' +
-    config.dom +
-    ');' +
-    'if (!dom) return { ok: false };' +
-    'if (!window.__PHUB_MARK) {' +
-    '  window.__PHUB_MARK = {' +
-    '    domAt: performance.now(),' +
-    '    displayedAt: null,' +
-    '    recommendationVisible: Boolean(' +
-    (config.recommendation ?? 'false') +
-    ')' +
-    '  };' +
-    '  requestAnimationFrame(() => requestAnimationFrame(() => {' +
-    '    window.__PHUB_MARK.displayedAt = performance.now();' +
-    '    window.__PHUB_MARK.lcpAfterDisplay = window.__PHUB_MARKS ? window.__PHUB_MARKS.lcp : null;' +
-    '  }));' +
-    '}' +
+    'if (window.__PHUB_RUN_ID !== ' +
+    JSON.stringify(runId) +
+    ') ' +
+    'return { ok: false, reason: "stale-document" };' +
+    'window.__PHUB_SIGNALS = window.__PHUB_SIGNALS || {};' +
+    'const result = {};' +
+    'let all = true;' +
+    body +
     'return {' +
-    '  ok: window.__PHUB_MARK.displayedAt !== null,' +
-    '  mark: window.__PHUB_MARK,' +
-    '  errors: window.__PHUB_ERRORS ?? [],' +
+    '  ok: all, signals: result, errors: window.__PHUB_ERRORS ?? [],' +
     '  navStart: window.__PHUB_NAV_START ?? 0' +
     '};' +
     '})()'
@@ -302,18 +426,28 @@ async function waitForMarker(cdp, runId, scenario, timeoutMs = 25000) {
       return {
         timeout: false,
         pageErrors: last.errors,
-        mark: last.mark ?? null,
+        signals: last.signals ?? null,
         navStart: last.navStart ?? 0,
       };
     }
     if (last && last.ok) {
-      return { timeout: false, mark: last.mark, navStart: last.navStart ?? 0, pageErrors: [] };
+      return {
+        timeout: false,
+        signals: last.signals,
+        navStart: last.navStart ?? 0,
+        pageErrors: [],
+      };
     }
     await sleep(20);
   }
+  const signals = last?.signals ?? {};
+  const missingSignals = SCENARIOS[scenario].signals
+    .map((signal) => signal.name)
+    .filter((name) => !signals[name] || signals[name].displayedAt === null);
   return {
     timeout: true,
-    mark: last?.mark ?? null,
+    signals: last?.signals ?? null,
+    missingSignals,
     navStart: last?.navStart ?? 0,
     pageErrors: last?.errors ?? [],
   };
@@ -325,6 +459,24 @@ async function pageState(cdp) {
     returnByValue: true,
   });
   return result.result.value;
+}
+
+// Closes the previous document and waits until the blank document has committed. A new epoch is
+// opened only after this, so the old page cannot start a continuation request inside the next run.
+async function closeDocument(cdp) {
+  await cdp.send('Page.navigate', { url: 'about:blank' });
+  const started = Date.now();
+  while (Date.now() - started < 5000) {
+    const state = await cdp.send('Runtime.evaluate', {
+      expression: '({ href: location.href, ready: document.readyState })',
+      returnByValue: true,
+    });
+    const value = state.result.value;
+    if (value && value.href === 'about:blank' && value.ready === 'complete') break;
+    await sleep(20);
+  }
+  // Let unload handlers and any already-aborted requests settle before the next epoch exists.
+  await sleep(80);
 }
 
 async function beginRun(url, label) {
@@ -343,6 +495,22 @@ async function endRun(url, runId) {
 async function readRun(url, runId) {
   const response = await httpJson(url + '/__perf/run/' + encodeURIComponent(runId));
   return response;
+}
+
+async function readRunLive(url, runId) {
+  return httpJson(url + '/__perf/run/' + encodeURIComponent(runId) + '/live');
+}
+
+// Freeze the snapshot only after this run has no in-flight request, so the completed count and the
+// document's API resource entries share one boundary. The displayed time was already captured.
+async function waitForRunIdle(url, runId, timeoutMs = 1500) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const live = await readRunLive(url, runId).catch(() => undefined);
+    if (live?.body?.aggregates && live.body.aggregates.inFlight === 0) return live;
+    await sleep(25);
+  }
+  return readRunLive(url, runId).catch(() => undefined);
 }
 
 function resourcesSince(resources, sinceMs) {
@@ -365,14 +533,53 @@ function groupStats(resources, group) {
   };
 }
 
-function requiredEndMs(resources, requiredPaths) {
-  const matching = resources.filter(
-    (entry) =>
-      entry.group === 'api' &&
-      requiredPaths.some((fragment) => new URL(entry.name).pathname.endsWith(fragment)),
+// Every required response must be present, and a `screen` descriptor must match a completed
+// booking-screen read job in the frozen run. One arbitrary /complete is not enough.
+// A read-job URL carries its originating run in the job id. A continuation from the warm Home
+// document is visible on the transition page timeline but belongs to the warm run, not this one.
+function jobRunIdFromPath(pathname) {
+  const match = pathname.match(
+    /\/booking-screen-read-jobs\/([^/]+)(?:\/complete|\/results\/[^/]+)?$/,
   );
-  if (matching.length === 0) return null;
-  return Math.max(...matching.map((entry) => entry.endMs));
+  if (!match) return null;
+  const jobId = decodeURIComponent(match[1]);
+  const run = jobId.match(/(run-\d+-\d+)-\d+$/);
+  return run ? run[1] : null;
+}
+
+function runScopedApiResources(resources, runId) {
+  return resources.filter((entry) => {
+    const jobRunId = jobRunIdFromPath(new URL(entry.name).pathname);
+    return !jobRunId || jobRunId === runId;
+  });
+}
+
+function requiredResponses(resources, frozen, required, beforeMs) {
+  const ends = [];
+  const missing = [];
+  for (const requirement of required) {
+    const matchingResources = resources.filter(
+      (entry) =>
+        entry.group === 'api' &&
+        new URL(entry.name).pathname.endsWith(requirement.path) &&
+        (typeof beforeMs !== 'number' || entry.startMs <= beforeMs),
+    );
+    const matchingRequests =
+      requirement.screen && frozen
+        ? frozen.requests.filter(
+            (request) =>
+              request.completed &&
+              request.path.endsWith(requirement.path) &&
+              request.meta?.screen === requirement.screen,
+          )
+        : undefined;
+    if (matchingResources.length === 0 || (matchingRequests && matchingRequests.length === 0)) {
+      missing.push(requirement);
+      continue;
+    }
+    ends.push(Math.max(...matchingResources.map((entry) => entry.endMs)));
+  }
+  return missing.length > 0 ? { endMs: null, missing } : { endMs: Math.max(...ends), missing: [] };
 }
 
 function percentileFree(values) {
@@ -459,10 +666,11 @@ async function cssCoverage(cdp) {
 }
 
 let runSequence = 0;
-
 async function measureOne(cdp, variant, scenario, options) {
   const config = SCENARIOS[scenario];
   const runLabel = variant.name + ':' + scenario + ':' + String(options.rep);
+  // The previous document is gone before the next epoch exists.
+  await closeDocument(cdp);
   const runId = await beginRun(variant.url, runLabel).catch(() => undefined);
   if (!runId) {
     return {
@@ -473,10 +681,7 @@ async function measureOne(cdp, variant, scenario, options) {
       exclusionReason: 'stub-begin-failed',
     };
   }
-  const documentRunId = 'doc-' + variant.name + '-' + String(++runSequence);
   if (!options.keepCache) await cdp.send('Network.clearBrowserCache');
-  await cdp.send('Page.navigate', { url: 'about:blank' });
-  await sleep(80);
   if (options.css) await cdp.send('CSS.startRuleUsageTracking');
   const tracing = Boolean(tracePath) && scenario === 'home';
   if (tracing) {
@@ -485,54 +690,184 @@ async function measureOne(cdp, variant, scenario, options) {
       transferMode: 'ReportEvents',
     });
   }
-  await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
-    source:
-      'window.__PHUB_RUN_ID = "' +
-      documentRunId +
-      '";' +
-      'window.__PHUB_MARK = null;' +
-      'window.__PHUB_NAV_START = 0;' +
-      INSTRUMENT,
+  const injection = await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: requestAttributionScript(runId) + INSTRUMENT,
   });
 
   const navigationStartedAt = Date.now();
   await cdp.send('Page.navigate', { url: variant.url + config.path });
-  const marker = await waitForMarker(cdp, documentRunId, scenario);
+  const marker = await waitForMarker(cdp, runId, scenario);
+  // A short settle lets a continuation that belongs to this document finish; an old document's
+  // continuation cannot enter this run at all.
+  await sleep(120);
+  await waitForRunIdle(variant.url, runId);
+  await sleep(60);
+  const state = await pageState(cdp);
   const snapshot = await endRun(variant.url, runId).catch(() => undefined);
+  if (injection?.identifier) {
+    await cdp.send('Page.removeScriptToEvaluateOnNewDocument', {
+      identifier: injection.identifier,
+    });
+  }
 
   let coverage;
   if (options.css) coverage = await cssCoverage(cdp);
   if (tracing) await captureTrace(cdp, tracePath);
 
-  const state = await pageState(cdp);
   const sinceMs = marker.navStart ?? 0;
-  const resources = resourcesSince(state.resources, sinceMs);
-  const dataAppliedMs = requiredEndMs(resources, config.required);
-  const displayedMs = marker.mark?.displayedAt != null ? marker.mark.displayedAt - sinceMs : null;
-  const domAtMs = marker.mark?.domAt != null ? marker.mark.domAt - sinceMs : null;
+  const resources = resourcesSince(state.resources, sinceMs).filter(
+    (entry) => entry.startTime <= (state.now ?? Infinity),
+  );
+  const signalValue = (name, field) => {
+    const value = marker.signals?.[name]?.[field];
+    return typeof value === 'number' ? value - sinceMs : null;
+  };
+  const displayedMs = signalValue('displayed', 'displayedAt');
+  const domAtMs = signalValue('displayed', 'domAt');
+  const recommendationsMs = signalValue('recommendations', 'displayedAt');
+  const profileReadyMs = signalValue('profileReady', 'displayedAt');
   const refresh = resources.find((entry) => entry.name.endsWith('/auth/session/refresh'));
   const apiResources = resources.filter((entry) => entry.group === 'api');
+  const runApiResources = runScopedApiResources(apiResources, runId);
   const firstApiMs =
-    apiResources.length > 0 ? Math.min(...apiResources.map((entry) => entry.startMs)) : null;
+    runApiResources.length > 0 ? Math.min(...runApiResources.map((entry) => entry.startMs)) : null;
   const lastApiMs =
-    apiResources.length > 0 ? Math.max(...apiResources.map((entry) => entry.endMs)) : null;
+    runApiResources.length > 0 ? Math.max(...runApiResources.map((entry) => entry.endMs)) : null;
 
   const frozenRaw = snapshot && snapshot.raw ? snapshot.raw : null;
-  await sleep(200);
+  await sleep(250);
   const again = await readRun(variant.url, runId).catch(() => undefined);
+  const live = await readRunLive(variant.url, runId).catch(() => undefined);
   const snapshotStable = Boolean(frozenRaw && again && again.raw === frozenRaw);
   const frozen = snapshot?.body;
+  const required = requiredResponses(resources, frozen, config.required);
+  const boundaryFor = (name) => {
+    const signalDomAt = marker.signals?.[name]?.domAt;
+    const beforeMs = typeof signalDomAt === 'number' ? signalDomAt - sinceMs + 1 : undefined;
+    return requiredResponses(
+      resources,
+      frozen,
+      config.required.filter(
+        (requirement) =>
+          (requirement.for ?? ['displayed']).includes(name) && !requirement.presenceOnly,
+      ),
+      beforeMs,
+    );
+  };
+  const requiredResponseEndMs = boundaryFor('displayed').endMs;
+  const recommendationsBoundary = marker.signals?.recommendations
+    ? boundaryFor('recommendations')
+    : undefined;
+  const profileReadyBoundary = marker.signals?.profileReady
+    ? boundaryFor('profileReady')
+    : undefined;
+
+  // Cards in the Games screen container must be the ones the completed EVENT_CATALOG job returned.
+  let gamesBinding = null;
+  if (config.cardScreen) {
+    const cardsResult = await cdp.send('Runtime.evaluate', {
+      expression:
+        "Array.from(document.querySelectorAll('.games-page .games-list .game-card')).map((node) => " +
+        'node.getAttribute("data-game-id") || ' +
+        '((node.querySelector(\'a[href^="/games/"]\') || {}).getAttribute ' +
+        '? (node.querySelector(\'a[href^="/games/"]\').getAttribute("href") || "").split("/")[2] : null))',
+      returnByValue: true,
+    });
+    const cardIds = Array.isArray(cardsResult.result.value) ? cardsResult.result.value : [];
+    const catalogCompletion = (frozen?.requests ?? [])
+      .filter(
+        (request) =>
+          request.completed &&
+          request.path.endsWith('/complete') &&
+          request.meta?.screen === 'EVENT_CATALOG',
+      )
+      .at(-1);
+    const catalogIds = catalogCompletion?.meta?.catalogItemIds ?? [];
+    gamesBinding = {
+      cardIds,
+      catalogIds,
+      cardsFromCatalog: cardIds.length > 0 && cardIds.every((id) => catalogIds.includes(id)),
+    };
+  }
 
   const exclusions = [];
-  if (marker.timeout) exclusions.push('marker-timeout');
+  if (marker.timeout) {
+    exclusions.push('marker-timeout');
+    if (marker.missingSignals?.length) {
+      exclusions.push('missing-signal:' + marker.missingSignals.join('+'));
+    }
+  }
   if (marker.pageErrors && marker.pageErrors.length > 0) exclusions.push('page-error');
   if (displayedMs === null) exclusions.push('no-display-time');
-  if (dataAppliedMs === null) exclusions.push('required-read-not-observed');
-  if (displayedMs !== null && dataAppliedMs !== null && displayedMs < dataAppliedMs - 5) {
+  if (requiredResponseEndMs === null) {
+    exclusions.push(
+      'required-read-not-observed:' +
+        required.missing
+          .map(
+            (requirement) =>
+              requirement.path + (requirement.screen ? '@' : '') + (requirement.screen ?? ''),
+          )
+          .join('+'),
+    );
+  }
+  if (
+    displayedMs !== null &&
+    requiredResponseEndMs !== null &&
+    displayedMs < requiredResponseEndMs - 5
+  ) {
     exclusions.push('displayed-before-data');
   }
   if (!frozen) exclusions.push('no-run-snapshot');
   if (!snapshotStable && frozen) exclusions.push('snapshot-not-stable');
+  if (gamesBinding && !gamesBinding.cardsFromCatalog) {
+    exclusions.push('games-cards-not-in-catalog');
+  }
+  // A cold Profile cannot own a Home base read or a booking-screen read job. Count equality with
+  // resource entries is reported as a diagnostic, not used to discard a valid timing.
+  if (
+    scenario === 'profile' &&
+    frozen &&
+    frozen.requests.some((request) =>
+      ['home-base', 'read-job-start', 'read-job-complete'].includes(request.endpoint),
+    )
+  ) {
+    exclusions.push('foreign-document-request');
+  }
+  if (
+    config.cardScreen &&
+    frozen &&
+    frozen.requests.some(
+      (request) =>
+        request.path.includes('/booking-screen-read-jobs') &&
+        request.meta?.screen !== 'EVENT_CATALOG',
+    )
+  ) {
+    exclusions.push('foreign-read-job');
+  }
+  if (
+    recommendationsMs !== null &&
+    recommendationsBoundary?.endMs != null &&
+    recommendationsMs < recommendationsBoundary.endMs - 5
+  ) {
+    exclusions.push('recommendations-before-data');
+  }
+  if (
+    profileReadyMs !== null &&
+    profileReadyBoundary?.endMs != null &&
+    profileReadyMs < profileReadyBoundary.endMs - 5
+  ) {
+    exclusions.push('profile-ready-before-data');
+  }
+
+  const signalSnapshot = (name) => {
+    const signal = marker.signals?.[name];
+    if (!signal) return null;
+    return {
+      domAtMs: signal.domAt != null ? Math.round(signal.domAt - sinceMs) : null,
+      displayedMs: signal.displayedAt != null ? Math.round(signal.displayedAt - sinceMs) : null,
+      ...(signal.empty !== undefined ? { empty: Boolean(signal.empty) } : {}),
+    };
+  };
 
   const group = (name) => groupStats(resources, name);
   const sample = {
@@ -541,29 +876,55 @@ async function measureOne(cdp, variant, scenario, options) {
     rep: options.rep,
     runId,
     label: runLabel,
-    documentRunId,
+    documentRunId: runId,
     valid: exclusions.length === 0,
     exclusionReason: exclusions.join(',') || null,
     wallClockStartedAt: navigationStartedAt,
     timeOrigin: state.timeOrigin,
     sinceMs,
+    boundary: {
+      since: options.sinceSource ?? 'document-navigation-start',
+      pageNowMs: Math.round(state.now ?? 0),
+      resourceEntries: 'PerformanceResourceTiming entries with startTime inside the boundary',
+    },
     marker: {
       domAtMs: domAtMs === null ? null : Math.round(domAtMs),
       displayedMs: displayedMs === null ? null : Math.round(displayedMs),
-      recommendationVisible: Boolean(marker.mark?.recommendationVisible),
       source: options.sinceSource ?? 'document-navigation-start',
+      signals: {
+        displayed: signalSnapshot('displayed'),
+        ...(config.signals.some((signal) => signal.name === 'recommendations')
+          ? { recommendations: signalSnapshot('recommendations') }
+          : {}),
+        ...(config.signals.some((signal) => signal.name === 'profileReady')
+          ? { profileReady: signalSnapshot('profileReady') }
+          : {}),
+        ...(config.signals.some((signal) => signal.name === 'catalog')
+          ? { catalog: signalSnapshot('catalog') }
+          : {}),
+      },
+      recommendationsEmpty: marker.signals?.recommendations
+        ? Boolean(marker.signals.recommendations.empty)
+        : null,
     },
     timings: {
       sessionRestoreMs: refresh ? Math.round(refresh.endMs) : null,
       firstApiRequestMs: firstApiMs === null ? null : Math.round(firstApiMs),
-      requiredDataAppliedMs: dataAppliedMs === null ? null : Math.round(dataAppliedMs),
+      requiredResponseEndMs:
+        requiredResponseEndMs === null ? null : Math.round(requiredResponseEndMs),
+      recommendationsResponseEndMs:
+        recommendationsBoundary?.endMs != null ? Math.round(recommendationsBoundary.endMs) : null,
+      profileReadyResponseEndMs:
+        profileReadyBoundary?.endMs != null ? Math.round(profileReadyBoundary.endMs) : null,
       lastApiResponseMs: lastApiMs === null ? null : Math.round(lastApiMs),
-      renderAfterDataMs:
-        displayedMs !== null && dataAppliedMs !== null
-          ? Math.round(displayedMs - dataAppliedMs)
+      renderAfterResponseEndMs:
+        displayedMs !== null && requiredResponseEndMs !== null
+          ? Math.round(displayedMs - requiredResponseEndMs)
           : null,
-      enrichmentAfterRequiredMs:
-        lastApiMs !== null && dataAppliedMs !== null ? Math.round(lastApiMs - dataAppliedMs) : null,
+      enrichmentAfterRequiredResponseMs:
+        lastApiMs !== null && requiredResponseEndMs !== null
+          ? Math.round(lastApiMs - requiredResponseEndMs)
+          : null,
     },
     network: {
       total:
@@ -594,9 +955,17 @@ async function measureOne(cdp, variant, scenario, options) {
             ),
           ),
           lateCompletions: frozen.lateCompletions,
+          lateCompletionsAfterClose: live?.body?.lateCompletions ?? null,
+          lateStartsAfterClose: live?.body?.lateStarts ?? null,
+          liveCompletedAfterClose: live?.body?.aggregates?.completed ?? null,
+          liveInFlightAfterClose: live?.body?.aggregates?.inFlight ?? null,
+          resourceEntries: runApiResources.length,
+          countsMatchResources: frozen.aggregates.completed === runApiResources.length,
+          requestCountsMatchResources: frozen.aggregates.requests === runApiResources.length,
           snapshotStable,
         }
       : null,
+    ...(gamesBinding ? { gamesBinding } : {}),
     pageErrors: marker.pageErrors ?? state.errors ?? [],
     ...(coverage ? { cssCoverage: coverage } : {}),
     resources,
@@ -619,84 +988,207 @@ async function measureNavigation(cdp, variant, scenario, options) {
   await sleep(1000);
   const runLabel = variant.name + ':' + scenario + ':' + String(options.rep);
   const runId = await beginRun(variant.url, runLabel).catch(() => undefined);
-  const documentRunId = 'same-document';
+  if (!runId) {
+    return {
+      variant: variant.name,
+      scenario,
+      rep: options.rep,
+      valid: false,
+      exclusionReason: 'stub-begin-failed',
+    };
+  }
+  // The document keeps its Home provenance until this mark; every request issued after it carries the
+  // transition run id, even though the stub epoch was already open before the action.
   const action = await cdp.send('Runtime.evaluate', {
     expression:
       'window.__PHUB_NAV_START = performance.now();' +
-      'window.__PHUB_MARK = null;' +
-      'window.__PHUB_RUN_ID = "' +
-      documentRunId +
-      '";' +
-      'window.history.pushState({}, "", "' +
-      config.spaPath +
-      '");' +
+      'window.__PHUB_SIGNALS = {};' +
+      'window.__PHUB_RUN_ID = ' +
+      JSON.stringify(runId) +
+      ';' +
+      'window.__PHUB_REQUEST_RUN_ID = ' +
+      JSON.stringify(runId) +
+      ';' +
+      'window.history.pushState({}, "", ' +
+      JSON.stringify(config.spaPath) +
+      ');' +
       'window.dispatchEvent(new PopStateEvent("popstate"));' +
       'window.__PHUB_NAV_START',
     returnByValue: true,
   });
   const actionAt = action.result.value;
-  const marker = await waitForMarker(cdp, documentRunId, scenario);
-  const snapshot = runId ? await endRun(variant.url, runId).catch(() => undefined) : undefined;
+  const marker = await waitForMarker(cdp, runId, scenario);
+  await sleep(120);
+  await waitForRunIdle(variant.url, runId);
+  await sleep(60);
   const state = await pageState(cdp);
-  const resources = resourcesSince(state.resources, actionAt);
-  const dataAppliedMs = requiredEndMs(resources, config.required);
-  const displayedMs = marker.mark?.displayedAt != null ? marker.mark.displayedAt - actionAt : null;
-  const domAtMs = marker.mark?.domAt != null ? marker.mark.domAt - actionAt : null;
+  const snapshot = await endRun(variant.url, runId).catch(() => undefined);
   const frozen = snapshot?.body;
   const frozenRaw = snapshot?.raw ?? null;
-  await sleep(200);
-  const again = runId ? await readRun(variant.url, runId).catch(() => undefined) : undefined;
+  await sleep(250);
+  const again = await readRun(variant.url, runId).catch(() => undefined);
+  const live = await readRunLive(variant.url, runId).catch(() => undefined);
   const snapshotStable = Boolean(frozenRaw && again && again.raw === frozenRaw);
+
+  const resources = resourcesSince(state.resources, actionAt).filter(
+    (entry) => entry.startTime <= (state.now ?? Infinity),
+  );
+  const signalValue = (name, field) => {
+    const value = marker.signals?.[name]?.[field];
+    return typeof value === 'number' ? value - actionAt : null;
+  };
+  const displayedMs = signalValue('displayed', 'displayedAt');
+  const domAtMs = signalValue('displayed', 'domAt');
+  const required = requiredResponses(resources, frozen, config.required);
+  const boundaryFor = (name) => {
+    const signalDomAt = marker.signals?.[name]?.domAt;
+    const beforeMs = typeof signalDomAt === 'number' ? signalDomAt - actionAt + 1 : undefined;
+    return requiredResponses(
+      resources,
+      frozen,
+      config.required.filter(
+        (requirement) =>
+          (requirement.for ?? ['displayed']).includes(name) && !requirement.presenceOnly,
+      ),
+      beforeMs,
+    );
+  };
+  const requiredResponseEndMs = boundaryFor('displayed').endMs;
+  const catalogBoundary = marker.signals?.catalog ? boundaryFor('catalog') : undefined;
+  const apiResources = resources.filter((entry) => entry.group === 'api');
+  const runApiResources = runScopedApiResources(apiResources, runId);
+
+  let gamesBinding = null;
+  if (config.cardScreen) {
+    const cardsResult = await cdp.send('Runtime.evaluate', {
+      expression:
+        "Array.from(document.querySelectorAll('.games-page .games-list .game-card')).map((node) => " +
+        'node.getAttribute("data-game-id") || ' +
+        '((node.querySelector(\'a[href^="/games/"]\') || {}).getAttribute ' +
+        '? (node.querySelector(\'a[href^="/games/"]\').getAttribute("href") || "").split("/")[2] : null))',
+      returnByValue: true,
+    });
+    const cardIds = Array.isArray(cardsResult.result.value) ? cardsResult.result.value : [];
+    const catalogCompletion = (frozen?.requests ?? [])
+      .filter(
+        (request) =>
+          request.completed &&
+          request.path.endsWith('/complete') &&
+          request.meta?.screen === 'EVENT_CATALOG',
+      )
+      .at(-1);
+    const catalogIds = catalogCompletion?.meta?.catalogItemIds ?? [];
+    gamesBinding = {
+      cardIds,
+      catalogIds,
+      cardsFromCatalog: cardIds.length > 0 && cardIds.every((id) => catalogIds.includes(id)),
+    };
+  }
+
   const exclusions = [];
-  if (!runId) exclusions.push('stub-begin-failed');
-  if (marker.timeout) exclusions.push('marker-timeout');
+  if (marker.timeout) {
+    exclusions.push('marker-timeout');
+    if (marker.missingSignals?.length) {
+      exclusions.push('missing-signal:' + marker.missingSignals.join('+'));
+    }
+  }
   if (marker.pageErrors && marker.pageErrors.length > 0) exclusions.push('page-error');
   if (displayedMs === null) exclusions.push('no-display-time');
-  if (dataAppliedMs === null) exclusions.push('required-read-not-observed');
-  if (displayedMs !== null && dataAppliedMs !== null && displayedMs < dataAppliedMs - 5)
+  if (requiredResponseEndMs === null) {
+    exclusions.push(
+      'required-read-not-observed:' +
+        required.missing
+          .map(
+            (requirement) =>
+              requirement.path + (requirement.screen ? '@' : '') + (requirement.screen ?? ''),
+          )
+          .join('+'),
+    );
+  }
+  if (
+    displayedMs !== null &&
+    requiredResponseEndMs !== null &&
+    displayedMs < requiredResponseEndMs - 5
+  ) {
     exclusions.push('displayed-before-data');
+  }
   if (!frozen) exclusions.push('no-run-snapshot');
   if (!snapshotStable && frozen) exclusions.push('snapshot-not-stable');
+  if (gamesBinding && !gamesBinding.cardsFromCatalog) {
+    exclusions.push('games-cards-not-in-catalog');
+  }
+  if (
+    frozen &&
+    frozen.requests.some(
+      (request) =>
+        request.path.includes('/booking-screen-read-jobs') &&
+        request.meta?.screen !== 'EVENT_CATALOG',
+    )
+  ) {
+    exclusions.push('foreign-read-job');
+  }
+  if (
+    marker.signals?.catalog?.displayedAt != null &&
+    catalogBoundary?.endMs != null &&
+    marker.signals.catalog.displayedAt - actionAt < catalogBoundary.endMs - 5
+  ) {
+    exclusions.push('catalog-before-data');
+  }
+
+  const signalSnapshot = (name) => {
+    const signal = marker.signals?.[name];
+    if (!signal) return null;
+    return {
+      domAtMs: signal.domAt != null ? Math.round(signal.domAt - actionAt) : null,
+      displayedMs: signal.displayedAt != null ? Math.round(signal.displayedAt - actionAt) : null,
+      ...(signal.empty !== undefined ? { empty: Boolean(signal.empty) } : {}),
+    };
+  };
+
   return {
     variant: variant.name,
     scenario,
     rep: options.rep,
     runId,
     label: runLabel,
-    documentRunId,
+    documentRunId: runId,
     valid: exclusions.length === 0,
     exclusionReason: exclusions.join(',') || null,
     wallClockStartedAt: Date.now(),
     timeOrigin: state.timeOrigin,
     sinceMs: actionAt,
+    boundary: {
+      since: 'in-app-action-mark',
+      pageNowMs: Math.round(state.now ?? 0),
+      resourceEntries: 'PerformanceResourceTiming entries with startTime inside the boundary',
+    },
     marker: {
       domAtMs: domAtMs === null ? null : Math.round(domAtMs),
       displayedMs: displayedMs === null ? null : Math.round(displayedMs),
-      recommendationVisible: Boolean(marker.mark?.recommendationVisible),
       source: 'in-app-action-mark',
+      signals: {
+        displayed: signalSnapshot('displayed'),
+        catalog: signalSnapshot('catalog'),
+      },
+      recommendationsEmpty: null,
     },
     timings: {
       sessionRestoreMs: null,
-      firstApiRequestMs: resources.filter((entry) => entry.group === 'api').length
-        ? Math.round(
-            Math.min(
-              ...resources.filter((entry) => entry.group === 'api').map((entry) => entry.startMs),
-            ),
-          )
+      firstApiRequestMs: runApiResources.length
+        ? Math.round(Math.min(...runApiResources.map((entry) => entry.startMs)))
         : null,
-      requiredDataAppliedMs: dataAppliedMs === null ? null : Math.round(dataAppliedMs),
-      lastApiResponseMs: resources.filter((entry) => entry.group === 'api').length
-        ? Math.round(
-            Math.max(
-              ...resources.filter((entry) => entry.group === 'api').map((entry) => entry.endMs),
-            ),
-          )
+      requiredResponseEndMs:
+        requiredResponseEndMs === null ? null : Math.round(requiredResponseEndMs),
+      catalogResponseEndMs:
+        catalogBoundary?.endMs != null ? Math.round(catalogBoundary.endMs) : null,
+      lastApiResponseMs: runApiResources.length
+        ? Math.round(Math.max(...runApiResources.map((entry) => entry.endMs)))
         : null,
-      renderAfterDataMs:
-        displayedMs !== null && dataAppliedMs !== null
-          ? Math.round(displayedMs - dataAppliedMs)
+      renderAfterResponseEndMs:
+        displayedMs !== null && requiredResponseEndMs !== null
+          ? Math.round(displayedMs - requiredResponseEndMs)
           : null,
-      enrichmentAfterRequiredMs: null,
+      enrichmentAfterRequiredResponseMs: null,
     },
     network: {
       total:
@@ -722,9 +1214,17 @@ async function measureNavigation(cdp, variant, scenario, options) {
           payloadBytes: frozen.aggregates.bytes,
           byEndpoint: frozen.aggregates.byEndpoint,
           lateCompletions: frozen.lateCompletions,
+          lateCompletionsAfterClose: live?.body?.lateCompletions ?? null,
+          lateStartsAfterClose: live?.body?.lateStarts ?? null,
+          liveCompletedAfterClose: live?.body?.aggregates?.completed ?? null,
+          liveInFlightAfterClose: live?.body?.aggregates?.inFlight ?? null,
+          resourceEntries: runApiResources.length,
+          countsMatchResources: frozen.aggregates.completed === runApiResources.length,
+          requestCountsMatchResources: frozen.aggregates.requests === runApiResources.length,
           snapshotStable,
         }
       : null,
+    ...(gamesBinding ? { gamesBinding } : {}),
     pageErrors: marker.pageErrors ?? state.errors ?? [],
     resources,
   };
@@ -733,9 +1233,22 @@ async function measureNavigation(cdp, variant, scenario, options) {
 async function measureBackground(cdp, variant, options) {
   await measureOne(cdp, variant, 'home', { ...options, keepCache: true });
   const runId = await beginRun(variant.url, variant.name + ':background:' + String(options.rep));
+  if (!runId) {
+    return {
+      variant: variant.name,
+      scenario: 'background',
+      rep: options.rep,
+      valid: false,
+      exclusionReason: 'stub-begin-failed',
+    };
+  }
+  // The focus refresh belongs to the background run, not to the warm Home run that produced the doc.
   const focus = await cdp.send('Runtime.evaluate', {
     expression:
       'window.__PHUB_FOCUS_AT = performance.now();' +
+      'window.__PHUB_REQUEST_RUN_ID = ' +
+      JSON.stringify(runId) +
+      ';' +
       "window.dispatchEvent(new Event('focus'));" +
       "document.dispatchEvent(new Event('visibilitychange'));" +
       'window.__PHUB_FOCUS_AT',
@@ -752,14 +1265,23 @@ async function measureBackground(cdp, variant, options) {
     if (entry) refreshMs = Math.round(entry.startTime - focusAt);
     else await sleep(20);
   }
-  const snapshot = runId ? await endRun(variant.url, runId) : undefined;
+  const snapshot = await endRun(variant.url, runId).catch(() => undefined);
+  await sleep(250);
+  const live = await readRunLive(variant.url, runId).catch(() => undefined);
+  const refreshRequest = snapshot?.body?.requests?.find(
+    (request) => request.path.endsWith('/home/base') && request.runId === runId,
+  );
+  const exclusions = [];
+  if (refreshMs === null) exclusions.push('no-refresh-request');
+  if (!snapshot?.body) exclusions.push('no-run-snapshot');
+  if (snapshot?.body && !refreshRequest) exclusions.push('refresh-not-in-background-run');
   return {
     variant: variant.name,
     scenario: 'background',
     rep: options.rep,
     runId,
-    valid: refreshMs !== null && Boolean(snapshot?.body),
-    exclusionReason: refreshMs === null ? 'no-refresh-request' : null,
+    valid: exclusions.length === 0,
+    exclusionReason: exclusions.join(',') || null,
     focusAt,
     refreshRequestMs: refreshMs,
     api: snapshot?.body
@@ -767,6 +1289,10 @@ async function measureBackground(cdp, variant, options) {
           requests: snapshot.body.aggregates.requests,
           payloadBytes: snapshot.body.aggregates.bytes,
           byEndpoint: snapshot.body.aggregates.byEndpoint,
+          refreshInBackgroundRun: Boolean(refreshRequest),
+          lateCompletions: snapshot.body.lateCompletions,
+          lateCompletionsAfterClose: live?.body?.lateCompletions ?? null,
+          lateStartsAfterClose: live?.body?.lateStarts ?? null,
         }
       : null,
   };
@@ -835,7 +1361,7 @@ try {
         ' displayed=' +
         String(attempt.marker?.displayedMs ?? '-') +
         ' applied=' +
-        String(attempt.timings?.requiredDataAppliedMs ?? '-'),
+        String(attempt.timings?.requiredResponseEndMs ?? '-'),
     );
     return attempt;
   };
@@ -894,23 +1420,33 @@ try {
   const metricNames = [
     'displayedMs',
     'domAtMs',
-    'requiredDataAppliedMs',
+    'recommendationsDisplayedMs',
+    'profileReadyDisplayedMs',
+    'requiredResponseEndMs',
+    'recommendationsResponseEndMs',
+    'profileReadyResponseEndMs',
+    'catalogResponseEndMs',
     'sessionRestoreMs',
     'firstApiRequestMs',
     'lastApiResponseMs',
-    'renderAfterDataMs',
-    'enrichmentAfterRequiredMs',
+    'renderAfterResponseEndMs',
+    'enrichmentAfterRequiredResponseMs',
     'refreshRequestMs',
   ];
   const aggregate = (samples) => {
     const out = { runs: samples.length };
     for (const name of metricNames) {
       const values = samples
-        .map((sample) =>
-          name === 'refreshRequestMs'
-            ? sample.refreshRequestMs
-            : (sample.marker?.[name] ?? sample.timings?.[name]),
-        )
+        .map((sample) => {
+          if (name === 'refreshRequestMs') return sample.refreshRequestMs;
+          if (name === 'recommendationsDisplayedMs') {
+            return sample.marker?.signals?.recommendations?.displayedMs;
+          }
+          if (name === 'profileReadyDisplayedMs') {
+            return sample.marker?.signals?.profileReady?.displayedMs;
+          }
+          return sample.marker?.[name] ?? sample.timings?.[name];
+        })
         .filter((value) => typeof value === 'number' && !Number.isNaN(value));
       if (values.length === 0) continue;
       const sorted = [...values].sort((left, right) => left - right);
@@ -939,6 +1475,16 @@ try {
             : sorted[middle],
         min: sorted[0],
         max: sorted[sorted.length - 1],
+      };
+    }
+    const lateAfterClose = samples
+      .map((sample) => sample.api?.lateCompletionsAfterClose)
+      .filter((value) => typeof value === 'number');
+    if (lateAfterClose.length > 0) {
+      out.lateCompletionsAfterClose = {
+        runs: lateAfterClose.length,
+        total: lateAfterClose.reduce((sum, value) => sum + value, 0),
+        max: Math.max(...lateAfterClose),
       };
     }
     const apiRequests = samples
@@ -1029,9 +1575,9 @@ try {
           : null;
       deltas[scenario] = {
         displayedMs: delta(base.displayedMs?.median, candidate.displayedMs?.median),
-        requiredDataAppliedMs: delta(
-          base.requiredDataAppliedMs?.median,
-          candidate.requiredDataAppliedMs?.median,
+        requiredResponseEndMs: delta(
+          base.requiredResponseEndMs?.median,
+          candidate.requiredResponseEndMs?.median,
         ),
         apiPayloadBytes: delta(base.apiPayloadBytes?.median, candidate.apiPayloadBytes?.median),
         networkBytesTotal: delta(
@@ -1049,9 +1595,9 @@ try {
       scenario: attempt.scenario,
       rep: attempt.rep,
       domAtMs: attempt.marker.domAtMs,
-      requiredDataAppliedMs: attempt.timings.requiredDataAppliedMs,
+      requiredResponseEndMs: attempt.timings.requiredResponseEndMs,
       displayedMs: attempt.marker.displayedMs,
-      renderAfterDataMs: attempt.timings.renderAfterDataMs,
+      renderAfterResponseEndMs: attempt.timings.renderAfterResponseEndMs,
       valid: attempt.valid,
       reason: attempt.exclusionReason,
     }));
