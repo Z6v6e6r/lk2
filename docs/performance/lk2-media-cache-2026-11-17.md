@@ -117,3 +117,71 @@ standard browser-cache behaviour; no first-party client sets the header manually
 
 LOCAL/CI evidence only. No production traffic was measured, no staging deployment was made, and no
 claim is made about the resulting p95 or about S3 call reduction.
+
+## Status on 2026-11-18 (head e3e35e6afb0b81a6168cb98b64c47b96af86cfb0)
+
+### Code and behaviour checks
+
+- Parser boundaries and routes: `conditional-media-get` 10 tests, profile-photo routes 15,
+  community-logo routes 5 - 30 pass. Typecheck, API build, contracts lint, eslint and prettier pass.
+- Handler-level HTTP behaviour is covered: `200` with the body for a new object, bodyless `304` with
+  `ETag`/`Cache-Control` for a matching tag or a lone `*` (including a stored object without an ETag),
+  `404` for a missing object under `*`, and `200` for a changed object.
+- **Not verified on a real path.** No PadlHub API instance was available in this task (no live or
+  staging access, Docker daemon unavailable), so the conditional re-fetch was not exercised through a
+  proxy or a browser HTTP cache against the real media routes. The evidence above is handler-level and
+  must be labelled that way. A live check still needs a running API + object store and a request pair
+  (`curl -sI`, then `curl -sI -H 'If-None-Match: <etag>'`) against the deployed media URL.
+
+### CI on the exact head
+
+- Green: `ci-plan`, `secret-scan`, `source-quality`, `dependency-security`, `deployment-contract`,
+  `docker-selection`, both `docker-build` jobs, Android unsigned build + JVM, iOS simulator build.
+- `quality-full` fails on exactly one test, unrelated to this change:
+  `scripts/run-ci-tests-with-diagnostics.test.ts > CI test diagnostics supervisor > suppresses raw
+output and returns supervisor failure when redaction times out` with
+  `spawnSync ... run-ci-tests-with-diagnostics.sh ETIMEDOUT`.
+- A targeted rerun of only the failed job on the **unchanged** SHA (run 44251693594) reproduced the
+  same ETIMEDOUT: this is not a one-off flake of a single attempt. The same test also fails on the
+  client PR #678, whose diff cannot affect `scripts/`; and in an earlier run of this branch the same
+  suite passed 25/25.
+- Root cause shape: the scenario stalls redaction for 0.5 s and expects the supervisor to exit 126,
+  while the test's own watchdog is a 10 s `spawnSync` timeout; under full-suite load the supervisor's
+  wall-clock budget (finalisation up to 5 s, process-group cleanup, probe timeouts) can exceed the
+  watchdog, and Node reports ETIMEDOUT as the test result. It is a CI harness timing defect, not the
+  media change.
+- Not fixed here: a correct fix belongs to the CI tooling owner (make the watchdog independent of the
+  supervisor's documented budget, or make the inner timeout deterministic). Editing that test or its
+  timeout in this PR would change release tooling outside this change's scope; disabling it is not an
+  acceptable fix.
+
+### Contract gate: BLOCKED
+
+1. **Rejected delta:** `contracts/openapi/public/v1/openapi.yaml` (documentation of `If-None-Match`,
+   the 304 response and the 200 cache headers). The release window `4b8dbaa1..origin/main` contains 0
+   paths matching the protected set; this head contains 1.
+2. **Condition:** `scripts/timeweb-api-web-upgrade.js` `validateRuntimeDelta` fails with
+   `runtime_definition_changed` for any path matching
+   `^(deploy/timeweb/(?!operator-entry|run-standard)|contracts/|packages/database/migrations/|openapi\.yaml$)`.
+   `validateRuntimeUpgrade` then only admits the exact historical `CALLBACK_RUNTIME_BRIDGE` identity
+   (`previousSha`/`candidateSha` `0d6078be7a50ed3f5761d66071527be003bd568f` / candidateTree
+   `5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`), which cannot match a new candidate. Result:
+   `callback_runtime_bridge`.
+3. **Existing allowed path for these SHAs/target:** none found. The bridge is pinned to an old candidate;
+   no runbook or script admits a new contract delta without changing the release tooling itself.
+4. **Exact evidence:** on this head,
+   `npx vitest run scripts/timeweb-api-web-upgrade.test.ts` -> 1 failed, 77 passed,
+   `Error: callback_runtime_bridge`.
+5. **Decision required from the owner / release owner:** whether a doc-only, add-only contract delta
+   may be admitted for this exact source SHA and target, and through which approved mechanism. A new
+   attestation/bridge is itself a release-tooling change and needs its own review; it is not made here.
+6. **Verification after a decision:** the same validator command must pass for the exact SHA and target
+   (or the approved package must carry the recorded admission), followed by the normal release
+   preflight/approval. This PR is not merge-ready until that decision exists.
+
+### What this means for the PR
+
+- Code, tests and the documented behaviour are complete; the media change is not published.
+- The PR stays Draft. Merge needs owner approval because it touches the public contract; publication
+  needs the release-owner decision above.
+- No release tooling, guard, workflow or historical check was modified.
