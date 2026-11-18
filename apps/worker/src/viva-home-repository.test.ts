@@ -35,7 +35,7 @@ const delegation: VivaHomeDelegation = {
 };
 
 describe('Viva Home producer repository', () => {
-  it('fills a mapped legacy participant level from the confirmed Viva viewer profile', async () => {
+  it('refreshes a mapped legacy participant name without writing a Viva level', async () => {
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
       if (
         text === 'begin' ||
@@ -45,14 +45,9 @@ describe('Viva Home producer repository', () => {
       ) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
-      if (text.includes('pg_advisory_xact_lock')) {
-        expect(values).toEqual([tenantId, 'legacy-viewer-key']);
-        expect(text).toContain('player-level:');
-        return Promise.resolve({ rows: [], rowCount: 1 });
-      }
       if (text.includes('update profile.user_summaries p')) {
-        expect(values).toEqual([tenantId, 'legacy-viewer-key', 'Alexey Sergeev', 'C', 3.15022]);
-        expect(text).toContain('eligibility.cup_player_level_projections');
+        expect(values).toEqual([tenantId, 'legacy-viewer-key', 'Alexey Sergeev']);
+        expect(text).not.toContain('level_');
         return Promise.resolve({ rows: [], rowCount: 1 });
       }
       throw new Error(`Unexpected query: ${text}`);
@@ -65,8 +60,6 @@ describe('Viva Home producer repository', () => {
         tenantId,
         participantExternalId: 'legacy-viewer-key',
         displayName: 'Alexey Sergeev',
-        level: 'C',
-        levelValue: 3.15022,
       }),
     ).resolves.toBe(true);
   });
@@ -287,16 +280,7 @@ describe('Viva Home producer repository', () => {
       if (text.includes('from integration.profile_photo_observation_watermarks')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
-      if (text.includes('update profile.user_summaries') && text.includes('set level_label')) {
-        expect(text).toContain('eligibility.cup_player_level_projections');
-        // The provider phone must never reach the auth-owned profile column: it stays in integration
-        // custody through linkLegacyViewerPhone.
-        expect(text).not.toContain('phone_e164');
-        return Promise.resolve({
-          rows: [{ level_label: 'C+', level_value: '3.63000' }],
-          rowCount: 1,
-        });
-      }
+
       if (
         text.includes('set photo_url') ||
         text.includes('insert into integration.user_profile_photo_sync') ||
@@ -380,6 +364,7 @@ describe('Viva Home producer repository', () => {
 
     const serialized = outboxPayloads.join(' ');
     expect(serialized).not.toContain(externalProfileId);
+    expect(query.mock.calls.some(([sql]) => sql.includes('set level_label'))).toBe(false);
     expect(serialized).not.toContain(externalBookingId);
     expect(serialized).not.toContain(externalSubscriptionId);
     expect(serialized).not.toContain(externalExerciseId);
@@ -390,7 +375,7 @@ describe('Viva Home producer repository', () => {
     expect(serialized).toContain(`/subscriptions/${subscriptionId}`);
     expect(serialized).toContain('"firstName":"Алексей"');
     expect(serialized).toContain('"lastName":"Петров"');
-    expect(serialized).toContain('"level":{"label":"C+","value":3.63');
+    expect(serialized).not.toContain('"assessmentRequired":');
     expect(serialized).toContain('"nickname":null');
     expect(serialized).toContain('"displayName":"Дмитрий Крикунов"');
     expect(serialized).toContain('"displayName":"Александр Сосновский"');

@@ -1818,11 +1818,16 @@ export function createGameRepository(
         const participants = await client.query<ProjectionParticipantRow>(
           `select p.user_id,
                     coalesce(nullif(btrim(summary.display_name), ''), 'Игрок') as display_name,
-                    summary.photo_url, summary.level_label, summary.level_value,
+                    summary.photo_url,
+                    case when cup.player_id is not null then summary.level_label end as level_label,
+                    case when cup.player_id is not null then summary.level_value end as level_value,
                     p.role, p.payment_state
                from games.participations p
                left join profile.user_summaries summary
                  on summary.tenant_id = p.tenant_id and summary.user_id = p.user_id
+               left join eligibility.cup_player_level_projections cup
+                 on cup.tenant_id = summary.tenant_id and cup.player_id = summary.user_id
+                and cup.sport_code = 'PADEL'
               where p.tenant_id = $1 and p.game_id = $2 and p.state = 'ACTIVE'
               order by case p.role when 'ORGANIZER' then 0 else 1 end, p.joined_at, p.id`,
           [input.tenantId, input.gameId],

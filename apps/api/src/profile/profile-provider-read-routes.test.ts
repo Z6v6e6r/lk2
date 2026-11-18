@@ -305,7 +305,7 @@ function completeUrl(id = jobId) {
 }
 
 describe('POST profile/provider-read-jobs/:jobId/results/:commandId', () => {
-  it('accepts a valid relayed provider payload and stores only the observation', async () => {
+  it('accepts a valid relayed provider payload and stores only the observed balance', async () => {
     const { app, jobStore, observations } = startHarness();
     await seedJob(jobStore);
 
@@ -327,7 +327,6 @@ describe('POST profile/provider-read-jobs/:jobId/results/:commandId', () => {
       tenantId,
       userId,
       observation: {
-        level: { label: 'C+', value: 3.8, assessmentRequired: false },
         balanceMinor: 54_000,
         currency: 'RUB',
       },
@@ -335,6 +334,7 @@ describe('POST profile/provider-read-jobs/:jobId/results/:commandId', () => {
     const storedObservation = JSON.stringify(observations.rows.get(tenantId + ':' + userId));
     expect(storedObservation).not.toContain('1f6d8c19-0d6b-4a57-9f0e-2a1b3c4d5e6f');
     expect(storedObservation).not.toContain('79990001122');
+    expect(storedObservation).not.toContain('level');
     expect(storedObservation).not.toContain('cdn.viva.test');
   });
 

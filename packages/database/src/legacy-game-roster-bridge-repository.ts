@@ -68,8 +68,8 @@ export function createLegacyGameRosterBridgeRepository(
           `select identity_map.user_id,
                   profile.display_name,
                   profile.phone_e164,
-                  profile.level_label,
-                  profile.level_value,
+                  case when cup.player_id is not null then profile.level_label end as level_label,
+                  case when cup.player_id is not null then profile.level_value end as level_value,
                   game.id as game_id,
                   game.revision as game_revision
              from integration.external_identity_map identity_map
@@ -80,6 +80,9 @@ export function createLegacyGameRosterBridgeRepository(
              join profile.user_summaries profile
                on profile.tenant_id = identity_map.tenant_id
               and profile.user_id = identity_map.user_id
+             left join eligibility.cup_player_level_projections cup
+               on cup.tenant_id = profile.tenant_id and cup.player_id = profile.user_id
+              and cup.sport_code = 'PADEL'
              left join integration.external_entity_map mapping
                on mapping.tenant_id = identity_map.tenant_id
               and mapping.external_system = 'LK_LEGACY_SNAPSHOT'

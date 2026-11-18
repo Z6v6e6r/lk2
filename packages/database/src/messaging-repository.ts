@@ -679,11 +679,11 @@ const CONVERSATION_SELECT = `
          case when other_privacy.user_id is null
                     or (other_privacy.visibility_mode <> 'PRIVATE'
                         and other_privacy.section_visibility->>'levelAndRating' = 'true')
-              then other_summary.level_label end as other_level_label,
+              then case when other_cup.player_id is not null then other_summary.level_label end end as other_level_label,
          case when other_privacy.user_id is null
                     or (other_privacy.visibility_mode <> 'PRIVATE'
                         and other_privacy.section_visibility->>'levelAndRating' = 'true')
-              then other_summary.level_value end as other_level_value,
+              then case when other_cup.player_id is not null then other_summary.level_value end end as other_level_value,
          greatest(
            (conversation.next_sequence - 1) - current_member.last_read_sequence,
            0
@@ -729,6 +729,9 @@ const CONVERSATION_SELECT = `
     left join profile.user_summaries other_summary
       on other_summary.tenant_id = other_member.tenant_id
      and other_summary.user_id = other_member.user_id
+    left join eligibility.cup_player_level_projections other_cup
+      on other_cup.tenant_id = other_summary.tenant_id and other_cup.player_id = other_summary.user_id
+     and other_cup.sport_code = 'PADEL'
     left join integration.user_profile_photo_sync other_photo
       on other_photo.tenant_id = other_member.tenant_id
      and other_photo.user_id = other_member.user_id
@@ -825,8 +828,8 @@ const GAME_CONVERSATION_SELECT = `
                  participant.role,
                  coalesce(participant_summary.display_name, 'Участник') as display_name,
                  participant_photo.delivery_id,
-                 participant_summary.level_label,
-                 participant_summary.level_value
+                 case when participant_cup.player_id is not null then participant_summary.level_label end as level_label,
+                 case when participant_cup.player_id is not null then participant_summary.level_value end as level_value
             from games.participations participant
             join identity.users participant_user
               on participant_user.tenant_id = participant.tenant_id
@@ -835,6 +838,9 @@ const GAME_CONVERSATION_SELECT = `
             left join profile.user_summaries participant_summary
               on participant_summary.tenant_id = participant.tenant_id
              and participant_summary.user_id = participant.user_id
+            left join eligibility.cup_player_level_projections participant_cup
+              on participant_cup.tenant_id = participant_summary.tenant_id and participant_cup.player_id = participant_summary.user_id
+             and participant_cup.sport_code = 'PADEL'
             left join integration.user_profile_photo_sync participant_photo
               on participant_photo.tenant_id = participant.tenant_id
              and participant_photo.user_id = participant.user_id
@@ -995,11 +1001,11 @@ async function getMessage(
             case when sender_privacy.user_id is null
                        or (sender_privacy.visibility_mode <> 'PRIVATE'
                            and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                 then summary.level_label end as sender_level_label,
+                 then case when sender_cup.player_id is not null then summary.level_label end end as sender_level_label,
             case when sender_privacy.user_id is null
                        or (sender_privacy.visibility_mode <> 'PRIVATE'
                            and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                 then summary.level_value end as sender_level_value,
+                 then case when sender_cup.player_id is not null then summary.level_value end end as sender_level_value,
             message.message_type, message.body, message.created_at::text as created_at,
             message.client_message_id, message.idempotency_key
        from messaging.messages message
@@ -1019,6 +1025,9 @@ async function getMessage(
        left join profile.user_summaries summary
          on summary.tenant_id = sender.tenant_id
         and summary.user_id = sender.user_id
+       left join eligibility.cup_player_level_projections sender_cup
+         on sender_cup.tenant_id = summary.tenant_id and sender_cup.player_id = summary.user_id
+        and sender_cup.sport_code = 'PADEL'
        left join integration.user_profile_photo_sync photo
          on photo.tenant_id = sender.tenant_id
         and photo.user_id = sender.user_id
@@ -1789,11 +1798,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                   case when sender_privacy.user_id is null
                              or (sender_privacy.visibility_mode <> 'PRIVATE'
                                  and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                       then summary.level_label end as sender_level_label,
+                       then case when sender_cup.player_id is not null then summary.level_label end end as sender_level_label,
                   case when sender_privacy.user_id is null
                              or (sender_privacy.visibility_mode <> 'PRIVATE'
                                  and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                       then summary.level_value end as sender_level_value,
+                       then case when sender_cup.player_id is not null then summary.level_value end end as sender_level_value,
                   message.client_message_id, message.message_type, message.body,
                   message.created_at::text as created_at
              from messaging.messages message
@@ -1804,6 +1813,9 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              left join profile.user_summaries summary
                on summary.tenant_id = sender.tenant_id
               and summary.user_id = sender.user_id
+             left join eligibility.cup_player_level_projections sender_cup
+               on sender_cup.tenant_id = summary.tenant_id and sender_cup.player_id = summary.user_id
+              and sender_cup.sport_code = 'PADEL'
              left join integration.user_profile_photo_sync photo
                on photo.tenant_id = sender.tenant_id
               and photo.user_id = sender.user_id
@@ -1932,11 +1944,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                   case when sender_privacy.user_id is null
                              or (sender_privacy.visibility_mode <> 'PRIVATE'
                                  and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                       then summary.level_label end as sender_level_label,
+                       then case when sender_cup.player_id is not null then summary.level_label end end as sender_level_label,
                   case when sender_privacy.user_id is null
                              or (sender_privacy.visibility_mode <> 'PRIVATE'
                                  and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                       then summary.level_value end as sender_level_value,
+                       then case when sender_cup.player_id is not null then summary.level_value end end as sender_level_value,
                   message.message_type, message.body, message.created_at::text as created_at,
                   message.client_message_id, message.idempotency_key
              from messaging.messages message
@@ -1947,6 +1959,9 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              left join profile.user_summaries summary
                on summary.tenant_id = sender.tenant_id
               and summary.user_id = sender.user_id
+             left join eligibility.cup_player_level_projections sender_cup
+               on sender_cup.tenant_id = summary.tenant_id and sender_cup.player_id = summary.user_id
+              and sender_cup.sport_code = 'PADEL'
              left join integration.user_profile_photo_sync photo
                on photo.tenant_id = sender.tenant_id
               and photo.user_id = sender.user_id

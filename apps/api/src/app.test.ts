@@ -1928,6 +1928,8 @@ describe('health endpoints', () => {
       pool: fakePool(),
       homeDashboardRepository: { get: () => Promise.resolve(undefined) },
       profileSummaryRepository: {
+        getCupProjectedLevels: () =>
+          Promise.resolve(new Map([[targetUserId, { label: 'C', value: 3.43844 }]])),
         get: (_tenantId, userId) =>
           Promise.resolve(
             userId === targetUserId
@@ -1935,8 +1937,8 @@ describe('health endpoints', () => {
                   userId: targetUserId,
                   displayName: 'Дмитрий Крикунов',
                   avatarUrl: 'https://media.padlhub.test/profiles/dmitriy.webp',
-                  levelLabel: 'C',
-                  levelValue: 3.43844,
+                  levelLabel: 'A',
+                  levelValue: 6.5,
                 }
               : undefined,
           ),
@@ -2026,7 +2028,7 @@ describe('health endpoints', () => {
     expect(response.json()).not.toHaveProperty('balanceMinor');
   });
 
-  it('keeps the persisted Home profile unchanged when the projection exists', async () => {
+  it('serves persisted Home identity and hides stale level while CUP projection is pending', async () => {
     const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
     const generatedAt = new Date();
     const dashboard = buildMockHomeDashboard({
@@ -2072,10 +2074,13 @@ describe('health endpoints', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(payload.profile);
+    const expected = Object.fromEntries(
+      Object.entries(payload.profile).filter(([key]) => key !== 'level'),
+    );
+    expect(response.json()).toEqual(expected);
     expect(response.json()).toHaveProperty('balanceMinor');
     expect(response.json()).toHaveProperty('currency');
-    expect(response.json()).toHaveProperty('level');
+    expect(response.json()).not.toHaveProperty('level');
   });
 
   it('answers an explicit unavailable state when no bookings projection exists', async () => {

@@ -46,6 +46,7 @@ import {
   createCommunityEventRecoveryRepository,
   createCommunityMediaRepository,
   createLocalCommunityDirectoryRepository,
+  createProfileSummaryRepository,
 } from '@phub/database';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
@@ -302,8 +303,11 @@ export function createCommunityReadExperienceRuntime(input: {
       !input.config.COMMUNITY_LEGACY_READ_RATING_ENABLED)
   )
     return undefined;
+  const profiles = createProfileSummaryRepository(input.pool);
   return createCommunityReadExperienceService(
     new LegacyCommunityExperienceRepository({
+      readCupLevels: (tenantId, clientIds) =>
+        profiles.getCupProjectedLevelsByVivaClientId(tenantId, clientIds),
       stationMessageRequests: Boolean(createStationMessageRuntime(input)),
       ...(input.token ? { token: input.token } : {}),
       baseUrl: input.config.COMMUNITIES_LEGACY_BASE_URL,

@@ -293,7 +293,7 @@ function CommunityReadOnlyPageContent({
     ranking: (rating?.rows ?? []).map((row) => ({
       place: row.place,
       displayName: row.displayName,
-      levelLabel: `Уровень ${row.currentLevel}`,
+      ...(row.currentLevel === null ? {} : { levelLabel: `Уровень ${row.currentLevel}` }),
       score: row.score,
       delta: row.delta,
       games: row.games,

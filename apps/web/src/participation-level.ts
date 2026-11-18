@@ -6,8 +6,8 @@ import type { AuthGateway } from './auth-gateway.js';
  * browser custody of the key is kept and a retry re-evaluates under the same key.
  */
 const LEVEL_REFUSAL_MESSAGES: Readonly<Record<string, string>> = {
-  PLAYER_LEVEL_REQUIRED: 'Чтобы записаться, укажите свой уровень.',
-  PLAYER_LEVEL_UNKNOWN: 'Не удалось определить ваш уровень. Укажите его и повторите.',
+  PLAYER_LEVEL_REQUIRED: 'Подтвердите уровень в личном кабинете клуба и запишитесь снова.',
+  PLAYER_LEVEL_UNKNOWN: 'Не удалось подтвердить уровень в ЦУП. Повторите проверку позже.',
   LEVEL_NOT_ALLOWED: 'Ваш уровень не подходит под диапазон этой активности.',
   LEVEL_SPORT_MISMATCH: 'Уровень указан для другого вида спорта.',
   LEVEL_SCALE_VERSION_MISMATCH: 'Шкала вашего уровня устарела. Обновите уровень и повторите.',
@@ -16,11 +16,7 @@ const LEVEL_REFUSAL_MESSAGES: Readonly<Record<string, string>> = {
   LEVEL_POLICY_MISCONFIGURED: 'Правило допуска по уровню временно настроено некорректно.',
 };
 
-const LEVEL_SETUP_CODES = new Set([
-  'PLAYER_LEVEL_REQUIRED',
-  'PLAYER_LEVEL_UNKNOWN',
-  'LEVEL_SCALE_VERSION_MISMATCH',
-]);
+const LEVEL_SETUP_CODES = new Set(['PLAYER_LEVEL_REQUIRED', 'LEVEL_SCALE_VERSION_MISMATCH']);
 
 export interface ParticipationLevelRefusal {
   readonly code: string;

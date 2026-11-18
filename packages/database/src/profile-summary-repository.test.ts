@@ -793,11 +793,11 @@ describe('profile summary repository', () => {
 
   it('loads normalized CUP level values for game-card progress rings', async () => {
     const query = vi.fn((text: string) => {
-      if (text.includes('select user_id, level_value')) {
+      if (text.includes('from eligibility.cup_player_level_projections cup')) {
         return Promise.resolve({
           rows: [
-            { user_id: firstUserId, level_value: '3.43844' },
-            { user_id: secondUserId, level_value: 4.82 },
+            { user_id: firstUserId, level_label: 'C', level_value: '3.43844' },
+            { user_id: secondUserId, level_label: 'B+', level_value: 4.82 },
           ],
         });
       }
@@ -808,14 +808,16 @@ describe('profile summary repository', () => {
     };
     const repository = createProfileSummaryRepository(pool as never);
 
-    await expect(repository.getLevelValues(tenantId, [firstUserId, secondUserId])).resolves.toEqual(
+    await expect(
+      repository.getCupProjectedLevels(tenantId, [firstUserId, secondUserId]),
+    ).resolves.toEqual(
       new Map([
-        [firstUserId, 3.43844],
-        [secondUserId, 4.82],
+        [firstUserId, { label: 'C', value: 3.43844 }],
+        [secondUserId, { label: 'B+', value: 4.82 }],
       ]),
     );
     expect(
-      query.mock.calls.some(([text]) => String(text).includes('level_value is not null')),
+      query.mock.calls.some(([text]) => String(text).includes("cup.sport_code = 'PADEL'")),
     ).toBe(true);
   });
 });

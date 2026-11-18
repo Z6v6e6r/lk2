@@ -90,7 +90,6 @@ describe('Viva Home source adapter', () => {
         lastName: 'Петров',
         photoUrl: 'https://562807.selcdn.ru/smstretching/profile-source.jpg',
         balanceMinor: -12_500,
-        level: { label: 'C+', value: 3.7, assessmentRequired: false },
       },
       upcoming: [
         {

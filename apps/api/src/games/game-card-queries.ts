@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isRestrictedGameTestCourt, type GameTestCourtRepository } from '@phub/database';
 
 import type {
+  CupProjectedProfileLevel,
   GameConversationSummary,
   GameRepository,
   MessagingRepository,
@@ -31,12 +32,12 @@ type CardReadRepository = Pick<
   'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
 >;
 type CardProfileRepository = Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'> &
-  Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
+  Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getCupProjectedLevels'>>;
 
 interface CardProfileData {
   readonly deliveryIds: ReadonlyMap<string, string>;
   readonly displayNames: ReadonlyMap<string, string>;
-  readonly levelValues: ReadonlyMap<string, number>;
+  readonly projectedLevels: ReadonlyMap<string, CupProjectedProfileLevel>;
 }
 
 async function profileDataForProjections(input: {
@@ -45,17 +46,17 @@ async function profileDataForProjections(input: {
   readonly projections: readonly StoredGameCardProjection[];
 }): Promise<CardProfileData> {
   if (!input.repository) {
-    return { deliveryIds: new Map(), displayNames: new Map(), levelValues: new Map() };
+    return { deliveryIds: new Map(), displayNames: new Map(), projectedLevels: new Map() };
   }
   const userIds = input.projections.flatMap((projection) =>
     gameCardProfilePhotoUserIds(projection.basePayload),
   );
-  const [deliveryIds, displayNames, levelValues] = await Promise.all([
+  const [deliveryIds, displayNames, projectedLevels] = await Promise.all([
     input.repository.getPhotoDeliveryIds(input.tenantId, userIds),
     input.repository.getDisplayNames?.(input.tenantId, userIds) ?? Promise.resolve(new Map()),
-    input.repository.getLevelValues?.(input.tenantId, userIds) ?? Promise.resolve(new Map()),
+    input.repository.getCupProjectedLevels?.(input.tenantId, userIds) ?? Promise.resolve(new Map()),
   ]);
-  return { deliveryIds, displayNames, levelValues };
+  return { deliveryIds, displayNames, projectedLevels };
 }
 
 function enrichGameCardProfiles(
@@ -70,11 +71,16 @@ function enrichGameCardProfiles(
   );
   return {
     ...payload,
-    participants: payload.participants.map((participant) => ({
-      ...participant,
-      displayName: profileData.displayNames.get(participant.userId) ?? participant.displayName,
-      levelValue: profileData.levelValues.get(participant.userId) ?? participant.levelValue ?? null,
-    })),
+    participants: payload.participants.map((participant) => {
+      const level = profileData.projectedLevels.get(participant.userId);
+      const label = GAME_PLAYER_LEVELS.find((code) => code === level?.label);
+      return {
+        ...participant,
+        displayName: profileData.displayNames.get(participant.userId) ?? participant.displayName,
+        level: label ?? null,
+        levelValue: label && level ? level.value : null,
+      };
+    }),
   };
 }
 

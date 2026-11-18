@@ -5,11 +5,9 @@ import type { AuthGateway } from './auth-gateway.js';
 import { TournamentLocalAttempts } from './tournament-local-attempt.js';
 import {
   PARTICIPATION_LEVEL_UNAVAILABLE_MESSAGE,
-  canPickParticipationLevel,
   participationLevelRefusal,
   participationLevelUnavailable,
 } from './participation-level.js';
-import { ParticipationLevelPicker } from './ParticipationLevelPicker.js';
 const refusalMessages: Partial<
   Record<NonNullable<TournamentLocalResult['operation']['reason']>, string>
 > = {
@@ -17,8 +15,8 @@ const refusalMessages: Partial<
   MEMBERSHIP_EXISTS: 'Существующая запись не принадлежит этой операции.',
   GENERATION_NOT_CURRENT: 'Исходная регистрация уже изменилась.',
   LEVEL_NOT_ALLOWED: 'Ваш уровень не подходит под диапазон турнира.',
-  PLAYER_LEVEL_REQUIRED: 'Чтобы записаться, укажите свой уровень.',
-  PLAYER_LEVEL_UNKNOWN: 'Не удалось определить ваш уровень. Укажите его и повторите.',
+  PLAYER_LEVEL_REQUIRED: 'Подтвердите уровень в личном кабинете клуба и запишитесь снова.',
+  PLAYER_LEVEL_UNKNOWN: 'Не удалось подтвердить уровень в ЦУП. Повторите проверку позже.',
   ACTIVITY_LEVEL_INVALID:
     'Диапазон уровней турнира настроен некорректно. Обратитесь к организатору.',
   PLAYER_GENDER_REQUIRED: 'Для записи укажите пол в профиле.',
@@ -44,12 +42,7 @@ export function TournamentRegistrationPanel({
 }: {
   gateway: Pick<
     AuthGateway,
-    | 'tournamentPrincipal'
-    | 'commandTournament'
-    | 'retryTournament'
-    | 'getTournamentRegistration'
-    | 'getOwnPlayerLevel'
-    | 'setOwnPlayerLevel'
+    'tournamentPrincipal' | 'commandTournament' | 'retryTournament' | 'getTournamentRegistration'
   >;
   principal: { tenantId: string; userId: string };
   tournamentId: string;
@@ -90,15 +83,7 @@ export function TournamentRegistrationPanel({
     [busy, setBusy] = useState(true),
     [error, setError] = useState<string | null>(null),
     [pending, setPending] = useState(false),
-    [commandsEnabled, setCommandsEnabled] = useState(false),
-    [levelSetup, setLevelSetup] = useState(false);
-  const acceptResult = useCallback((next: TournamentLocalResult | null) => {
-    setResult(next);
-    setLevelSetup(
-      next?.operation.status === 'REJECTED' &&
-        ['PLAYER_LEVEL_REQUIRED', 'PLAYER_LEVEL_UNKNOWN'].includes(next.operation.reason ?? ''),
-    );
-  }, []);
+    [commandsEnabled, setCommandsEnabled] = useState(false);
   const hasCustody = useCallback(() => {
     try {
       return Boolean(attempts.load(tournamentId));
@@ -110,8 +95,7 @@ export function TournamentRegistrationPanel({
     const code = e && typeof e === 'object' && 'code' in e ? String(e.code) : '';
     const level = participationLevelRefusal(e);
     if (level) {
-      setError(level.message);
-      setLevelSetup(level.needsLevel);
+      setError(refusalMessages[level.code] ?? level.message);
       return;
     }
     if (participationLevelUnavailable(e)) {
@@ -133,7 +117,7 @@ export function TournamentRegistrationPanel({
       .then(
         (r) => {
           if (active && life.active) {
-            acceptResult(r.result);
+            setResult(r.result);
             setCommandsEnabled(r.commandsEnabled);
             setPending(hasCustody());
           }
@@ -152,17 +136,16 @@ export function TournamentRegistrationPanel({
     return () => {
       active = false;
     };
-  }, [attempts, life, tournamentId, hasCustody, failure, acceptResult]);
+  }, [attempts, life, tournamentId, hasCustody, failure]);
   async function run(kind: 'join' | 'leave' | 'retry' | 'read') {
     setBusy(true);
     setError(null);
-    setLevelSetup(false);
     let levelRefused = false;
     try {
       if (kind === 'read') {
         const r = await attempts.read(tournamentId);
         if (life.active) {
-          acceptResult(r.result);
+          setResult(r.result);
           setCommandsEnabled(r.commandsEnabled);
         }
       } else {
@@ -176,7 +159,7 @@ export function TournamentRegistrationPanel({
                   ? { action: 'JOIN' }
                   : { action: 'LEAVE', originalJoinOperationId: result!.operation.generation! },
               );
-        if (life.active) acceptResult(r);
+        if (life.active) setResult(r);
       }
     } catch (e) {
       if (life.active) {
@@ -201,13 +184,6 @@ export function TournamentRegistrationPanel({
   return (
     <div className="tournament-registration" aria-live="polite">
       {error ? <p role="alert">{error}</p> : null}
-      {levelSetup && !busy && canPickParticipationLevel(gateway) ? (
-        <ParticipationLevelPicker
-          gateway={gateway}
-          onSaved={() => void run('join')}
-          onCancel={() => setLevelSetup(false)}
-        />
-      ) : null}
       {!busy && !commandsEnabled && !error ? (
         <p>Запись сейчас недоступна. Можно проверить сохранённую операцию.</p>
       ) : null}

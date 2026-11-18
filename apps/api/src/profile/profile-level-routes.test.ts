@@ -1,5 +1,5 @@
 import { loadConfig } from '@phub/config';
-import type { PlayerLevelRepository } from '@phub/database';
+import { PlayerLevelProjectionConflictError, type PlayerLevelRepository } from '@phub/database';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
@@ -82,6 +82,7 @@ function repository() {
           },
         ],
         currentLevel: null,
+        projectionStatus: 'PENDING',
       }),
       setLevel,
     } satisfies PlayerLevelRepository,
@@ -112,12 +113,43 @@ describe('profile level routes', () => {
     expect(response.json()).toMatchObject({
       sportCode: 'PADEL',
       currentLevel: null,
+      projectionStatus: 'PENDING',
       levels: [{ id: levelId, code: 'C+' }],
     });
   });
 
-  it('derives the player and source instead of accepting them from the client', async () => {
+  it.each([
+    [new Error('database unavailable'), 503, 'PROFILE_LEVEL_UNAVAILABLE'],
+    [new PlayerLevelProjectionConflictError(), 409, 'PROFILE_LEVEL_PROJECTION_CONFLICT'],
+  ] as const)(
+    'keeps an unsuccessful projection read separate from pending (%s)',
+    async (error, status, code) => {
+      const repo = repository();
+      repo.value.getState.mockRejectedValue(error);
+      const app = await buildApp({
+        config,
+        logger: createLogger('profile-level-route-test', 'silent'),
+        pool: fakePool(),
+        playerLevelRepository: repo.value,
+      });
+      apps.push(app);
+      const response = await app.inject({
+        method: 'GET',
+        url: '/user/api/v1/local-padel/profile/level',
+        headers: { authorization: `Bearer ${await token()}` },
+      });
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+    },
+  );
+
+  it('derives the player and source for a non-PADEL sport command', async () => {
     const repo = repository();
+    repo.setLevel.mockResolvedValue({
+      outcome: 'applied',
+      level: { ...level, sportCode: 'TENNIS' },
+      replayed: false,
+    });
     const app = await buildApp({
       config,
       logger: createLogger('profile-level-route-test', 'silent'),
@@ -132,7 +164,7 @@ describe('profile level routes', () => {
         authorization: `Bearer ${await token()}`,
         'idempotency-key': 'profile-level-command-0001',
       },
-      payload: { sportCode: 'PADEL', levelId },
+      payload: { sportCode: 'TENNIS', levelId },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ levelId, source: 'SELF_DECLARED' });
@@ -140,6 +172,7 @@ describe('profile level routes', () => {
       expect.objectContaining({
         tenantId,
         playerId: userId,
+        sportCode: 'TENNIS',
         source: 'SELF_DECLARED',
         idempotencyKey: 'profile-level-command-0001',
       }),
@@ -171,7 +204,6 @@ describe('profile level routes', () => {
 
   it('reports CUP ownership instead of allowing self-declared overwrite', async () => {
     const repo = repository();
-    repo.setLevel.mockResolvedValue({ outcome: 'cup_authoritative' });
     const app = await buildApp({
       config,
       logger: createLogger('profile-level-route-test', 'silent'),
@@ -190,6 +222,7 @@ describe('profile level routes', () => {
     });
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({ code: 'PROFILE_LEVEL_CUP_AUTHORITATIVE' });
+    expect(repo.setLevel).not.toHaveBeenCalled();
   });
 
   it('publishes the established assessment without exposing its scoring operations', async () => {
@@ -218,13 +251,8 @@ describe('profile level routes', () => {
     expect(response.body).not.toContain('cap');
   });
 
-  it('derives ONBOARDING level and numeric value from answers on the server', async () => {
+  it('rejects a valid local PADEL assessment without writing a level', async () => {
     const repo = repository();
-    repo.setLevel.mockResolvedValue({
-      outcome: 'applied',
-      level: { ...level, source: 'ONBOARDING', numericValue: 3.63 },
-      replayed: false,
-    });
     const app = await buildApp({
       config,
       logger: createLogger('profile-level-route-test', 'silent'),
@@ -253,20 +281,9 @@ describe('profile level routes', () => {
         },
       },
     });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      assessment: { numericScore: 3.63, levelCode: 'C+' },
-      level: { source: 'ONBOARDING', numericValue: 3.63 },
-    });
-    expect(repo.setLevel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId,
-        playerId: userId,
-        source: 'ONBOARDING',
-        numericValue: 3.63,
-        levelId,
-      }),
-    );
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'PROFILE_LEVEL_CUP_AUTHORITATIVE' });
+    expect(repo.setLevel).not.toHaveBeenCalled();
   });
 
   it('rejects client-computed assessment output and hidden-branch answers', async () => {

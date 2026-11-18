@@ -447,7 +447,12 @@ export function createParticipationCommandRepository(
                  on level.tenant_id = player.tenant_id
                 and level.sport_code = player.sport_code and level.id = player.level_id
               where player.tenant_id = $1 and player.player_id = $2
-                and player.sport_code = $3`,
+                and player.sport_code = $3
+                and (player.sport_code <> 'PADEL' or exists (
+                  select 1 from eligibility.cup_player_level_projections cup
+                   where cup.tenant_id = player.tenant_id and cup.player_id = player.player_id
+                     and cup.sport_code = player.sport_code and cup.level_id = player.level_id
+                ))`,
             [input.tenantId, input.actorUserId, activity.sport_code],
           ),
         ]);

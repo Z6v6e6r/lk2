@@ -1,4 +1,4 @@
-import type { Pool, QueryResultRow } from 'pg';
+import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
 import type { CanonicalLevelView } from './level-eligibility-policy-repository.js';
@@ -21,6 +21,14 @@ export interface PlayerLevelState {
   readonly scaleVersion: number | null;
   readonly levels: readonly CanonicalLevelView[];
   readonly currentLevel: PlayerSportLevelView | null;
+  readonly projectionStatus?: 'PENDING' | 'PROJECTED';
+}
+
+export class PlayerLevelProjectionConflictError extends Error {
+  public constructor() {
+    super('PLAYER_LEVEL_PROJECTION_CONFLICT');
+    this.name = 'PlayerLevelProjectionConflictError';
+  }
 }
 
 export interface SetPlayerLevelInput {
@@ -137,9 +145,12 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
             order by sort_order, id`,
           [tenantId, sportCode],
         );
-        const current = await queryOne<PlayerLevelRow>(
-          client,
-          `select ${PLAYER_LEVEL_COLUMNS}
+        const current =
+          sportCode === 'PADEL'
+            ? await readCupLevel(client, tenantId, playerId)
+            : await queryOne<PlayerLevelRow>(
+                client,
+                `select ${PLAYER_LEVEL_COLUMNS}
              from eligibility.player_sport_levels player
              join eligibility.canonical_levels level
                on level.tenant_id = player.tenant_id
@@ -148,19 +159,23 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
              join profile.user_summaries profile
                on profile.tenant_id = player.tenant_id and profile.user_id = player.player_id
             where player.tenant_id = $1 and player.player_id = $2 and player.sport_code = $3`,
-          [tenantId, playerId, sportCode],
-        );
+                [tenantId, playerId, sportCode],
+              );
         const views = levels.rows.map(levelView);
         return {
           sportCode,
           scaleVersion: views[0]?.scaleVersion ?? null,
           levels: views,
           currentLevel: current ? playerLevelView(current) : null,
+          ...(sportCode === 'PADEL' ? { projectionStatus: current ? 'PROJECTED' : 'PENDING' } : {}),
         };
       });
     },
 
     setLevel(input) {
+      if (input.sportCode === 'PADEL') {
+        return Promise.resolve({ outcome: 'cup_authoritative' });
+      }
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         if (
           input.numericValue !== undefined &&
@@ -171,6 +186,9 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
         ) {
           throw new Error('PLAYER_LEVEL_NUMERIC_INVALID');
         }
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `player-level:${input.tenantId}:${input.playerId}:PADEL`,
+        ]);
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `player-level:${input.tenantId}:${input.playerId}:${input.sportCode}`,
         ]);
@@ -231,9 +249,15 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
           [input.tenantId, input.playerId, input.sportCode],
         );
         const profile = await client.query(
-          `update profile.user_summaries
-              set level_label = $3, level_value = $4, updated_at = now()
-            where tenant_id = $1 and user_id = $2`,
+          `update profile.user_summaries profile
+              set level_label = case when cup.player_id is null then $3 else profile.level_label end,
+                  level_value = case when cup.player_id is null then $4 else profile.level_value end,
+                  updated_at = now()
+             from (select $1::uuid as tenant_id, $2::uuid as player_id) actor
+             left join eligibility.cup_player_level_projections cup
+               on cup.tenant_id = actor.tenant_id and cup.player_id = actor.player_id
+              and cup.sport_code = 'PADEL'
+            where profile.tenant_id = actor.tenant_id and profile.user_id = actor.player_id`,
           [input.tenantId, input.playerId, level.code, input.numericValue ?? null],
         );
         if ((profile.rowCount ?? 0) !== 1) return { outcome: 'profile_not_found' };
@@ -296,4 +320,33 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
       });
     },
   };
+}
+
+async function readCupLevel(
+  client: PoolClient,
+  tenantId: string,
+  playerId: string,
+): Promise<PlayerLevelRow | undefined> {
+  const current = await queryOne<PlayerLevelRow>(
+    client,
+    `select cup.player_id, cup.sport_code, cup.level_id, level.code, level.title, level.rank,
+            player.source, player.scale_version, cup.occurred_at::text as updated_at,
+            profile.level_value as numeric_value
+       from eligibility.cup_player_level_projections cup
+       join eligibility.canonical_levels level
+         on level.tenant_id = cup.tenant_id and level.sport_code = cup.sport_code
+        and level.id = cup.level_id
+       left join eligibility.player_sport_levels player
+         on player.tenant_id = cup.tenant_id and player.player_id = cup.player_id
+        and player.sport_code = cup.sport_code and player.level_id = cup.level_id
+       left join profile.user_summaries profile
+         on profile.tenant_id = cup.tenant_id and profile.user_id = cup.player_id
+        and profile.level_label = level.code and profile.level_value between 1 and 7
+      where cup.tenant_id = $1 and cup.player_id = $2 and cup.sport_code = 'PADEL'`,
+    [tenantId, playerId],
+  );
+  if (current && (!current.source || current.numeric_value == null)) {
+    throw new PlayerLevelProjectionConflictError();
+  }
+  return current;
 }

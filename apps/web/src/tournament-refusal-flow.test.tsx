@@ -13,8 +13,8 @@ import { TournamentRegistrationPanel } from './TournamentRegistrationPanel.js';
 const id = '11111111-1111-4111-a111-111111111111';
 const reasons = [
   ['LEVEL_NOT_ALLOWED', 'Ваш уровень не подходит под диапазон турнира.'],
-  ['PLAYER_LEVEL_REQUIRED', 'Чтобы записаться, укажите свой уровень.'],
-  ['PLAYER_LEVEL_UNKNOWN', 'Не удалось определить ваш уровень. Укажите его и повторите.'],
+  ['PLAYER_LEVEL_REQUIRED', 'Подтвердите уровень в личном кабинете клуба и запишитесь снова.'],
+  ['PLAYER_LEVEL_UNKNOWN', 'Не удалось подтвердить уровень в ЦУП. Повторите проверку позже.'],
   ['ACTIVITY_LEVEL_INVALID', 'Диапазон уровней турнира настроен некорректно.'],
   ['PLAYER_GENDER_REQUIRED', 'Для записи укажите пол в профиле.'],
   ['GENDER_NOT_ALLOWED', 'Вы не подходите под ограничение турнира по полу.'],
@@ -168,6 +168,8 @@ function fixture(reason: (typeof reasons)[number][0], loseAck: boolean) {
       commandTournament: sdk.commandTournament.bind(sdk),
       getTournamentRegistration: sdk.getTournamentRegistration.bind(sdk),
       retryTournament: sdk.retryTournament.bind(sdk),
+      getOwnPlayerLevel: vi.fn(),
+      setOwnPlayerLevel: vi.fn(),
     },
     keys,
     allow: () => {
@@ -209,6 +211,8 @@ it.each(reasons)(
     await user.click(screen.getByRole('button', { name: 'Проверить запись' }));
     expect(await screen.findByText(new RegExp(message.replaceAll('.', '\\.')))).toBeVisible();
     expect(f.keys).toHaveLength(1);
+    expect(f.gateway.getOwnPlayerLevel).not.toHaveBeenCalled();
+    expect(f.gateway.setOwnPlayerLevel).not.toHaveBeenCalled();
     f.allow();
     await user.click(join);
     expect(await screen.findByText('Запись подтверждена.')).toBeVisible();

@@ -2488,12 +2488,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       }
       const cached = playerProfilePromises.get(userId);
       if (cached) return cached;
-      const request = client.getPlayerProfile(userId);
-      const guardedRequest = request.catch((error: unknown) => {
+      const guardedRequest = client.getPlayerProfile(userId).finally(() => {
         if (playerProfilePromises.get(userId) === guardedRequest) {
           playerProfilePromises.delete(userId);
         }
-        throw error;
       });
       playerProfilePromises.set(userId, guardedRequest);
       return guardedRequest;
@@ -3308,30 +3306,6 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getOwnPlayerLevel(sportCode) {
       return client.getOwnPlayerLevel(sportCode);
-    },
-
-    async setOwnPlayerLevel(levelId, sportCode) {
-      const saved = await client.setOwnPlayerLevel(levelId, sportCode);
-      selfProfilePromise = undefined;
-      selfProfileExpiresAt = 0;
-      homeBasePromise = undefined;
-      homeDashboardPromise = undefined;
-      if (currentUserId) playerProfilePromises.delete(currentUserId);
-      return saved;
-    },
-
-    getOwnLevelAssessment() {
-      return client.getOwnLevelAssessment();
-    },
-
-    async completeOwnLevelAssessment(assessmentVersion, answers) {
-      const saved = await client.completeOwnLevelAssessment(assessmentVersion, answers);
-      selfProfilePromise = undefined;
-      selfProfileExpiresAt = 0;
-      homeBasePromise = undefined;
-      homeDashboardPromise = undefined;
-      if (currentUserId) playerProfilePromises.delete(currentUserId);
-      return saved;
     },
 
     listConversations() {

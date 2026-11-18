@@ -62,3 +62,61 @@ This stage does not define a deletion or invalid-rating tombstone. Keep the
 `player_projection_ready` gate false and do not publish `BLOCK` while CUP reports invalid states or
 until an explicit clear-level contract exists; otherwise the last accepted PadlHub level remains in
 force.
+
+## CUP-only PADEL consumer candidate
+
+The dashboard and both profile routes take the PADEL level from the tenant's accepted CUP
+projection. A Viva observation can still update the displayed balance. The old Home snapshot
+and the old profile summary cannot supply a PADEL level before projection. Active game cards,
+community current-level columns, player lists, booking recommendations and native game or
+training eligibility use the CUP projection fence. Community scores, deltas and ranking order
+still come from the requested community snapshot. An unknown row level is returned as null.
+
+The authenticated `GET /profile/level` response uses `projectionStatus: PENDING` when no
+snapshot has arrived, and `PROJECTED` when an accepted snapshot is readable. A projection
+conflict returns `409 PROFILE_LEVEL_PROJECTION_CONFLICT` and a read error returns
+`503 PROFILE_LEVEL_UNAVAILABLE`. Pending projection establishes no statement about whether
+CUP has assigned a level. A cached CUP snapshot can remain visible during delivery delay.
+Tournament eligibility itself is checked by the CUP owner on new attempts. Existing attempts
+retain their own receipt and recovery path.
+
+PADEL self-declaration and assessment writes return `PROFILE_LEVEL_CUP_AUTHORITATIVE`.
+The authenticated player can complete the existing canonical onboarding in LK1, or an authorized
+staff member can assign a level in CUP. Any new signup requires an explicit user action.
+Legacy profile and match/booking history remains available as history. The level-history screen
+does not label an old history point as the current level.
+
+Migration `0119_cup_calculated_player_levels.sql` widens the existing provenance check.
+The receiver records calculated game and tournament event types exactly and uses the existing
+`CALCULATED` classification in its projection. Sender and receiver need the paired calculated
+event allowlist. Existing first-assignment deliveries retain their `RATING_MANUALLY_CHANGED`
+wire representation and idempotency hash. Disable delivery to pause ingestion while retaining
+CUP-only reads, accepted snapshots and the event ledger.
+
+## Local cross-service fixture
+
+Use a new dedicated loopback PostgreSQL 16 database. The fixture requires the exact database
+name, port, migration ledger entry and a synthetic token before it seeds the synthetic player.
+It serves the production projection ingress and uses a disposable runtime role with forced
+tenant RLS. It also exposes test-only `GET /rehearsal` with the exact accepted level, projection
+status, event revisions and the synthetic request log for deliberate replay. No provider network
+traffic is needed.
+
+```sh
+docker run --rm -d --name phub-cup-level-probe \
+  --publish 127.0.0.1:25478:5432 \
+  --env POSTGRES_HOST_AUTH_METHOD=trust \
+  --env POSTGRES_DB=phub_cup_level_probe postgres:16-alpine
+docker exec phub-cup-level-probe pg_isready -U postgres -d phub_cup_level_probe
+CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1 \
+  DATABASE_URL=postgres://postgres@127.0.0.1:25478/phub_cup_level_probe \
+  node --import tsx scripts/migrate.ts
+LK2_CUP_PROJECTION_TEST_DB=postgres://postgres@127.0.0.1:25478/phub_cup_level_probe \
+  LK2_CUP_PROJECTION_TEST_TOKEN=synthetic-shared-projection-test-token \
+  node --import tsx scripts/rehearse-cup-player-level-projection.ts
+```
+
+Use Node 22. The sender's base URL is `http://127.0.0.1:18078`, its target tenant is
+`local-padel`, and its player ID is `synthetic-shared-player`. The initial read must show
+`PENDING`, even though the legacy compatibility rows contain a different level. Subsequent
+reads identify which CUP revisions arrived and the value visible through each LK2 repository.
