@@ -1489,10 +1489,30 @@ function paidJoinBindingRefsFromSnapshot(snapshot: unknown): PaidJoinBindingRefs
   if (typeof snapshot !== 'object' || snapshot === null || Array.isArray(snapshot))
     throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
   const row = snapshot as Record<string, unknown>;
+  const hasCommercialRef =
+    Object.prototype.hasOwnProperty.call(row, 'policyRef') ||
+    Object.prototype.hasOwnProperty.call(row, 'usageRef');
+  if (!hasCommercialRef) {
+    // Local level-eligibility stores a matching decisionId/ALLOWED decision and is not a CUP
+    // commercial ref. An orphan decision or a managed binding without policyRef is corruption.
+    if (Object.prototype.hasOwnProperty.call(row, 'managedJoin'))
+      throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+    if (Object.prototype.hasOwnProperty.call(row, 'decisionId')) {
+      const decision = row.decision;
+      if (
+        typeof decision !== 'object' ||
+        decision === null ||
+        Array.isArray(decision) ||
+        (decision as Record<string, unknown>).decisionId !== row.decisionId ||
+        (decision as Record<string, unknown>).status !== 'ALLOWED'
+      )
+        throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+    }
+    return undefined;
+  }
   const keys = ['policyRef', 'usageRef', 'decisionId'].filter((key) =>
     Object.prototype.hasOwnProperty.call(row, key),
   );
-  if (keys.length === 0) return undefined;
   try {
     const refs = parseCommercialBindingRefs(Object.fromEntries(keys.map((key) => [key, row[key]])));
     // The existing payment snapshot stores local level eligibility at decisionId/decision.
@@ -2620,9 +2640,9 @@ export function createGameRosterRepository(
                 '{reconciliation}',
                 jsonb_build_object(
                   'required', true,
-                  'attempts', $3,
+                  'attempts', $3::int,
                   'lastAttemptAt', now()::text,
-                  'escalated', $4
+                  'escalated', $4::boolean
                 ),
                 true
               )
@@ -2777,10 +2797,15 @@ export function createGameRosterRepository(
             input.evidence.currency === 'RUB' &&
             replaySnapshot.managedJoin === undefined &&
             replaySnapshot.providerBinding === undefined;
-          if (
-            !v3Replay &&
-            !(await managedConfirmationMatches(snapshot.binding_snapshot, input, true))
-          ) {
+          if (input.evidence.verifiedBy === 'LK1_OWNER_V3') {
+            if (!v3Replay) {
+              return {
+                outcome: 'rejected' as const,
+                code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
+                replayed: true,
+              };
+            }
+          } else if (!(await managedConfirmationMatches(snapshot.binding_snapshot, input, true))) {
             return {
               outcome: 'rejected' as const,
               code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
@@ -2862,8 +2887,16 @@ export function createGameRosterRepository(
           paidSnapshot.settlement.toPayMinor === input.evidence.amountMinor &&
           paidSnapshot.settlement.requestSha256 !== undefined &&
           input.evidence.currency === 'RUB';
-        if (
-          !v3Confirmation &&
+        if (input.evidence.verifiedBy === 'LK1_OWNER_V3') {
+          if (!v3Confirmation) {
+            return {
+              outcome: 'rejected' as const,
+              code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
+              currentRevision,
+              replayed: false,
+            };
+          }
+        } else if (
           !(await managedConfirmationMatches(paidSnapshot?.binding_snapshot, input, false))
         ) {
           return {

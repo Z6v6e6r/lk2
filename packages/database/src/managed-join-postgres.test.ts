@@ -9,8 +9,10 @@ import { withTenantTransaction } from './connection.js';
 import {
   createGameRosterRepository,
   type BeginPaidJoinInput,
+  type BeginPaidJoinResult,
   type ConfirmGamePaymentInput,
 } from './game-roster-repository.js';
+import { readCommercialJoinOperation } from '../../../apps/api/src/games/game-commercial-join.js';
 
 // Existing migrated quality-full service only. Never adopt an ambient/local or remote database.
 function ciDatabase(): string | undefined {
@@ -34,6 +36,10 @@ function ciDatabase(): string | undefined {
 const url = ciDatabase();
 const suite = url ? describe : describe.skip;
 const hash = (text: string): string => createHash('sha256').update(text).digest('hex');
+const reservationIdOf = (result: BeginPaidJoinResult): string => {
+  if (result.outcome !== 'reserved') throw new Error('SYNTHETIC_RESERVATION_EXPECTED');
+  return result.reservationId;
+};
 
 suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', () => {
   // Different pools force independent sessions, unlike a single mocked Pool or transaction.
@@ -444,7 +450,7 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
       const stationMembership = await adopt(input);
       const reserved = await repo1.beginPaidJoin({ ...input, stationMembership });
       if (reserved.outcome !== 'reserved') throw Error('RESERVATION_REQUIRED');
-      const confirmed = await repo2.confirmPayment(confirmation(input, reserved.reservationId));
+      const confirmed = await repo2.confirmPayment(confirmation(input, reservationIdOf(reserved)));
       if (confirmed.outcome !== 'applied' || !confirmed.participationId)
         throw Error('CONFIRMATION_REQUIRED');
       const eventId = await withTenantTransaction(
@@ -545,7 +551,7 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
     const reserved = await repo1.beginPaidJoin(input);
     expect(reserved.outcome).toBe('reserved');
     if (reserved.outcome !== 'reserved') throw new Error('FIXTURE_RESERVATION_REQUIRED');
-    const valid = confirmation(input, reserved.reservationId);
+    const valid = confirmation(input, reservationIdOf(reserved));
     const changed = {
       ...valid,
       managedJoinReceipt: {
@@ -671,7 +677,7 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
       tenantId,
       actorUserId: player1,
       gameId: game.gameId,
-      reservationId: reserved.reservationId,
+      reservationId: reservationIdOf(reserved),
       idempotencyKey: `v3-confirm:${operationId}`,
       requestHash: evidence.evidenceHash,
       correlationId: `v3-confirm:${operationId}`,
@@ -689,6 +695,179 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
       applied: 1,
       confirmedEvents: 1,
     });
+    const stored = await repo2.getPaidJoinAttempt({
+      tenantId,
+      actorUserId: player1,
+      operationId,
+    });
+    expect(stored).toMatchObject({
+      state: 'COMPLETED',
+      settlement: { toPayMinor: 90_000 },
+    });
+    await repo2.recordPaidJoinReconciliationAttempt({
+      tenantId,
+      operationId,
+      attempts: 3,
+      escalated: false,
+    });
+    const attempted = await repo2.getPaidJoinAttempt({
+      tenantId,
+      actorUserId: player1,
+      operationId,
+    });
+    expect(attempted?.reconciliation).toMatchObject({ attempts: 3, escalated: false });
+  });
+
+  it('runs the API readback through the real repository and confirms once', async () => {
+    const game = await fixtureGame();
+    const input: BeginPaidJoinInput = {
+      tenantId,
+      actorUserId: player1,
+      gameId: game.gameId,
+      operationId: randomUUID(),
+      idempotencyKey: 'api-readback-v3-synthetic-key-0001',
+      correlationId: 'api-readback-v3',
+      expectedRevision: 1,
+      subscriptionInstanceId: randomUUID(),
+      reservationTtlSeconds: 600,
+      settlement: {
+        quoteId: randomUUID(),
+        toPayMinor: 90_000,
+        checkoutUrl: 'https://padlhub.su/pay/api-readback',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        requestSha256: `sha256:${hash('api-readback-preflight')}`,
+      },
+      settlementActor: { tenantKey: `managed-join-${tenantId}`, sessionId: randomUUID() },
+      requestHash: hash('api-readback-admission'),
+      price: {
+        amountMinor: 90_000,
+        currency: 'RUB',
+        basePriceMinor: 90_000,
+        freeMinutes: 60,
+        paidMinutes: 60,
+        evaluatedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      },
+    };
+    await repo1.beginPaidJoin(input);
+    const receipt = {
+      receiptId: `receipt-${input.operationId}`,
+      confirmedAt: new Date().toISOString(),
+      bookingRef: `booking-${input.operationId}`,
+      usageRef: `usage-${input.operationId}`,
+      appliedRule: 'rule-v3',
+      priceCharged: { amountMinor: 90_000, currency: 'RUB' as const },
+      provider: 'VIVA' as const,
+    };
+    const body = await readCommercialJoinOperation(
+      {
+        tenantId,
+        tenantKey: `managed-join-${tenantId}`,
+        actorUserId: player1,
+        sessionId: randomUUID(),
+        operationId: input.operationId,
+        correlationId: 'api-readback-v3',
+      },
+      {
+        repository: repo1 as never,
+        owner: {} as never,
+        settlementOwner: {
+          prepare: () => Promise.reject(new Error('unexpected')),
+          execute: () => Promise.reject(new Error('unexpected')),
+          cancel: () => Promise.reject(new Error('unexpected')),
+          read: () =>
+            Promise.resolve({
+              status: 'CONFIRMED' as const,
+              receipt,
+            }),
+        },
+      },
+    );
+    expect(body?.operation.status).toBe('SUCCEEDED');
+    expect(await counts(game.gameId)).toEqual({
+      attempts: 1,
+      seats: 1,
+      snapshots: 1,
+      players: 1,
+      applied: 1,
+      confirmedEvents: 1,
+    });
+    const replay = await readCommercialJoinOperation(
+      {
+        tenantId,
+        tenantKey: `managed-join-${tenantId}`,
+        actorUserId: player1,
+        sessionId: randomUUID(),
+        operationId: input.operationId,
+        correlationId: 'api-readback-v3-replay',
+      },
+      {
+        repository: repo1 as never,
+        owner: {} as never,
+        settlementOwner: {
+          prepare: () => Promise.reject(new Error('unexpected')),
+          execute: () => Promise.reject(new Error('unexpected')),
+          cancel: () => Promise.reject(new Error('unexpected')),
+          read: () => Promise.resolve({ status: 'CONFIRMED' as const, receipt }),
+        },
+      },
+    );
+    expect(replay?.operation.status).toBe('SUCCEEDED');
+    expect(await counts(game.gameId)).toEqual({
+      attempts: 1,
+      seats: 1,
+      snapshots: 1,
+      players: 1,
+      applied: 1,
+      confirmedEvents: 1,
+    });
+  });
+
+  it('persists reconciliation attempts and escalation on the real snapshot', async () => {
+    const game = await fixtureGame();
+    const baseInput = command(game);
+    const input: BeginPaidJoinInput = {
+      tenantId,
+      actorUserId: player1,
+      gameId: game.gameId,
+      operationId: baseInput.operationId,
+      idempotencyKey: `escalation:${baseInput.operationId}`,
+      correlationId: `escalation:${baseInput.operationId}`,
+      expectedRevision: 1,
+      subscriptionInstanceId: randomUUID(),
+      reservationTtlSeconds: 600,
+      settlement: {
+        quoteId: randomUUID(),
+        toPayMinor: 90_000,
+        checkoutUrl: 'https://padlhub.su/pay/escalation',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        requestSha256: `sha256:${hash('escalation:' + baseInput.operationId)}`,
+      },
+      settlementActor: { tenantKey: `managed-join-${tenantId}`, sessionId: randomUUID() },
+      requestHash: hash('escalation:' + baseInput.operationId),
+      price: {
+        amountMinor: 90_000,
+        currency: 'RUB',
+        basePriceMinor: 90_000,
+        freeMinutes: 60,
+        paidMinutes: 60,
+        evaluatedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      },
+    };
+    await repo1.beginPaidJoin(input);
+    await repo1.recordPaidJoinReconciliationAttempt({
+      tenantId,
+      operationId: input.operationId,
+      attempts: 20,
+      escalated: true,
+    });
+    const stored = await repo1.getPaidJoinAttempt({
+      tenantId,
+      actorUserId: player1,
+      operationId: input.operationId,
+    });
+    expect(stored?.reconciliation).toMatchObject({ attempts: 20, escalated: true });
   });
 
   it('keeps the seat when dispatch wins the fence before expiry', async () => {
@@ -701,15 +880,15 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
         actorUserId: player1,
         gameId: game.gameId,
         operationId: input.operationId,
-        reservationId: reserved.reservationId,
+        reservationId: reservationIdOf(reserved),
       }),
     ).toBe(true);
-    await moveExpiryIntoPast(game.gameId, reserved.reservationId);
+    await moveExpiryIntoPast(game.gameId, reservationIdOf(reserved));
     const expired = await repo2.expireReservation(
-      expiryCommand(game.gameId, reserved.reservationId),
+      expiryCommand(game.gameId, reservationIdOf(reserved)),
     );
     expect(expired.outcome).toBe('not_due');
-    expect(await reservationState(reserved.reservationId)).toBe('ACTIVE');
+    expect(await reservationState(reservationIdOf(reserved))).toBe('ACTIVE');
     expect(
       await repo2.getPaidJoinAttempt({
         tenantId,
@@ -723,19 +902,19 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
     const game = await fixtureGame();
     const input = command(game);
     const reserved = await repo1.beginPaidJoin(input);
-    await moveExpiryIntoPast(game.gameId, reserved.reservationId);
+    await moveExpiryIntoPast(game.gameId, reservationIdOf(reserved));
     const expired = await repo2.expireReservation(
-      expiryCommand(game.gameId, reserved.reservationId),
+      expiryCommand(game.gameId, reservationIdOf(reserved)),
     );
     expect(expired.outcome).toBe('applied');
-    expect(await reservationState(reserved.reservationId)).toBe('EXPIRED');
+    expect(await reservationState(reservationIdOf(reserved))).toBe('EXPIRED');
     expect(
       await repo2.markPaidJoinDispatched({
         tenantId,
         actorUserId: player1,
         gameId: game.gameId,
         operationId: input.operationId,
-        reservationId: reserved.reservationId,
+        reservationId: reservationIdOf(reserved),
       }),
     ).toBe(false);
     expect(
@@ -751,7 +930,7 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
     const game = await fixtureGame();
     const input = command(game);
     const reserved = await repo1.beginPaidJoin(input);
-    await moveExpiryIntoPast(game.gameId, reserved.reservationId);
+    await moveExpiryIntoPast(game.gameId, reservationIdOf(reserved));
     await withTenantTransaction(first, tenantId, (client) =>
       client.query(
         'delete from eligibility.payment_snapshots where tenant_id=$1 and operation_id=$2',
@@ -759,9 +938,9 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
       ),
     );
     const expired = await repo2.expireReservation(
-      expiryCommand(game.gameId, reserved.reservationId),
+      expiryCommand(game.gameId, reservationIdOf(reserved)),
     );
     expect(expired.outcome).toBe('not_due');
-    expect(await reservationState(reserved.reservationId)).toBe('ACTIVE');
+    expect(await reservationState(reservationIdOf(reserved))).toBe('ACTIVE');
   });
 });

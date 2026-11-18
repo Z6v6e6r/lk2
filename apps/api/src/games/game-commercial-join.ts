@@ -1385,6 +1385,8 @@ export async function readCommercialJoinOperation(
             evidenceHash,
             verifiedAt: receipt.confirmedAt,
             verifiedBy: 'LK1_OWNER_V3',
+            amountMinor: receipt.priceCharged.amountMinor,
+            currency: receipt.priceCharged.currency,
           },
         });
       } catch {
@@ -1431,6 +1433,20 @@ export async function readCommercialJoinOperation(
       });
     }
     if (read.status === 'CANCELLED') {
+      try {
+        await dependencies.repository.failPaidJoinAttempt({
+          tenantId: input.tenantId,
+          actorUserId: input.actorUserId,
+          operationId: input.operationId,
+          gameId: attempt.gameId,
+          code: 'GAME_JOIN_CANCELLED',
+          correlationId: input.correlationId,
+        });
+      } catch {
+        // The owner is closed but the local write failed. Keep the operation unresolved so the next
+        // readback retries the local completion without any new financial dispatch.
+        return unresolvedSettlementOperation(attempt, now);
+      }
       return operationBody({
         operationId: attempt.commandId,
         status: 'FAILED',
@@ -1439,16 +1455,10 @@ export async function readCommercialJoinOperation(
         createdAt: new Date(now()).toISOString(),
         updatedAt: new Date(now()).toISOString(),
         error: {
-          code: 'GAME_RESERVATION_EXPIRED',
-          message: FAILURE_MESSAGES.GAME_RESERVATION_EXPIRED,
+          code: 'GAME_JOIN_CANCELLED',
+          message: FAILURE_MESSAGES.GAME_JOIN_CANCELLED,
         },
-        commercial: attemptView(
-          'FAILED',
-          attempt.reservation,
-          null,
-          null,
-          'GAME_RESERVATION_EXPIRED',
-        ),
+        commercial: attemptView('FAILED', attempt.reservation, null, null, 'GAME_JOIN_CANCELLED'),
         replayed: true,
       });
     }
@@ -1624,6 +1634,7 @@ export async function cancelCommercialJoinOperation(
     cancelled = null;
   }
   if (cancelled?.status === 'CLOSED') {
+    let localClosed = false;
     try {
       await dependencies.repository.failPaidJoinAttempt({
         tenantId: input.tenantId,
@@ -1633,23 +1644,27 @@ export async function cancelCommercialJoinOperation(
         code: 'GAME_JOIN_CANCELLED',
         correlationId: input.correlationId,
       });
+      localClosed = true;
     } catch {
-      // The owner already closed the attempt; the local failure is retried by readback.
+      // The owner is closed but the local write failed. Do not report a terminal cancel; the next
+      // readback retries the local completion and never sends another owner cancel.
     }
-    return operationBody({
-      operationId: attempt.commandId,
-      status: 'FAILED',
-      gameId: attempt.gameId,
-      revision: null,
-      createdAt: observedAt,
-      updatedAt: observedAt,
-      error: {
-        code: 'GAME_JOIN_CANCELLED',
-        message: FAILURE_MESSAGES.GAME_JOIN_CANCELLED,
-      },
-      commercial: attemptView('FAILED', attempt.reservation, null, null, 'GAME_JOIN_CANCELLED'),
-      replayed: true,
-    });
+    if (localClosed) {
+      return operationBody({
+        operationId: attempt.commandId,
+        status: 'FAILED',
+        gameId: attempt.gameId,
+        revision: null,
+        createdAt: observedAt,
+        updatedAt: observedAt,
+        error: {
+          code: 'GAME_JOIN_CANCELLED',
+          message: FAILURE_MESSAGES.GAME_JOIN_CANCELLED,
+        },
+        commercial: attemptView('FAILED', attempt.reservation, null, null, 'GAME_JOIN_CANCELLED'),
+        replayed: true,
+      });
+    }
   }
   return operationBody({
     operationId: attempt.commandId,

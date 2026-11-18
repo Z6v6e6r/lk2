@@ -568,6 +568,68 @@ describe('commercial JOIN readback', () => {
     );
   });
 
+  it('keeps the cancel unresolved after a local DB failure and completes it on readback', async () => {
+    const settlement = {
+      quoteId: fixtureId(123),
+      amountMinor: 70_000,
+      toPayMinor: 70_000,
+      checkoutUrl: 'https://padlhub.su/pay/synthetic-cancel-recover',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestSha256: 'sha256:' + 'd'.repeat(64),
+    };
+    const failPaidJoinAttempt = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('synthetic database failure'))
+      .mockResolvedValueOnce(undefined);
+    const settlementOwner = {
+      prepare: vi.fn(),
+      execute: vi.fn(),
+      cancel: vi.fn(() =>
+        resolved({ status: 'CLOSED' as const, limitReleased: true, visitReturned: false }),
+      ),
+      read: vi.fn(() => resolved({ status: 'CANCELLED' as const })),
+    };
+    const cancelled = await cancelCommercialJoinOperation(
+      {
+        tenantId: fixtureActor.tenantId,
+        tenantKey: 'synthetic',
+        actorUserId: fixtureActor.userId,
+        sessionId: fixtureActor.sessionId,
+        operationId,
+        correlationId: 'correlation-cancel-recover',
+      },
+      {
+        repository: {
+          getPaidJoinAttempt: () => resolved({ ...attemptBase, settlement }),
+          failPaidJoinAttempt,
+        },
+        settlementOwner,
+      },
+    );
+    expect(cancelled?.operation.status).toBe('PROCESSING');
+    const recovered = await readCommercialJoinOperation(
+      {
+        tenantId: fixtureActor.tenantId,
+        tenantKey: 'synthetic',
+        actorUserId: fixtureActor.userId,
+        sessionId: fixtureActor.sessionId,
+        operationId,
+        correlationId: 'correlation-cancel-recover-read',
+      },
+      {
+        ...readbackDependencies({ ...attemptBase, settlement }),
+        repository: {
+          ...readbackDependencies({ ...attemptBase, settlement }).repository,
+          failPaidJoinAttempt,
+        },
+        settlementOwner,
+      },
+    );
+    expect(recovered?.operation.status).toBe('FAILED');
+    expect(recovered?.operation.error?.code).toBe('GAME_JOIN_CANCELLED');
+    expect(failPaidJoinAttempt).toHaveBeenCalledTimes(2);
+  });
+
   it('does not cancel a v3 attempt while the owner reports PAID', async () => {
     const settlement = {
       quoteId: fixtureId(122),
