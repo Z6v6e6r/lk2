@@ -2,13 +2,47 @@ import { useEffect, useId, useState } from 'react';
 import type { AuthGateway, HomeDashboard } from './auth-gateway.js';
 import './GameJoinSubscriptionPicker.css';
 
-type Subscription = Pick<HomeDashboard['subscriptions'][number], 'id' | 'title'>;
+type Subscription = Pick<
+  HomeDashboard['subscriptions'][number],
+  'id' | 'title' | 'status' | 'remainingUnits' | 'validUntil'
+>;
 type State = {
   gateway: Pick<AuthGateway, 'getHomeDashboard'>;
   status: 'loading' | 'error' | 'ready';
   items: readonly Subscription[];
 };
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const statusLabels: Readonly<Record<string, string>> = {
+  active: 'активна',
+  scheduled: 'запланирована',
+  paused: 'заморожена',
+  exhausted: 'лимит исчерпан',
+  expired: 'истекла',
+};
+
+/** Display only: the server still decides ownership, applicability and price. */
+function subscriptionLabel(subscription: Subscription): string {
+  const parts: string[] = [subscription.title];
+  if (typeof subscription.remainingUnits === 'number') {
+    parts.push(`осталось: ${subscription.remainingUnits}`);
+  }
+  if (subscription.validUntil) {
+    const validUntil = new Date(subscription.validUntil);
+    if (Number.isFinite(validUntil.getTime())) {
+      parts.push(
+        `до ${new Intl.DateTimeFormat('ru-RU', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        }).format(validUntil)}`,
+      );
+    }
+  }
+  const status = statusLabels[subscription.status];
+  if (status && subscription.status !== 'active') parts.push(status);
+  return parts.join(' · ');
+}
 
 /** Titles are display only; the server decides ownership, applicability and price. */
 export function GameJoinSubscriptionPicker(props: {
@@ -30,7 +64,13 @@ export function GameJoinSubscriptionPicker(props: {
         const subscriptions = new Map<string, Subscription>();
         for (const item of dashboard.subscriptions) {
           if (canonicalUuid.test(item.id) && !subscriptions.has(item.id)) {
-            subscriptions.set(item.id, { id: item.id, title: item.title });
+            subscriptions.set(item.id, {
+              id: item.id,
+              title: item.title,
+              status: item.status,
+              remainingUnits: item.remainingUnits,
+              validUntil: item.validUntil,
+            });
           }
         }
         const items = [...subscriptions.values()];
@@ -84,7 +124,7 @@ export function GameJoinSubscriptionPicker(props: {
             <option value="">Выберите подписку</option>
             {current.items.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.title}
+                {subscriptionLabel(item)}
               </option>
             ))}
           </select>
