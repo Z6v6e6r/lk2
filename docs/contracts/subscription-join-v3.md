@@ -16,14 +16,14 @@ v3 использует те же `CommercialTarget`/котировку и те 
 `docs/contracts/game-create-join-shared-contract.md` (владелец — CREATE). Отличия только в
 транспорте:
 
-| Понятие   | v3                                                                                                                             |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Действие  | `JOIN_GAME` или `CREATE_GAME`                                                                                                  |
-| Цель      | `GAME` (существующая) или `DRAFT_GAME` (черновик CREATE)                                                                       |
-| Котировка | `quoteId`, `basis`, `durationMinutes` 60/90/120, `amountMinor`, `coveredMinutes`, `surchargeMinor`, `expiresAt`, `priceDigest` |
-| Согласие  | ровно `{quoteId, amountMinor, currency}`; сервер сверяет с действующей котировкой                                              |
-| Расчёт    | `settlement.mode=ZERO                                                                                                          | SURCHARGE`, `toPayMinor`, `checkoutUrl`, `expiresAt`, `state` |
-| Квитанция | `receipt` только от владельца; HTTP 200 и возврат с платёжной страницы успехом не считаются                                    |
+| Понятие   | v3                                                                                                                                                                                        |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Действие  | `JOIN_GAME` или `CREATE_GAME`                                                                                                                                                             |
+| Цель      | `GAME` (существующая) или `DRAFT_GAME` (черновик CREATE)                                                                                                                                  |
+| Котировка | `quoteId`, `basis`, `durationMinutes` 60/90/120, `amountMinor`, `coveredMinutes`, `surchargeMinor`, `expiresAt`, `priceDigest`                                                            |
+| Согласие  | ровно `{quoteId, amountMinor, currency, expiresAt}`; сервер сверяет с действующей котировкой и отклоняет просроченное                                                                     |
+| Расчёт    | `settlement.mode` = `ZERO` или `SURCHARGE`; `toPayMinor`, `checkoutUrl`, `expiresAt`, `state`                                                                                             |
+| Квитанция | `receiptId`, `confirmedAt`, `bookingRef`, `usageRef?`, `appliedRule`, `priceCharged{amountMinor,currency}`, `provider:VIVA`; HTTP 200 и возврат с платёжной страницы успехом не считаются |
 
 ## Маршруты
 
@@ -31,6 +31,11 @@ v3 использует те же `CommercialTarget`/котировку и те 
 - `POST /lk/integrations/v3/booked-operation-admissions`
 - `GET  /lk/integrations/v3/booked-operations/{operationId}`
 - `POST /lk/integrations/v3/booked-operations/{operationId}/cancel`
+
+Каждый ответ привязан к исходной операции: preflight/read возвращают `operationId` и
+`requestSha256`, котировка содержит тот же `operationId`, consent содержит `quoteId` и
+`expiresAt`, read возвращает `quoteId` (null только для исторической строки). Ответ без этой
+привязки — не успех.
 
 Авторизация — та же RS256-делегация ЛК2→ЛК1 и actor token; добавляются scopes
 `subscription-runtime.booked-operation.preflight/admit/read/cancel`. v3 не ослабляет v2:
@@ -71,5 +76,8 @@ visit.state:   NOT_CONSUMED | CONSUMED | RETURNED | NOT_APPLICABLE | UNKNOWN
 ## Проверки
 
 `packages/subscription-runtime-adapter/src/booked-operation-v3.test.ts`: exact keys, 120 минут,
-HTTP checkout запрещён, `OPEN` без срока запрещён, раздельные состояния, идемпотентная отмена.
+HTTP checkout запрещён, `OPEN` без срока запрещён, раздельные состояния, квитанция только для
+CONFIRMED, cancel-инварианты (`CLOSING` не объявляет release, `CLOSED` требует `cancelled=true`).
+`booked-operation-v3-client.test.ts`: привязка заголовков/тела, отсутствие actor token на read,
+breaker после трёх transport-ошибок.
 Это LOCAL-контракт; LK1/Viva/STAGING не проверялись.
