@@ -27,8 +27,18 @@ readonly final_snapshot_timeout="${CI_TEST_FINAL_SNAPSHOT_TIMEOUT:-5s}"
 readonly final_snapshot_command="${CI_TEST_FINAL_SNAPSHOT_COMMAND:-}"
 readonly output_redaction_timeout="${CI_TEST_OUTPUT_REDACTION_TIMEOUT:-10s}"
 readonly output_redaction_command="${CI_TEST_OUTPUT_REDACTION_COMMAND:-}"
+# Declared ceiling for the whole finalization sequence (helper shutdown, process-group
+# teardown, redaction, final evidence). Stages are capped both individually and by what is
+# left of this budget, so a loaded runner can never push the supervisor past it. The workflow
+# keeps 70s between the watchdog deadline and the Actions step timeout, so 30s always fits.
+readonly finalization_budget_seconds="${CI_TEST_FINALIZATION_BUDGET_SECONDS:-30}"
+# Grace window for a killed process group to finish tearing down before a probe is allowed to
+# call it a cleanup failure. Without it a single instantaneous probe races the kernel.
+readonly process_group_settle_milliseconds="${CI_TEST_PROCESS_GROUP_SETTLE_MILLISECONDS:-250}"
 readonly residual_process_group_status=125
 readonly supervisor_cleanup_status=126
+finalization_started_milliseconds=''
+finalization_deadline_milliseconds=''
 
 mkdir -p "$diagnostics_dir"
 : >"$stdout_log"
@@ -63,6 +73,122 @@ log_watchdog_event() {
   printf -v event_line 'timestamp=%s %s' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
   printf '%s\n' "$event_line" >>"$watchdog_log"
   printf '%s\n' "$event_line"
+}
+
+now_milliseconds() {
+  local epoch_realtime="${EPOCHREALTIME:-}"
+  local nanoseconds
+  local seconds
+  local fraction
+
+  if [[ -n "$epoch_realtime" ]]; then
+    seconds="${epoch_realtime%%[.,]*}"
+    fraction="${epoch_realtime#*[.,]}000"
+    printf '%s%s' "$seconds" "${fraction:0:3}"
+    return
+  fi
+  nanoseconds="$(date +%s%N 2>/dev/null)"
+  if [[ "$nanoseconds" =~ ^[0-9]{16,}$ ]]; then
+    printf '%s' "${nanoseconds:0:13}"
+    return
+  fi
+  printf '%s000' "$(date +%s)"
+}
+
+milliseconds_from_duration() {
+  local value="${1:-}"
+  local fraction
+
+  value="${value%s}"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$(( 10#$value * 1000 ))"
+    return
+  fi
+  if [[ "$value" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+    fraction="${BASH_REMATCH[2]}000"
+    printf '%s' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${fraction:0:3} ))"
+    return
+  fi
+  printf '%s' "$(( finalization_budget_seconds * 1000 ))"
+}
+
+finalization_budget_start() {
+  if [[ -n "$finalization_started_milliseconds" ]]; then
+    return
+  fi
+  finalization_started_milliseconds="$(now_milliseconds)"
+  finalization_deadline_milliseconds="$(( finalization_started_milliseconds + finalization_budget_seconds * 1000 ))"
+}
+
+finalization_elapsed_milliseconds() {
+  if [[ -z "$finalization_started_milliseconds" ]]; then
+    printf '0'
+    return
+  fi
+  printf '%s' "$(( $(now_milliseconds) - finalization_started_milliseconds ))"
+}
+
+finalization_remaining_milliseconds() {
+  local remaining
+
+  if [[ -z "$finalization_deadline_milliseconds" ]]; then
+    printf '%s' "$(( finalization_budget_seconds * 1000 ))"
+    return
+  fi
+  remaining="$(( finalization_deadline_milliseconds - $(now_milliseconds) ))"
+  if [[ "$remaining" -lt 0 ]]; then
+    remaining=0
+  fi
+  printf '%s' "$remaining"
+}
+
+finalization_stage_milliseconds() {
+  local stage_milliseconds="$1"
+  local remaining
+
+  remaining="$(finalization_remaining_milliseconds)"
+  if [[ "$remaining" -lt "$stage_milliseconds" ]]; then
+    stage_milliseconds="$remaining"
+  fi
+  if [[ "$stage_milliseconds" -lt 50 ]]; then
+    stage_milliseconds=50
+  fi
+  printf '%s' "$stage_milliseconds"
+}
+
+finalization_stage_timeout() {
+  local stage_milliseconds
+
+  stage_milliseconds="$(finalization_stage_milliseconds "$1")"
+  printf '%d.%03ds' "$(( stage_milliseconds / 1000 ))" "$(( stage_milliseconds % 1000 ))"
+}
+
+# Bounded replacement for a post-kill sleep plus a single instantaneous probe: it returns as soon
+# as the group is gone, keeps polling for the settle window, and never blocks past the budget.
+# Status: 0 = group still alive, 1 = group gone, 2 = probe unusable (fails closed).
+wait_for_process_group_exit() {
+  local settle_milliseconds="$1"
+  local effective_milliseconds
+  local started_milliseconds
+  local probe_status
+
+  effective_milliseconds="$(finalization_stage_milliseconds "$settle_milliseconds")"
+  started_milliseconds="$(now_milliseconds)"
+  while true; do
+    # Cheap, fork-free fast path: once no member of the group is left, stop probing.
+    if [[ -z "$test_pgid" ]] || ! kill -0 -- "-$test_pgid" 2>/dev/null; then
+      return 1
+    fi
+    process_group_alive
+    probe_status=$?
+    if [[ "$probe_status" -ne 0 ]]; then
+      return "$probe_status"
+    fi
+    if [[ "$(( $(now_milliseconds) - started_milliseconds ))" -ge "$effective_milliseconds" ]]; then
+      return 0
+    fi
+    sleep 0.02
+  done
 }
 
 read_cgroup_metric() {
@@ -129,7 +255,7 @@ capture_snapshot() {
 
 helper_group_has_live_processes() {
   local helper_pgid="$1"
-  timeout --signal=KILL "$process_group_probe_timeout" \
+  timeout --signal=KILL "$(finalization_stage_timeout "$(milliseconds_from_duration "$process_group_probe_timeout")")" \
     bash -c 'ps -eo pgid=,stat= | awk -v pgid="$1" '\''$1 == pgid && $2 !~ /^Z/ { found = 1 } END { exit(found ? 0 : 1) }'\''' \
     bash "$helper_pgid" >/dev/null 2>&1
 }
@@ -150,7 +276,9 @@ helper_pid_is_running() {
 stop_helper() {
   local helper_pid="$1"
   local helper_name=monitor
-  local deadline
+  local deadline_milliseconds
+  local settle_deadline_milliseconds
+  local shutdown_budget_milliseconds
   local forced_kill=false
   local probe_status
 
@@ -164,15 +292,18 @@ stop_helper() {
 
   log_watchdog_event "reason=finalization_phase phase=${helper_name}_shutdown state=started target_pgid=$helper_pid"
   kill -TERM -- "-$helper_pid" 2>/dev/null || true
-  deadline=$((SECONDS + helper_shutdown_seconds))
+  shutdown_budget_milliseconds="$(finalization_stage_milliseconds "$(milliseconds_from_duration "$helper_shutdown_seconds")")"
+  deadline_milliseconds="$(( $(now_milliseconds) + shutdown_budget_milliseconds ))"
+  # Bounded poll: the loop exits as soon as the helper is gone instead of always sleeping the
+  # whole shutdown window, and the millisecond deadline cannot expire instantly on a coarse clock.
   while helper_pid_is_running "$helper_pid"; do
-    if [[ "$SECONDS" -ge "$deadline" ]]; then
+    if [[ "$(now_milliseconds)" -ge "$deadline_milliseconds" ]]; then
       forced_kill=true
       log_watchdog_event "reason=finalization_budget_exceeded phase=${helper_name}_shutdown action=SIGKILL target_pgid=$helper_pid"
       kill -KILL -- "-$helper_pid" 2>/dev/null || true
       break
     fi
-    sleep 0.05
+    sleep 0.02
   done
 
   wait "$helper_pid" 2>/dev/null || true
@@ -182,8 +313,17 @@ stop_helper() {
     cleanup_failure_phase='watchdog_unexpected_exit'
     log_watchdog_event "reason=supervisor_cleanup_failure phase=$cleanup_failure_phase target_pgid=$helper_pid"
   fi
-  helper_group_has_live_processes "$helper_pid"
-  probe_status=$?
+  # Give a just-killed group a bounded settle window before the single probe may declare a
+  # residual process: an instantaneous probe races the kernel's own teardown.
+  settle_deadline_milliseconds="$(( $(now_milliseconds) + $(finalization_stage_milliseconds "$process_group_settle_milliseconds") ))"
+  while :; do
+    helper_group_has_live_processes "$helper_pid"
+    probe_status=$?
+    if [[ "$probe_status" -ne 0 || "$(now_milliseconds)" -ge "$settle_deadline_milliseconds" ]]; then
+      break
+    fi
+    sleep 0.02
+  done
   if [[ "$probe_status" -eq 0 ]]; then
     forced_kill=true
     log_watchdog_event "reason=finalization_budget_exceeded phase=${helper_name}_shutdown action=SIGKILL target_pgid=$helper_pid residual_group=true"
@@ -209,7 +349,7 @@ process_group_alive() {
     return 1
   fi
   if [[ -n "$process_group_probe_command" ]]; then
-    timeout --signal=KILL "$process_group_probe_timeout" \
+    timeout --signal=KILL "$(finalization_stage_timeout "$(milliseconds_from_duration "$process_group_probe_timeout")")" \
       "$process_group_probe_command" "$test_pgid" >/dev/null 2>&1
   else
     helper_group_has_live_processes "$test_pgid"
@@ -229,8 +369,29 @@ process_group_alive() {
 
 terminate_test_group() {
   local probe_status
+  local termination_grace_milliseconds
 
-  process_group_alive
+  termination_grace_milliseconds="$(milliseconds_from_duration "$external_kill_after_seconds")"
+  wait_for_process_group_exit "$process_group_settle_milliseconds"
+  probe_status=$?
+  if [[ "$probe_status" -eq 1 ]]; then
+    if [[ -n "$launcher_pid" ]]; then
+      wait "$launcher_pid" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  if [[ "$probe_status" -eq 2 ]]; then
+    cleanup_failure_phase='process_group_probe'
+    kill -KILL -- "-$test_pgid" 2>/dev/null || true
+    if [[ -n "$launcher_pid" ]]; then
+      wait "$launcher_pid" 2>/dev/null || true
+    fi
+    return 1
+  fi
+  kill -TERM -- "-$test_pgid" 2>/dev/null || true
+  # Poll the grace window instead of sleeping through it: a cooperative group is reaped the
+  # moment it exits, and an uncooperative one escalates to SIGKILL exactly when the window ends.
+  wait_for_process_group_exit "$termination_grace_milliseconds"
   probe_status=$?
   if [[ "$probe_status" -eq 2 ]]; then
     cleanup_failure_phase='process_group_probe'
@@ -241,26 +402,13 @@ terminate_test_group() {
     return 1
   fi
   if [[ "$probe_status" -eq 0 ]]; then
-    kill -TERM -- "-$test_pgid" 2>/dev/null || true
-    sleep "$external_kill_after_seconds"
-    process_group_alive
-    probe_status=$?
-    if [[ "$probe_status" -eq 2 ]]; then
-      cleanup_failure_phase='process_group_probe'
-      kill -KILL -- "-$test_pgid" 2>/dev/null || true
-      if [[ -n "$launcher_pid" ]]; then
-        wait "$launcher_pid" 2>/dev/null || true
-      fi
-      return 1
-    fi
-    if [[ "$probe_status" -eq 0 ]]; then
-      kill -KILL -- "-$test_pgid" 2>/dev/null || true
-    fi
+    log_watchdog_event "reason=termination_grace_expired signal=KILL target_pgid=$test_pgid"
+    kill -KILL -- "-$test_pgid" 2>/dev/null || true
   fi
   if [[ -n "$launcher_pid" ]]; then
     wait "$launcher_pid" 2>/dev/null || true
   fi
-  process_group_alive
+  wait_for_process_group_exit "$process_group_settle_milliseconds"
   probe_status=$?
   if [[ "$probe_status" -eq 0 || "$probe_status" -eq 2 ]]; then
     cleanup_failure_phase='test_process_group_shutdown'
@@ -291,29 +439,40 @@ write_status_file() {
     printf 'termination=%s\n' "$termination_reason"
     printf 'finalization=%s\n' "$finalization_state"
     printf 'cleanup_failure_phase=%s\n' "${cleanup_failure_phase:-none}"
+    printf 'finalization_budget_seconds=%s\n' "$finalization_budget_seconds"
+    printf 'finalization_ms=%s\n' "$(finalization_elapsed_milliseconds)"
   } >"$temporary_status_file"
   mv "$temporary_status_file" "$status_file"
 }
 
 capture_final_snapshot() {
+  local snapshot_timeout
+
+  snapshot_timeout="$(finalization_stage_timeout "$(milliseconds_from_duration "$final_snapshot_timeout")")"
   if [[ -n "$final_snapshot_command" ]]; then
-    timeout --signal=TERM --kill-after=1s "$final_snapshot_timeout" \
+    timeout --signal=TERM --kill-after=1s "$snapshot_timeout" \
       "$final_snapshot_command" </dev/null >/dev/null 2>&1
   else
-    timeout --signal=TERM --kill-after=1s "$final_snapshot_timeout" \
+    timeout --signal=TERM --kill-after=1s "$snapshot_timeout" \
       bash -c 'capture_snapshot final' </dev/null >/dev/null 2>&1
   fi
 }
 
 redact_output_logs() {
   local redaction_status
+  local redaction_budget_milliseconds
+
+  redaction_budget_milliseconds="$(milliseconds_from_duration "$output_redaction_timeout")"
 
   if [[ -n "$output_redaction_command" ]]; then
-    timeout --signal=KILL "$output_redaction_timeout" \
+    # The duration is what is left of the declared budget, not the configured cap: a stalled
+    # redactor can never push finalization past its ceiling. `timeout` already signals the whole
+    # process group it created, so a redactor's children die with it.
+    timeout --signal=KILL "$(finalization_stage_timeout "$redaction_budget_milliseconds")" \
       "$output_redaction_command" "$stdout_log" "$stderr_log"
     redaction_status=$?
   else
-    timeout --signal=KILL "$output_redaction_timeout" node --input-type=commonjs - "$stdout_log" "$stderr_log" <<'NODE'
+    timeout --signal=KILL "$(finalization_stage_timeout "$redaction_budget_milliseconds")" node --input-type=commonjs - "$stdout_log" "$stderr_log" <<'NODE'
 const { readFileSync, renameSync, writeFileSync } = require('node:fs');
 
 const sensitiveName = /(?:^|_)(?:SECRET|TOKEN|PASSWORD|PASS|KEY|AUTHORIZATION|COOKIE)(?:_|$)/iu;
@@ -359,7 +518,7 @@ write_final_evidence() {
   fi
 
   if command -v dmesg >/dev/null 2>&1; then
-    timeout --signal=KILL 2s bash -c \
+    timeout --signal=KILL "$(finalization_stage_timeout 2000)" bash -c \
       'dmesg --color=never 2>&1 | grep -Eai '\''oom|out of memory|killed process'\'' | tail -n 100' \
       >"$diagnostics_dir/kernel-oom-evidence.log" || true
   fi
@@ -384,7 +543,9 @@ finalize() {
   fi
   finalized=1
   trap - TERM INT
+  finalization_budget_start
   write_status_file "$status" "$captured_child_status" "$termination_reason" child_exit_captured
+  log_watchdog_event "reason=finalization_phase phase=finalization_budget budget_seconds=$finalization_budget_seconds"
   log_watchdog_event "reason=finalization_phase phase=child_exit_captured child_status=$captured_child_status effective_status=$status"
   stop_helper "$watchdog_pid" || true
   stop_helper "$monitor_pid" || true
@@ -396,6 +557,10 @@ finalize() {
   fi
   redact_output_logs || true
   write_final_evidence "$status" "$captured_child_status" "$termination_reason"
+  log_watchdog_event "reason=finalization_phase phase=finalization_complete elapsed_ms=$(finalization_elapsed_milliseconds) budget_seconds=$finalization_budget_seconds"
+  if [[ "$(finalization_remaining_milliseconds)" -le 0 ]]; then
+    log_watchdog_event "reason=finalization_budget_exhausted phase=finalization budget_seconds=$finalization_budget_seconds elapsed_ms=$(finalization_elapsed_milliseconds)"
+  fi
 }
 
 terminate_for_external_signal() {
@@ -475,8 +640,11 @@ export diagnostics_dir resource_log watchdog_log watchdog_failure_file watchdog_
 export watchdog_stop_file watchdog_stopped_file test_pid test_pgid launcher_pid
 export heartbeat_seconds watchdog_seconds kill_after_seconds
 export process_group_probe_timeout process_group_probe_command
+export finalization_budget_seconds process_group_settle_milliseconds
 export -f capture_snapshot helper_group_has_live_processes helper_pid_is_running read_cgroup_metric
 export -f log_watchdog_event process_group_alive
+export -f now_milliseconds milliseconds_from_duration finalization_remaining_milliseconds
+export -f finalization_stage_milliseconds finalization_stage_timeout
 
 registration_in_progress=1
 setsid bash -c 'printf "%s\n" "$$" >"$1"; shift; exec "$@"' bash "$test_pid_file" \
@@ -643,12 +811,12 @@ residual_process_group=false
 if [[ -s "$watchdog_failure_file" ]]; then
   read -r cleanup_failure_phase <"$watchdog_failure_file"
 fi
-process_group_alive
-process_group_probe_status=$?
-if [[ "$process_group_probe_status" -eq 2 ]]; then
+wait_for_process_group_exit "$process_group_settle_milliseconds"
+residual_probe_status=$?
+if [[ "$residual_probe_status" -eq 2 ]]; then
   cleanup_failure_phase='process_group_probe'
   kill -KILL -- "-$test_pgid" 2>/dev/null || true
-elif [[ "$process_group_probe_status" -eq 0 ]]; then
+elif [[ "$residual_probe_status" -eq 0 ]]; then
   residual_process_group=true
   log_watchdog_event "reason=residual_process_group_after_leader_exit target_pgid=$test_pgid leader_status=$child_status"
   terminate_test_group || true
