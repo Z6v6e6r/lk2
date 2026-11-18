@@ -1622,9 +1622,13 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(testStep).toEqual({
       name: 'Unit and integration tests',
       run: 'scripts/run-ci-tests-with-diagnostics.sh',
-      'timeout-minutes': 15,
+      // The suite outgrew the previous 15 min / 800 s budget: run 44266726885 on main was still
+      // finishing suites when the 800 s watchdog killed it at 831 s. The step deadline and the
+      // watchdog move together, and scripts/run-ci-tests-with-diagnostics.test.ts asserts the
+      // remaining window still fits the bounded finalization budget.
+      'timeout-minutes': 25,
       env: {
-        CI_TEST_WATCHDOG_SECONDS: '800',
+        CI_TEST_WATCHDOG_SECONDS: '1380',
         CI_TEST_SKIP_PAUSED_RELEASE_TOOLING:
           "${{ needs.ci-plan.outputs.release_tooling_tests == 'false' && '1' || '0' }}",
       },
