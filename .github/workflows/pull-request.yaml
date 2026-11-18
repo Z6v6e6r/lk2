@@ -243,6 +243,21 @@ jobs:
         env:
           CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK: CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1
         run: npm run db:migrate
+      - name: Verify supervised Compose worker death and cancellation
+        if: ${{ needs.ci-plan.outputs.release_tooling_tests != 'false' }}
+        timeout-minutes: 8
+        run: |
+          # Run outside Vitest: no nested Docker session may escape its outer watchdog.
+          # Each case: <=180s body + 2s grace + 30s finalization; two fit inside 480s.
+          for mode in worker-death supervisor-cancellation; do
+            directory="$PWD/.ci-artifacts/test-and-coverage/compose-cancellation/$mode"
+            result=0
+            CI_TEST_DIAGNOSTICS_DIR="$directory" CI_TEST_WATCHDOG_SECONDS=180 \
+              CI_TEST_KILL_AFTER_SECONDS=2 CI_TEST_EXTERNAL_KILL_AFTER_SECONDS=2 \
+              scripts/run-ci-tests-with-diagnostics.sh \
+              node scripts/verify-timeweb-compose-cancellation.js "$mode" || result=$?
+            node scripts/verify-timeweb-compose-cancellation.js --verify "$mode" "$directory" "$result"
+          done
       - name: Unit and integration tests
         timeout-minutes: 25
         env:

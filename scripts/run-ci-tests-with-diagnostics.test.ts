@@ -1106,6 +1106,7 @@ const supervisorPrimitiveFunctions = [
   'wait_for_process_group_exit',
   'run_command_in_own_group_bounded',
   'terminate_test_group',
+  'cleanup_compose_fixture',
 ] as const;
 
 const portableProcessGroupProbeBody = [
@@ -1185,6 +1186,63 @@ function readKeyedOutput(stdout: string, key: string): string | undefined {
 }
 
 describe('CI supervisor finalization primitives', () => {
+  it.each([0, 2])(
+    'refuses fixture cleanup when the owned group probe returns %s',
+    async (probeStatus) => {
+      const directory = await createDiagnosticsDirectory();
+      await writeFile(join(directory, 'compose-fixture-owner.json'), 'retained ownership evidence');
+      const result = await runSupervisorPrimitives(
+        directory,
+        [
+          'test_pgid=123',
+          `process_group_alive() { return ${probeStatus}; }`,
+          'run_command_in_own_group_bounded() { echo entered > "$diagnostics_dir/cleanup-entered"; }',
+          'cleanup_compose_fixture',
+          'printf "status=%s\\n" "$?"',
+          'printf "phase=%s\\n" "$cleanup_failure_phase"',
+        ].join('\n'),
+      );
+      expect(readKeyedOutput(result.stdout, 'status')).toBe('1');
+      expect(readKeyedOutput(result.stdout, 'phase')).toBe('compose_fixture_group_unconfirmed');
+      await expect(readFile(join(directory, 'cleanup-entered'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(readFile(join(directory, 'compose-fixture-cleanup.log'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      expect(await readFile(join(directory, 'compose-fixture-owner.json'), 'utf8')).toBe(
+        'retained ownership evidence',
+      );
+    },
+  );
+
+  it('does not enter fixture cleanup while an ignored-stdio descendant survives', async () => {
+    const directory = await createDiagnosticsDirectory();
+    await writeFile(join(directory, 'compose-fixture-owner.json'), 'retained ownership evidence');
+    const result = await runSupervisorPrimitives(
+      directory,
+      [
+        `set -m; bash -c '(trap "" TERM; while :; do sleep 1; done) </dev/null >/dev/null 2>&1 & exit 0' & test_pgid=$!; set +m`,
+        `trap 'kill -KILL -- "-$test_pgid" 2>/dev/null || true' EXIT`,
+        'sleep 0.2',
+        // Establish actual liveness independently; cleanup must refuse even if its bounded
+        // production probe is unusable. Do not turn a slow observer into permission to delete.
+        '"$process_group_probe_command" "$test_pgid"; printf "before=%s\\n" "$?"',
+        'run_command_in_own_group_bounded() { echo entered > "$diagnostics_dir/cleanup-entered"; }',
+        'cleanup_compose_fixture',
+        'printf "status=%s\\n" "$?"',
+      ].join('\n'),
+    );
+    expect(readKeyedOutput(result.stdout, 'before'), JSON.stringify(result)).toBe('0');
+    expect(readKeyedOutput(result.stdout, 'status'), JSON.stringify(result)).toBe('1');
+    await expect(readFile(join(directory, 'cleanup-entered'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(await readFile(join(directory, 'compose-fixture-owner.json'), 'utf8')).toBe(
+      'retained ownership evidence',
+    );
+  });
+
   it('kills the whole redaction command group when its budget expires', async () => {
     const directory = await createDiagnosticsDirectory();
     const result = await runSupervisorPrimitives(
@@ -1246,7 +1304,7 @@ describe('CI supervisor finalization primitives', () => {
     );
 
     // 1 = gone. A single instantaneous probe at t=0.05s would have said "alive" and failed the run.
-    expect(readKeyedOutput(result.stdout, 'probe')).toBe('1');
+    expect(readKeyedOutput(result.stdout, 'probe'), JSON.stringify(result)).toBe('1');
     expect(Number(readKeyedOutput(result.stdout, 'elapsed'))).toBeLessThan(2_000);
   });
 

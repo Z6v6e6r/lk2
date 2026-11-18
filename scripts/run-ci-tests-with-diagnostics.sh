@@ -563,6 +563,31 @@ write_final_evidence() {
   write_status_file "$final_status" "$child_status" "$termination_reason" complete
 }
 
+cleanup_compose_fixture() {
+  local record="$diagnostics_dir/compose-fixture-owner.json"
+  local probe_status
+  if [[ ! -e "$record" ]]; then
+    return 0
+  fi
+  # A killed test worker cannot race this cleanup: the rehearsal and every CLI descendant
+  # inherit test_pgid. Unknown/still-live groups retain both resources and ownership evidence.
+  process_group_alive
+  probe_status=$?
+  if [[ "$probe_status" -ne 1 ]]; then
+    cleanup_failure_phase='compose_fixture_group_unconfirmed'
+    log_watchdog_event "reason=compose_fixture_cleanup_refused probe_status=$probe_status target_pgid=$test_pgid"
+    return 1
+  fi
+  log_watchdog_event 'reason=finalization_phase phase=compose_fixture_cleanup'
+  if ! run_command_in_own_group_bounded "$(finalization_stage_milliseconds 23000)" \
+      compose_fixture_cleanup node scripts/rehearse-timeweb-standard-compose.js --cleanup-record "$record" \
+      >"$diagnostics_dir/compose-fixture-cleanup.log" 2>&1; then
+    cleanup_failure_phase='compose_fixture_cleanup'
+    log_watchdog_event 'reason=supervisor_cleanup_failure phase=compose_fixture_cleanup'
+    return 1
+  fi
+}
+
 finalize() {
   local status="$1"
   local termination_reason="$2"
@@ -586,6 +611,7 @@ finalize() {
   if [[ -s "$watchdog_failure_file" ]]; then
     read -r cleanup_failure_phase <"$watchdog_failure_file"
   fi
+  cleanup_compose_fixture || true
   redact_output_logs || true
   write_final_evidence "$status" "$captured_child_status" "$termination_reason"
   log_watchdog_event "reason=finalization_phase phase=finalization_complete elapsed_ms=$(finalization_elapsed_milliseconds) budget_seconds=$finalization_budget_seconds"
