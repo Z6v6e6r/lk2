@@ -1142,7 +1142,7 @@ function extractSupervisorFunctions(source: string, names: readonly string[]): s
 async function runSupervisorPrimitives(
   directory: string,
   script: string,
-  settleMilliseconds = 250,
+  settleMilliseconds = 1_000,
 ): Promise<{ readonly status: number | null; readonly stdout: string; readonly stderr: string }> {
   const functions = extractSupervisorFunctions(
     await readFile(diagnosticsRunner, 'utf8'),
@@ -1162,7 +1162,7 @@ async function runSupervisorPrimitives(
     "finalization_started_milliseconds=''",
     "finalization_deadline_milliseconds=''",
     'process_group_probe_status=1',
-    'process_group_probe_timeout=0.5s',
+    'process_group_probe_timeout=2s',
     `process_group_probe_command=${shellQuote(probe)}`,
     `finalization_budget_seconds=${supervisorFinalizationBudgetSeconds}`,
     `process_group_settle_milliseconds=${settleMilliseconds}`,

@@ -32,9 +32,10 @@ readonly output_redaction_command="${CI_TEST_OUTPUT_REDACTION_COMMAND:-}"
 # left of this budget, so a loaded runner can never push the supervisor past it. The workflow
 # keeps 70s between the watchdog deadline and the Actions step timeout, so 30s always fits.
 readonly finalization_budget_seconds="${CI_TEST_FINALIZATION_BUDGET_SECONDS:-30}"
-# Grace window for a killed process group to finish tearing down before a probe is allowed to
-# call it a cleanup failure. Without it a single instantaneous probe races the kernel.
-readonly process_group_settle_milliseconds="${CI_TEST_PROCESS_GROUP_SETTLE_MILLISECONDS:-250}"
+# Ceiling for waiting out a *killed* process group's teardown before a probe may call it a cleanup
+# failure. The poll returns as soon as the group is empty, so a healthy teardown never pays it; a
+# single instantaneous probe raced the kernel and turned a 143 exit into supervisor failure 126.
+readonly process_group_settle_milliseconds="${CI_TEST_PROCESS_GROUP_SETTLE_MILLISECONDS:-1000}"
 readonly residual_process_group_status=125
 readonly supervisor_cleanup_status=126
 finalization_started_milliseconds=''
@@ -175,10 +176,7 @@ wait_for_process_group_exit() {
   effective_milliseconds="$(finalization_stage_milliseconds "$settle_milliseconds")"
   started_milliseconds="$(now_milliseconds)"
   while true; do
-    # Cheap, fork-free fast path: once no member of the group is left, stop probing.
-    if [[ -z "$test_pgid" ]] || ! kill -0 -- "-$test_pgid" 2>/dev/null; then
-      return 1
-    fi
+    # The probe stays authoritative: an unusable probe must never be read as "group gone".
     process_group_alive
     probe_status=$?
     if [[ "$probe_status" -ne 0 ]]; then
@@ -372,7 +370,7 @@ terminate_test_group() {
   local termination_grace_milliseconds
 
   termination_grace_milliseconds="$(milliseconds_from_duration "$external_kill_after_seconds")"
-  wait_for_process_group_exit "$process_group_settle_milliseconds"
+  process_group_alive
   probe_status=$?
   if [[ "$probe_status" -eq 1 ]]; then
     if [[ -n "$launcher_pid" ]]; then
