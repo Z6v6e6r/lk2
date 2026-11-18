@@ -1,4 +1,6 @@
 import { createMonthlyPurchaseRuntime } from './subscriptions/monthly-purchase-runtime.js';
+import { createResidencyOrderRuntime } from './residency/client-residency-order-runtime.js';
+import { ClientResidencyOwnerClient } from './residency/client-residency-owner-client.js';
 import { createMonthlyPurchaseRepository } from '@phub/database/subscription-purchase';
 import { MonthlyPurchaseOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createTournamentChatOwner } from './tournaments/tournament-chat-owner-client.js';
@@ -1122,9 +1124,31 @@ const monthlyPurchase = (() => {
     },
   });
 })();
+// LK2 consumer of the LK1 residency owner. No local order, price or entitlement:
+// the owner stays the single payment owner and the Viva delegation is session-bound.
+const residencyOrders = createResidencyOrderRuntime({
+  enabled: config.RESIDENCY_ORDER_ENABLED,
+  productId: config.VIVA_RESIDENCY_PRODUCT_ID,
+  tenantKey: config.VIVA_AUTH_TENANT_KEY,
+  ...(config.RESIDENCY_ORDER_ENABLED && config.RESIDENCY_OWNER_BASE_URL
+    ? {
+        client: new ClientResidencyOwnerClient({
+          baseUrl: config.RESIDENCY_OWNER_BASE_URL,
+          environment: ['local', 'ci'].includes(config.APP_ENV) ? 'development' : 'production',
+          timeoutMs: config.RESIDENCY_OWNER_TIMEOUT_MS,
+          onMetric: (metric) => logger.info({ metric }, 'residency owner operation'),
+        }),
+      }
+    : {}),
+  token: async (actor) => {
+    const issued = await authService.issueVivaAccessToken(actor);
+    return { token: issued.accessToken, expiresAt: issued.expiresAt };
+  },
+});
 const organizerProfileLookup = createOrganizerProfileLookup(config, pool, redis);
 const app = await buildApp({
   monthlyPurchase,
+  residencyOrders,
   ...(gameQuarterCreate ? { gameQuarterCreate } : {}),
   config,
   logger,

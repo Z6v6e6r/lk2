@@ -198,6 +198,8 @@ import { registerNotificationRoutes } from './notifications/notification-routes.
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerAndroidPushRoutes } from './notifications/android-push-routes.js';
 import { registerClientResidencyRoutes } from './residency/client-residency-routes.js';
+import { registerClientResidencyOrderRoutes } from './residency/client-residency-order-routes.js';
+import type { ResidencyOrderRuntime } from './residency/client-residency-order-runtime.js';
 import type { ClientResidencyService } from './residency/client-residency-service.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
 import { registerProfileFriendshipRoutes } from './profile/profile-friendship-routes.js';
@@ -482,6 +484,8 @@ export interface BuildAppOptions {
   readonly gameCommercialCreate?: GameCommercialCreateOptions;
   readonly gameQuarterCreate?: QuarterCreateRuntime;
   readonly monthlyPurchase?: MonthlyPurchaseRuntime;
+  /** LK1 residency owner consumer; absent or disabled keeps the purchase surface closed. */
+  readonly residencyOrders?: ResidencyOrderRuntime;
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
   readonly bookedOperationRead?: Omit<
     BookedOperationReadRouteOptions,
@@ -1829,6 +1833,11 @@ export async function buildApp(options: BuildAppOptions) {
       ? { getUserContext: options.authService.getUserContext.bind(options.authService) }
       : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerClientResidencyOrderRoutes(app as unknown as FastifyInstance, {
+    ...(options.residencyOrders ? { runtime: options.residencyOrders } : {}),
+    readHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
   registerProfileLevelRoutes(app as unknown as FastifyInstance, {
     ...(options.playerLevelRepository ? { repository: options.playerLevelRepository } : {}),
