@@ -821,7 +821,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
       const stalledRedaction = await createExecutable(
         directory,
         'stalled-redaction.sh',
-        'sleep 30',
+        'sleep 10',
       );
       const result = spawnSync(
         diagnosticsRunner,
@@ -835,7 +835,9 @@ describe.sequential('CI test diagnostics supervisor', () => {
             CI_TEST_OUTPUT_REDACTION_TIMEOUT: '0.5s',
             CI_TEST_SECRET_SENTINEL: secretSentinel,
           },
-          timeout: 10_000,
+          // The supervisor cleans up a 0.5s redaction timeout; on a loaded CI runner that can
+          // exceed the old 10s spawnSync budget and turn this negative test into ETIMEDOUT.
+          timeout: 25_000,
         },
       );
 
