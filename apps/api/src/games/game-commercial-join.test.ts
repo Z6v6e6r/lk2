@@ -58,6 +58,9 @@ const resolved = <T>(value: T): Promise<T> => Promise.resolve(value);
 function repository(overrides: Partial<CommercialJoinRepositoryPort> = {}) {
   const calls: string[] = [];
   const base: CommercialJoinRepositoryPort = {
+    markDispatchStarted() {
+      return resolved(true);
+    },
     beginPaidJoin() {
       calls.push('beginPaidJoin');
       return resolved<CommercialJoinBeginResult>({
@@ -272,6 +275,7 @@ describe('commercial JOIN orchestration', () => {
       actorUserId: envelope.userId,
       gameId: envelope.gameId,
       operationId,
+      reservationId,
     });
     expect(order).toEqual(['fence', 'execute']);
   });
@@ -285,7 +289,7 @@ describe('commercial JOIN orchestration', () => {
       envelope,
       dependencies({ ...repo, markDispatchStarted }, owner.owner),
     );
-    expect(result).toMatchObject({ kind: 'failed', code: 'GAME_OWNER_UNAVAILABLE' });
+    expect(result).toMatchObject({ kind: 'failed', code: 'GAME_RESERVATION_EXPIRED' });
     expect(owner.calls).toEqual([]);
     expect(calls).toContain('failPaidJoinAttempt');
   });
@@ -436,6 +440,9 @@ describe('commercial JOIN readback', () => {
       },
       failPaidJoinAttempt(): Promise<unknown> {
         return Promise.reject(new Error('readback must not write'));
+      },
+      markDispatchStarted(): Promise<boolean> {
+        return Promise.reject(new Error('readback must not dispatch'));
       },
     } satisfies CommercialJoinRepositoryPort,
     owner: {

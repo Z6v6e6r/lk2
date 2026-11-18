@@ -31,6 +31,7 @@ function rosterRepository() {
     beginPaidJoin: () => Promise.reject(new Error('must not be called')),
     getPaidJoinAttempt: () => Promise.resolve(null),
     failPaidJoinAttempt: () => Promise.reject(new Error('must not be called')),
+    markPaidJoinDispatched: () => Promise.resolve(true),
   };
 }
 
@@ -685,7 +686,11 @@ describe('60-minute second participant through the real commercial runtime', () 
         priceConsent: { amountMinor, currency: 'RUB' as const },
       };
       const input = { ...command, requestHash: commercialJoinRequestHash(command) };
-      const deps = { repository: repo, conditionsOwner: fixture.owner, owner: runtime.owner };
+      const deps = {
+        repository: runtime.repository,
+        conditionsOwner: fixture.owner,
+        owner: runtime.owner,
+      };
       expect(await executeCommercialJoin(input, deps)).toMatchObject({ kind: 'accepted' });
       expect(order).toEqual(
         amountMinor === 0 ? ['preflight', 'reserve', 'owner'] : ['reserve', 'owner'],

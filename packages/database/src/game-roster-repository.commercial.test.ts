@@ -349,13 +349,15 @@ describe('game roster commercial paid join', () => {
         actorUserId: playerId,
         gameId,
         operationId,
+        reservationId,
       }),
     ).resolves.toBe(true);
 
-    const fence = query.mock.calls.find(([text]) => text.includes("snapshot ? 'dispatch'"));
+    const fence = query.mock.calls.find(([text]) => text.includes("not (snapshot ? 'dispatch')"));
     expect(fence).toBeDefined();
     expect(fence?.[0]).toContain('jsonb_set');
-    expect(fence?.[1]).toEqual([tenantId, operationId, playerId, gameId]);
+    expect(fence?.[0]).toContain('reservation.id = $5');
+    expect(fence?.[1]).toEqual([tenantId, operationId, playerId, gameId, reservationId]);
   });
 
   it('expires a due reservation only when the owner call never started', async () => {

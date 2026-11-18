@@ -134,7 +134,11 @@ export interface GameCommercialJoinRuntimeOptions {
   readonly pool: Parameters<typeof createBookedOperationAdmissionTargetRepository>[0];
   readonly rosterRepository: Pick<
     GameRosterRepository,
-    'beginPaidJoin' | 'getPaidJoinAttempt' | 'failPaidJoinAttempt' | 'confirmPayment'
+    | 'beginPaidJoin'
+    | 'getPaidJoinAttempt'
+    | 'failPaidJoinAttempt'
+    | 'confirmPayment'
+    | 'markPaidJoinDispatched'
   >;
   readonly conditionsOwner?: GameJoinConditionsOwner;
   readonly ownerBoundary?: GameCommercialJoinOwnerBoundary;
@@ -564,7 +568,16 @@ export function createGameCommercialJoinRuntime(
   const stationMembership = createGameStationMembershipAdmission({ config, pool: options.pool });
   return {
     ...(stationMembership ? { stationMembership } : {}),
-    repository: options.rosterRepository as unknown as GameCommercialJoinOptions['repository'],
+    repository: {
+      ...options.rosterRepository,
+      markDispatchStarted: (input: {
+        readonly tenantId: string;
+        readonly actorUserId: string;
+        readonly gameId: string;
+        readonly operationId: string;
+        readonly reservationId: string;
+      }) => options.rosterRepository.markPaidJoinDispatched(input),
+    } as unknown as GameCommercialJoinOptions['repository'],
     conditionsOwner: options.conditionsOwner,
     owner,
   };

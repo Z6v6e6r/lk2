@@ -299,6 +299,8 @@ export interface MarkPaidJoinDispatchedInput {
   readonly actorUserId: string;
   readonly gameId: string;
   readonly operationId: string;
+  /** The reservation this dispatch belongs to; the fence is a CAS, not a blind snapshot update. */
+  readonly reservationId: string;
 }
 
 export interface PaidJoinReconciliationView {
@@ -2424,23 +2426,40 @@ export function createGameRosterRepository(
 
     markPaidJoinDispatched(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        // Same lock order as expiry/confirmation: game, then reservation, then the attempt.
+        await client.query(
+          'select id from games.games where tenant_id = $1 and id = $2 for update',
+          [input.tenantId, input.gameId],
+        );
+        // The fence is a CAS against the live attempt. It must fail when the reservation has
+        // expired or the attempt is no longer IN_PROGRESS, otherwise a slow API could dispatch
+        // after the expiry worker already released the seat.
         const updated = await client.query(
-          `update eligibility.payment_snapshots
-              set snapshot = case
-                when snapshot ? 'dispatch' then snapshot
-                else jsonb_set(
-                  snapshot,
-                  '{dispatch}',
-                  jsonb_build_object('startedAt', now()::text, 'attempt', 1),
-                  true
-                )
-              end
-            where tenant_id = $1
-              and operation_id = $2
-              and player_id = $3
-              and activity_type = 'GAME'
-              and activity_id = $4`,
-          [input.tenantId, input.operationId, input.actorUserId, input.gameId],
+          `update eligibility.payment_snapshots snapshot
+              set snapshot = jsonb_set(
+                snapshot,
+                '{dispatch}',
+                jsonb_build_object('startedAt', now()::text, 'attempt', 1),
+                true
+              )
+             from games.seat_reservations reservation, games.command_idempotency command
+            where snapshot.tenant_id = $1
+              and snapshot.operation_id = $2
+              and snapshot.player_id = $3
+              and snapshot.activity_type = 'GAME'
+              and snapshot.activity_id = $4
+              and reservation.tenant_id = $1
+              and reservation.id = $5
+              and reservation.state = 'ACTIVE'
+              and reservation.eligibility_decision_id = snapshot.decision_id
+              and reservation.expires_at > now()
+              and command.tenant_id = $1
+              and command.id = snapshot.operation_id
+              and command.actor_user_id = $3
+              and command.state = 'IN_PROGRESS'
+              and not (snapshot ? 'dispatch')
+            returning snapshot.operation_id`,
+          [input.tenantId, input.operationId, input.actorUserId, input.gameId, input.reservationId],
         );
         return updated.rowCount === 1;
       });
