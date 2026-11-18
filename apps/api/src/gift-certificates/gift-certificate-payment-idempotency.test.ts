@@ -1,34 +1,59 @@
 /**
- * QA scenario 4 — payment command idempotency (Idempotency-Key replay).
+ * QA scenario 4 — payment idempotency at the FULL application boundary.
  *
- * Write path under test: `POST /user/api/v1/:tenantKey/gift-certificate-orders/:orderId/payment-intents`
- * -> `GiftCertificateSaleRepository.createPayment()` (apps/api/src/gift-certificates/
- * gift-certificate-sale-routes.ts:443-483). The route is a credential-free shell: it requires an
- * Idempotency-Key plus session-scoped access, derives a request hash from the principal and the
- * order, forwards both to the repository, and maps the repository's outcomes to 201 / 200 / 409.
+ * The app under test is the real one (`buildAppWithActiveSession` → `apps/api/src/app.ts`), so the
+ * pre-handler chains are the production chains rather than test substitutes:
+ *   public surface → [resolvePublicTenant, requireIdempotencyKey]
+ *   user   surface → [authenticate, resolveTenant, requireIdempotencyKey]
+ * `apps/api/src/app.ts` passes exactly those arrays into `registerGiftCertificateSaleRoutes`
+ * (`publicCommandHandlers` / `authenticatedCommandHandlers`), and `requireIdempotencyKey`
+ * (`apps/api/src/app.ts:588`) answers `400 IDEMPOTENCY_KEY_REQUIRED` for a missing or malformed key.
  *
- * The route module is registered on a bare Fastify instance (the same style as
- * apps/api/src/residency/client-residency-routes.test.ts) instead of the full app builder, so this
- * test runs without DATABASE_URL, Redis, or the MongoDB-backed legacy adapter.
+ * Correction of the earlier QA finding D-3 ("a missing Idempotency-Key answers 404
+ * GIFT_ORDER_NOT_FOUND"): that conclusion came from a module-level harness that registered the sale
+ * routes on a bare Fastify instance with `[authenticated]` as the command chain. That replaced the
+ * real guard, so the handler's own `!operationKey` branch answered 404. With the production chain the
+ * guard rejects the request before the handler runs and neither the repository nor a provider is
+ * touched. The assertions below pin the exact status and error code — never `status >= 400`.
  *
- * Evidence level: UNIT-LEVEL. The fake repository implements the replay/conflict contract the real
- * repository persists (`GIFT_PAYMENT_IDEMPOTENCY_CONFLICT`, `intent.replayed`). It proves the route
- * keeps one key, never mints a second charge on replay, and never accepts a mutated payload under a
- * reused key. It does NOT prove the single durable attempt row — that needs PostgreSQL and is
- * BLOCKED in this environment (no local database).
+ * Write path under test: `POST /{surface}/api/v1/:tenantKey/gift-certificate-orders/:orderId/
+ * payment-intents` → `GiftCertificateSaleRepository.createPayment()` (apps/api/src/gift-certificates/
+ * gift-certificate-sale-routes.ts:443-483).
+ *
+ * Evidence level: LOCAL, application-level. The fake repository implements the replay/conflict
+ * contract that the real repository persists. It proves the route keeps one key per command, never
+ * mints a second charge on replay, never accepts a mutated payload under a reused key, and that the
+ * key guard runs first. It does NOT prove the single durable attempt row — that needs PostgreSQL and
+ * is recorded as BLOCKED for this scenario.
  */
 import type { GiftCertificateSaleRepository } from '@phub/database';
+import { loadConfig } from '@phub/config';
 import type { GiftCertificatePaymentIntent } from '@phub/gift-certificates';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import { createLogger } from '@phub/observability';
+import { SignJWT } from 'jose';
+import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { registerGiftCertificateSaleRoutes } from './gift-certificate-sale-routes.js';
+import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
+const tenantKey = 'local-padel';
 const userId = '22222222-2222-4222-8222-222222222222';
 const orderId = '55555555-5555-4555-8555-555555555555';
 const paymentId = '66666666-6666-4666-8666-666666666666';
 const KEY = 'gift-payment-idempotency-0001';
+const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
+
+const baseEnvironment = {
+  APP_ENV: 'ci',
+  DATABASE_URL: 'postgresql://phub:***@localhost:5432/phub',
+  REDIS_URL: 'redis://localhost:6379',
+  RABBITMQ_URL: 'amqp://phub:***@localhost:5672',
+  JWT_ISSUER: 'phub-identity',
+  JWT_AUDIENCE: 'phub-api',
+  JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+  JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+} as const;
 
 const intent = {
   payment: {
@@ -43,21 +68,15 @@ const intent = {
   },
   nextAction: {
     type: 'REDIRECT',
-    url: `/user/api/v1/local-padel/gift-certificate-payment-sandbox/${paymentId}`,
+    url: `/public/api/v1/${tenantKey}/gift-certificate-payment-sandbox/${paymentId}`,
   },
   replayed: false,
 } satisfies GiftCertificatePaymentIntent;
 
-const instances: FastifyInstance[] = [];
-
-function authenticated(request: FastifyRequest): Promise<void> {
-  (request as unknown as { tenantId: string }).tenantId = tenantId;
-  (request as unknown as { padlHubClaims: unknown }).padlHubClaims = {
-    sub: userId,
-    roles: [],
-    permissions: [],
-  };
-  return Promise.resolve();
+function fakePool(): Pool {
+  return {
+    query: vi.fn().mockResolvedValue({ rows: [{ id: tenantId }] }),
+  } as unknown as Pool;
 }
 
 function repository() {
@@ -73,29 +92,82 @@ function repository() {
   };
 }
 
-function appWith(repositoryValue: GiftCertificateSaleRepository): FastifyInstance {
-  const app = Fastify({ genReqId: () => 'qa-correlation' });
-  registerGiftCertificateSaleRoutes(app, {
-    repository: repositoryValue,
-    artifactsEnabled: false,
-    sandboxEnabled: true,
-    purchaseSecret: 'qa-purchase-secret-at-least-32-characters',
-    secureCookies: false,
-    publicTenantHandlers: [authenticated],
-    publicCommandHandlers: [authenticated],
-    authenticatedTenantHandlers: [authenticated],
-    authenticatedCommandHandlers: [authenticated],
+async function appWith(repositoryValue: GiftCertificateSaleRepository, sandbox = true) {
+  const config = loadConfig({
+    ...baseEnvironment,
+    ...(sandbox ? { GIFT_CERTIFICATE_PAYMENT_MODE: 'sandbox' } : {}),
   });
-  instances.push(app);
-  return app;
+  const app = await buildApp({
+    config,
+    logger: createLogger('gift-payment-idempotency-test', 'silent'),
+    pool: fakePool(),
+    giftCertificateSaleRepository: repositoryValue,
+  });
+  apps.push(app);
+  return { app, config };
 }
 
-function payPath(order: string = orderId, tenant = 'local-padel'): string {
-  return `/user/api/v1/${tenant}/gift-certificate-orders/${order}/payment-intents`;
+async function accessToken(config: ReturnType<typeof loadConfig>): Promise<string> {
+  return new SignJWT({
+    tenants: [tenantId],
+    // `authenticateForAudience` rejects a token whose roles/permissions are not string arrays
+    // (apps/api/src/app.ts:622-637), so a "valid session" token must carry both claims.
+    roles: [],
+    permissions: [],
+    sid: '77777777-7777-4777-8777-777777777777',
+  })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuer(config.JWT_ISSUER)
+    .setAudience(config.JWT_AUDIENCE)
+    .setSubject(userId)
+    .setExpirationTime('5m')
+    .sign(new TextEncoder().encode(config.JWT_ACCESS_SECRET));
+}
+
+function payPath(surface: 'public' | 'user' = 'public', order = orderId): string {
+  return `/${surface}/api/v1/${tenantKey}/gift-certificate-orders/${order}/payment-intents`;
 }
 
 afterEach(async () => {
-  await Promise.all(instances.splice(0).map((app) => app.close()));
+  await Promise.all(apps.splice(0).map((app) => app.close()));
+});
+
+describe('scenario 4: the real command chain requires a valid Idempotency-Key', () => {
+  it.each(['public', 'user'] as const)(
+    'rejects a %s payment command without a key with 400 IDEMPOTENCY_KEY_REQUIRED',
+    async (surface) => {
+      const repo = repository();
+      const { app, config } = await appWith(repo.value);
+      const headers: Record<string, string> =
+        surface === 'user' ? { authorization: `Bearer ${await accessToken(config)}` } : {};
+
+      const response = await app.inject({ method: 'POST', url: payPath(surface), headers });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
+      // The guard runs before the handler, so no durable or provider work can happen.
+      expect(repo.createPayment).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['too short', 'short'],
+    ['illegal characters', 'not a valid key!!'],
+    ['longer than 128 characters', 'k'.repeat(129)],
+  ])('rejects a key that is %s with 400 IDEMPOTENCY_KEY_REQUIRED', async (_label, key) => {
+    const repo = repository();
+    const { app } = await appWith(repo.value);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: payPath(),
+      headers: { 'idempotency-key': key },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
+    expect(repo.createPayment).not.toHaveBeenCalled();
+  });
 });
 
 describe('scenario 4: Idempotency-Key replay returns the stored result', () => {
@@ -104,17 +176,18 @@ describe('scenario 4: Idempotency-Key replay returns the stored result', () => {
     repo.createPayment
       .mockResolvedValueOnce({ outcome: 'applied', intent: { ...intent, replayed: false } })
       .mockResolvedValueOnce({ outcome: 'applied', intent: { ...intent, replayed: true } });
-    const app = appWith(repo.value);
+    const { app, config } = await appWith(repo.value);
+    const authorization = `Bearer ${await accessToken(config)}`;
 
     const first = await app.inject({
       method: 'POST',
-      url: payPath(),
-      headers: { 'idempotency-key': KEY },
+      url: payPath('user'),
+      headers: { 'idempotency-key': KEY, authorization },
     });
     const second = await app.inject({
       method: 'POST',
-      url: payPath(),
-      headers: { 'idempotency-key': KEY },
+      url: payPath('user'),
+      headers: { 'idempotency-key': KEY, authorization },
     });
 
     expect(first.statusCode).toBe(201);
@@ -122,10 +195,10 @@ describe('scenario 4: Idempotency-Key replay returns the stored result', () => {
     expect(first.json()).toMatchObject({ replayed: false, payment: { id: paymentId } });
     expect(second.json()).toMatchObject({ replayed: true, payment: { id: paymentId } });
     // Same durable payment on both calls: the replay did not mint a second charge.
-    const firstBody = first.json<GiftCertificatePaymentIntent>();
-    const secondBody = second.json<GiftCertificatePaymentIntent>();
-    expect(firstBody.payment.id).toBe(secondBody.payment.id);
-    // The key reached the repository unchanged both times.
+    expect(first.json<GiftCertificatePaymentIntent>().payment.id).toBe(
+      second.json<GiftCertificatePaymentIntent>().payment.id,
+    );
+    // The key reached the repository unchanged on both calls.
     expect(repo.createPayment.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
       KEY,
       KEY,
@@ -134,7 +207,7 @@ describe('scenario 4: Idempotency-Key replay returns the stored result', () => {
     expect(repo.createPayment.mock.calls[0]?.[0].requestHash).toBe(
       repo.createPayment.mock.calls[1]?.[0].requestHash,
     );
-    // The repository — the only writer — was invoked exactly once per HTTP call, never doubled.
+    // One repository call per HTTP call, never doubled.
     expect(repo.createPayment).toHaveBeenCalledTimes(2);
   });
 
@@ -143,34 +216,25 @@ describe('scenario 4: Idempotency-Key replay returns the stored result', () => {
     repo.createPayment
       .mockResolvedValueOnce({ outcome: 'applied', intent })
       .mockResolvedValueOnce({ outcome: 'idempotency_conflict' });
-    const app = appWith(repo.value);
+    const { app, config } = await appWith(repo.value);
+    const authorization = `Bearer ${await accessToken(config)}`;
 
     const created = await app.inject({
       method: 'POST',
-      url: payPath(),
-      headers: { 'idempotency-key': KEY },
+      url: payPath('user'),
+      headers: { 'idempotency-key': KEY, authorization },
     });
     const conflicting = await app.inject({
       method: 'POST',
-      url: payPath('77777777-7777-4777-8777-777777777777'),
-      headers: { 'idempotency-key': KEY },
+      url: payPath('user', '77777777-7777-4777-8777-777777777777'),
+      headers: { 'idempotency-key': KEY, authorization },
     });
 
     expect(created.statusCode).toBe(201);
     expect(conflicting.statusCode).toBe(409);
     expect(conflicting.json()).toMatchObject({ code: 'GIFT_PAYMENT_IDEMPOTENCY_CONFLICT' });
-    // A conflicting replay performed no second write.
     expect(repo.createPayment).toHaveBeenCalledTimes(2);
     expect(conflicting.json()).not.toHaveProperty('payment');
-  });
-
-  it('refuses a payment command without an Idempotency-Key and never calls the repository', async () => {
-    const repo = repository();
-    const app = appWith(repo.value);
-    const response = await app.inject({ method: 'POST', url: payPath() });
-    expect(response.statusCode).toBeGreaterThanOrEqual(400);
-    expect(response.statusCode).not.toBe(500);
-    expect(repo.createPayment).not.toHaveBeenCalled();
   });
 
   it('maps an unknown order and an unpayable order to stable client errors, not 500', async () => {
@@ -178,22 +242,38 @@ describe('scenario 4: Idempotency-Key replay returns the stored result', () => {
     repo.createPayment
       .mockResolvedValueOnce({ outcome: 'order_not_found' })
       .mockResolvedValueOnce({ outcome: 'order_not_payable' });
-    const app = appWith(repo.value);
+    const { app, config } = await appWith(repo.value);
+    const authorization = `Bearer ${await accessToken(config)}`;
 
     const missing = await app.inject({
       method: 'POST',
-      url: payPath(),
-      headers: { 'idempotency-key': `${KEY}-a` },
+      url: payPath('user'),
+      headers: { 'idempotency-key': `${KEY}-a`, authorization },
     });
     const notPayable = await app.inject({
       method: 'POST',
-      url: payPath(),
-      headers: { 'idempotency-key': `${KEY}-b` },
+      url: payPath('user'),
+      headers: { 'idempotency-key': `${KEY}-b`, authorization },
     });
 
     expect(missing.statusCode).toBe(404);
     expect(missing.json()).toMatchObject({ code: 'GIFT_ORDER_NOT_FOUND' });
     expect(notPayable.statusCode).toBe(409);
     expect(notPayable.json()).toMatchObject({ code: 'GIFT_ORDER_NOT_PAYABLE' });
+  });
+
+  it('still answers 503 GIFT_PAYMENT_SANDBOX_DISABLED for a valid key when sandbox is off', async () => {
+    const repo = repository();
+    const { app } = await appWith(repo.value, false);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: payPath(),
+      headers: { 'idempotency-key': 'gift-payment-sandbox-off-0001' },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'GIFT_PAYMENT_SANDBOX_DISABLED' });
+    expect(repo.createPayment).not.toHaveBeenCalled();
   });
 });
