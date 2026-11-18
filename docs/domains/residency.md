@@ -86,7 +86,10 @@ proven), not `NONE`. A frozen or held instance is not active residency even if i
 The cabinet buys and renews residency only through the LK1 owner
 ([Z6v6e6r/lk#443](https://github.com/Z6v6e6r/lk/pull/443), contract
 `residency-lifecycle.v2`; see `docs/residency-lifecycle.md` in that repository). LK2 is a
-consumer: it keeps no order row, no local price and no independent entitlement model.
+consumer: it keeps no order row, no local **tariff** and no independent entitlement model. The
+browser may keep the exact catalog total it confirmed for a specific operation
+(`expectedTotalMinor`) so a retry replays the same request; that snapshot is not a local price
+calculation and the owner still enforces exact equality.
 
 | Method | LK2 path (`/user/api/v1/{tenantKey}`)   | Owner path                                      | Idempotency-Key |
 | ------ | --------------------------------------- | ----------------------------------------------- | --------------- |
@@ -131,8 +134,13 @@ purchase state.
   `TERMINAL`). It is derived by the owner from stored fields, so it is identical after a
   restart, a lost mutation response or on another device. `GET /residency/orders?state=unresolved`
   is the authorized way to find the user's own unfinished order after losing local storage.
+- `expectedTotalMinor` is mandatory and must equal the server-computed total exactly. A
+  mode-only request from the previous client is 400 `RESIDENCY_PRICE_CONSENT_REQUIRED` before
+  the owner's idempotency lookup; `schemaVersion: 1` does not make it compatible.
 - An unknown financial outcome is not promised to disappear after the local payment window.
-  Only the owner's confirmed terminal provider result closes an order.
+  The local TTL does not close an order: `PENDING` past the window is `overdue=true` with
+  recovery `AWAITING_CONFIRMATION`; local `UNKNOWN` stays `UNKNOWN_OUTCOME` with
+  `overdue=false`. Only the owner's confirmed terminal provider result closes an order.
 
 ### Configuration
 
@@ -146,10 +154,13 @@ purchase state.
 ### Evidence status
 
 The consumer, its tests and a composed chain test against the real LK1 owner modules are
-LOCAL. The LK1 owner is not installed, its Mongo indexes are not applied and the flag is off,
-so no CI, STAGING, PROVIDER or PRODUCTION evidence exists for purchase. A provider stand is
-still required for an end-to-end card payment; its absence does not block the source or the
-local integration.
+LOCAL: `LK1_RESIDENCY_MODULES_ROOT=<lk@4d04a05c> npx vitest run
+apps/api/src/residency/client-residency-owner-chain.test.ts` (see
+`docs/contracts/residency-orders-consumer.md#reproducible-composed-test-for-the-websdk-pr-682`).
+The Viva/CUP transport in that test is synthetic; it is not PROVIDER evidence. The LK1 owner is
+not installed, its Mongo indexes are not applied and the flag is off, so no STAGING or PRODUCTION
+evidence exists for purchase. A provider stand is still required for an end-to-end card payment;
+its absence does not block the source or the local integration.
 
 ## Out of scope
 

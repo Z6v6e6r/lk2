@@ -60,12 +60,15 @@ paths:
       summary: Create or renew a residency order
       description: |
         Forwards one operation to the LK1 residency owner with the user's server-held Viva
-        delegation. LK2 keeps no order, price or entitlement of its own. The price consent
-        (`expectedTotalMinor`) is mandatory and is checked by the owner before any provider
-        call; a changed price is 409 RESIDENCY_PRICE_CHANGED and an early renewal is 409
-        RESIDENCY_RENEWAL_TOO_EARLY, both with `details` and zero provider POSTs. The same
-        Idempotency-Key always returns the same order; a different key cannot bypass an
-        unresolved operation. An unknown outcome stays unresolved with a recovery block.
+        delegation. LK2 keeps no order row, tariff or entitlement of its own. The price consent
+        (`expectedTotalMinor`) is mandatory and must equal the owner's total exactly; the
+        owner rejects a missing value with 400 RESIDENCY_PRICE_CONSENT_REQUIRED and a lower or
+        higher total with 409 RESIDENCY_PRICE_CHANGED, both with `details` and zero provider
+        POSTs. A mode-only body from the previous client is therefore not compatible (the
+        response `schemaVersion` stays 1). An early renewal is 409
+        RESIDENCY_RENEWAL_TOO_EARLY. The same Idempotency-Key always returns the same order; a
+        different key cannot bypass an unresolved operation. An unknown outcome stays unresolved
+        with a recovery block.
       parameters:
         - { '$ref': '#/components/parameters/ResidencyIdempotencyKey' }
       requestBody:
@@ -222,6 +225,9 @@ components:
         RESIDENCY_IDEMPOTENCY_CONFLICT, RESIDENCY_PRICE_CHANGED,
         RESIDENCY_RENEWAL_TOO_EARLY, RESIDENCY_ORDER_PAID or
         RESIDENCY_PAYMENT_STATUS_UNKNOWN. Structured refusals carry `details`.
+        A refusal raised before the owner's idempotency lookup (for example
+        RESIDENCY_PRICE_CONSENT_REQUIRED or a product mismatch) does not prove that no earlier
+        order exists for the key; use GET /{tenantKey}/residency/orders?state=unresolved.
       content:
         application/json:
           schema: { '$ref': '#/components/schemas/ResidencyError' }
@@ -269,7 +275,9 @@ components:
         expectedTotalMinor:
           type: integer
           minimum: 1
-          description: The exact total the user confirmed; the owner refuses a higher price.
+          description: >-
+            Mandatory exact total the user confirmed. Both a lower and a higher server total are
+            409 RESIDENCY_PRICE_CHANGED; omission is 400 RESIDENCY_PRICE_CONSENT_REQUIRED.
         expectedProductId: { type: string, format: uuid }
     ResidencyReconcileRequest:
       type: object

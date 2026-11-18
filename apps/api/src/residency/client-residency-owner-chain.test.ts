@@ -342,8 +342,24 @@ describeChain('composed residency chain (LK1 owner + LK2 consumer)', () => {
 
     const catalog: ChainJson = await api.catalog(actor);
     expect(catalog.product.productId).toBe(PRODUCT);
-    expect(catalog.renewal.eligible).toBe(false);
-    expect(catalog.renewal.reason).toBe('NOT_ACTIVE');
+    expect(catalog.renewal).toMatchObject({
+      eligible: false,
+      reason: 'NOT_ACTIVE',
+      eligibleAt: null,
+      currentValidUntil: null,
+      expected: { termDays: 30, startsAt: 'PAYMENT_DATE', earliestValidUntil: null },
+    });
+    expect(catalog.renewalEligible).toBe(false);
+
+    // Consent is exact: a higher confirmed total is a change, not a ceiling.
+    await expect(
+      api.create(actor, KEY + '-high', { mode: 'NEW', expectedTotalMinor: 80000 }),
+    ).rejects.toMatchObject({
+      code: 'RESIDENCY_PRICE_CHANGED',
+      status: 409,
+      details: { expectedTotalMinor: 80000, totalMinor: 79000 },
+    });
+    expect(state.createCalls).toBe(0);
 
     const created: ChainJson = await api.create(actor, KEY, {
       mode: 'NEW',
@@ -352,7 +368,13 @@ describeChain('composed residency chain (LK1 owner + LK2 consumer)', () => {
     expect(created.order.state).toBe('PENDING_PAYMENT');
     expect(created.order.payment.status).toBe('PENDING');
     expect(created.order.payment.paymentUrl).toBe('https://bank.example/pay/chain');
-    expect(created.order.recovery.state).toBe('AWAITING_PAYMENT');
+    expect(created.order.payment.overdue).toBe(false);
+    expect(created.order.recovery).toMatchObject({
+      state: 'AWAITING_PAYMENT',
+      required: false,
+      action: 'PAY',
+      retryable: true,
+    });
     expect(state.createCalls).toBe(1);
     // The LK2 return target reached the provider, not an arbitrary redirect.
     expect(state.lastCreateBody?.successUrl).toBe('https://lk2.padlhub.su/residency');
@@ -381,7 +403,12 @@ describeChain('composed residency chain (LK1 owner + LK2 consumer)', () => {
     });
     expect(paid.order.state).toBe('ACTIVE');
     expect(paid.order.residency.validUntil).toBe(ACTIVE_TO);
-    expect(paid.order.recovery.state).toBe('NONE');
+    expect(paid.order.recovery).toMatchObject({
+      state: 'NONE',
+      required: false,
+      action: 'NONE',
+      retryable: false,
+    });
 
     const duplicate: ChainJson = await api.reconcile(actor, created.order.orderId, KEY + '-d', {
       eventId: 'evt-paid',
@@ -404,8 +431,14 @@ describeChain('composed residency chain (LK1 owner + LK2 consumer)', () => {
     });
     expect(state.createCalls).toBe(beforePayment);
     const afterCatalog: ChainJson = await api.catalog(actor);
-    expect(afterCatalog.renewal.eligible).toBe(false);
-    expect(afterCatalog.renewal.eligibleAt).toBe(ACTIVE_TO);
+    expect(afterCatalog.renewal).toMatchObject({
+      eligible: false,
+      reason: 'REMAINING_DAYS_NOT_TRANSFERABLE',
+      eligibleAt: ACTIVE_TO,
+      currentValidUntil: ACTIVE_TO,
+      expected: { termDays: 30, startsAt: 'PAYMENT_DATE' },
+    });
+    expect(afterCatalog.renewalEligible).toBe(false);
   });
 
   it('keeps an unknown create outcome unresolved and surfaces recovery', async () => {
@@ -447,6 +480,95 @@ describeChain('composed residency chain (LK1 owner + LK2 consumer)', () => {
     state.paid = true;
     const paid: ChainJson = await api.reconcile(actor, created.order.orderId, KEY + '-r', {});
     expect(paid.order.state).toBe('ACTIVE');
+  });
+
+  it('keeps the local TTL from closing PENDING or UNKNOWN orders', async () => {
+    const pending = await chain();
+    const pendingApi = pending.runtime();
+    const created: ChainJson = await pendingApi.create(pending.actor, KEY, {
+      mode: 'NEW',
+      expectedTotalMinor: 79000,
+    });
+    pending.state.now = NOW + 21 * 60_000;
+
+    const order: ChainJson = await pendingApi.readOrder(pending.actor, created.order.orderId);
+    expect(order.state).toBe('PENDING_PAYMENT');
+    expect(order.payment).toMatchObject({ status: 'PENDING', overdue: true });
+    expect(order.recovery).toMatchObject({
+      state: 'AWAITING_CONFIRMATION',
+      required: true,
+      action: 'RETRY_RECONCILE',
+      retryable: true,
+    });
+    const payment: ChainJson = await pendingApi.readPayment(pending.actor, created.order.orderId);
+    expect(payment).toMatchObject({
+      state: 'PENDING_PAYMENT',
+      paymentStatus: 'PENDING',
+      overdue: true,
+      recovery: { state: 'AWAITING_CONFIRMATION', action: 'RETRY_RECONCILE' },
+    });
+    const pendingUnresolved: ChainJson = await pendingApi.listUnresolved(pending.actor);
+    expect(pendingUnresolved.count).toBe(1);
+
+    // A locally UNKNOWN dispatch is not converted to AWAITING_CONFIRMATION or closed by the TTL.
+    const unknown = await chain();
+    unknown.state.createMode = 'throw';
+    const ambiguous: ChainJson = await unknown.runtime().create(unknown.actor, KEY, {
+      mode: 'NEW',
+      expectedTotalMinor: 79000,
+    });
+    unknown.state.now = NOW + 21 * 60_000;
+    const kept: ChainJson = await unknown
+      .runtime()
+      .readOrder(unknown.actor, ambiguous.order.orderId);
+    expect(kept).toMatchObject({
+      state: 'PENDING_PAYMENT',
+      payment: { status: 'UNKNOWN', overdue: false },
+      recovery: { state: 'UNKNOWN_OUTCOME', action: 'RETRY_RECONCILE', required: true },
+    });
+    const unknownUnresolved: ChainJson = await unknown.runtime().listUnresolved(unknown.actor);
+    expect(unknownUnresolved.count).toBe(1);
+  });
+
+  it('does not replay a previous-format mode-only order but recovers it', async () => {
+    const { state, runtime, actor, store } = await chain();
+    const api = runtime();
+    const created: ChainJson = await api.create(actor, KEY, {
+      mode: 'NEW',
+      expectedTotalMinor: 79000,
+    });
+    const legacy = store.orders.get(created.order.orderId);
+    expect(legacy).toBeTruthy();
+    delete legacy!.consent;
+    legacy!.requestHash = 'legacy-mode-only-request-hash';
+
+    await expect(api.create(actor, KEY, { mode: 'NEW' })).rejects.toMatchObject({
+      code: 'RESIDENCY_PRICE_CONSENT_REQUIRED',
+      status: 400,
+    });
+    expect(state.createCalls).toBe(1);
+    await expect(
+      api.create(actor, KEY, { mode: 'NEW', expectedTotalMinor: 79000 }),
+    ).rejects.toMatchObject({
+      code: 'RESIDENCY_IDEMPOTENCY_CONFLICT',
+      status: 409,
+    });
+    expect(state.createCalls).toBe(1);
+
+    const unresolved: ChainJson = await api.listUnresolved(actor);
+    expect(unresolved.count).toBe(1);
+    expect(unresolved.orders[0].orderId).toBe(created.order.orderId);
+    expect(unresolved.orders[0].consent).toBeNull();
+
+    state.paid = true;
+    const reconciled: ChainJson = await api.reconcile(
+      actor,
+      created.order.orderId,
+      KEY + '-legacy-r',
+      {},
+    );
+    expect(reconciled.order.state).toBe('ACTIVE');
+    expect(reconciled.order.recovery.state).toBe('NONE');
   });
 
   it('fails closed on an expired delegation, an unavailable owner and a product mismatch', async () => {

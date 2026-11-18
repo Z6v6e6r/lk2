@@ -34,10 +34,27 @@ POST /residency/orders
 }
 ```
 
-`expectedTotalMinor` is required: it is the total the user saw in the catalog. The owner refuses
-a missing value (400 `RESIDENCY_PRICE_CONSENT_REQUIRED`), a higher server price or another product
-(409 `RESIDENCY_PRICE_CHANGED` with `details`) before any durable order or provider POST.
-`expectedProductId` is optional and defaults to the configured product.
+`expectedTotalMinor` is **mandatory** and is the **exact** total the user saw in the catalog. The
+owner refuses a missing/non-positive value (400 `RESIDENCY_PRICE_CONSENT_REQUIRED`) and any
+mismatch — lower **or higher** — or another product (409 `RESIDENCY_PRICE_CHANGED` with
+`details`) before any durable order or provider POST. An exact match is required; "not more than
+the confirmed amount" is not the contract. `expectedProductId` is optional and defaults to the
+configured product. If CUP ever returns a quote-time discount that the catalog did not publish,
+the create is refused rather than silently charging a different total; the catalog must expose the
+same total/discount before that path can be purchased.
+
+### Compatibility: this is a breaking create change for the previous client
+
+`schemaVersion: 1` describes the response DTO and does not make the old request compatible. The
+web/SDK head that sends only `{ "mode": "NEW" }` gets 400 `RESIDENCY_PRICE_CONSENT_REQUIRED` before
+the owner's idempotency lookup; it creates nothing and cannot replay an existing order. The required
+field must be added by the web/SDK PR (#682), which is a separate task; this consumer already
+requires it.
+
+Orders created by the previous owner head (`adc9c644`, no `consent`, old request hash) stay
+durable and recoverable, but they are not replayable: mode-only is 400, and a new-format request
+with the same key is 409 `RESIDENCY_IDEMPOTENCY_CONFLICT`. Use
+`GET /residency/orders?state=unresolved`, then read/reconcile that order; do not mint a new key.
 
 ## Response additions
 
@@ -82,6 +99,46 @@ client error),
 
 Error body: `{ code, message, correlationId, details? }`.
 
+## Create error table (order, key and recovery)
+
+"Before lookup" means the owner checks the request before `findOrderByKey`; such an answer does
+not prove that no earlier order exists for the key. "After lookup" means the key was looked up and
+no order with that key existed at that moment; a concurrent request can still race. "After insert"
+means the durable order exists before the provider POST.
+
+| Result (HTTP)                                                                                                                      | Decided                                              | Order created by this request?              | Earlier operation can exist?                               | Client key                 | Required recovery                                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------ |
+| 400 `RESIDENCY_PRICE_CONSENT_REQUIRED`                                                                                             | consumer parse, then owner before lookup             | no                                          | **yes** — mode-only retry or an old-format order           | keep                       | `GET /residency/orders?state=unresolved` if an earlier attempt may exist |
+| 409 `RESIDENCY_PRICE_CHANGED` (product)                                                                                            | owner before lookup                                  | no                                          | **yes**                                                    | keep                       | unresolved lookup / correct product                                      |
+| 400 `RESIDENCY_MODE_INVALID`, `RESIDENCY_REQUEST_INVALID`, `RESIDENCY_RETURN_TARGET_INVALID`, `RESIDENCY_IDEMPOTENCY_KEY_REQUIRED` | consumer/owner before lookup                         | no                                          | **yes**                                                    | keep a valid key           | unresolved lookup if the key may have been used                          |
+| 401 `AUTH_REQUIRED` / 403 `RESIDENCY_PERMISSION_REQUIRED`                                                                          | consumer before the owner                            | no                                          | **yes**                                                    | keep                       | authenticate / grant the `client` role, repeat the same key              |
+| 409 `RESIDENCY_REAUTH_REQUIRED`, 503 `RESIDENCY_REAUTH_UNAVAILABLE`                                                                | consumer before the owner                            | no                                          | **yes**                                                    | keep                       | fresh Viva delegation, repeat the same key                               |
+| 409 `RESIDENCY_IDEMPOTENCY_CONFLICT`                                                                                               | owner after lookup; the key already maps to an order | no new order                                | **yes** — that key's order                                 | keep                       | replay the original body, or unresolved lookup                           |
+| 409 `RESIDENCY_ORDER_ALREADY_PENDING`                                                                                              | owner after lookup, before insert                    | no                                          | **yes** — another unresolved order                         | discard this attempt's key | `GET /residency/orders?state=unresolved`; never mint a new key           |
+| 503 `RESIDENCY_STATUS_UNAVAILABLE`                                                                                                 | owner after lookup, before insert                    | no                                          | no for this key at lookup (race only)                      | may discard                | retry; unresolved lookup if the response was lost                        |
+| 409 `RESIDENCY_RENEWAL_NOT_ELIGIBLE`, `RESIDENCY_RENEWAL_REQUIRED`, `RESIDENCY_RENEWAL_TOO_EARLY`                                  | owner after lookup, before insert                    | no                                          | no for this key at lookup                                  | may discard                | refresh status/catalog; show `details.eligibleAt`                        |
+| 503 `RESIDENCY_CATALOG_UNAVAILABLE`, `RESIDENCY_PRICING_UNAVAILABLE`, `RESIDENCY_PRICING_INVALID`                                  | owner after lookup, before insert                    | no                                          | no for this key at lookup                                  | may discard                | retry after the quote/configuration recovers                             |
+| 409 `RESIDENCY_PRICE_CHANGED` (total)                                                                                              | owner after lookup, after quote                      | no                                          | no for this key at lookup                                  | may keep; no order exists  | re-read catalog, show and confirm the exact new total, retry             |
+| 409 `RESIDENCY_ORDER_CONFLICT`                                                                                                     | owner insert race                                    | no by this request                          | **yes** — a concurrent order may exist                     | keep                       | unresolved lookup / same-key replay                                      |
+| 503 `RESIDENCY_OWNER_UNAVAILABLE`, `RESIDENCY_OWNER_RESPONSE_INVALID`                                                              | consumer transport/timeout/invalid answer            | **unknown** — the owner may have created it | **yes**                                                    | keep                       | same-key replay; unresolved lookup if key/orderId was lost               |
+| 503 `RESIDENCY_OWNER_CONFIGURATION_INVALID`                                                                                        | consumer mapping of an owner configuration refusal   | no for this request; see owner rows         | **yes**                                                    | keep                       | fix configuration, repeat; unresolved lookup                             |
+| 503 `RESIDENCY_ORDERS_DISABLED`, `RESIDENCY_PRODUCT_NOT_CONFIGURED`, `RESIDENCY_TENANT_NOT_SUPPORTED`                              | consumer before the owner                            | no                                          | **yes**                                                    | keep                       | fix configuration/tenant; unresolved lookup                              |
+| 200 `PAYMENT_FAILED`                                                                                                               | owner after insert; provider explicit 4xx            | **yes**, terminal                           | provider refused; no financial operation from that request | new key for a retry        | read the terminal order                                                  |
+| 200 `PENDING_PAYMENT` payment `PENDING`                                                                                            | owner after insert; provider accepted                | **yes**                                     | **yes** — provider operation exists                        | keep                       | pay or reconcile                                                         |
+| 200 `PENDING_PAYMENT` payment `UNKNOWN`                                                                                            | owner after insert; ambiguous outcome                | **yes**                                     | **yes** — provider operation may exist                     | keep                       | reconcile/read; `UNKNOWN_OUTCOME`; never a new key                       |
+| 200 `PAID` / `ACTIVE`                                                                                                              | owner after insert                                   | **yes**                                     | provider payment exists                                    | terminal                   | read; activation/reconcile                                               |
+
+A response is definitive for the key only when it is raised **after** the owner's lookup and
+before an order is inserted, or when it is `RESIDENCY_ORDER_ALREADY_PENDING` (another order
+exists). Pre-lookup 400/409 answers, `RESIDENCY_OWNER_UNAVAILABLE` and an invalid answer are
+**not** proof that no order exists; keep the key and recover through
+`GET /residency/orders?state=unresolved`.
+
+The HTTP layer can also refuse before the runtime: owner 400 `RESIDENCY_REQUEST_INVALID`
+(malformed JSON), 413 `RESIDENCY_REQUEST_TOO_LARGE` and 415
+`RESIDENCY_CONTENT_TYPE_INVALID`; the consumer route's Fastify body limit can answer 413 before
+the runtime with a framework code. These create nothing, but the pre-lookup caveat still applies.
+
 ## Renewal rule (authoritative)
 
 The rights owner (CUP) always computes a paid window as `paymentDate + 30 days` and never
@@ -93,9 +150,14 @@ publishes the same reason before payment. The cabinet should show "продле�
 
 ## Client flow requirements
 
-1. Store only the Idempotency-Key, mode and orderId locally (already specified by the web
-   contract); never a price, link or token.
-2. Send `expectedTotalMinor` from the catalog the user confirmed.
+1. The client may store the Idempotency-Key, mode, orderId and the **confirmed catalog total**
+   it sent as `expectedTotalMinor`. That total is an immutable operation snapshot required to
+   replay the same create and to refuse a different total; it is **not** a locally computed
+   tariff. Every amount still comes from the catalog/owner, and the owner enforces exact
+   equality. Never store a payment link, token or provider id. (This corrects the earlier
+   "no price" wording: storing the confirmed total is allowed and required for replay.)
+2. Send the exact `expectedTotalMinor` from the catalog the user confirmed; never derive,
+   round or cache it as a price.
 3. Use `mode=NEW` when the status read is not ACTIVE, `RENEWAL` only when it is ACTIVE and
    `catalog.renewal.eligible` is true. With `eligible=false` offer no purchase and show
    `eligibleAt`.
@@ -103,3 +165,56 @@ publishes the same reason before payment. The cabinet should show "продле�
    `REVIEW_REQUIRED`, never start a new payment; poll `reconcile`/`read` and offer
    `GET /residency/orders?state=unresolved` on a new device.
 5. `RESIDENCY_REAUTH_REQUIRED` means a fresh Viva sign-in is needed; the operation key is kept.
+
+## Local TTL does not close PENDING or UNKNOWN
+
+The owner's local pending-payment window (default 20 minutes) is a display/reconciliation hint,
+not the provider's payment lifetime. Passing it must not be presented as expiry:
+
+- `payment.status=PENDING` past `expiresAt`: the order stays `PENDING_PAYMENT`, the payment
+  endpoint reports `overdue=true`, recovery is `AWAITING_CONFIRMATION` with action
+  `RETRY_RECONCILE`; the link stays usable.
+- `payment.status=UNKNOWN` (ambiguous dispatch): the order stays `PENDING_PAYMENT`, recovery is
+  `UNKNOWN_OUTCOME` with action `RETRY_RECONCILE`, `overdue=false`; the TTL does not convert it
+  to `AWAITING_CONFIRMATION`, `EXPIRED`, `CANCELLED` or a new purchase.
+- Only a confirmed provider terminal result, or a confirmed PAID read, changes the order. A lost
+  local TTL never releases the active slot; a new key is refused with
+  `RESIDENCY_ORDER_ALREADY_PENDING`.
+
+## Reproducible composed test for the web/SDK PR (#682)
+
+This command runs the **real LK2 consumer** (owner client + runtime) against the **real LK1
+owner** HTTP contract, engine and provider adapter. The Viva/CUP transport is a controlled
+synthetic fixture, so this is **LOCAL contract composition, not PROVIDER/Viva evidence**. Do not
+use it as a sandbox payment or Viva readback.
+
+```bash
+# Consumer checkout at this PR head; owner checkout at the compatible LK1 PR head.
+LK2="${LK2:?path to the lk2 checkout at this PR head}"
+LK1="${LK1:?path to the lk checkout at Z6v6e6r/lk#443}"
+EXPECTED_OWNER_SHA=4d04a05c05561047fb4293498812c6d8af38b88c
+
+test "$(git -C "$LK1" rev-parse HEAD)" = "$EXPECTED_OWNER_SHA" || {
+  echo "owner checkout is not the reviewed head"; exit 2; }
+
+cd "$LK2"
+LK1_RESIDENCY_MODULES_ROOT="$LK1" \
+  npx vitest run apps/api/src/residency/client-residency-owner-chain.test.ts
+```
+
+Expected: 7 tests pass (catalog/renewal, purchase + exact-total refusal + replay, unknown
+outcome, paid create with a failed Admin read, overdue/TTL for PENDING and UNKNOWN, previous-format
+recovery, reauth/owner-unavailable/product mismatch). The compatibility pair pinned by this command is LK1
+`4d04a05c05561047fb4293498812c6d8af38b88c` + LK2 consumer
+`d92b978221f8800521583b5926402a3c2a593dd3` (plus the CI-main merge on the consumer branch).
+
+The equivalent owner-side suites are run in the LK1 checkout:
+
+```bash
+cd "$LK1"
+npm run -s test:residency-lifecycle
+# 90 tests: 82 pass, 8 real-Mongo tests skipped when LK_TEST_MONGO_URI is unset
+```
+
+Not PROVIDER evidence: no real Viva transaction, Admin read, CUP refresh, sandbox card payment or
+Node-RED install is performed by either command.
