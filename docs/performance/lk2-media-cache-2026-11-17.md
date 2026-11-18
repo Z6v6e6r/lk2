@@ -118,7 +118,7 @@ standard browser-cache behaviour; no first-party client sets the header manually
 LOCAL/CI evidence only. No production traffic was measured, no staging deployment was made, and no
 claim is made about the resulting p95 or about S3 call reduction.
 
-## Status on 2026-11-18 (head e3e35e6afb0b81a6168cb98b64c47b96af86cfb0)
+## Status on 2026-11-18 (head after the main merge, 8c1920b9e)
 
 ### Code and behaviour checks
 
@@ -133,33 +133,26 @@ claim is made about the resulting p95 or about S3 call reduction.
   must be labelled that way. A live check still needs a running API + object store and a request pair
   (`curl -sI`, then `curl -sI -H 'If-None-Match: <etag>'`) against the deployed media URL.
 
-### CI on the exact head
+### CI after merging main
 
-- Green: `ci-plan`, `secret-scan`, `source-quality`, `dependency-security`, `deployment-contract`,
-  `docker-selection`, both `docker-build` jobs, Android unsigned build + JVM, iOS simulator build.
-- `quality-full` fails on exactly one test, unrelated to this change:
-  `scripts/run-ci-tests-with-diagnostics.test.ts > CI test diagnostics supervisor > suppresses raw
-output and returns supervisor failure when redaction times out` with
-  `spawnSync ... run-ci-tests-with-diagnostics.sh ETIMEDOUT`.
-- A targeted rerun of only the failed job on the **unchanged** SHA (run 44251693594) reproduced the
-  same ETIMEDOUT: this is not a one-off flake of a single attempt. The same test also fails on the
-  client PR #678, whose diff cannot affect `scripts/`; and in an earlier run of this branch the same
-  suite passed 25/25.
-- Root cause shape: the scenario stalls redaction for 0.5 s and expects the supervisor to exit 126,
-  while the test's own watchdog is a 10 s `spawnSync` timeout; under full-suite load the supervisor's
-  wall-clock budget (finalisation up to 5 s, process-group cleanup, probe timeouts) can exceed the
-  watchdog, and Node reports ETIMEDOUT as the test result. It is a CI harness timing defect, not the
-  media change.
-- Not fixed here: a correct fix belongs to the CI tooling owner (make the watchdog independent of the
-  supervisor's documented budget, or make the inner timeout deterministic). Editing that test or its
-  timeout in this PR would change release tooling outside this change's scope; disabling it is not an
-  acceptable fix.
+The branch now includes `origin/main` at `1bd9d6c5c2dfc0c3f1d6f178317037342da36a4a` (PRs #680 and
+#681), merged into `8c1920b9e`. No supervisor, publication-workflow or release-guard file was edited
+in this branch; the main fixes are carried unchanged.
+
+- **CI on `8c1920b9e` is fully green** (run 44283445144): `ci-plan`, `secret-scan`,
+  `source-quality`, `quality-full`, `dependency-security`, `deployment-contract`,
+  `docker-selection`, all `docker-build` jobs, Android unsigned build + JVM, and iOS simulator.
+- The earlier `quality-full` `ETIMEDOUT` in `scripts/run-ci-tests-with-diagnostics.test.ts` was the
+  CI supervisor wall-clock defect, not this change. It is fixed by #681 (the supervisor finalisation
+  is bounded by one declared budget), so the test now passes on the unchanged media diff. This branch
+  did not edit, skip or re-time that test.
 
 ### Contract gate: BLOCKED
 
 1. **Rejected delta:** `contracts/openapi/public/v1/openapi.yaml` (documentation of `If-None-Match`,
-   the 304 response and the 200 cache headers). The release window `4b8dbaa1..origin/main` contains 0
-   paths matching the protected set; this head contains 1.
+   the 304 response and the 200 cache headers). The release window `4b8dbaa1..origin/main` (main is
+   now `1bd9d6c5c2dfc0c3f1d6f178317037342da36a4a`) contains 0 paths matching the protected set; this
+   head contains 1.
 2. **Condition:** `scripts/timeweb-api-web-upgrade.js` `validateRuntimeDelta` fails with
    `runtime_definition_changed` for any path matching
    `^(deploy/timeweb/(?!operator-entry|run-standard)|contracts/|packages/database/migrations/|openapi\.yaml$)`.
@@ -169,7 +162,8 @@ output and returns supervisor failure when redaction times out` with
    `callback_runtime_bridge`.
 3. **Existing allowed path for these SHAs/target:** none found. The bridge is pinned to an old candidate;
    no runbook or script admits a new contract delta without changing the release tooling itself.
-4. **Exact evidence:** on this head,
+4. **Exact evidence:** rerun on the merged code head `8c1920b9e` (the later commits are
+   documentation only and do not change validator inputs):
    `npx vitest run scripts/timeweb-api-web-upgrade.test.ts` -> 1 failed, 77 passed,
    `Error: callback_runtime_bridge`.
 5. **Decision required from the owner / release owner:** whether a doc-only, add-only contract delta
@@ -179,9 +173,31 @@ output and returns supervisor failure when redaction times out` with
    (or the approved package must carry the recorded admission), followed by the normal release
    preflight/approval. This PR is not merge-ready until that decision exists.
 
+### Release-owner handoff (exact blocker and required decision)
+
+- **Candidate:** the exact head of PR #679, recorded in the PR body at handoff (code head
+  `8c1920b9e`, then documentation-only commits). **Target:** the production lane for
+  `lk2.padlhub.su`; no publication, deploy or live operation is requested by this PR.
+- **Blocked input:** the add-only `contracts/openapi/public/v1/openapi.yaml` delta for the media
+  routes.
+- **Mechanism failure:** `validateRuntimeDelta` rejects any `contracts/` path
+  (`runtime_definition_changed`), and the only admitted non-canonical predecessor is pinned to
+  `CALLBACK_RUNTIME_BRIDGE` `0d6078be…` / tree `5e50be3c…`, so this candidate ends in
+  `callback_runtime_bridge`. No existing runbook admits a new contract delta without changing the
+  release tooling.
+- **Required decision:** either (a) the release owner records an explicit admission of this doc-only,
+  add-only contract delta for the exact candidate SHA and production target, with the verification
+  that admission requires; or (b) the release owner directs the OpenAPI hunk into a separate
+  release-owner change so this PR can ship under the automatic lane. Weakening the guard, editing
+  the historical bridge, or splitting the 304 from its documented contract is not offered as a fix.
+- **After a decision:** the same validator must pass for the exact SHA and target (or the approved
+  package must carry the recorded admission), followed by the normal release preflight and exact
+  approval. Until then this PR remains Draft.
+
 ### What this means for the PR
 
 - Code, tests and the documented behaviour are complete; the media change is not published.
 - The PR stays Draft. Merge needs owner approval because it touches the public contract; publication
   needs the release-owner decision above.
-- No release tooling, guard, workflow or historical check was modified.
+- The OpenAPI change and its separate contract-gate status are preserved; no release tooling, guard,
+  workflow or historical check was modified.
