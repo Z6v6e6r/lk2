@@ -10,6 +10,20 @@ import {
   participationLevelUnavailable,
 } from './participation-level.js';
 import { ParticipationLevelPicker } from './ParticipationLevelPicker.js';
+const refusalMessages: Partial<
+  Record<NonNullable<TournamentLocalResult['operation']['reason']>, string>
+> = {
+  FULL: 'Мест нет.',
+  MEMBERSHIP_EXISTS: 'Существующая запись не принадлежит этой операции.',
+  GENERATION_NOT_CURRENT: 'Исходная регистрация уже изменилась.',
+  LEVEL_NOT_ALLOWED: 'Ваш уровень не подходит под диапазон турнира.',
+  PLAYER_LEVEL_REQUIRED: 'Чтобы записаться, укажите свой уровень.',
+  PLAYER_LEVEL_UNKNOWN: 'Не удалось определить ваш уровень. Укажите его и повторите.',
+  ACTIVITY_LEVEL_INVALID:
+    'Диапазон уровней турнира настроен некорректно. Обратитесь к организатору.',
+  PLAYER_GENDER_REQUIRED: 'Для записи укажите пол в профиле.',
+  GENDER_NOT_ALLOWED: 'Вы не подходите под ограничение турнира по полу.',
+};
 class Lifetime {
   constructor(
     readonly key: string,
@@ -78,6 +92,13 @@ export function TournamentRegistrationPanel({
     [pending, setPending] = useState(false),
     [commandsEnabled, setCommandsEnabled] = useState(false),
     [levelSetup, setLevelSetup] = useState(false);
+  const acceptResult = useCallback((next: TournamentLocalResult | null) => {
+    setResult(next);
+    setLevelSetup(
+      next?.operation.status === 'REJECTED' &&
+        ['PLAYER_LEVEL_REQUIRED', 'PLAYER_LEVEL_UNKNOWN'].includes(next.operation.reason ?? ''),
+    );
+  }, []);
   const hasCustody = useCallback(() => {
     try {
       return Boolean(attempts.load(tournamentId));
@@ -112,7 +133,7 @@ export function TournamentRegistrationPanel({
       .then(
         (r) => {
           if (active && life.active) {
-            setResult(r.result);
+            acceptResult(r.result);
             setCommandsEnabled(r.commandsEnabled);
             setPending(hasCustody());
           }
@@ -131,7 +152,7 @@ export function TournamentRegistrationPanel({
     return () => {
       active = false;
     };
-  }, [attempts, life, tournamentId, hasCustody, failure]);
+  }, [attempts, life, tournamentId, hasCustody, failure, acceptResult]);
   async function run(kind: 'join' | 'leave' | 'retry' | 'read') {
     setBusy(true);
     setError(null);
@@ -141,7 +162,7 @@ export function TournamentRegistrationPanel({
       if (kind === 'read') {
         const r = await attempts.read(tournamentId);
         if (life.active) {
-          setResult(r.result);
+          acceptResult(r.result);
           setCommandsEnabled(r.commandsEnabled);
         }
       } else {
@@ -155,7 +176,7 @@ export function TournamentRegistrationPanel({
                   ? { action: 'JOIN' }
                   : { action: 'LEAVE', originalJoinOperationId: result!.operation.generation! },
               );
-        if (life.active) setResult(r);
+        if (life.active) acceptResult(r);
       }
     } catch (e) {
       if (life.active) {
@@ -180,7 +201,7 @@ export function TournamentRegistrationPanel({
   return (
     <div className="tournament-registration" aria-live="polite">
       {error ? <p role="alert">{error}</p> : null}
-      {levelSetup && canPickParticipationLevel(gateway) ? (
+      {levelSetup && !busy && canPickParticipationLevel(gateway) ? (
         <ParticipationLevelPicker
           gateway={gateway}
           onSaved={() => void run('join')}
@@ -199,12 +220,7 @@ export function TournamentRegistrationPanel({
       ) : result?.operation.status === 'REJECTED' ? (
         <p>
           Запись не выполнена:{' '}
-          {result.operation.reason === 'FULL'
-            ? 'мест нет'
-            : result.operation.reason === 'MEMBERSHIP_EXISTS'
-              ? 'существующая запись не принадлежит этой операции'
-              : 'исходная регистрация уже изменилась'}
-          .
+          {refusalMessages[result.operation.reason!] ?? 'Допуск не подтверждён.'}
         </p>
       ) : null}
       {unknown ? (

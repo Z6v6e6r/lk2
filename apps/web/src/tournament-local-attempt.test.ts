@@ -52,6 +52,45 @@ function fixture() {
   };
 }
 describe('tournament browser original request custody', () => {
+  it.each([
+    'LEVEL_NOT_ALLOWED',
+    'PLAYER_LEVEL_REQUIRED',
+    'PLAYER_LEVEL_UNKNOWN',
+    'ACTIVITY_LEVEL_INVALID',
+    'PLAYER_GENDER_REQUIRED',
+    'GENDER_NOT_ALLOWED',
+  ] as const)(
+    'terminal %s receipt clears custody on submit/read and permits a conscious new key',
+    async (reason) => {
+      const f = fixture();
+      const refused: TournamentLocalResult = {
+        ...result,
+        operation: { ...result.operation, status: 'REJECTED', reason },
+        registration: { status: 'NOT_REGISTERED_BY_OPERATION', asOf: '2026-11-18T10:00:00Z' },
+        retryAfterSeconds: null,
+      };
+      f.gateway.commandTournament.mockResolvedValueOnce(refused);
+      expect((await f.controller().submit(id, { action: 'JOIN' })).operation.reason).toBe(reason);
+      expect(f.controller().load(id)).toBeNull();
+      f.gateway.commandTournament.mockRejectedValueOnce(new Error('ACK lost'));
+      await expect(f.controller().submit(id, { action: 'JOIN' })).rejects.toThrow('ACK lost');
+      expect(f.controller().load(id)).not.toBeNull();
+      f.gateway.getTournamentRegistration.mockResolvedValue({
+        commandsEnabled: true,
+        result: refused,
+      });
+      expect((await f.controller().read(id)).result).toEqual(refused);
+      expect(f.controller().load(id)).toBeNull();
+      expect((await f.controller().read(id)).result).toEqual(refused);
+      await f.controller().submit(id, { action: 'JOIN' });
+      const calls = f.gateway.commandTournament.mock.calls as unknown as [
+        string,
+        unknown,
+        string,
+      ][];
+      expect(new Set(calls.map((call) => call[2])).size).toBe(3);
+    },
+  );
   it('a server level refusal keeps custody so the retry reuses the original key', async () => {
     const f = fixture();
     f.gateway.commandTournament.mockRejectedValueOnce(

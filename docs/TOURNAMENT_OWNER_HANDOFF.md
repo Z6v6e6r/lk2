@@ -48,3 +48,18 @@ npx vitest run apps/api/src/tournaments/tournament-local-runtime.test.ts package
 Use actual Node 22 from .nvmrc; verify `node --version` because host node@22 symlink pointed to
 Node 25 during this task. Full source checks and targeted checks are reported separately. Provider,
 deployed API/SPA, mobile/browser end-to-end and runtime integration were not executed.
+
+## Terminal refusal client compatibility (2026-11-18)
+
+The browser attempt parser now accepts all six agreed CUP level/gender REJECTED reasons.
+The panel explains each reason, offers level setup for missing/unknown level, and permits
+an explicit new JOIN after a verified terminal receipt clears local custody. An HTTP error,
+unknown/malformed result, lost response or missing read result still preserves the original
+key. Repeated reads can recover a durable refusal without a second command.
+
+`apps/web/src/tournament-refusal-flow.test.tsx` composes the actual CUP owner transport/parser,
+API runtime, SDK, browser attempt store and rendered panel, with a synthetic CUP response and
+in-memory repository. It checks six reasons, repeated read, new keys after resolution and a
+lost browser ACK. This is LOCAL composition evidence, not a live CUP/API HTTP, real-browser,
+STAGING or PROVIDER acceptance test. Existing unknown-result and account-change regressions
+remain. Production certificate code and Hermes QA files are unchanged.
