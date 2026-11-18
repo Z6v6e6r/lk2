@@ -15,6 +15,7 @@ import {
   type CommercialJoinCommandEnvelope,
   type CommercialJoinOwnerOutcome,
   type CommercialJoinRepositoryPort,
+  type CommercialJoinSettlementOwner,
 } from './game-commercial-join.js';
 import {
   createJoinConditionsFixture,
@@ -263,7 +264,9 @@ describe('commercial JOIN orchestration', () => {
       requestSha256: 'sha256:' + 'a'.repeat(64),
     };
     const prepare = vi.fn(() => resolved(settlement));
-    const execute = vi.fn(() => resolved({ status: 'PAYMENT_REQUIRED' as const, settlement }));
+    const execute = vi.fn<CommercialJoinSettlementOwner['execute']>(() =>
+      resolved({ status: 'PAYMENT_REQUIRED' as const, settlement }),
+    );
 
     const result = await executeCommercialJoin(envelope, {
       ...dependencies(repo, ownerPort([]).owner, fixture),
@@ -294,7 +297,7 @@ describe('commercial JOIN orchestration', () => {
         requestSha256: 'sha256:' + 'a'.repeat(64),
       }),
     );
-    const execute = vi.fn();
+    const execute = vi.fn<CommercialJoinSettlementOwner['execute']>();
     const result = await executeCommercialJoin(envelope, {
       ...dependencies(repo, ownerPort([]).owner, fixture),
       settlementOwner: { prepare, execute },

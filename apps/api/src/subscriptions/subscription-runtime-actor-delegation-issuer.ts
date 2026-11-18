@@ -1138,6 +1138,106 @@ export class SubscriptionRuntimeActorDelegationIssuer {
       .sign(key);
   }
 
+  async issueBookedOperationV3(input: {
+    readonly scope: 'preflight' | 'admit' | 'read' | 'cancel';
+    readonly method: 'GET' | 'POST';
+    readonly path: string;
+    readonly operationId: string;
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly providerClientId: string;
+    readonly providerMappingId: string;
+    readonly correlationId: string;
+    readonly requestSha256: string;
+    readonly idempotencyKeySha256?: string;
+    readonly actorToken?: { readonly token: string; readonly expiresAt: string };
+    readonly providerClientSubscriptionId?: string;
+    readonly reservationId?: string;
+    readonly quoteId?: string;
+    readonly expiresAt?: string;
+  }): Promise<string> {
+    if (
+      ![
+        input.userId,
+        input.tenantId,
+        input.sessionId,
+        input.providerMappingId,
+        input.operationId,
+      ].every((value) => uuidPattern.test(value) && value === value.toLowerCase()) ||
+      !idPattern.test(input.tenantKey) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.providerClientId) ||
+      !correlationPattern.test(input.correlationId) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(input.correlationId) ||
+      !/^[a-f0-9]{64}$/.test(input.requestSha256.replace(/^sha256:/, '')) ||
+      (input.idempotencyKeySha256 !== undefined &&
+        !/^[a-f0-9]{64}$/.test(input.idempotencyKeySha256.replace(/^sha256:/, ''))) ||
+      (input.actorToken !== undefined &&
+        (!/^[!-~]{16,4096}$/.test(input.actorToken.token) ||
+          !Number.isFinite(Date.parse(input.actorToken.expiresAt)))) ||
+      (input.reservationId !== undefined && !uuidPattern.test(input.reservationId)) ||
+      (input.quoteId !== undefined && !uuidPattern.test(input.quoteId)) ||
+      (input.expiresAt !== undefined && !Number.isFinite(Date.parse(input.expiresAt))) ||
+      !input.path.startsWith('/lk/integrations/v3/booked-operation')
+    ) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    const key = await importPKCS8(this.options.privateKeyPem, 'RS256');
+    const now = Math.floor(Date.now() / 1000);
+    const scope = {
+      preflight: 'subscription-runtime.booked-operation.preflight',
+      admit: 'subscription-runtime.booked-operation.admit',
+      read: 'subscription-runtime.booked-operation.read',
+      cancel: 'subscription-runtime.booked-operation.cancel',
+    }[input.scope];
+    return new SignJWT({
+      contract_version: 3,
+      scope,
+      caller: 'lk2-api',
+      method: input.method,
+      path: input.path,
+      operation_id: input.operationId,
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: input.providerClientId,
+      provider_mapping_id: input.providerMappingId,
+      correlation_id: input.correlationId,
+      request_sha256: input.requestSha256,
+      ...(input.idempotencyKeySha256 ? { idempotency_key_sha256: input.idempotencyKeySha256 } : {}),
+      ...(input.actorToken
+        ? {
+            actor_token_sha256:
+              'sha256:' + createHash('sha256').update(input.actorToken.token, 'utf8').digest('hex'),
+            actor_token_expires_at: input.actorToken.expiresAt,
+          }
+        : {}),
+      ...(input.providerClientSubscriptionId
+        ? { provider_client_subscription_id: input.providerClientSubscriptionId }
+        : {}),
+      ...(input.reservationId ? { reservation_id: input.reservationId } : {}),
+      ...(input.quoteId ? { quote_id: input.quoteId } : {}),
+      ...(input.expiresAt ? { expires_at: input.expiresAt } : {}),
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + this.options.ttlSeconds)
+      .setJti(randomUUID())
+      .sign(key);
+  }
+
   async issue(input: {
     readonly userId: string;
     readonly tenantId: string;

@@ -1,4 +1,5 @@
 import { createGameStationMembershipAdmission } from './game-station-membership.js';
+import { createBookedOperationV3SettlementOwner } from './game-commercial-join-settlement.js';
 import { createHash } from 'node:crypto';
 
 import type { AppConfig } from '@phub/config';
@@ -18,6 +19,7 @@ import {
   BookedOperationAdmissionClient,
   BookedOperationReadClient,
   BookedOperationReadError,
+  BookedOperationV3Client,
   bookedOperationAdmissionRequestSha256,
   type BookedOperationAdmissionRequest,
   type BookedOperationReadOutcome,
@@ -62,7 +64,7 @@ type CommercialJoinConfig = Partial<
     | 'GAME_COMMERCIAL_JOIN_ENABLED'
     | 'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL'
     | 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS'
-  >;
+  > & { readonly GAME_COMMERCIAL_JOIN_V3_ENABLED?: boolean };
 
 /** User-scoped, backend-issued provider credential handed to the owner for exactly one operation. */
 export interface CommercialJoinActorToken {
@@ -97,7 +99,10 @@ export interface GameCommercialJoinOwnerBoundary {
     Partial<
       Pick<
         SubscriptionRuntimeActorDelegationIssuer,
-        'issueManagedJoinPreflight' | 'issueManagedJoinAdmission' | 'issueManagedJoinRead'
+        | 'issueManagedJoinPreflight'
+        | 'issueManagedJoinAdmission'
+        | 'issueManagedJoinRead'
+        | 'issueBookedOperationV3'
       >
     >;
   readonly managedJoinClient?: Pick<ManagedJoinOwnerClient, 'preflight' | 'admit' | 'read'>;
@@ -566,7 +571,47 @@ export function createGameCommercialJoinRuntime(
     ...(options.issueActorToken ? { issueActorToken: options.issueActorToken } : {}),
   });
   const stationMembership = createGameStationMembershipAdmission({ config, pool: options.pool });
+  const v3Issuer = options.ownerBoundary.delegationIssuer as unknown as {
+    issueBookedOperationV3?: SubscriptionRuntimeActorDelegationIssuer['issueBookedOperationV3'];
+  };
+  const settlementOwner =
+    config.GAME_COMMERCIAL_JOIN_V3_ENABLED && typeof v3Issuer.issueBookedOperationV3 === 'function'
+      ? createBookedOperationV3SettlementOwner({
+          client: new BookedOperationV3Client({
+            baseUrl,
+            timeoutMs: config.GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS,
+          }),
+          issuer: {
+            issueBookedOperationV3: v3Issuer.issueBookedOperationV3.bind(v3Issuer),
+          },
+          issueActorToken: async (actor, correlationId) =>
+            options.issueActorToken!({ ...actor, correlationId }),
+          resolveActorContext: async (actor) => {
+            const context = await options.ownerBoundary!.actorContextRepository.resolve({
+              tenantId: actor.tenantId,
+              userId: actor.userId,
+              sessionId: actor.sessionId,
+            });
+            if (context.outcome !== 'ok')
+              throw new Error('COMMERCIAL_JOIN_ACTOR_CONTEXT_UNAVAILABLE');
+            return {
+              providerClientId: context.providerClientId,
+              providerMappingId: context.providerMappingId,
+            };
+          },
+          resolveProviderClientSubscriptionId: (input) =>
+            options.ownerBoundary!.resolveProviderClientSubscriptionId!({
+              tenantId: input.actor.tenantId,
+              tenantKey: input.actor.tenantKey,
+              userId: input.actor.userId,
+              sessionId: input.actor.sessionId,
+              gameId: input.actor.gameId,
+              subscriptionInstanceId: input.subscriptionInstanceId,
+            }),
+        })
+      : undefined;
   return {
+    ...(settlementOwner ? { settlementOwner } : {}),
     ...(stationMembership ? { stationMembership } : {}),
     repository: {
       ...options.rosterRepository,

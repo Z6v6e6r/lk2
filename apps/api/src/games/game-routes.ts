@@ -568,6 +568,7 @@ export interface GameCommercialJoinOptions {
   readonly repository: CommercialJoinRepositoryPort;
   readonly conditionsOwner: GameJoinConditionsOwner;
   readonly owner: CommercialJoinOwnerPort;
+  readonly settlementOwner?: CommercialJoinDependencies['settlementOwner'];
 }
 
 export function registerGameRoutes(
@@ -897,6 +898,9 @@ export function registerGameRoutes(
               repository: options.commercialJoin.repository,
               conditionsOwner: options.commercialJoin.conditionsOwner,
               owner: options.commercialJoin.owner,
+              ...(options.commercialJoin.settlementOwner
+                ? { settlementOwner: options.commercialJoin.settlementOwner }
+                : {}),
               ...(options.commercialJoin.stationMembership
                 ? { stationMembership: options.commercialJoin.stationMembership }
                 : {}),

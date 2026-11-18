@@ -1,0 +1,189 @@
+import {
+  BOOKED_OPERATION_V3_ADMISSION_PATH,
+  BOOKED_OPERATION_V3_PREFLIGHT_PATH,
+} from '@phub/subscription-runtime-adapter';
+import type {
+  BookedOperationV3Client,
+  BookedOperationV3AdmissionRequest,
+  BookedOperationV3PreflightRequest,
+} from '@phub/subscription-runtime-adapter';
+import { createHash } from 'node:crypto';
+
+import type { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
+import type {
+  CommercialJoinOwnerActor,
+  CommercialJoinSettlement,
+  CommercialJoinSettlementOwner,
+} from './game-commercial-join.js';
+
+type ActorToken = { readonly token: string; readonly expiresAt: string };
+
+const sha256 = (value: unknown): string =>
+  'sha256:' + createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex');
+
+/**
+ * Source-only v3 settlement owner. It is composed only when the LK1 receiver is published and
+ * the explicit v3 flag is enabled; it never creates a checkout locally.
+ */
+export function createBookedOperationV3SettlementOwner(options: {
+  readonly client: Pick<BookedOperationV3Client, 'preflight' | 'admit'>;
+  readonly issuer: Pick<SubscriptionRuntimeActorDelegationIssuer, 'issueBookedOperationV3'>;
+  readonly issueActorToken: (
+    actor: CommercialJoinOwnerActor,
+    correlationId: string,
+  ) => Promise<ActorToken>;
+  readonly resolveActorContext: (actor: CommercialJoinOwnerActor) => Promise<{
+    readonly providerClientId: string;
+    readonly providerMappingId: string;
+  }>;
+  readonly resolveProviderClientSubscriptionId?: (input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly subscriptionInstanceId: string;
+  }) => Promise<string | undefined>;
+}): CommercialJoinSettlementOwner {
+  const actorTokenFor = async (
+    actor: CommercialJoinOwnerActor,
+    correlationId: string,
+  ): Promise<ActorToken> => {
+    const token = await options.issueActorToken(actor, correlationId);
+    if (!token.token || Date.parse(token.expiresAt) <= Date.now())
+      throw new Error('COMMERCIAL_JOIN_ACTOR_TOKEN_UNAVAILABLE');
+    return token;
+  };
+  const providerSubscriptionFor = async (
+    actor: CommercialJoinOwnerActor,
+    subscriptionInstanceId: string,
+  ): Promise<string | undefined> => {
+    if (!options.resolveProviderClientSubscriptionId) return undefined;
+    return options.resolveProviderClientSubscriptionId({ actor, subscriptionInstanceId });
+  };
+  const contextFor = async (actor: CommercialJoinOwnerActor) => {
+    const context = await options.resolveActorContext(actor);
+    if (!context.providerClientId || !context.providerMappingId)
+      throw new Error('COMMERCIAL_JOIN_ACTOR_CONTEXT_UNAVAILABLE');
+    return context;
+  };
+  return {
+    async prepare(input) {
+      const actorToken = await actorTokenFor(input.actor, input.correlationId);
+      const context = await contextFor(input.actor);
+      const providerClientSubscriptionId = await providerSubscriptionFor(
+        input.actor,
+        input.subscriptionInstanceId,
+      );
+      const request: BookedOperationV3PreflightRequest = {
+        contractVersion: 3,
+        action: 'JOIN_GAME',
+        target: {
+          kind: 'GAME',
+          id: input.actor.gameId,
+          expectedRevision: input.actor.expectedRevision,
+        },
+        paymentIntent: 'USE_SUBSCRIPTION',
+      };
+      const requestSha256 = sha256(request);
+      const actorDelegation = await options.issuer.issueBookedOperationV3({
+        scope: 'preflight',
+        method: 'POST',
+        path: BOOKED_OPERATION_V3_PREFLIGHT_PATH,
+        operationId: input.operationId,
+        tenantId: input.actor.tenantId,
+        tenantKey: input.actor.tenantKey,
+        userId: input.actor.userId,
+        sessionId: input.actor.sessionId,
+        providerClientId: context.providerClientId,
+        providerMappingId: context.providerMappingId,
+        correlationId: input.correlationId,
+        requestSha256,
+        actorToken,
+        ...(providerClientSubscriptionId ? { providerClientSubscriptionId } : {}),
+      });
+      const result = await options.client.preflight(request, {
+        actorDelegation,
+        correlationId: input.correlationId,
+        operationId: input.operationId,
+        actorToken,
+      });
+      if (
+        !result.quote ||
+        !result.settlement ||
+        result.settlement.mode !== 'SURCHARGE' ||
+        result.settlement.state !== 'OPEN' ||
+        !result.settlement.checkoutUrl ||
+        !result.settlement.expiresAt ||
+        result.quote.amountMinor !== input.price.amountMinor ||
+        result.quote.surchargeMinor !== result.settlement.toPayMinor
+      ) {
+        throw new Error('COMMERCIAL_JOIN_V3_QUOTE_INVALID');
+      }
+      const settlement: CommercialJoinSettlement = {
+        quoteId: result.quote.quoteId,
+        amountMinor: result.quote.amountMinor,
+        toPayMinor: result.settlement.toPayMinor,
+        checkoutUrl: result.settlement.checkoutUrl,
+        expiresAt: result.settlement.expiresAt,
+        requestSha256: result.requestSha256,
+      };
+      return settlement;
+    },
+    async execute(input) {
+      const actorToken = await actorTokenFor(input.actor, input.correlationId);
+      const context = await contextFor(input.actor);
+      const providerClientSubscriptionId = await providerSubscriptionFor(
+        input.actor,
+        input.subscriptionInstanceId,
+      );
+      const request: BookedOperationV3AdmissionRequest = {
+        contractVersion: 3,
+        action: 'JOIN_GAME',
+        target: {
+          kind: 'GAME',
+          id: input.actor.gameId,
+          expectedRevision: input.actor.expectedRevision,
+        },
+        paymentIntent: 'USE_SUBSCRIPTION',
+        quoteId: input.settlement.quoteId,
+        settlementConsent: {
+          quoteId: input.settlement.quoteId,
+          amountMinor: input.settlement.toPayMinor,
+          currency: 'RUB',
+          expiresAt: input.settlement.expiresAt,
+        },
+      };
+      const requestSha256 = sha256(request);
+      const actorDelegation = await options.issuer.issueBookedOperationV3({
+        scope: 'admit',
+        method: 'POST',
+        path: BOOKED_OPERATION_V3_ADMISSION_PATH,
+        operationId: input.operationId,
+        tenantId: input.actor.tenantId,
+        tenantKey: input.actor.tenantKey,
+        userId: input.actor.userId,
+        sessionId: input.actor.sessionId,
+        providerClientId: context.providerClientId,
+        providerMappingId: context.providerMappingId,
+        correlationId: input.correlationId,
+        requestSha256,
+        idempotencyKeySha256:
+          'sha256:' + createHash('sha256').update(input.idempotencyKey, 'utf8').digest('hex'),
+        actorToken,
+        ...(providerClientSubscriptionId ? { providerClientSubscriptionId } : {}),
+        reservationId: input.reservationId,
+        quoteId: input.settlement.quoteId,
+        expiresAt: input.settlement.expiresAt,
+      });
+      const result = await options.client.admit(request, {
+        actorDelegation,
+        correlationId: input.correlationId,
+        operationId: input.operationId,
+        actorToken,
+      });
+      if (result.status === 'CANCELLED')
+        return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
+      if (result.status === 'UNKNOWN') return { status: 'UNKNOWN' };
+      if (result.payment.state === 'OPEN' && result.payment.checkoutUrl)
+        return { status: 'PAYMENT_REQUIRED', settlement: { ...input.settlement } };
+      return { status: 'PENDING' };
+    },
+  };
+}
