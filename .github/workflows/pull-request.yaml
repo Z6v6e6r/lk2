@@ -243,14 +243,38 @@ jobs:
         env:
           CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK: CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1
         run: npm run db:migrate
+      - name: Verify supervised Compose worker death and cancellation
+        if: ${{ needs.ci-plan.outputs.release_tooling_tests != 'false' }}
+        timeout-minutes: 8
+        run: |
+          # Run outside Vitest: no nested Docker session may escape its outer watchdog.
+          # Each case: <=180s body + 2s grace + 30s finalization; two fit inside 480s.
+          for mode in worker-death supervisor-cancellation; do
+            directory="$PWD/.ci-artifacts/test-and-coverage/compose-cancellation/$mode"
+            result=0
+            CI_TEST_DIAGNOSTICS_DIR="$directory" CI_TEST_WATCHDOG_SECONDS=180 \
+              CI_TEST_KILL_AFTER_SECONDS=2 CI_TEST_EXTERNAL_KILL_AFTER_SECONDS=2 \
+              scripts/run-ci-tests-with-diagnostics.sh \
+              node scripts/verify-timeweb-compose-cancellation.js "$mode" || result=$?
+            node scripts/verify-timeweb-compose-cancellation.js --verify "$mode" "$directory" "$result"
+          done
       - name: Unit and integration tests
-        timeout-minutes: 15
+        timeout-minutes: 25
         env:
-          # Run 43739391426 completed its suites at 741s; keep 70s for bounded finalization.
-          CI_TEST_WATCHDOG_SECONDS: '800'
+          # Full profile (paused release tooling INCLUDED): main run 44266726885 hit the 800 s
+          # watchdog; this does not identify runner slowness or prove test/report/exit completion.
+          # Product-only runs (CI_TEST_SKIP_PAUSED_RELEASE_TOOLING=1) are not duration baselines.
+          # Keep separate room for the 30 s grace, 30 s finalization and 60 s Actions margin.
+          # A branch result cannot establish main green; require an actual post-merge main run.
+          CI_TEST_WATCHDOG_SECONDS: '1380'
           # A change that stays inside product areas skips scripts/paused-release-tooling-tests.txt.
           CI_TEST_SKIP_PAUSED_RELEASE_TOOLING: ${{ needs.ci-plan.outputs.release_tooling_tests == 'false' && '1' || '0' }}
+          CI_REQUIRE_QA_POSTGRES: '1'
+          GAME_CAPACITY_RACE_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          SUBSCRIPTION_ACTIVATION_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: scripts/run-ci-tests-with-diagnostics.sh
+      - name: Require all eight PostgreSQL QA scenarios without skips
+        run: python3 scripts/verify-required-qa-postgres.py .ci-artifacts/test-and-coverage/junit.xml
       - name: Verify closed 0103 and 0104 migration modes on PostgreSQL 16
         timeout-minutes: 3
         env:

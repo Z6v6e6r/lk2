@@ -1565,6 +1565,18 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/residency/catalog:
+    $ref: ./residency-orders.yaml#/paths/~1{tenantKey}~1residency~1catalog
+  /{tenantKey}/residency/orders:
+    $ref: ./residency-orders.yaml#/paths/~1{tenantKey}~1residency~1orders
+  /{tenantKey}/residency/orders/{orderId}:
+    $ref: ./residency-orders.yaml#/paths/~1{tenantKey}~1residency~1orders~1{orderId}
+  /{tenantKey}/residency/orders/{orderId}/payment:
+    $ref: ./residency-orders.yaml#/paths/~1{tenantKey}~1residency~1orders~1{orderId}~1payment
+  /{tenantKey}/residency/orders/{orderId}/reconcile:
+    $ref: ./residency-orders.yaml#/paths/~1{tenantKey}~1residency~1orders~1{orderId}~1reconcile
+  /{tenantKey}/residency/orders/{orderId}/cancel:
+    $ref: ./residency-orders.yaml#/paths/~1{tenantKey}~1residency~1orders~1{orderId}~1cancel
   /{tenantKey}/residency:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey

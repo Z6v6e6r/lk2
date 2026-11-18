@@ -1,0 +1,476 @@
+paths:
+  '/{tenantKey}/residency/catalog':
+    parameters:
+      - { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' }
+      - { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' }
+    get:
+      tags: [profiles]
+      operationId: getResidencyCatalog
+      summary: Read the residency product and the caller's renewal eligibility
+      description: |
+        Server-owned product, price and term of the exact Viva residency product, read from
+        the LK1 residency owner (Z6v6e6r/lk#443, contract residency-lifecycle.v2). The
+        renewal block is evaluated for the authenticated user before any payment: eligible,
+        the stable reason, the earliest eligible instant and the expected window. Remaining
+        days are not carried into a new window by the rights owner, so an early renewal is
+        refused before the transaction. No browser-supplied product, price or redirect is
+        accepted. Cache-Control: private, no-store.
+      responses:
+        '200':
+          description: Exact product terms and the per-user renewal decision.
+          content:
+            application/json:
+              schema: { '$ref': '#/components/schemas/ResidencyCatalog' }
+        '401': { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' }
+        '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' }
+        '429': { '$ref': '../../common/components.yaml#/components/responses/TooManyRequests' }
+        '503': { '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable' }
+  '/{tenantKey}/residency/orders':
+    parameters:
+      - { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' }
+      - { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' }
+    get:
+      tags: [profiles]
+      operationId: listUnresolvedResidencyOrders
+      summary: Find the caller's own unfinished residency order
+      description: |
+        Server-authorized lookup of the authenticated user's unresolved order on another
+        device or after losing local storage. Only `state=unresolved` is accepted. The list
+        is tenant- and user-scoped and never includes another user's order. An unknown
+        financial outcome is not promised to disappear after the local payment window.
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema: { type: string, enum: [unresolved] }
+      responses:
+        '200':
+          description: Unresolved orders of the verified user.
+          content:
+            application/json:
+              schema: { '$ref': '#/components/schemas/ResidencyUnresolvedOrders' }
+        '400': { '$ref': '../../common/components.yaml#/components/responses/BadRequest' }
+        '401': { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' }
+        '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' }
+        '429': { '$ref': '../../common/components.yaml#/components/responses/TooManyRequests' }
+        '503': { '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable' }
+    post:
+      tags: [profiles]
+      operationId: createResidencyOrder
+      summary: Create or renew a residency order
+      description: |
+        Forwards one operation to the LK1 residency owner with the user's server-held Viva
+        delegation. LK2 keeps no order row, tariff or entitlement of its own. The price consent
+        (`expectedTotalMinor`) is mandatory and must equal the owner's total exactly; the
+        owner rejects a missing value with 400 RESIDENCY_PRICE_CONSENT_REQUIRED and a lower or
+        higher total with 409 RESIDENCY_PRICE_CHANGED, both with `details` and zero provider
+        POSTs. A mode-only body from the previous client is therefore not compatible (the
+        response `schemaVersion` stays 1). An early renewal is 409
+        RESIDENCY_RENEWAL_TOO_EARLY. The same Idempotency-Key always returns the same order; a
+        different key cannot bypass an unresolved operation. An unknown outcome stays unresolved
+        with a recovery block.
+      parameters:
+        - { '$ref': '#/components/parameters/ResidencyIdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { '$ref': '#/components/schemas/ResidencyCreateRequest' }
+      responses:
+        '200':
+          description: The durable order and its recovery state.
+          content:
+            application/json:
+              schema: { '$ref': '#/components/schemas/ResidencyOrderEnvelope' }
+        '400': { '$ref': '../../common/components.yaml#/components/responses/BadRequest' }
+        '401': { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' }
+        '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' }
+        '409': { '$ref': '#/components/responses/ResidencyConflict' }
+        '429': { '$ref': '../../common/components.yaml#/components/responses/TooManyRequests' }
+        '503': { '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable' }
+  '/{tenantKey}/residency/orders/{orderId}':
+    parameters:
+      - { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' }
+      - { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' }
+      - { '$ref': '#/components/parameters/ResidencyOrderId' }
+    get:
+      tags: [profiles]
+      operationId: getResidencyOrder
+      summary: Read one own residency order
+      description: |
+        Returns the durable order. The recovery block is a projection of stored fields, so
+        it is identical after a restart, a lost mutation response or on another device.
+        Another user's or tenant's id is 404 RESIDENCY_ORDER_NOT_FOUND.
+      responses:
+        '200':
+          description: The order and its recovery state.
+          content:
+            application/json:
+              schema: { '$ref': '#/components/schemas/ResidencyOrder' }
+        '401': { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' }
+        '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' }
+        '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' }
+        '429': { '$ref': '../../common/components.yaml#/components/responses/TooManyRequests' }
+        '503': { '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable' }
+  '/{tenantKey}/residency/orders/{orderId}/payment':
+    parameters:
+      - { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' }
+      - { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' }
+      - { '$ref': '#/components/parameters/ResidencyOrderId' }
+    get:
+      tags: [profiles]
+      operationId: getResidencyOrderPayment
+      summary: Read the payment link or instruction of one own order
+      description: |
+        Same normalized payment vocabulary as the order (NONE, PENDING, PAID, FAILED,
+        UNKNOWN); the internal dispatch state is never exposed. A cancelled, paid or failed
+        order never returns a stale link. The endpoint reads the provider back before
+        answering and never creates a payment.
+      responses:
+        '200':
+          description: The payment view of the order.
+          content:
+            application/json:
+              schema: { '$ref': '#/components/schemas/ResidencyPayment' }
+        '401': { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' }
+        '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' }
+        '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' }
+        '429': { '$ref': '../../common/components.yaml#/components/responses/TooManyRequests' }
+        '503': { '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable' }
+  '/{tenantKey}/residency/orders/{orderId}/reconcile':
+    parameters:
+      - { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' }
+      - { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' }
+      - { '$ref': '#/components/parameters/ResidencyOrderId' }
+      - { '$ref': '#/components/parameters/ResidencyIdempotencyKey' }
+    post:
+      tags: [profiles]
+      operationId: reconcileResidencyOrder
+      summary: Reconcile one own residency order with the owner
+      description: |
+        Reads the original Viva transaction at the owner and activates only from the CUP
+        confirmed window. A repeated eventId is idempotent and activates at most once. A
+        PENDING/UNKNOWN read keeps the order retryable; a terminal provider failure closes
+        it; a late PAID is recovered without a second charge. This call never creates a
+        payment.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { '$ref': '#/components/schemas/ResidencyReconcileRequest' }
+      responses:
+        '200':
+          description: The reconciled order and its recovery state.
+          content:
+            application/json:
+              schema: { '$ref': '#/components/schemas/ResidencyOrderEnvelope' }
+        '400': { '$ref': '../../common/components.yaml#/components/responses/BadRequest' }
+        '401': { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' }
+        '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' }
+        '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' }
+        '409': { '$ref': '#/components/responses/ResidencyConflict' }
+        '429': { '$ref': '../../common/components.yaml#/components/responses/TooManyRequests' }
+        '503': { '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable' }
+  '/{tenantKey}/residency/orders/{orderId}/cancel':
+    parameters:
+      - { '$ref': '../../common/components.yaml#/components/parameters/TenantKey' }
+      - { '$ref': '../../common/components.yaml#/components/parameters/CorrelationId' }
+      - { '$ref': '#/components/parameters/ResidencyOrderId' }
+      - { '$ref': '#/components/parameters/ResidencyIdempotencyKey' }
+    post:
+      tags: [profiles]
+      operationId: cancelResidencyOrder
+      summary: Cancel one own unpaid residency order
+      description: |
+        A safe cancellation requires a confirmed basis. The owner reads the original
+        transaction first: PAID refuses the cancel, an unreadable or still-pending status
+        fails closed, and an unknown dispatch without a provider id is not cancellable by
+        this command. A confirmed terminal provider failure is a valid basis.
+      responses:
+        '200':
+          description: The cancelled order with a terminal recovery state.
+          content:
+            application/json:
+              schema: { '$ref': '#/components/schemas/ResidencyOrderEnvelope' }
+        '400': { '$ref': '../../common/components.yaml#/components/responses/BadRequest' }
+        '401': { '$ref': '../../common/components.yaml#/components/responses/Unauthorized' }
+        '403': { '$ref': '../../common/components.yaml#/components/responses/Forbidden' }
+        '404': { '$ref': '../../common/components.yaml#/components/responses/NotFound' }
+        '409': { '$ref': '#/components/responses/ResidencyConflict' }
+        '429': { '$ref': '../../common/components.yaml#/components/responses/TooManyRequests' }
+        '503': { '$ref': '../../common/components.yaml#/components/responses/ServiceUnavailable' }
+
+components:
+  parameters:
+    ResidencyOrderId:
+      name: orderId
+      in: path
+      required: true
+      description: PadlHub order id returned by POST /residency/orders.
+      schema: { type: string, format: uuid }
+    ResidencyIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable client operation key; the owner derives the order identity from it.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+        pattern: '^[!-~]+$'
+  responses:
+    ResidencyConflict:
+      description: |
+        A stable refusal such as RESIDENCY_ORDER_ALREADY_PENDING,
+        RESIDENCY_IDEMPOTENCY_CONFLICT, RESIDENCY_PRICE_CHANGED,
+        RESIDENCY_RENEWAL_TOO_EARLY, RESIDENCY_ORDER_PAID or
+        RESIDENCY_PAYMENT_STATUS_UNKNOWN. Structured refusals carry `details`.
+        A refusal raised before the owner's idempotency lookup (for example
+        RESIDENCY_PRICE_CONSENT_REQUIRED or a product mismatch) does not prove that no earlier
+        order exists for the key; use GET /{tenantKey}/residency/orders?state=unresolved.
+      content:
+        application/json:
+          schema: { '$ref': '#/components/schemas/ResidencyError' }
+  schemas:
+    ResidencyCatalog:
+      type: object
+      required: [schemaVersion, product, renewalEligible, renewal, checkedAt]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        product:
+          type: object
+          required: [productId, title, termDays, priceMinor, currency, benefits]
+          properties:
+            productId: { type: string, format: uuid }
+            title: { type: string }
+            termDays: { type: integer, minimum: 1 }
+            priceMinor: { type: integer, minimum: 1 }
+            currency: { type: string, enum: [RUB] }
+            benefits: { type: array, items: { type: object } }
+        renewalEligible: { type: boolean }
+        renewal: { '$ref': '#/components/schemas/ResidencyRenewal' }
+        checkedAt: { type: string, format: date-time }
+    ResidencyRenewal:
+      type: object
+      required: [eligible, reason, eligibleAt, currentValidUntil, expected]
+      properties:
+        eligible: { type: boolean }
+        reason:
+          type: [string, 'null']
+          enum: [NOT_ACTIVE, REMAINING_DAYS_NOT_TRANSFERABLE, STATUS_UNAVAILABLE, null]
+        eligibleAt: { type: [string, 'null'], format: date-time }
+        currentValidUntil: { type: [string, 'null'], format: date-time }
+        expected:
+          type: [object, 'null']
+          properties:
+            termDays: { type: integer, minimum: 1 }
+            startsAt: { type: string, enum: [PAYMENT_DATE] }
+            earliestValidUntil: { type: [string, 'null'], format: date-time }
+    ResidencyCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedTotalMinor]
+      properties:
+        mode: { type: string, enum: [NEW, RENEWAL], default: NEW }
+        expectedTotalMinor:
+          type: integer
+          minimum: 1
+          description: >-
+            Mandatory exact total the user confirmed. Both a lower and a higher server total are
+            409 RESIDENCY_PRICE_CHANGED; omission is 400 RESIDENCY_PRICE_CONSENT_REQUIRED.
+        expectedProductId: { type: string, format: uuid }
+    ResidencyReconcileRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        eventId: { type: string, minLength: 1, maxLength: 128 }
+    ResidencyOrder:
+      type: object
+      required:
+        [
+          schemaVersion,
+          orderId,
+          mode,
+          state,
+          terminal,
+          terminalReason,
+          product,
+          pricing,
+          consent,
+          renewal,
+          payment,
+          recovery,
+          activation,
+          residency,
+          createdAt,
+          updatedAt,
+          revision,
+        ]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        orderId: { type: string, format: uuid }
+        mode: { type: string, enum: [NEW, RENEWAL] }
+        state:
+          type: string
+          enum:
+            [
+              PENDING_PAYMENT,
+              PAYMENT_FAILED,
+              EXPIRED,
+              CANCELLED,
+              PAID,
+              PAID_ACTIVATION_PENDING,
+              ACTIVE,
+              ACTIVATION_FAILED,
+              PAID_REQUIRES_REVIEW,
+            ]
+        terminal: { type: boolean }
+        terminalReason: { type: [string, 'null'] }
+        product: { '$ref': '#/components/schemas/ResidencyProduct' }
+        pricing: { '$ref': '#/components/schemas/ResidencyPricing' }
+        consent: { '$ref': '#/components/schemas/ResidencyConsent' }
+        renewal:
+          type: [object, 'null']
+          properties:
+            baseValidUntil: { type: string, format: date-time }
+            minimumValidUntil: { type: string, format: date-time }
+        payment: { '$ref': '#/components/schemas/ResidencyOrderPayment' }
+        recovery: { '$ref': '#/components/schemas/ResidencyRecovery' }
+        activation:
+          type: object
+          properties:
+            state: { type: string }
+            attempts: { type: integer, minimum: 0 }
+            lastErrorCode: { type: [string, 'null'] }
+        residency:
+          type: [object, 'null']
+          properties:
+            state: { type: string, enum: [ACTIVE, EXPIRED, NONE, UNAVAILABLE] }
+            validFrom: { type: string, format: date-time }
+            validUntil: { type: string, format: date-time }
+            source: { type: string }
+            observedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        revision: { type: integer, minimum: 1 }
+    ResidencyProduct:
+      type: object
+      required: [productId, title, termDays, currency]
+      properties:
+        productId: { type: string, format: uuid }
+        title: { type: string }
+        termDays: { type: integer, minimum: 1 }
+        currency: { type: string, enum: [RUB] }
+    ResidencyPricing:
+      type: object
+      required: [baseAmountMinor, discountLines, totalMinor, currency]
+      properties:
+        baseAmountMinor: { type: integer, minimum: 0 }
+        discountLines: { type: array, items: { type: object } }
+        totalMinor: { type: integer, minimum: 0 }
+        currency: { type: string, enum: [RUB] }
+    ResidencyConsent:
+      type: [object, 'null']
+      properties:
+        expectedTotalMinor: { type: integer, minimum: 1 }
+        productId: { type: string, format: uuid }
+        acceptedAt: { type: string, format: date-time }
+    ResidencyOrderPayment:
+      type: object
+      required: [status, paymentUrl, expiresAt, overdue, instruction]
+      properties:
+        status: { type: string, enum: [NONE, PENDING, PAID, FAILED, UNKNOWN] }
+        paymentUrl: { type: [string, 'null'], format: uri }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        overdue: { type: boolean }
+        instruction: { type: [string, 'null'] }
+    ResidencyRecovery:
+      type: object
+      required: [state, required, reason, action, retryable, since]
+      properties:
+        state:
+          type: string
+          enum:
+            [
+              NONE,
+              AWAITING_PAYMENT,
+              AWAITING_CONFIRMATION,
+              UNKNOWN_OUTCOME,
+              ACTIVATION_PENDING,
+              REVIEW_REQUIRED,
+              TERMINAL,
+            ]
+        required: { type: boolean }
+        reason: { type: [string, 'null'] }
+        action:
+          type: string
+          enum: [NONE, PAY, RETRY_RECONCILE, CONTACT_SUPPORT, START_NEW_ORDER]
+        retryable: { type: boolean }
+        since: { type: [string, 'null'], format: date-time }
+    ResidencyOrderEnvelope:
+      type: object
+      required: [schemaVersion, order, idempotentReplay]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        order: { '$ref': '#/components/schemas/ResidencyOrder' }
+        idempotentReplay: { type: boolean }
+        recoveryRequired: { type: boolean }
+        recovery: { '$ref': '#/components/schemas/ResidencyRecovery' }
+        retryable: { type: boolean }
+        reviewRequired: { type: boolean }
+    ResidencyUnresolvedOrders:
+      type: object
+      required: [schemaVersion, orders, count]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        orders: { type: array, items: { '$ref': '#/components/schemas/ResidencyOrder' } }
+        count: { type: integer, minimum: 0 }
+    ResidencyPayment:
+      type: object
+      required:
+        [
+          schemaVersion,
+          orderId,
+          state,
+          paymentStatus,
+          paymentUrl,
+          expiresAt,
+          overdue,
+          instruction,
+          recovery,
+          terminal,
+          terminalReason,
+        ]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        orderId: { type: string, format: uuid }
+        state:
+          type: string
+          enum:
+            [
+              PENDING_PAYMENT,
+              PAYMENT_FAILED,
+              EXPIRED,
+              CANCELLED,
+              PAID,
+              PAID_ACTIVATION_PENDING,
+              ACTIVE,
+              ACTIVATION_FAILED,
+              PAID_REQUIRES_REVIEW,
+            ]
+        paymentStatus: { type: string, enum: [NONE, PENDING, PAID, FAILED, UNKNOWN] }
+        paymentUrl: { type: [string, 'null'], format: uri }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        overdue: { type: boolean }
+        instruction: { type: [string, 'null'] }
+        recovery: { '$ref': '#/components/schemas/ResidencyRecovery' }
+        terminal: { type: boolean }
+        terminalReason: { type: [string, 'null'] }
+    ResidencyError:
+      type: object
+      required: [code, message, correlationId]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        correlationId: { type: string }
+        details: { type: object, additionalProperties: true }
