@@ -1756,6 +1756,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(diagnosticsRunner).toContain('/proc/$helper_pid/stat');
     expect(diagnosticsRunner).toContain('CI_TEST_FINALIZATION_BUDGET_SECONDS:-30');
     expect(diagnosticsRunner).toContain('wait_for_process_group_exit');
+    expect(diagnosticsRunner).toContain('run_command_in_own_group_bounded');
     expect(diagnosticsRunner).toContain('finalization_stage_timeout');
     expect(diagnosticsRunner).toContain('finalization_budget_seconds=%s');
     expect(diagnosticsRunner).toContain(
