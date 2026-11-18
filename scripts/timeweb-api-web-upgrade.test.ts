@@ -187,7 +187,8 @@ describe('explicit API/Web upgrade boundary', () => {
     scenario(`const {execFileSync}=await import('node:child_process');
       const git=args=>execFileSync('git',args,{encoding:'utf8'}).trim();
       const previousSha='4b8dbaa12c1ec3fea478a5e661465955e4b0c7c0';
-      const candidateSha=git(['rev-parse','HEAD']),candidateTree=git(['rev-parse','HEAD^{tree}']);
+      // Keep the application-only fixture immutable: later HEAD may change protected contracts.
+      const candidateSha='1bd9d6c5c2dfc0c3f1d6f178317037342da36a4a',candidateTree=git(['rev-parse',candidateSha+'^{tree}']);
       const renderer='scripts/render-timeweb-beta-release-env.js';
       assert.equal(git(['rev-parse',previousSha+':'+renderer]),'9ad2df84d16f1683e54f79870ccfbc79d345ca12');
       assert.equal(git(['rev-parse',candidateSha+':'+renderer]),git(['rev-parse',previousSha+':'+renderer]));
@@ -198,7 +199,7 @@ describe('explicit API/Web upgrade boundary', () => {
         assert.throws(()=>validateRuntimeUpgrade({previousSha,candidateSha,candidateTree},[...entries,{path:renderer}]),service);
       }
       assert.throws(()=>validateRuntimeDelta([renderer]),/runtime_definition_changed/);
-      for(const path of ['packages/database/migrations/0123.sql','contracts/openapi/user/v1/openapi.yaml','apps/api/Dockerfile','deploy/timeweb/compose.beta.yaml'])
+      for(const path of ['packages/database/migrations/0123.sql','contracts/openapi/user/v1/openapi.yaml','contracts/openapi/user/v1/tournament-local.yaml','apps/api/Dockerfile','deploy/timeweb/compose.beta.yaml'])
         assert.throws(()=>validateRuntimeUpgrade({previousSha,candidateSha,candidateTree},[...entries,{path}]));
     `);
   });
