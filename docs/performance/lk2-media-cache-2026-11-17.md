@@ -39,6 +39,15 @@ double-quoted opaque tags, comma-separated lists and `*`. Specific behaviour, al
 | `avatar-v1` (unquoted), `W/`, `"unterminated`, empty | `"v1"`                | 200 — malformed input fails safe                     |
 | `"a,b"`                                              | `"a"`                 | 200 — a comma inside a quoted tag is part of the tag |
 
+Token boundaries are explicit, not implied by a split on commas:
+
+- a lone `*` (surrounded only by optional whitespace) is the wildcard; `*, "v1"` or `"v1", *` is a
+  malformed field and does not match;
+- tags must be double-quoted and separated by commas; space-separated tags, a trailing comma, an
+  unquoted tag or a tag followed by garbage (`"v1"x`, `W/"v1"junk`) make the field malformed;
+- one malformed entry fails the whole field (normal `200`), instead of matching a healthy-looking
+  prefix.
+
 This implementation does not claim full RFC 9110 conformance: it has no parser for every listed
 production, it compares the quoted opaque value literally after stripping `W/`, and it does not
 implement `If-Match` / `If-Modified-Since`. Within that subset it is deterministic and fails towards
@@ -77,15 +86,22 @@ standard browser-cache behaviour; no first-party client sets the header manually
    `contracts/`, `packages/database/migrations/`, `openapi.yaml` or the protected deploy scripts;
    this head contains **1** (`contracts/openapi/public/v1/openapi.yaml`).
 
-   On CI, `quality-full` passed on this head: the release-tooling tests stay paused unless the
+   On CI, `quality-full` passed on head `fadd8865e`: the release-tooling tests stay paused unless the
    change also touches their activation inputs (`scripts/**`, `vitest.config.ts`), and this branch
-   touches neither. Running the validator test directly on this head **fails** with
+   touches neither. Running the validator directly on the same head **fails** with
    `callback_runtime_bridge` (`npx vitest run scripts/timeweb-api-web-upgrade.test.ts`: 1 failed,
-   77 passed), and it fails the same way in a linked worktree of pristine `origin/main` once the
-   contracts path enters the window. A green CI therefore does **not** mean the release validator
-   accepted the contract delta: publication needs the release owner's decision on how a doc-only,
-   add-only contract change is admitted. The guard is not weakened and no historical check was
-   edited.
+   77 passed): the release window now contains a `contracts/` path where `origin/main` had none.
+   The guard is not weakened and no historical check was edited.
+
+   **Applicable release route.** This source cannot be admitted by the automatic publication lane:
+   the lane's validator rejects the candidate, and a green `quality-full` does not change that. The
+   only applicable route is an owner-approved release package in which the release owner explicitly
+   records the doc-only, add-only contract delta and admits it for the exact source SHA and target
+   (fresh preflight, then publication). While the production lane is paused by the owner decision in
+   `AGENTS.md`, this PR stays Draft and is not published. The alternative — moving the OpenAPI hunk
+   into a separate release-owner PR so this one can pass the automatic lane — was rejected: it would
+   ship the 304 while leaving the public contract describing only 200, which is the inaccuracy this
+   change exists to remove.
 
 3. **Order of deployment:** API first (the 304 originates there), Web/Android later are unaffected.
    No migration, no schema change, no backfill, no cache purge needed.
