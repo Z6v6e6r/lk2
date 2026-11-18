@@ -753,8 +753,11 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
 
     getGameOperation.mockResolvedValueOnce(managedResult('SUCCEEDED'));
     await user.click(screen.getByRole('button', { name: 'Проверить статус' }));
+    // The paid path must carry the same revision readback contract as the free path.
     await waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith(`/games/${managedGameId}?created=1&recovered=1`),
+      expect(navigate).toHaveBeenCalledWith(
+        `/games/${managedGameId}?created=1&revision=1&recovered=1`,
+      ),
     );
     const ledger = loadCreateGameAttemptLedger(principal, window.localStorage);
     expect(ledger.activeAttempt).toBeUndefined();
@@ -987,6 +990,65 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
       { state: 'PENDING', payload: { paymentMode: 'SPLIT' } },
     );
+
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await screen.findByRole('heading', { name: 'Игра ожидает подтверждения' });
+    expect(createPaidGame).toHaveBeenCalledTimes(2);
+    expect(createPaidGame.mock.calls[1]?.[1]).toBe(createPaidGame.mock.calls[0]?.[1]);
+  });
+
+  // Pre-write managed refusals the UI can satisfy: exact copy, no navigation, no stranded attempt.
+  it.each([
+    ['GAME_PAYMENT_MODE_MISMATCH', /Этот режим оплаты игры сейчас недоступен/],
+    ['GAME_PRICE_CONFIRMATION_REQUIRED', /Цена изменилась или ещё не подтверждена/],
+    ['GAME_SUBSCRIPTION_SELECTION_REQUIRED', /Нужно выбрать подписку или другой способ оплаты/],
+    ['GAME_SERVICE_BLOCKED', /Клуб не разрешает эту игру/],
+  ])('clears the attempt and explains the pre-write refusal %s', async (code, copy) => {
+    openManagedCreate();
+    const createPaidGame = vi
+      .fn<NonNullable<AuthGateway['createPaidGame']>>()
+      .mockRejectedValue(Object.assign(new Error('refused'), { code }));
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation: vi.fn() }),
+      navigate,
+    });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    expect(await screen.findByText(copy)).toBeVisible();
+    expect(
+      loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt,
+    ).toBeUndefined();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the protected attempt on a cross-command key conflict and replays the same key', async () => {
+    openManagedCreate();
+    const conflict = Object.assign(new Error('conflict'), {
+      code: 'GAME_COMMERCIAL_ATTEMPT_CONFLICT',
+    });
+    const createPaidGame = vi
+      .fn<NonNullable<AuthGateway['createPaidGame']>>()
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce(managedResult('UNKNOWN'));
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation: vi.fn() }),
+      navigate,
+    });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.selectOptions(screen.getByLabelText('Оплата'), 'SUBSCRIPTION');
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    expect(await screen.findByText(/уже связан с другой командой/)).toBeVisible();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      { state: 'PENDING' },
+    );
+    expect(navigate).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: 'Создать игру' }));
     await screen.findByRole('heading', { name: 'Игра ожидает подтверждения' });
