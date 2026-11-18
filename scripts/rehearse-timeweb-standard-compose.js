@@ -1,8 +1,16 @@
 // Disposable Docker-only rehearsal: no host credentials, shared endpoints, ports or volumes.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   runCriticalWebTransition,
@@ -70,12 +78,148 @@ export function requireUnavailableFixtureRejection(error, row, project, previous
   );
 }
 
-// Importing the pure fixture proof must never provision or run a Docker fixture.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+export function requireOwnedFixtureResources(project, containers, networks) {
+  if (!/^lk2-standard-fixture-[1-9][0-9]*$/.test(project)) throw Error('Invalid fixture project');
+  for (const row of containers) {
+    const labels = row?.Config?.Labels;
+    if (
+      !/^[a-f0-9]{64}$/.test(row?.Id ?? '') ||
+      labels?.['fixture.owner'] !== project ||
+      (labels['com.docker.compose.project'] !== undefined &&
+        labels['com.docker.compose.project'] !== project)
+    )
+      throw Error('Fixture container ownership lost');
+  }
+  for (const row of networks) {
+    if (
+      !/^[a-f0-9]{64}$/.test(row?.Id ?? '') ||
+      row?.Labels?.['fixture.owner'] !== project ||
+      row.Labels['com.docker.compose.project'] !== project ||
+      row.Internal !== true
+    )
+      throw Error('Fixture network ownership lost');
+  }
+}
+
+function cleanupOwnedFixture(project, directory) {
+  const started = performance.now();
+  if (
+    !/^lk2-standard-fixture-[1-9][0-9]*$/.test(project) ||
+    !/^lk2-standard-fixture-[A-Za-z0-9]+$/.test(basename(directory))
+  )
+    throw Error('Invalid fixture cleanup identity');
+  const composeFile = join(directory, 'compose.json');
+  const baseline = join(directory, 'baseline.env');
+  if (existsSync(directory)) {
+    if (
+      directory !== resolve(directory) ||
+      !lstatSync(directory).isDirectory() ||
+      lstatSync(directory).isSymbolicLink()
+    )
+      throw Error('Fixture directory ownership lost');
+    const model = JSON.parse(readFileSync(composeFile, 'utf8'));
+    if (
+      model.name !== project ||
+      !model.services ||
+      Object.values(model.services).some((service) => service.labels?.['fixture.owner'] !== project)
+    )
+      throw Error('Fixture model ownership lost');
+  }
+  const docker = (args) => {
+    const remaining = 20000 - (performance.now() - started);
+    if (remaining <= 0) throw Error('Fixture cleanup budget exhausted');
+    return execFileSync('docker', args, {
+      encoding: 'utf8',
+      timeout: Math.floor(remaining),
+      killSignal: 'SIGKILL',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  };
+  const ids = (args) => docker(args).trim().split('\n').filter(Boolean);
+  const containerIds = () => [
+    ...new Set([
+      ...ids(['ps', '-aq', '--filter', `label=com.docker.compose.project=${project}`]),
+      ...ids(['ps', '-aq', '--filter', `label=fixture.owner=${project}`]),
+    ]),
+  ];
+  const networkIds = () => [
+    ...new Set([
+      ...ids(['network', 'ls', '-q', '--filter', `label=com.docker.compose.project=${project}`]),
+      ...ids(['network', 'ls', '-q', '--filter', `label=fixture.owner=${project}`]),
+    ]),
+  ];
+  const containers = containerIds();
+  const networks = networkIds();
+  requireOwnedFixtureResources(
+    project,
+    containers.length ? JSON.parse(docker(['inspect', ...containers])) : [],
+    networks.length ? JSON.parse(docker(['network', 'inspect', ...networks])) : [],
+  );
+  if (containers.length || networks.length) {
+    if (readFileSync(join(directory, 'admitted'), 'utf8') !== project)
+      throw Error('Fixture creation was not admitted');
+    docker([
+      'compose',
+      '--env-file',
+      baseline,
+      '-f',
+      composeFile,
+      '--profile',
+      '*',
+      'down',
+      '--remove-orphans',
+    ]);
+    // A killed Docker CLI does not remove a daemon-side --rm smoke container until it exits.
+    const smoke = containerIds();
+    if (smoke.length) {
+      requireOwnedFixtureResources(project, JSON.parse(docker(['inspect', ...smoke])), []);
+      docker(['rm', '-f', ...smoke]);
+    }
+  }
+  if (containerIds().length || networkIds().length) throw Error('Fixture cleanup unconfirmed');
+  rmSync(directory, { recursive: true, force: true });
+  process.stdout.write(
+    `FIXTURE_CLEANUP_PASS containers=0 networks=0 duration_ms=${Math.round(performance.now() - started)}\n`,
+  );
+}
+
+// Importing the pure fixture proofs must never provision or run a Docker fixture.
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+if (isMain && process.argv[2] === '--cleanup') {
+  cleanupOwnedFixture(process.argv[3], process.argv[4]);
+} else if (isMain && process.argv[2] === '--cleanup-record') {
+  const path = process.argv[3];
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 2048)
+    throw Error('Invalid fixture ownership record');
+  const bytes = readFileSync(path, 'utf8');
+  const record = JSON.parse(bytes);
+  if (
+    Object.keys(record).sort().join(',') !== 'directory,project' ||
+    typeof record.project !== 'string' ||
+    typeof record.directory !== 'string'
+  )
+    throw Error('Invalid fixture ownership record');
+  cleanupOwnedFixture(record.project, record.directory);
+  if (readFileSync(path, 'utf8') !== bytes) throw Error('Fixture ownership record changed');
+  rmSync(path);
+} else if (isMain) {
   if (process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')
     throw new Error('Explicit fixture opt-in required');
-  const directory = mkdtempSync(join(tmpdir(), 'lk2-standard-fixture-'));
-  const project = `lk2-standard-fixture-${process.pid}`;
+  const directory =
+    process.env.TIMEWEB_STANDARD_FIXTURE_DIRECTORY ??
+    mkdtempSync(join(tmpdir(), 'lk2-standard-fixture-'));
+  const project =
+    process.env.TIMEWEB_STANDARD_FIXTURE_PROJECT ?? `lk2-standard-fixture-${process.pid}`;
+  if (
+    !/^lk2-standard-fixture-[1-9][0-9]*$/.test(project) ||
+    !/^lk2-standard-fixture-[A-Za-z0-9]+$/.test(basename(directory)) ||
+    directory !== resolve(directory) ||
+    !lstatSync(directory).isDirectory() ||
+    lstatSync(directory).isSymbolicLink() ||
+    readdirSync(directory).length
+  )
+    throw Error('Invalid fresh fixture identity');
   const started = performance.now();
   let stage = 'prepare';
   let stageStarted = started;
@@ -124,14 +268,26 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
           labels: { 'fixture.owner': project, 'phub.release-id': '${RELEASE}' },
         },
       },
-      networks: { default: { internal: true } },
+      networks: { default: { internal: true, labels: { 'fixture.owner': project } } },
     }),
   );
+  process.stdout.write(`FIXTURE_IDENTITY ${JSON.stringify({ project, directory })}\n`);
+  // In CI the outer supervisor owns cleanup after the complete test PGID is confirmed stopped.
+  // The rehearsal never detaches: a killed worker cannot leave an untracked fixture process group.
+  const ownershipRecord = process.env.CI_TEST_DIAGNOSTICS_DIR
+    ? join(process.env.CI_TEST_DIAGNOSTICS_DIR, 'compose-fixture-owner.json')
+    : undefined;
+  if (ownershipRecord)
+    writeFileSync(ownershipRecord, JSON.stringify({ project, directory }), {
+      flag: 'wx',
+      mode: 0o600,
+    });
   const docker = (args) => {
     const commandStarted = performance.now();
     try {
-      const remaining =
-        (stage === 'cleanup' ? stageStarted + 15000 : started + 155000) - commandStarted;
+      // Measured full cold-image rehearsal: 252 s, including real Compose and 61 probe rounds.
+      // Reserve cleanup separately: 270 s body + 20 s cleanup < 300 s parent deadline.
+      const remaining = started + 270000 - commandStarted;
       if (remaining <= 0) throw new Error(`FIXTURE_STAGE_BUDGET_EXHAUSTED:${stage}`);
       return execFileSync('docker', args, {
         encoding: 'utf8',
@@ -201,6 +357,18 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   const journal = [];
   try {
     setStage('initial-compose-readiness');
+    if (
+      docker(['ps', '-aq', '--filter', `label=com.docker.compose.project=${project}`]).trim() ||
+      docker([
+        'network',
+        'ls',
+        '-q',
+        '--filter',
+        `label=com.docker.compose.project=${project}`,
+      ]).trim()
+    )
+      throw Error('Fixture project already exists');
+    writeFileSync(join(directory, 'admitted'), project, { flag: 'wx' });
     docker([
       'compose',
       '--env-file',
@@ -297,7 +465,18 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
         compose(candidate, 'pull');
       },
       artifactSmoke: async () => {
-        docker(['run', '--rm', '--network', 'none', '--entrypoint', 'nginx', image, '-t']);
+        docker([
+          'run',
+          '--rm',
+          '--label',
+          `fixture.owner=${project}`,
+          '--network',
+          'none',
+          '--entrypoint',
+          'nginx',
+          image,
+          '-t',
+        ]);
       },
       activate,
       observe: async () => {
@@ -644,18 +823,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     );
   } finally {
     setStage('cleanup');
-    docker([
-      'compose',
-      '--env-file',
-      baseline,
-      '-f',
-      composeFile,
-      '--profile',
-      '*',
-      'down',
-      '--remove-orphans',
-    ]);
-    rmSync(directory, { recursive: true });
+    if (ownershipRecord) process.stdout.write('FIXTURE_CLEANUP_DEFERRED_TO_OUTER_SUPERVISOR\n');
+    else cleanupOwnedFixture(project, directory);
     setStage('complete');
   }
 }
