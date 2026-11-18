@@ -189,6 +189,38 @@ wait_for_process_group_exit() {
   done
 }
 
+# Runs a command in its own process group and kills the whole group when the budget expires.
+# `timeout(1)` only signals its direct child, so a stalled redactor's grandchild survived, kept the
+# inherited stdout/stderr pipes open, and made the caller wait for the grandchild's own sleep even
+# though the supervisor had already exited.
+run_command_in_own_group_bounded() {
+  local budget_milliseconds="$1"
+  local phase="$2"
+  shift 2
+
+  (
+    set -m
+    "$@" &
+    group_pid=$!
+    deadline_milliseconds="$(( $(now_milliseconds) + budget_milliseconds ))"
+    while kill -0 "$group_pid" 2>/dev/null; do
+      if [[ "$(now_milliseconds)" -ge "$deadline_milliseconds" ]]; then
+        log_watchdog_event "reason=finalization_budget_exceeded phase=$phase action=SIGKILL target_pgid=$group_pid"
+        kill -KILL -- "-$group_pid" 2>/dev/null || true
+        break
+      fi
+      sleep 0.02
+    done
+    wait "$group_pid" 2>/dev/null
+    command_status=$?
+    # Reap anything the command left behind in its group, so no child can outlive the stage.
+    if kill -0 -- "-$group_pid" 2>/dev/null; then
+      kill -KILL -- "-$group_pid" 2>/dev/null || true
+    fi
+    exit "$command_status"
+  )
+}
+
 read_cgroup_metric() {
   local metric="$1"
   local cgroup_path=''
@@ -463,10 +495,11 @@ redact_output_logs() {
   redaction_budget_milliseconds="$(milliseconds_from_duration "$output_redaction_timeout")"
 
   if [[ -n "$output_redaction_command" ]]; then
-    # The duration is what is left of the declared budget, not the configured cap: a stalled
-    # redactor can never push finalization past its ceiling. `timeout` already signals the whole
-    # process group it created, so a redactor's children die with it.
-    timeout --signal=KILL "$(finalization_stage_timeout "$redaction_budget_milliseconds")" \
+    # The budget is what is left of the declared ceiling, not the configured cap, and the whole
+    # group is killed: a stalled redactor's children must not outlive the stage or hold our pipes.
+    run_command_in_own_group_bounded \
+      "$(finalization_stage_milliseconds "$redaction_budget_milliseconds")" \
+      output_redaction \
       "$output_redaction_command" "$stdout_log" "$stderr_log"
     redaction_status=$?
   else

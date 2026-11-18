@@ -78,8 +78,9 @@ describe('CI workflow finalization budget', () => {
     expect(supervisorCaseTimeoutMilliseconds).toBeGreaterThan(supervisorSpawnTimeoutMilliseconds);
     // Every bounded stage must take its duration from what is left of the declared budget, and the
     // fixed post-kill sleep must stay gone (it is a poll now, so teardown is never a fixed wait).
+    expect(runner).toContain('run_command_in_own_group_bounded');
     expect(runner).toContain(
-      'timeout --signal=KILL "$(finalization_stage_timeout "$redaction_budget_milliseconds")"',
+      '"$(finalization_stage_milliseconds "$redaction_budget_milliseconds")"',
     );
     expect(runner).toContain(
       'snapshot_timeout="$(finalization_stage_timeout "$(milliseconds_from_duration "$final_snapshot_timeout")")"',
@@ -1103,6 +1104,7 @@ const supervisorPrimitiveFunctions = [
   'helper_group_has_live_processes',
   'process_group_alive',
   'wait_for_process_group_exit',
+  'run_command_in_own_group_bounded',
   'terminate_test_group',
 ] as const;
 
@@ -1183,6 +1185,48 @@ function readKeyedOutput(stdout: string, key: string): string | undefined {
 }
 
 describe('CI supervisor finalization primitives', () => {
+  it('kills the whole redaction command group when its budget expires', async () => {
+    const directory = await createDiagnosticsDirectory();
+    const result = await runSupervisorPrimitives(
+      directory,
+      [
+        "# A stalled redactor whose grandchild would otherwise hold the supervisor's pipes open.",
+        `run_command_in_own_group_bounded 300 output_redaction bash -c 'echo $$ > "$diagnostics_dir/redactor.pid"; ( trap "" TERM; while :; do sleep 5; done ) & echo $! > "$diagnostics_dir/grandchild.pid"; wait'`,
+        'status=$?',
+        'grandchild_pid=$(cat "$diagnostics_dir/grandchild.pid")',
+        'if kill -0 "$grandchild_pid" 2>/dev/null; then echo "grandchild=alive"; else echo "grandchild=gone"; fi',
+        'printf \'status=%s\n\' "$status"',
+      ].join('\n'),
+    );
+
+    expect(result.stderr).toBe('');
+    expect(readKeyedOutput(result.stdout, 'grandchild')).toBe('gone');
+    expect(Number(readKeyedOutput(result.stdout, 'status'))).toBeGreaterThan(0);
+    // The budget expiry is reported, so a stalled redactor stays visible in CI evidence.
+    expect(await readFile(join(directory, 'watchdog-events.log'), 'utf8')).toContain(
+      'reason=finalization_budget_exceeded phase=output_redaction action=SIGKILL',
+    );
+  });
+
+  it('propagates the redaction status without waiting out its budget', async () => {
+    const directory = await createDiagnosticsDirectory();
+    const result = await runSupervisorPrimitives(
+      directory,
+      [
+        'started=$(now_milliseconds)',
+        "run_command_in_own_group_bounded 20000 output_redaction bash -c 'exit 7'",
+        'status=$?',
+        'elapsed=$(( $(now_milliseconds) - started ))',
+        'printf \'status=%s\n\' "$status"',
+        'printf \'elapsed=%s\n\' "$elapsed"',
+      ].join('\n'),
+    );
+
+    expect(readKeyedOutput(result.stdout, 'status')).toBe('7');
+    // Early exit: a finishing command is reaped at once instead of sleeping for its whole budget.
+    expect(Number(readKeyedOutput(result.stdout, 'elapsed'))).toBeLessThan(3_000);
+  });
+
   it('waits out a tearing-down process group instead of reporting a residual process', async () => {
     const directory = await createDiagnosticsDirectory();
     const result = await runSupervisorPrimitives(
