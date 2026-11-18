@@ -2,7 +2,7 @@
 
 Status: **client aligned, server surface pending.** The order owner is the LK1 residency
 lifecycle, [Z6v6e6r/lk#443](https://github.com/Z6v6e6r/lk/pull/443) at
-`bdbd9f57dd939202ea3e2efc822d0c598616b37a` (Draft, flag `LK_RESIDENCY_LIFECYCLE_ENABLED` off,
+`adc9c64464ff25c679459b66bfff9cd00b82e1b2` (Draft, flag `LK_RESIDENCY_LIFECYCLE_ENABLED` off,
 not deployed). This client is compatible with that head. LK2 browsers may not call it directly:
 it lives on the LK1 origin and authenticates an LK1 Keycloak `widget` token, while LK2 clients
 hold only a PadlHub JWT and call only PadlHub APIs. The LK2 API surface below must therefore be
@@ -112,9 +112,11 @@ For the backend owner of #443 and the LK2 server consumer:
    catalog publish plain-text benefit lines from CUP? Until then the screen shows none.
 5. **Renewal eligibility.** `renewalEligible` in the catalog is product-level, not per user. The
    client chooses `RENEWAL` from the LK2 status read. Is that the intended rule?
-6. **Renewal window.** #443 states that a renewal is a new purchase starting at its payment date,
-   and the current instance stays valid until its own end. Confirm, so the screen can state the
-   new period. It now says the club defines the dates after payment.
+6. **Renewal window.** Since `adc9c644` the owner requires the new instance to start no later
+   than the current `validUntil` and to end at least `validUntil + term`. Otherwise it refuses
+   with `RENEWAL_WINDOW_NOT_EXTENDED`. Can the catalog or order expose the expected new
+   `validUntil`, so the screen can show it before payment? It now says the club defines the dates
+   after payment.
 7. **Pending order lookup.** There is no "my unresolved order" read. After
    `RESIDENCY_ORDER_ALREADY_PENDING` on a device without the key, the user can only wait for
    expiry (20 min). Add `GET /orders?state=unresolved`?

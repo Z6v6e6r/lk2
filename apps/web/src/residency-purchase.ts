@@ -357,6 +357,8 @@ const ORDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   RESIDENCY_RENEWAL_NOT_ELIGIBLE: 'Продление недоступно: активного резидентства нет.',
   RESIDENCY_ORDER_PAID: 'Заказ уже оплачен и не может быть отменён. Ждём активации.',
   RESIDENCY_ORDER_NOT_CANCELLABLE: 'Этот заказ уже нельзя отменить.',
+  RESIDENCY_PAYMENT_STATUS_UNKNOWN:
+    'Банк ещё не подтвердил статус оплаты, поэтому заказ не отменён. Попробуйте позже.',
   RESIDENCY_PRODUCT_TERMS_MISMATCH: 'Условия резидентства изменились. Оформление приостановлено.',
   RESIDENCY_RATE_LIMITED: 'Слишком много запросов. Попробуйте через минуту.',
 };
