@@ -2056,6 +2056,55 @@ it('keeps residency product configuration explicit and never enables a mock fall
   expect(() => loadConfig({ ...configured, VIVA_RESIDENCY_PRODUCT_ID: 'invented-id' })).toThrow();
 });
 
+describe('residency owner consumer configuration', () => {
+  const residency = {
+    ...validEnvironment,
+    APP_ENV: 'local',
+    VIVA_MODE: 'sandbox',
+    VIVA_OAUTH_ENABLED: 'true',
+    VIVA_AUTH_TENANT_KEY: 'iSkq6G',
+    VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+    VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+    VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    VIVA_API_URL: 'https://api.vivacrm.test',
+    VIVA_API_KEY: 'synthetic-server-key',
+    VIVA_RESIDENCY_PRODUCT_ID: '0f2a7c4e-1b3d-4e5f-8a90-123456789abc',
+    RESIDENCY_ORDER_ENABLED: 'true',
+    RESIDENCY_OWNER_BASE_URL: 'https://padlhub.su',
+  };
+  it('is default-off and requires the complete owner, actor and product contract', () => {
+    expect(loadConfig(validEnvironment).RESIDENCY_ORDER_ENABLED).toBe(false);
+    expect(loadConfig(validEnvironment).RESIDENCY_OWNER_TIMEOUT_MS).toBe(8000);
+    expect(loadConfig(residency)).toMatchObject({
+      RESIDENCY_ORDER_ENABLED: true,
+      RESIDENCY_OWNER_BASE_URL: 'https://padlhub.su',
+      RESIDENCY_OWNER_TIMEOUT_MS: 8000,
+    });
+    for (const delta of [
+      { RESIDENCY_OWNER_BASE_URL: undefined },
+      { VIVA_OAUTH_ENABLED: 'false' },
+      { VIVA_AUTH_TENANT_KEY: 'foreign' },
+      { VIVA_MODE: 'mock' },
+      { VIVA_RESIDENCY_PRODUCT_ID: '' },
+    ])
+      expect(() => loadConfig({ ...residency, ...delta })).toThrow(
+        'RESIDENCY_ORDER_ENABLED requires',
+      );
+    for (const timeout of ['99', '10001'])
+      expect(() => loadConfig({ ...residency, RESIDENCY_OWNER_TIMEOUT_MS: timeout })).toThrow();
+  });
+  it('accepts only an exact owner origin', () => {
+    for (const url of [
+      'https://padlhub.su/other',
+      'http://foreign.invalid',
+      'https://x:y@padlhub.su/',
+    ])
+      expect(() => loadConfig({ ...residency, RESIDENCY_OWNER_BASE_URL: url })).toThrow(
+        /RESIDENCY_OWNER_URL_INVALID|Invalid url/,
+      );
+  });
+});
+
 describe('profile native read configuration', () => {
   it('keeps the Android profile read disabled by default with a bounded freshness window', () => {
     const parsed = loadConfig(validEnvironment);

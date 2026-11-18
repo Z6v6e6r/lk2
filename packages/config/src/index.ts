@@ -223,6 +223,10 @@ const environmentSchema = z.object({
   // Exact HTTPS origins whose same-origin landing page may consume a one-use payment launch code.
   // Empty keeps the reviewed default (lk2, plus lk.nano outside production). Owner: subscriptions.
   MONTHLY_SUBSCRIPTION_LAUNCH_ORIGINS: z.string().default(''),
+  // LK2 server consumer of the LK1 residency owner (Z6v6e6r/lk#443). Off by default.
+  RESIDENCY_ORDER_ENABLED: booleanFromEnvironment,
+  RESIDENCY_OWNER_BASE_URL: z.string().url().optional(),
+  RESIDENCY_OWNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(8_000),
   SUBSCRIPTION_RUNTIME_WARN_MODE: z.enum(['OFF', 'WARN']).default('OFF'),
   SUBSCRIPTION_RUNTIME_BASE_URL: z.string().url().optional(),
   SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: z.string().min(32).optional(),
@@ -1154,6 +1158,34 @@ export function loadConfig(
       throw new Error(
         'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID must select a PKCS8 private key',
       );
+  }
+  if (parsed.data.RESIDENCY_ORDER_ENABLED) {
+    if (
+      !parsed.data.RESIDENCY_OWNER_BASE_URL ||
+      !parsed.data.VIVA_OAUTH_ENABLED ||
+      parsed.data.VIVA_AUTH_TENANT_KEY !== 'iSkq6G' ||
+      !['sandbox', 'production'].includes(parsed.data.VIVA_MODE) ||
+      !parsed.data.VIVA_RESIDENCY_PRODUCT_ID
+    )
+      throw new Error(
+        'RESIDENCY_ORDER_ENABLED requires the owner URL, Viva OAuth, tenant iSkq6G, sandbox/production and VIVA_RESIDENCY_PRODUCT_ID',
+      );
+    const residencyOwner = new URL(parsed.data.RESIDENCY_OWNER_BASE_URL);
+    if (
+      residencyOwner.username ||
+      residencyOwner.password ||
+      residencyOwner.search ||
+      residencyOwner.hash ||
+      residencyOwner.pathname !== '/' ||
+      (parsed.data.APP_ENV === 'production'
+        ? residencyOwner.href !== 'https://padlhub.su/'
+        : residencyOwner.protocol !== 'https:' &&
+          !(
+            residencyOwner.protocol === 'http:' &&
+            ['localhost', '127.0.0.1', '[::1]'].includes(residencyOwner.hostname)
+          ))
+    )
+      throw new Error('RESIDENCY_OWNER_URL_INVALID');
   }
   if (parsed.data.TRAINING_REGISTRATION_ENABLED) {
     if (
