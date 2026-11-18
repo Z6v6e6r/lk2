@@ -5,6 +5,7 @@ import {
   reconcileCommercialJoinOperation,
   type CommercialJoinOwnerPort,
   type CommercialJoinRepositoryPort,
+  type CommercialJoinSettlementOwner,
 } from './game-commercial-join.js';
 
 /**
@@ -33,6 +34,7 @@ export async function runPaidJoinReconciliationCycle(input: {
     | 'confirmPayment'
   >;
   readonly owner: CommercialJoinOwnerPort;
+  readonly settlementOwner?: CommercialJoinSettlementOwner;
   readonly logger: Pick<Logger, 'info' | 'warn' | 'error'>;
   readonly limit?: number;
   readonly maxAttempts?: number;
@@ -57,18 +59,21 @@ export async function runPaidJoinReconciliationCycle(input: {
 
   for (const candidate of candidates) {
     try {
+      const context = candidate.settlementActor ?? candidate.actorContext;
+      if (!context) throw new Error('PAID_JOIN_RECONCILIATION_CONTEXT_MISSING');
       const body = await reconcileCommercialJoinOperation(
         {
           tenantId: input.tenantId,
-          tenantKey: candidate.actorContext.tenantKey,
+          tenantKey: context.tenantKey,
           actorUserId: candidate.actorUserId,
-          sessionId: candidate.actorContext.sessionId,
+          sessionId: context.sessionId,
           operationId: candidate.operationId,
           correlationId: `join-reconcile-${candidate.operationId}`,
         },
         {
           repository: input.repository as unknown as CommercialJoinRepositoryPort,
           owner: input.owner,
+          ...(input.settlementOwner ? { settlementOwner: input.settlementOwner } : {}),
           ...(input.now === undefined ? {} : { now: input.now }),
           onReconciliationFailure: (code) =>
             input.logger.warn(
@@ -150,6 +155,7 @@ export function startPaidJoinReconciliation(input: {
     | 'confirmPayment'
   >;
   readonly owner: CommercialJoinOwnerPort;
+  readonly settlementOwner?: CommercialJoinSettlementOwner;
   readonly logger: Pick<Logger, 'info' | 'warn' | 'error'>;
   readonly intervalMs?: number;
   readonly limit?: number;
@@ -168,6 +174,7 @@ export function startPaidJoinReconciliation(input: {
           tenantId,
           repository: input.repository,
           owner: input.owner,
+          ...(input.settlementOwner ? { settlementOwner: input.settlementOwner } : {}),
           logger: input.logger,
           ...(input.limit === undefined ? {} : { limit: input.limit }),
           ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),

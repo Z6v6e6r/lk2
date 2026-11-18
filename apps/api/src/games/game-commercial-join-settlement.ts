@@ -107,7 +107,12 @@ export function createBookedOperationV3SettlementOwner(options: {
         actorToken,
       });
       if (
+        result.operationId !== input.operationId ||
+        result.action !== 'JOIN_GAME' ||
+        result.target.id !== input.actor.gameId ||
+        result.target.expectedRevision !== input.actor.expectedRevision ||
         !result.quote ||
+        result.quote.operationId !== input.operationId ||
         !result.settlement ||
         result.settlement.mode !== 'SURCHARGE' ||
         result.settlement.state !== 'OPEN' ||
@@ -180,6 +185,13 @@ export function createBookedOperationV3SettlementOwner(options: {
         operationId: input.operationId,
         actorToken,
       });
+      if (
+        result.operationId !== input.operationId ||
+        result.quoteId !== input.settlement.quoteId ||
+        result.requestSha256 !== requestSha256 ||
+        result.payment.toPayMinor !== input.settlement.toPayMinor
+      )
+        throw new Error('COMMERCIAL_JOIN_V3_ADMISSION_MISMATCH');
       if (result.status === 'CANCELLED')
         return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
       if (result.status === 'UNKNOWN') return { status: 'UNKNOWN' };
@@ -216,6 +228,12 @@ export function createBookedOperationV3SettlementOwner(options: {
         operationId: input.operationId,
         actorToken,
       });
+      if (
+        result.operationId !== input.operationId ||
+        result.quoteId !== input.settlement.quoteId ||
+        result.payment.toPayMinor !== input.settlement.toPayMinor
+      )
+        throw new Error('COMMERCIAL_JOIN_V3_READ_MISMATCH');
       if (result.status === 'CONFIRMED' && result.receipt)
         return { status: 'CONFIRMED', receipt: result.receipt };
       if (result.status === 'CANCELLED') return { status: 'CANCELLED' };
@@ -255,6 +273,8 @@ export function createBookedOperationV3SettlementOwner(options: {
         operationId: input.operationId,
         actorToken,
       });
+      if (result.operationId !== input.operationId)
+        throw new Error('COMMERCIAL_JOIN_V3_CANCEL_MISMATCH');
       return {
         status: result.status,
         limitReleased: result.limitReleased,

@@ -1158,17 +1158,33 @@ export function registerGameRoutes(
           'Платёжный контур этой игры пока недоступен.',
         );
       }
+      const operationId = commercialOperationId({
+        tenantId: current.tenantId,
+        userId: current.userId,
+        idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(key),
+      });
+      const existing = await options.commercialJoin.repository.getPaidJoinAttempt({
+        tenantId: current.tenantId,
+        actorUserId: current.userId,
+        operationId,
+      });
+      // The URL game must match the original attempt before any owner cancel is sent.
+      if (!existing || existing.gameId !== currentGameId) {
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'GAME_OPERATION_NOT_FOUND',
+          'Операция не найдена.',
+        );
+      }
       const cancelled = await cancelCommercialJoinOperation(
         {
           tenantId: current.tenantId,
           tenantKey: (request.params as { tenantKey: string }).tenantKey,
           actorUserId: current.userId,
           sessionId: sessionId(request),
-          operationId: commercialOperationId({
-            tenantId: current.tenantId,
-            userId: current.userId,
-            idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(key),
-          }),
+          operationId,
           correlationId: request.id,
         },
         {

@@ -593,4 +593,175 @@ suite('managed JOIN on existing disposable CI PostgreSQL (no provider calls)', (
       confirmedEvents: 1,
     });
   });
+
+  const moveExpiryIntoPast = (gameId: string, reservationId: string) =>
+    withTenantTransaction(first, tenantId, (client) =>
+      client.query(
+        "update games.seat_reservations set expires_at = created_at + interval '1 millisecond' where tenant_id=$1 and game_id=$2 and id=$3",
+        [tenantId, gameId, reservationId],
+      ),
+    ).then(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  const expiryCommand = (gameId: string, reservationId: string) => {
+    const commandId = randomUUID();
+    return {
+      tenantId,
+      gameId,
+      reservationId,
+      commandId,
+      idempotencyKey: `expire:${commandId}`,
+      requestHash: hash(`expire:${commandId}`),
+      correlationId: `expire:${commandId}`,
+    };
+  };
+  const reservationState = async (reservationId: string) => {
+    const result = await first.query<{ state: string }>(
+      'select state from games.seat_reservations where tenant_id=$1 and id=$2',
+      [tenantId, reservationId],
+    );
+    return result.rows[0]?.state;
+  };
+
+  it('confirms a v3 settlement once through the real repository and trusted phone', async () => {
+    const game = await fixtureGame();
+    const baseInput = command(game);
+    const operationId = baseInput.operationId;
+    const settlement = {
+      quoteId: randomUUID(),
+      toPayMinor: 90_000,
+      checkoutUrl: 'https://padlhub.su/pay/synthetic-v3',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestSha256: `sha256:${hash('v3-preflight:' + operationId)}`,
+    };
+    const input: BeginPaidJoinInput = {
+      tenantId,
+      actorUserId: player1,
+      gameId: game.gameId,
+      operationId,
+      idempotencyKey: `v3-join:${operationId}`,
+      correlationId: `v3-join:${operationId}`,
+      expectedRevision: 1,
+      subscriptionInstanceId: randomUUID(),
+      reservationTtlSeconds: 600,
+      settlement,
+      requestHash: hash('v3-admission:' + operationId),
+      price: {
+        amountMinor: 90_000,
+        currency: 'RUB',
+        basePriceMinor: 90_000,
+        freeMinutes: 60,
+        paidMinutes: 60,
+        evaluatedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      },
+    };
+    const reserved = await repo1.beginPaidJoin(input);
+    expect(reserved.outcome).toBe('reserved');
+    const evidence = {
+      provider: 'VIVA' as const,
+      operationType: 'SUBSCRIPTION_BOOKING' as const,
+      operationId,
+      bookingId: `viva-booking:${operationId}`,
+      evidenceHash: hash('v3-receipt:' + operationId),
+      verifiedAt: new Date().toISOString(),
+      verifiedBy: 'LK1_OWNER_V3' as const,
+      amountMinor: 90_000,
+      currency: 'RUB',
+    };
+    const confirmation: ConfirmGamePaymentInput = {
+      tenantId,
+      actorUserId: player1,
+      gameId: game.gameId,
+      reservationId: reserved.reservationId,
+      idempotencyKey: `v3-confirm:${operationId}`,
+      requestHash: evidence.evidenceHash,
+      correlationId: `v3-confirm:${operationId}`,
+      evidence,
+    };
+    const applied = await repo2.confirmPayment(confirmation);
+    expect(applied.outcome).toBe('applied');
+    const replayed = await repo2.confirmPayment(confirmation);
+    expect(replayed).toMatchObject({ outcome: 'applied', replayed: true });
+    expect(await counts(game.gameId)).toEqual({
+      attempts: 1,
+      seats: 1,
+      snapshots: 1,
+      players: 1,
+      applied: 1,
+      confirmedEvents: 1,
+    });
+  });
+
+  it('keeps the seat when dispatch wins the fence before expiry', async () => {
+    const game = await fixtureGame();
+    const input = command(game);
+    const reserved = await repo1.beginPaidJoin(input);
+    expect(
+      await repo1.markPaidJoinDispatched({
+        tenantId,
+        actorUserId: player1,
+        gameId: game.gameId,
+        operationId: input.operationId,
+        reservationId: reserved.reservationId,
+      }),
+    ).toBe(true);
+    await moveExpiryIntoPast(game.gameId, reserved.reservationId);
+    const expired = await repo2.expireReservation(
+      expiryCommand(game.gameId, reserved.reservationId),
+    );
+    expect(expired.outcome).toBe('not_due');
+    expect(await reservationState(reserved.reservationId)).toBe('ACTIVE');
+    expect(
+      await repo2.getPaidJoinAttempt({
+        tenantId,
+        actorUserId: player1,
+        operationId: input.operationId,
+      }),
+    ).toMatchObject({ state: 'IN_PROGRESS' });
+  });
+
+  it('releases only after expiry proves the attempt was never dispatched', async () => {
+    const game = await fixtureGame();
+    const input = command(game);
+    const reserved = await repo1.beginPaidJoin(input);
+    await moveExpiryIntoPast(game.gameId, reserved.reservationId);
+    const expired = await repo2.expireReservation(
+      expiryCommand(game.gameId, reserved.reservationId),
+    );
+    expect(expired.outcome).toBe('applied');
+    expect(await reservationState(reserved.reservationId)).toBe('EXPIRED');
+    expect(
+      await repo2.markPaidJoinDispatched({
+        tenantId,
+        actorUserId: player1,
+        gameId: game.gameId,
+        operationId: input.operationId,
+        reservationId: reserved.reservationId,
+      }),
+    ).toBe(false);
+    expect(
+      await repo2.getPaidJoinAttempt({
+        tenantId,
+        actorUserId: player1,
+        operationId: input.operationId,
+      }),
+    ).toMatchObject({ state: 'FAILED', errorCode: 'GAME_JOIN_NOT_DISPATCHED' });
+  });
+
+  it('does not release a reservation whose paid attempt link is missing', async () => {
+    const game = await fixtureGame();
+    const input = command(game);
+    const reserved = await repo1.beginPaidJoin(input);
+    await moveExpiryIntoPast(game.gameId, reserved.reservationId);
+    await withTenantTransaction(first, tenantId, (client) =>
+      client.query(
+        'delete from eligibility.payment_snapshots where tenant_id=$1 and operation_id=$2',
+        [tenantId, input.operationId],
+      ),
+    );
+    const expired = await repo2.expireReservation(
+      expiryCommand(game.gameId, reserved.reservationId),
+    );
+    expect(expired.outcome).toBe('not_due');
+    expect(await reservationState(reserved.reservationId)).toBe('ACTIVE');
+  });
 });

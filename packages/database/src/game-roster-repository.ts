@@ -162,9 +162,11 @@ export interface PaidJoinReconciliationCandidate {
   readonly gameId: string;
   readonly actorUserId: string;
   readonly reservationId: string;
-  readonly providerBinding: PaidJoinProviderBinding;
-  readonly managedJoin: ManagedJoinBinding | null;
-  readonly actorContext: PaidJoinActorContext;
+  readonly providerBinding?: PaidJoinProviderBinding;
+  readonly managedJoin?: ManagedJoinBinding | null;
+  readonly actorContext?: PaidJoinActorContext;
+  readonly settlement?: PaidJoinSettlementBinding;
+  readonly settlementActor?: PaidJoinSettlementActor;
   readonly reconciliationAttempts: number;
 }
 
@@ -281,8 +283,14 @@ export interface PaidJoinSettlementBinding {
   readonly requestSha256: string;
 }
 
+export interface PaidJoinSettlementActor {
+  readonly tenantKey: string;
+  readonly sessionId: string;
+}
+
 export interface BeginPaidJoinInput {
   readonly settlement?: PaidJoinSettlementBinding;
+  readonly settlementActor?: PaidJoinSettlementActor;
   readonly actorContext?: PaidJoinActorContext;
   readonly stationMembership?: StationMarker;
   readonly tenantId: string;
@@ -464,6 +472,12 @@ interface ConfirmableReservationRow extends ReservationRow {
     operation_id: string;
     provider_binding: PaidJoinProviderBinding | null;
     binding_snapshot?: unknown;
+    managedJoin?: unknown;
+    providerBinding?: unknown;
+    settlement?: {
+      readonly toPayMinor?: number;
+      readonly requestSha256?: string;
+    } | null;
   };
 }
 
@@ -502,6 +516,7 @@ interface ExpirableReservationRow extends QueryResultRow {
   readonly user_id: string;
   readonly state: 'ACTIVE' | 'CONFIRMED' | 'EXPIRED' | 'CANCELLED';
   readonly expires_at: Date | string;
+  readonly eligibility_decision_id: string | null;
 }
 
 interface PaidJoinExpiryAttemptRow extends QueryResultRow {
@@ -557,6 +572,8 @@ interface PaidJoinReconciliationRow extends QueryResultRow {
   readonly reservation_id: string;
   readonly provider_binding: unknown;
   readonly managed_join: unknown;
+  readonly settlement: unknown;
+  readonly settlement_actor: unknown;
   readonly actor_context: unknown;
   readonly reconciliation_attempts: number;
 }
@@ -2363,6 +2380,7 @@ export function createGameRosterRepository(
               paidJoinLifecycleVersion: 1,
               subscriptionInstanceId: input.subscriptionInstanceId,
               ...(input.settlement ? { settlement: input.settlement } : {}),
+              ...(input.settlementActor ? { settlementActor: input.settlementActor } : {}),
               ...(input.actorContext ? { actorContext: input.actorContext } : {}),
               ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
               ...(managedJoin ? { managedJoin } : {}),
@@ -2492,6 +2510,8 @@ export function createGameRosterRepository(
                   reservation.id as reservation_id,
                   snapshot.snapshot->'providerBinding' as provider_binding,
                   snapshot.snapshot->'managedJoin' as managed_join,
+                  snapshot.snapshot->'settlement' as settlement,
+                  snapshot.snapshot->'settlementActor' as settlement_actor,
                   snapshot.snapshot->'actorContext' as actor_context,
                   coalesce((snapshot.snapshot->'reconciliation'->>'attempts')::int, 0)
                     as reconciliation_attempts
@@ -2513,12 +2533,39 @@ export function createGameRosterRepository(
               and snapshot.snapshot ? 'dispatch'
               and coalesce((snapshot.snapshot->'reconciliation'->>'escalated')::boolean, false) = false
               and coalesce((snapshot.snapshot->'reconciliation'->>'attempts')::int, 0) < $3
+              and (
+                (snapshot.snapshot ? 'providerBinding' and snapshot.snapshot ? 'actorContext')
+                or (snapshot.snapshot ? 'settlement' and snapshot.snapshot ? 'settlementActor')
+              )
               and reservation.expires_at <= now()
             order by reservation.expires_at, command.id
             limit $4`,
           [input.tenantId, PAID_JOIN_COMMAND_TYPE, maxAttempts, limit],
         );
-        return rows.rows.flatMap((row) => {
+        return rows.rows.flatMap<PaidJoinReconciliationCandidate>((row) => {
+          const settlement = row.settlement as PaidJoinSettlementBinding | null;
+          const settlementActor = row.settlement_actor as Record<string, unknown> | null;
+          if (settlement) {
+            if (
+              typeof settlementActor?.tenantKey !== 'string' ||
+              typeof settlementActor.sessionId !== 'string'
+            )
+              return [];
+            return [
+              {
+                operationId: row.operation_id,
+                gameId: row.game_id,
+                actorUserId: row.actor_user_id,
+                reservationId: row.reservation_id,
+                settlement,
+                settlementActor: {
+                  tenantKey: settlementActor.tenantKey,
+                  sessionId: settlementActor.sessionId,
+                },
+                reconciliationAttempts: row.reconciliation_attempts,
+              },
+            ];
+          }
           const binding = row.provider_binding as PaidJoinProviderBinding | null;
           const actor = row.actor_context as Record<string, unknown> | null;
           if (
@@ -2716,7 +2763,24 @@ export function createGameRosterRepository(
             [input.tenantId, input.gameId, input.reservationId, input.actorUserId],
           );
           if (!snapshot) throw new Error('GAME_PAYMENT_SNAPSHOT_MISSING');
-          if (!(await managedConfirmationMatches(snapshot.binding_snapshot, input, true))) {
+          const replaySnapshot =
+            typeof snapshot.binding_snapshot === 'object' && snapshot.binding_snapshot !== null
+              ? (snapshot.binding_snapshot as Record<string, unknown>)
+              : {};
+          const replaySettlement =
+            typeof replaySnapshot.settlement === 'object' && replaySnapshot.settlement !== null
+              ? (replaySnapshot.settlement as Record<string, unknown>)
+              : null;
+          const v3Replay =
+            input.evidence.verifiedBy === 'LK1_OWNER_V3' &&
+            replaySettlement?.toPayMinor === input.evidence.amountMinor &&
+            input.evidence.currency === 'RUB' &&
+            replaySnapshot.managedJoin === undefined &&
+            replaySnapshot.providerBinding === undefined;
+          if (
+            !v3Replay &&
+            !(await managedConfirmationMatches(snapshot.binding_snapshot, input, true))
+          ) {
             return {
               outcome: 'rejected' as const,
               code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
@@ -2746,6 +2810,8 @@ export function createGameRosterRepository(
                   ) as payment_snapshot_exists,
                   (select jsonb_build_object('operation_id', snapshot.operation_id,
                             'provider_binding', snapshot.snapshot->'providerBinding',
+                            'settlement', snapshot.snapshot->'settlement',
+                            'managedJoin', snapshot.snapshot->'managedJoin',
                             'binding_snapshot', snapshot.snapshot)
                      from eligibility.payment_snapshots snapshot
                     where snapshot.tenant_id=games.seat_reservations.tenant_id
@@ -2786,7 +2852,20 @@ export function createGameRosterRepository(
         // Legacy confirmation evidence has no policy/usage proof. Do not let a callback bypass
         // the orchestrator guard and settle a bound reservation as an ordinary v1 operation.
         // Malformed stored binding throws and rolls back; a valid bound attempt stays unresolved.
-        if (!(await managedConfirmationMatches(paidSnapshot?.binding_snapshot, input, false))) {
+        const v3Confirmation =
+          input.evidence.verifiedBy === 'LK1_OWNER_V3' &&
+          paidSnapshot?.operation_id === input.evidence.operationId &&
+          !paidSnapshot?.managedJoin &&
+          !paidSnapshot?.providerBinding &&
+          paidSnapshot.settlement !== null &&
+          paidSnapshot.settlement !== undefined &&
+          paidSnapshot.settlement.toPayMinor === input.evidence.amountMinor &&
+          paidSnapshot.settlement.requestSha256 !== undefined &&
+          input.evidence.currency === 'RUB';
+        if (
+          !v3Confirmation &&
+          !(await managedConfirmationMatches(paidSnapshot?.binding_snapshot, input, false))
+        ) {
           return {
             outcome: 'rejected' as const,
             code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
@@ -2853,6 +2932,19 @@ export function createGameRosterRepository(
           if (!actor?.phone_e164 || !/^\+[1-9][0-9]{7,14}$/.test(actor.phone_e164)) {
             // A delayed verified-profile projection is repairable. Roll back so the
             // fixed reconciliation key is not poisoned by a durable rejection.
+            throw new Error('GAME_PAYMENT_ACTOR_PHONE_UNAVAILABLE');
+          }
+          clientPhoneE164 = actor.phone_e164;
+        }
+        if (!clientPhoneE164 && input.evidence.verifiedBy === 'LK1_OWNER_V3') {
+          // v3 has no legacy provider_binding. The phone still comes only from the trusted
+          // server-side profile projection, never from the client or the owner response.
+          const actor = await queryOne<{ phone_e164: string | null }>(
+            client,
+            'select phone_e164 from profile.user_summaries where tenant_id=$1 and user_id=$2 for share',
+            [input.tenantId, input.actorUserId],
+          );
+          if (!actor?.phone_e164 || !/^\+[1-9][0-9]{7,14}$/.test(actor.phone_e164)) {
             throw new Error('GAME_PAYMENT_ACTOR_PHONE_UNAVAILABLE');
           }
           clientPhoneE164 = actor.phone_e164;
@@ -3361,7 +3453,8 @@ export function createGameRosterRepository(
         if (!game) throw new Error('GAME_NOT_FOUND');
         const reservation = await queryOne<ExpirableReservationRow>(
           client,
-          `select id, user_id, state, expires_at::text as expires_at
+          `select id, user_id, state, expires_at::text as expires_at,
+                  eligibility_decision_id
              from games.seat_reservations
             where tenant_id = $1 and game_id = $2 and id = $3
             for update`,
@@ -3413,6 +3506,15 @@ export function createGameRosterRepository(
             PAID_JOIN_COMMAND_TYPE,
           ],
         );
+        if (reservation.eligibility_decision_id !== null && !attempt) {
+          // The reservation points at a paid-join decision but its attempt cannot be read. Missing
+          // data is not proof that the owner was never called, so the seat stays reserved and the
+          // expiry command is retried after a bounded delay.
+          return {
+            outcome: 'not_due' as const,
+            availableAt: new Date(Date.parse(now) + 5 * 60_000).toISOString(),
+          };
+        }
         if (attempt?.state === 'COMPLETED') {
           const result = {
             outcome: 'no_op' as const,
@@ -3445,9 +3547,9 @@ export function createGameRosterRepository(
                     '{reconciliation}',
                     jsonb_build_object(
                       'required', true,
-                      'attempts', $3,
+                      'attempts', $3::int,
                       'lastAttemptAt', now()::text,
-                      'escalated', $4
+                      'escalated', $4::boolean
                     ),
                     true
                   )

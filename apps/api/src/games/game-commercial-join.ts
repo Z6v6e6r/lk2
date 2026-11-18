@@ -926,6 +926,10 @@ export async function executeCommercialJoin(
               expiresAt: settlement.expiresAt,
               requestSha256: settlement.requestSha256,
             },
+            settlementActor: {
+              tenantKey: input.tenantKey,
+              sessionId: input.sessionId,
+            },
           }
         : {}),
       ...(providerBinding
@@ -1407,6 +1411,13 @@ export async function readCommercialJoinOperation(
       return unresolvedSettlementOperation(attempt, now);
     }
     if (read.status === 'PAYMENT_REQUIRED' && read.settlement.checkoutUrl) {
+      // The checkout of one attempt is immutable. A different URL/expiry is not silently replaced
+      // by the snapshot; it stays unresolved for reconciliation.
+      if (
+        read.settlement.checkoutUrl !== attempt.settlement.checkoutUrl ||
+        read.settlement.expiresAt !== attempt.settlement.expiresAt
+      )
+        return unresolvedSettlementOperation(attempt, now);
       return operationBody({
         operationId: attempt.commandId,
         status: 'PROCESSING',
@@ -1664,7 +1675,7 @@ export async function reconcileCommercialJoinOperation(
   input: Parameters<typeof readCommercialJoinOperation>[0],
   dependencies: Pick<
     CommercialJoinDependencies,
-    'repository' | 'owner' | 'now' | 'onReconciliationFailure'
+    'repository' | 'owner' | 'now' | 'onReconciliationFailure' | 'settlementOwner'
   >,
 ): Promise<CommercialJoinResponseBody | null> {
   const attempt = await dependencies.repository.getPaidJoinAttempt({

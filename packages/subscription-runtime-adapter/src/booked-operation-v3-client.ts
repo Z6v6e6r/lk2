@@ -112,6 +112,19 @@ export class BookedOperationV3Client {
     );
   }
 
+  private recordFailure(): void {
+    this.failures += 1;
+    if (this.failures >= (this.options.circuitFailureThreshold ?? 3)) {
+      this.openUntil = Date.now() + (this.options.circuitResetMs ?? 30_000);
+      this.failures = 0;
+    }
+  }
+
+  private fail(status: number): BookedOperationV3ClientError {
+    if (status >= 500) this.recordFailure();
+    return new BookedOperationV3ClientError(status);
+  }
+
   private async send(
     path: string,
     method: 'POST' | 'GET',
@@ -155,10 +168,10 @@ export class BookedOperationV3Client {
       });
       if (!response.ok || (response.url && response.url !== url)) {
         await response.body?.cancel();
-        throw new BookedOperationV3ClientError(response.status);
+        throw this.fail(response.ok ? 503 : response.status);
       }
       const reader = response.body?.getReader();
-      if (!reader) throw new BookedOperationV3ClientError(503);
+      if (!reader) throw this.fail(503);
       let bytes = 0;
       let text = '';
       const decoder = new TextDecoder();
@@ -169,7 +182,7 @@ export class BookedOperationV3Client {
           bytes += chunk.value.byteLength;
           if (bytes > 32768) {
             await reader.cancel();
-            throw new BookedOperationV3ClientError(503);
+            throw this.fail(503);
           }
           text += decoder.decode(chunk.value, { stream: true });
         }
@@ -182,11 +195,7 @@ export class BookedOperationV3Client {
       return parsed;
     } catch (error) {
       if (error instanceof BookedOperationV3ClientError) throw error;
-      this.failures += 1;
-      if (this.failures >= (this.options.circuitFailureThreshold ?? 3)) {
-        this.openUntil = Date.now() + (this.options.circuitResetMs ?? 30_000);
-        this.failures = 0;
-      }
+      this.recordFailure();
       throw new BookedOperationV3ClientError(503);
     } finally {
       clearTimeout(timer);

@@ -1326,6 +1326,9 @@ const stopPaidJoinReconciliation =
         },
         repository: gameRosterRepository,
         owner: gameCommercialJoin.owner,
+        ...(gameCommercialJoin.settlementOwner
+          ? { settlementOwner: gameCommercialJoin.settlementOwner }
+          : {}),
         logger,
       })
     : undefined;

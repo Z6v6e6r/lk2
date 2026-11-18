@@ -141,6 +141,28 @@ describe('booked operation v3 client', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(3);
   });
 
+  it('counts real HTTP 503 responses in the breaker', async () => {
+    const fetchImplementation = vi.fn(() =>
+      Promise.resolve(new Response('unavailable', { status: 503 })),
+    );
+    const api = new BookedOperationV3Client({
+      baseUrl: 'https://lk1.example/',
+      timeoutMs: 1_000,
+      fetchImplementation,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(api.preflight(preflight, envelope)).rejects.toBeInstanceOf(
+        BookedOperationV3ClientError,
+      );
+    }
+    await expect(api.preflight(preflight, envelope)).rejects.toBeInstanceOf(
+      BookedOperationV3ClientError,
+    );
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+  });
+
   it('cancels idempotently and rejects a non-https owner or a missing actor token', async () => {
     const { client: api } = client({
       contractVersion: 3,

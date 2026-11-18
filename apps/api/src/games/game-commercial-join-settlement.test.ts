@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createBookedOperationV3SettlementOwner } from './game-commercial-join-settlement.js';
@@ -163,6 +164,39 @@ describe('v3 settlement owner adapter', () => {
       idempotencyKey: 'synthetic-key-0003',
       price,
     });
+    const admission = {
+      contractVersion: 3 as const,
+      action: 'JOIN_GAME' as const,
+      target: { kind: 'GAME' as const, id: actor.gameId, expectedRevision: 8 },
+      paymentIntent: 'USE_SUBSCRIPTION' as const,
+      quoteId: prepared.quoteId,
+      settlementConsent: {
+        quoteId: prepared.quoteId,
+        amountMinor: prepared.toPayMinor,
+        currency: 'RUB' as const,
+        expiresAt: prepared.expiresAt,
+      },
+    };
+    const admissionSha =
+      'sha256:' + createHash('sha256').update(JSON.stringify(admission)).digest('hex');
+    fixture.admit.mockResolvedValue({
+      contractVersion: 3,
+      operationId: id(20),
+      quoteId: prepared.quoteId,
+      requestSha256: admissionSha,
+      status: 'PENDING',
+      asOf: new Date().toISOString(),
+      payment: {
+        state: 'OPEN',
+        toPayMinor: prepared.toPayMinor,
+        paidMinor: 0,
+        checkoutUrl: prepared.checkoutUrl,
+      },
+      booking: { state: 'PENDING' },
+      visit: { state: 'CONSUMED', usageRef: 'usage-7' },
+      reason: 'OWNER_PENDING',
+      receipt: null,
+    } as never);
     await expect(
       fixture.owner.execute({
         actor,
