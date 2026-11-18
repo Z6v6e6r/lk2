@@ -487,7 +487,7 @@ function ResidencySession({
         <section className="residency-result residency-success" role="status">
           <h2>{order.mode === 'RENEWAL' ? 'Резидентство продлено' : 'Резидентство активно'}</h2>
           <p>
-            Оплата подтверждена. Резидентство действует до {formatDay(order.residencyValidUntil)}.
+            Оплата подтверждена. Резидентство действует до {formatDay(order.residencyValidUntil)}
           </p>
           <button
             type="button"
@@ -669,7 +669,7 @@ function ResidencySession({
                   <p className="residency-note">
                     Цена подтверждена клубом в {time(product.checkedAt)} (МСК).
                     {renewing && view?.kind === 'active' && view.validUntil
-                      ? ` Текущее резидентство действует до ${formatDay(view.validUntil)}. Новый срок клуб подтвердит после оплаты.`
+                      ? ` Текущее резидентство действует до ${formatDay(view.validUntil)} Новый срок клуб подтвердит после оплаты.`
                       : ''}{' '}
                     Оплата проходит на защищённой странице платёжного сервиса.
                   </p>
