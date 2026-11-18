@@ -318,7 +318,12 @@ async function chain() {
       productId,
       tenantKey: TENANT_KEY,
       client,
-      token: async () => ({ token: TOKEN, expiresAt: new Date(state.now + 300_000).toISOString() }),
+      // The owner clock is simulated; the credential lifetime is wall-clock, exactly like
+      // the real Viva delegation.
+      token: async () => ({
+        token: TOKEN,
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      }),
     });
   const actor = {
     tenantId: TENANT_ID,
