@@ -192,7 +192,7 @@ use it as a sandbox payment or Viva readback.
 # Consumer checkout at this PR head; owner checkout at the compatible LK1 PR head.
 LK2="${LK2:?path to the lk2 checkout at this PR head}"
 LK1="${LK1:?path to the lk checkout at Z6v6e6r/lk#443}"
-EXPECTED_OWNER_SHA=a25db7b15f097d00abbd4cbb99895ab556bff12a
+EXPECTED_OWNER_SHA=2f7c2d48251bc883cab9cf34a51492ba32be045e
 
 # Use the canonical path: the LK1 HTTP layer recognises its own error class by identity, and
 # a symlinked checkout (for example /tmp on macOS) can load the module twice and lose details.
@@ -214,7 +214,7 @@ paid create with a failed Admin read, overdue/TTL for PENDING and UNKNOWN, previ
 recovery, reauth/owner-unavailable/product mismatch. The original reviewed pair was LK1
 `4d04a05c05561047fb4293498812c6d8af38b88c` + LK2 `d92b978221f8800521583b5926402a3c2a593dd3`;
 the previous handoff pinned LK1 `93692e64853df63bb2165ddc54145d86cf8a078a`. This handoff pins LK1
-`a25db7b15f097d00abbd4cbb99895ab556bff12a` (late create evidence and unconfirmed-payment
+`2f7c2d48251bc883cab9cf34a51492ba32be045e` (late create evidence and unconfirmed-payment
 projection) with the consumer commit on this branch; the test asserts behavior, not a stale tree.
 
 The equivalent owner-side suites are run in the LK1 checkout:

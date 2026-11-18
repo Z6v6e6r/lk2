@@ -162,7 +162,7 @@ purchase state.
 ### Evidence status
 
 The consumer, its tests and a composed chain test against the real LK1 owner modules are
-LOCAL: `LK1_RESIDENCY_MODULES_ROOT=<lk@a25db7b1> npx vitest run
+LOCAL: `LK1_RESIDENCY_MODULES_ROOT=<lk@2f7c2d48> npx vitest run
 apps/api/src/residency/client-residency-owner-chain.test.ts` (see
 `docs/contracts/residency-orders-consumer.md#reproducible-composed-test-for-the-websdk-pr-682`).
 The Viva/CUP transport in that test is synthetic; it is not PROVIDER evidence. The LK1 owner is
