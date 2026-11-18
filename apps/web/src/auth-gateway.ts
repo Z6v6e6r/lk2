@@ -191,6 +191,7 @@ export type {
   ActivityHistoryStatus,
 } from '@phub/api-sdk';
 import { maskPhone } from '@phub/auth';
+import type { ResidencyGateway } from './residency-purchase.js';
 import {
   ClientTransportError,
   createClientTransportExecutor,
@@ -614,6 +615,11 @@ export interface AuthGateway {
    */
   readonly createPaidGame?: PadlHubApiClient['createPaidGame'];
   readonly monthlyPurchase?: MonthlyPurchaseGateway;
+  /**
+   * Residency status read and purchase operations (docs/contracts/residency-purchase.md). Web
+   * only: native shells have no reviewed residency transport or payment handoff yet.
+   */
+  readonly residency?: ResidencyGateway;
   readonly quarterCreatePrincipal?: () => string | null;
   /** Close the quarter command before native async cleanup. */
   readonly closeQuarterCreate?: () => void;
@@ -1036,6 +1042,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       monthlyPending.delete(entry);
     }
   }
+  /** A result that arrives after the account changed is discarded, never shown to the new one. */
+  async function residencyCall<T>(load: () => Promise<T>): Promise<T> {
+    const p = requireQuarterPrincipal();
+    const result = await load();
+    requireQuarterPrincipal(p);
+    return result;
+  }
   const clientOptions = {
     baseUrl: options.baseUrl.replace(/\/$/, ''),
     tenantKey: options.tenantKey,
@@ -1373,19 +1386,25 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let notificationsCacheRevision = 0;
   const publicTournamentSummaryPromises = new Map<string, Promise<PublicTournamentSummary>>();
   let vivaReauthorizationStarted = false;
+  let vivaReauthorizationInFlight = false;
 
   function vivaRecoveryPrincipal(): string | undefined {
     return currentUserId ? `${options.tenantKey}:${currentUserId}` : undefined;
   }
 
-  function startAutomaticVivaReauthorization(): Promise<void> {
-    if (nativeClient || typeof window === 'undefined' || vivaReauthorizationStarted)
+  function startAutomaticVivaReauthorization(userInitiated = false): Promise<void> {
+    if (
+      nativeClient ||
+      typeof window === 'undefined' ||
+      vivaReauthorizationInFlight ||
+      (!userInitiated && vivaReauthorizationStarted)
+    )
       return Promise.resolve();
     const recoveryPrincipal = vivaRecoveryPrincipal();
     if (!recoveryPrincipal) return Promise.resolve();
     try {
       const storedAttempt = window.sessionStorage.getItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
-      if (storedAttempt) {
+      if (storedAttempt && !userInitiated) {
         try {
           const attempt = JSON.parse(storedAttempt) as { principal?: unknown; startedAt?: unknown };
           if (
@@ -1401,12 +1420,17 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       }
       window.sessionStorage.setItem(
         VIVA_REAUTH_ATTEMPT_STORAGE_KEY,
-        JSON.stringify({ principal: recoveryPrincipal, startedAt: Date.now() }),
+        JSON.stringify({
+          principal: recoveryPrincipal,
+          startedAt: Date.now(),
+          ...(userInitiated ? { residency: true } : {}),
+        }),
       );
     } catch {
       // The in-memory latch still prevents duplicate starts in this gateway instance.
     }
     vivaReauthorizationStarted = true;
+    vivaReauthorizationInFlight = true;
     const generation = principalGeneration;
     try {
       window.sessionStorage.setItem(
@@ -1446,7 +1470,26 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           // A failed recovery must not leave an old route for a later regular login.
         }
         throw error;
+      })
+      .finally(() => {
+        vivaReauthorizationInFlight = false;
       });
+  }
+
+  function wasResidencyReauthorizationInterrupted(): boolean {
+    const principal = vivaRecoveryPrincipal();
+    if (!principal || vivaReauthorizationInFlight) return false;
+    try {
+      const path = window.sessionStorage.getItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
+      if (path !== `${window.location.pathname}${window.location.search}${window.location.hash}`)
+        return false;
+      const stored = window.sessionStorage.getItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
+      if (!stored) return false;
+      const attempt = JSON.parse(stored) as { principal?: unknown; residency?: unknown };
+      return attempt.principal === principal && attempt.residency === true;
+    } catch {
+      return false;
+    }
   }
 
   function restoreVivaReauthorizationReturnPath(): void {
@@ -2836,6 +2879,29 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.createGame(input, options);
     },
 
+    ...(!options.nativeSessionTransport
+      ? {
+          residency: {
+            residencyPrincipal: quarterCreatePrincipal,
+            getClientResidency: () => residencyCall(() => client.getClientResidency()),
+            getResidencyCatalog: () => residencyCall(() => client.getResidencyCatalog()),
+            createResidencyOrder: (input, key) =>
+              residencyCall(() => client.createResidencyOrder(input, key)),
+            listUnresolvedResidencyOrders: () =>
+              residencyCall(() => client.listUnresolvedResidencyOrders()),
+            reauthorizeResidency: () => startAutomaticVivaReauthorization(true),
+            wasResidencyReauthorizationInterrupted,
+            getResidencyOrder: (id) => residencyCall(() => client.getResidencyOrder(id)),
+            getResidencyOrderPayment: (id) =>
+              residencyCall(() => client.getResidencyOrderPayment(id)),
+            reconcileResidencyOrder: (id, key) =>
+              residencyCall(() => client.reconcileResidencyOrder(id, key)),
+            cancelResidencyOrder: (id, key) =>
+              residencyCall(() => client.cancelResidencyOrder(id, key)),
+            openResidencyPayment: (paymentUrl) => window.location.assign(paymentUrl),
+          } satisfies ResidencyGateway,
+        }
+      : {}),
     ...(options.nativeSessionTransport && options.openSubscriptionPayment
       ? {
           monthlyPurchase: {

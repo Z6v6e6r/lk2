@@ -1448,6 +1448,9 @@ function ProfileSubscriptions({
       <a className="profile-subscriptions-all" href="/subscriptions">
         Мои абонементы
       </a>
+      <a className="profile-subscriptions-all" href="/residency">
+        Резидентство
+      </a>
     </section>
   );
 }

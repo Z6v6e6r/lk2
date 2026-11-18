@@ -540,6 +540,7 @@ export class ApiClientError extends Error {
     public readonly status: number,
     public readonly code: string,
     public readonly correlationId: string,
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = 'ApiClientError';
@@ -1026,7 +1027,74 @@ export class PadlHubApiClient {
 
   /** One server-owned answer for the verified user's configured residency product. */
   public getClientResidency(): Promise<ClientResidencyStatus> {
-    return this.request<ClientResidencyStatus>('/residency');
+    return this.request<ClientResidencyStatus>('/residency', {
+      cache: 'no-store',
+    });
+  }
+
+  /**
+   * Residency order operations: the LK2 surface of the LK1 residency lifecycle owner
+   * (Z6v6e6r/lk#443, docs/contracts/residency-purchase.md). The server owns the product, price,
+   * renewal rule, payment link and activation; responses are `unknown` and validated by the
+   * caller. Create/reconcile/cancel carry the caller's Idempotency-Key; a lost create response is
+   * recovered by repeating the same key, never by a new key.
+   */
+  public getResidencyCatalog(): Promise<unknown> {
+    return this.request<unknown>('/residency/catalog', {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public createResidencyOrder(
+    input: { mode: 'NEW' | 'RENEWAL'; expectedTotalMinor: number; expectedProductId?: string },
+    key: string,
+  ): Promise<unknown> {
+    return this.request<unknown>('/residency/orders', {
+      method: 'POST',
+      idempotencyKey: key,
+      body: jsonRequestBody(input),
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public listUnresolvedResidencyOrders(): Promise<unknown> {
+    return this.request<unknown>('/residency/orders?state=unresolved', {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public getResidencyOrder(orderId: string): Promise<unknown> {
+    return this.request<unknown>('/residency/orders/' + encodeURIComponent(orderId), {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public getResidencyOrderPayment(orderId: string): Promise<unknown> {
+    return this.request<unknown>('/residency/orders/' + encodeURIComponent(orderId) + '/payment', {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public reconcileResidencyOrder(orderId: string, key: string): Promise<unknown> {
+    return this.request<unknown>(
+      '/residency/orders/' + encodeURIComponent(orderId) + '/reconcile',
+      {
+        method: 'POST',
+        idempotencyKey: key,
+        body: jsonRequestBody({}),
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+      },
+    );
+  }
+  public cancelResidencyOrder(orderId: string, key: string): Promise<unknown> {
+    return this.request<unknown>('/residency/orders/' + encodeURIComponent(orderId) + '/cancel', {
+      method: 'POST',
+      idempotencyKey: key,
+      body: jsonRequestBody({}),
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
   }
 
   public async syncUserProfilePhoto(input: {
@@ -3502,6 +3570,7 @@ export class PadlHubApiClient {
           recoveryAction?: string;
           latestSequence?: number;
           retainedFromSequence?: number;
+          details?: unknown;
         }
       | undefined;
     const correlationId =
@@ -3527,6 +3596,7 @@ export class PadlHubApiClient {
       response.status,
       body?.code ?? 'UNEXPECTED_API_ERROR',
       correlationId,
+      body?.details,
     );
   }
 }

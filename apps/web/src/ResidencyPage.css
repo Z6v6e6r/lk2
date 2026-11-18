@@ -1,0 +1,164 @@
+.residency-header {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+.residency-page h2 {
+  margin: 0 0 12px;
+  font:
+    600 18px/1.25 'Subscriptions RF Dewi',
+    'RF Dewi',
+    sans-serif;
+}
+.residency-page section {
+  margin-bottom: 18px;
+}
+.residency-status-card,
+.residency-result,
+.residency-offer,
+.residency-confirm {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #e3e9f1;
+  border-radius: 24px;
+  background: #fff;
+}
+.residency-status-card p,
+.residency-result p {
+  margin: 0;
+  color: #364258;
+}
+.residency-status-card .subscriptions-status {
+  justify-self: start;
+  border: 1px solid #dce3ee;
+}
+.residency-status-card[data-state='active'] {
+  border-color: #9fe0cc;
+  background: linear-gradient(140deg, #e7fbf4, #fff 70%);
+}
+.residency-status-card[data-state='expired'],
+.residency-status-card[data-state='unavailable'] {
+  background: #f7f4fb;
+}
+.residency-success {
+  border-color: #9fe0cc;
+  background: #e7fbf4;
+}
+.residency-failure {
+  border-color: #edccd2;
+  background: #fdf3f5;
+}
+.residency-failure p {
+  color: #8e2838;
+}
+.residency-offer-list {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+.residency-offer {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) auto;
+  cursor: pointer;
+}
+.residency-offer[data-selected='true'] {
+  border-color: #603db9;
+  box-shadow: 0 0 0 2px rgb(96 61 185 / 18%);
+}
+.residency-offer input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.residency-offer:has(input:focus-visible) {
+  outline: 3px solid #603db9;
+  outline-offset: 2px;
+}
+.residency-offer:has(input:disabled) {
+  cursor: default;
+}
+.residency-offer-head {
+  display: grid;
+  gap: 2px;
+}
+.residency-offer-head span,
+.residency-offer-text {
+  color: #536078;
+}
+.residency-offer-price {
+  font-weight: 700;
+  font-size: 18px;
+  white-space: nowrap;
+}
+.residency-offer-text,
+.residency-benefits {
+  grid-column: 1 / -1;
+}
+.residency-benefits {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.residency-benefits li {
+  position: relative;
+  padding-left: 22px;
+  color: #243147;
+}
+.residency-benefits li::before {
+  position: absolute;
+  left: 0;
+  color: #1c9c78;
+  content: '✓';
+  font-weight: 700;
+}
+.residency-confirm {
+  margin-bottom: 12px;
+}
+.residency-confirm .subscriptions-facts {
+  margin: 0;
+  border: 1px solid #e3e9f1;
+}
+.residency-note {
+  margin: 0;
+  color: #536078;
+  font-size: 13px;
+}
+.residency-primary,
+.residency-secondary {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  border-radius: 24px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.residency-primary {
+  border: 0;
+  background: #603db9;
+  color: #fff;
+}
+.residency-secondary {
+  border: 1px solid #dce3ee;
+  background: #fff;
+  color: #37305e;
+}
+.residency-primary:disabled,
+.residency-secondary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.residency-result .residency-secondary + .residency-secondary,
+.residency-result .residency-primary + .residency-secondary {
+  margin-top: 0;
+}
+.residency-link {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  text-decoration: none;
+}
