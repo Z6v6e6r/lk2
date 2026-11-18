@@ -4,14 +4,27 @@ import { describe, expect, it } from 'vitest';
 it.skipIf(process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')(
   'rehearses actual isolated Compose Web success and forced same-digest rollback',
   () => {
+    const started = performance.now();
     const result = spawnSync(process.execPath, ['scripts/rehearse-timeweb-standard-compose.js'], {
       encoding: 'utf8',
       timeout: 180000,
     });
-    expect(result.status, result.stderr).toBe(0);
+    const diagnostics = JSON.stringify({
+      elapsedMs: Math.round(performance.now() - started),
+      error: result.error?.message ?? null,
+      signal: result.signal,
+      status: result.status,
+      stdout: result.stdout?.slice(-16000),
+      stderr: result.stderr?.slice(-6000),
+    });
+    console.log(diagnostics);
+    expect(result.error, diagnostics).toBeUndefined();
+    expect(result.signal, diagnostics).toBeNull();
+    expect(result.status, diagnostics).toBe(0);
     expect(result.stdout).toContain('COMPOSE_HTTP_READY_GUARD_PASS');
     expect(result.stdout).toContain('STANDARD_COMPOSE_REHEARSAL_PASS');
     expect(result.stdout).toContain('API_WEB_COMPOSE_REHEARSAL_PASS');
+    expect(result.stdout).toContain('FIXTURE_STAGE cleanup');
   },
   180000,
 );

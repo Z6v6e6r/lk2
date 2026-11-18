@@ -76,6 +76,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     throw new Error('Explicit fixture opt-in required');
   const directory = mkdtempSync(join(tmpdir(), 'lk2-standard-fixture-'));
   const project = `lk2-standard-fixture-${process.pid}`;
+  const started = performance.now();
+  let stage = 'prepare';
+  let stageStarted = started;
+  const setStage = (next) => {
+    process.stdout.write(
+      `FIXTURE_STAGE ${stage} duration_ms=${Math.round(performance.now() - stageStarted)} elapsed_ms=${Math.round(performance.now() - started)}\n`,
+    );
+    stage = next;
+    stageStarted = performance.now();
+    process.stdout.write(`FIXTURE_STAGE_START ${stage}\n`);
+  };
   const lock = JSON.parse(readFileSync('deploy/timeweb/base-images.lock.json'));
   const nginxDigest = lock.images.find((item) => item.id === 'nginx-web-runtime').indexDigest;
   const image = `nginx@${nginxDigest}`;
@@ -116,12 +127,31 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
       networks: { default: { internal: true } },
     }),
   );
-  const docker = (args) =>
-    execFileSync('docker', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 120000,
-    });
+  const docker = (args) => {
+    const commandStarted = performance.now();
+    try {
+      const remaining =
+        (stage === 'cleanup' ? stageStarted + 15000 : started + 155000) - commandStarted;
+      if (remaining <= 0) throw new Error(`FIXTURE_STAGE_BUDGET_EXHAUSTED:${stage}`);
+      return execFileSync('docker', args, {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: Math.min(120000, Math.floor(remaining)),
+        killSignal: 'SIGKILL',
+      });
+    } catch (error) {
+      process.stderr.write(
+        `FIXTURE_COMMAND_ERROR ${JSON.stringify({ stage, command: args[0], status: error.status ?? null, signal: error.signal ?? null, error: tail(error.code ?? error.message), stdout: tail(error.stdout), stderr: tail(error.stderr) })}\n`,
+      );
+      throw error;
+    } finally {
+      const duration = Math.round(performance.now() - commandStarted);
+      if (duration >= 500)
+        process.stdout.write(
+          `FIXTURE_COMMAND stage=${stage} command=${args[0]} action=${args.find((arg) => ['pull', 'up', 'down'].includes(arg)) ?? args[0]} duration_ms=${duration}\n`,
+        );
+    }
+  };
   // Substitute only the fixture image: keep the production smoke arguments and nginx runtime
   // digest. These --rm, network-none containers receive no host credentials, ports or volumes.
   const smokeWebRuntimeBase = () => {
@@ -170,6 +200,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   };
   const journal = [];
   try {
+    setStage('initial-compose-readiness');
     docker([
       'compose',
       '--env-file',
@@ -187,6 +218,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     for (const service of ['api', 'web']) assertFixtureHttp(service);
     const apiBefore = inspect('api').Id;
     const previousImage = inspect('web').Image;
+    setStage('delayed-readiness');
     // Exercise a delayed startup once, instead of imposing an unrelated delay on every recovery.
     const fixtureModel = JSON.parse(readFileSync(composeFile, 'utf8'));
     const delayedCompose = join(directory, 'delayed-compose.json');
@@ -211,6 +243,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     ]);
     assertFixtureHttp('web');
     docker(['exec', inspect('web').Id, 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/']);
+    setStage('unavailable-readiness-and-restore');
     // A container that stays running without HTTP must fail the bounded readiness gate. Use only
     // the owned Web fixture; the initial API/Worker/Realtime containers stay untouched.
     const unavailableCompose = join(directory, 'unavailable-compose.json');
@@ -243,6 +276,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     process.stdout.write(
       'COMPOSE_HTTP_READY_GUARD_PASS delayed_start=true unavailable_rejected=true\n',
     );
+    setStage('web-success-and-rollback');
     const attestBackend = async () => {
       if (inspect('api').Id !== apiBefore) throw Error('Backend restarted');
     };
@@ -294,6 +328,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     )
       throw Error('Wrong transition result');
     await attestBackend();
+    setStage('critical-web-recovery');
     // Exercise the new Web-only phase machine against real disposable Compose, including partial
     // activation that leaves two labeled Web containers. No production request/path is substituted.
     const criticalWebPlan = {
@@ -392,6 +427,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     process.stdout.write(
       'CRITICAL_WEB_COMPOSE_REHEARSAL_PASS success_partial_activation_recovery=true other_containers_unchanged=true\n',
     );
+    setStage('api-web-success');
     const criticalPrevious = join(directory, 'critical-previous.env');
     const criticalCandidate = join(directory, 'critical-candidate.env');
     writeFileSync(criticalPrevious, 'RELEASE=web-previous\nAPI_RELEASE=api-previous\n');
@@ -485,6 +521,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
       },
     };
     await runApiWebTransition(criticalOps);
+    setStage('direct-observation');
     // A virtual clock verifies the controller's 61-round shape without representing production's
     // required wall-clock observation; the real path has no injected clock or probe.
     let virtualNow = Date.parse('2026-10-03T00:00:00.000Z');
@@ -505,6 +542,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     });
     if (direct.elapsedSeconds !== 900 || direct.samples.api.privateMs.length !== 61)
       throw Error('Wrong direct observation shape');
+    setStage('direct-rollback');
     await recoverApiWebTransition(criticalOps);
     const directRestoreOrder = [];
     let directRejected = false;
@@ -552,6 +590,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
       if (inspect(service).Config.Labels['phub.release-id'] !== `${service}-previous`)
         throw Error('Direct previous pair not restored');
     await unchanged();
+    setStage('api-web-boundary-recovery');
     for (const failure of [
       'preflight',
       'pullAndSmoke',
@@ -586,6 +625,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
           throw Error('Previous pair not restored');
       await unchanged();
     }
+    setStage('crash-recovery');
     // Simulate abrupt process loss with an activated pair, then converge using only previous inputs.
     await criticalOps.activate('api');
     await criticalOps.activate('web');
@@ -603,6 +643,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
       'STANDARD_COMPOSE_REHEARSAL_PASS success_and_forced_rollback=true backend_unchanged=true same_digest_rollback=true\n',
     );
   } finally {
+    setStage('cleanup');
     docker([
       'compose',
       '--env-file',
@@ -615,5 +656,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
       '--remove-orphans',
     ]);
     rmSync(directory, { recursive: true });
+    setStage('complete');
   }
 }

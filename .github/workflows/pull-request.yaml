@@ -246,12 +246,11 @@ jobs:
       - name: Unit and integration tests
         timeout-minutes: 25
         env:
-          # Suite duration has grown past the previous budget: run 44266726885 (main, merge of #681)
-          # was still finishing suites when the 800 s watchdog fired and killed it at 831 s
-          # (`termination=watchdog_sigkill`), while the supervisor's own finalization took 187 ms.
-          # 1380 s restores real headroom and keeps 90 s between the watchdog deadline, the bounded
-          # finalization budget and the Actions step deadline (asserted by
-          # scripts/run-ci-tests-with-diagnostics.test.ts).
+          # Full profile (paused release tooling INCLUDED): main run 44266726885 hit the 800 s
+          # watchdog; this does not identify runner slowness or prove test/report/exit completion.
+          # Product-only runs (CI_TEST_SKIP_PAUSED_RELEASE_TOOLING=1) are not duration baselines.
+          # Keep separate room for the 30 s grace, 30 s finalization and 60 s Actions margin.
+          # A branch result cannot establish main green; require an actual post-merge main run.
           CI_TEST_WATCHDOG_SECONDS: '1380'
           # A change that stays inside product areas skips scripts/paused-release-tooling-tests.txt.
           CI_TEST_SKIP_PAUSED_RELEASE_TOOLING: ${{ needs.ci-plan.outputs.release_tooling_tests == 'false' && '1' || '0' }}
