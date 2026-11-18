@@ -44,9 +44,23 @@ const order = (over: Record<string, unknown> = {}) => ({
   orderId: '00000000-0000-4000-8000-0000000000d1',
   mode: 'NEW',
   state: 'PENDING_PAYMENT',
-  product: { title: 'x' },
+  product: { title: 'x', productId: '4037a3a3-e551-4f9a-a9db-1410e46b8635' },
+  consent: null,
+  recovery: {
+    state: 'AWAITING_PAYMENT',
+    required: true,
+    reason: null,
+    action: 'PAY',
+    retryable: true,
+    since: '2026-11-18T09:00:00Z',
+  },
   pricing: { totalMinor: 79000, currency: 'RUB' },
-  payment: { status: 'PENDING', paymentUrl: 'https://bank.example.test/p', expiresAt: null },
+  payment: {
+    overdue: false,
+    status: 'PENDING',
+    paymentUrl: 'https://bank.example.test/p',
+    expiresAt: null,
+  },
   activation: { lastErrorCode: null },
   residency: null,
   ...over,
@@ -109,7 +123,12 @@ describe('order DTO', () => {
     expect(() =>
       parseResidencyOrder(
         order({
-          payment: { status: 'PENDING', paymentUrl: 'javascript:alert(1)', expiresAt: null },
+          payment: {
+            overdue: false,
+            status: 'PENDING',
+            paymentUrl: 'javascript:alert(1)',
+            expiresAt: null,
+          },
         }),
       ),
     ).toThrow();
@@ -132,7 +151,7 @@ describe('phase mapping', () => {
         attempt,
         parse({
           state: 'CANCELLED',
-          payment: { status: 'UNKNOWN', expiresAt: null },
+          payment: { overdue: false, status: 'UNKNOWN', expiresAt: null },
           activation: { lastErrorCode: 'DISPATCH_OUTCOME_UNKNOWN' },
         }),
         null,
@@ -143,14 +162,17 @@ describe('phase mapping', () => {
     expect(
       residencyOrderPhase(
         attempt,
-        parse({ state: 'PAYMENT_FAILED', payment: { status: 'FAILED', expiresAt: null } }),
+        parse({
+          state: 'PAYMENT_FAILED',
+          payment: { overdue: false, status: 'FAILED', expiresAt: null },
+        }),
         null,
       ),
     ).toBe('failed');
     expect(
       residencyOrderPhase(
         attempt,
-        parse({ state: 'CANCELLED', payment: { status: 'NONE', expiresAt: null } }),
+        parse({ state: 'CANCELLED', payment: { overdue: false, status: 'NONE', expiresAt: null } }),
         null,
       ),
     ).toBe('failed');
@@ -159,7 +181,7 @@ describe('phase mapping', () => {
     const active = parse({
       state: 'ACTIVE',
       mode: 'RENEWAL',
-      payment: { status: 'PAID', expiresAt: null },
+      payment: { overdue: false, status: 'PAID', expiresAt: null },
       residency: { validUntil: '2026-12-31T09:00:00.000Z' },
     });
     const old = { kind: 'active' as const, validFrom: null, validUntil: '2026-12-01' };
@@ -204,7 +226,9 @@ describe('SDK transport', () => {
       fetchImplementation,
     });
     const key = 'residency:00000000-0000-4000-8000-000000000001';
-    await expect(client.createResidencyOrder('NEW', key)).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      client.createResidencyOrder({ mode: 'NEW', expectedTotalMinor: 79000 }, key),
+    ).rejects.toBeInstanceOf(TypeError);
     await expect(
       client.reconcileResidencyOrder('o', 'residency-reconcile:k-0000001'),
     ).rejects.toBeInstanceOf(TypeError);

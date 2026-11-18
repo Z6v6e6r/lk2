@@ -540,6 +540,7 @@ export class ApiClientError extends Error {
     public readonly status: number,
     public readonly code: string,
     public readonly correlationId: string,
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = 'ApiClientError';
@@ -1044,11 +1045,20 @@ export class PadlHubApiClient {
       retryOnUnauthorized: false,
     });
   }
-  public createResidencyOrder(mode: 'NEW' | 'RENEWAL', key: string): Promise<unknown> {
+  public createResidencyOrder(
+    input: { mode: 'NEW' | 'RENEWAL'; expectedTotalMinor: number; expectedProductId?: string },
+    key: string,
+  ): Promise<unknown> {
     return this.request<unknown>('/residency/orders', {
       method: 'POST',
       idempotencyKey: key,
-      body: jsonRequestBody({ mode }),
+      body: jsonRequestBody(input),
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+    });
+  }
+  public listUnresolvedResidencyOrders(): Promise<unknown> {
+    return this.request<unknown>('/residency/orders?state=unresolved', {
       cache: 'no-store',
       retryOnUnauthorized: false,
     });
@@ -3560,6 +3570,7 @@ export class PadlHubApiClient {
           recoveryAction?: string;
           latestSequence?: number;
           retainedFromSequence?: number;
+          details?: unknown;
         }
       | undefined;
     const correlationId =
@@ -3585,6 +3596,7 @@ export class PadlHubApiClient {
       response.status,
       body?.code ?? 'UNEXPECTED_API_ERROR',
       correlationId,
+      body?.details,
     );
   }
 }

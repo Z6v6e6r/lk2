@@ -1386,19 +1386,25 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let notificationsCacheRevision = 0;
   const publicTournamentSummaryPromises = new Map<string, Promise<PublicTournamentSummary>>();
   let vivaReauthorizationStarted = false;
+  let vivaReauthorizationInFlight = false;
 
   function vivaRecoveryPrincipal(): string | undefined {
     return currentUserId ? `${options.tenantKey}:${currentUserId}` : undefined;
   }
 
-  function startAutomaticVivaReauthorization(): Promise<void> {
-    if (nativeClient || typeof window === 'undefined' || vivaReauthorizationStarted)
+  function startAutomaticVivaReauthorization(userInitiated = false): Promise<void> {
+    if (
+      nativeClient ||
+      typeof window === 'undefined' ||
+      vivaReauthorizationInFlight ||
+      (!userInitiated && vivaReauthorizationStarted)
+    )
       return Promise.resolve();
     const recoveryPrincipal = vivaRecoveryPrincipal();
     if (!recoveryPrincipal) return Promise.resolve();
     try {
       const storedAttempt = window.sessionStorage.getItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
-      if (storedAttempt) {
+      if (storedAttempt && !userInitiated) {
         try {
           const attempt = JSON.parse(storedAttempt) as { principal?: unknown; startedAt?: unknown };
           if (
@@ -1420,6 +1426,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       // The in-memory latch still prevents duplicate starts in this gateway instance.
     }
     vivaReauthorizationStarted = true;
+    vivaReauthorizationInFlight = true;
     const generation = principalGeneration;
     try {
       window.sessionStorage.setItem(
@@ -1459,6 +1466,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           // A failed recovery must not leave an old route for a later regular login.
         }
         throw error;
+      })
+      .finally(() => {
+        vivaReauthorizationInFlight = false;
       });
   }
 
@@ -2855,8 +2865,11 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             residencyPrincipal: quarterCreatePrincipal,
             getClientResidency: () => residencyCall(() => client.getClientResidency()),
             getResidencyCatalog: () => residencyCall(() => client.getResidencyCatalog()),
-            createResidencyOrder: (mode, key) =>
-              residencyCall(() => client.createResidencyOrder(mode, key)),
+            createResidencyOrder: (input, key) =>
+              residencyCall(() => client.createResidencyOrder(input, key)),
+            listUnresolvedResidencyOrders: () =>
+              residencyCall(() => client.listUnresolvedResidencyOrders()),
+            reauthorizeResidency: () => startAutomaticVivaReauthorization(true),
             getResidencyOrder: (id) => residencyCall(() => client.getResidencyOrder(id)),
             getResidencyOrderPayment: (id) =>
               residencyCall(() => client.getResidencyOrderPayment(id)),

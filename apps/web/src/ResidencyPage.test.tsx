@@ -1,18 +1,19 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ResidencyPage } from './ResidencyPage.js';
 import {
   createOwnerWorld,
   verifyOwnerSnapshot,
+  verifyConsumerSnapshot,
   type OwnerHarness,
 } from './residency-owner.test-helper.js';
 import { listResidencyAttempts } from './residency-purchase.js';
 
 // Every scenario below runs the real lk#443 owner state machine and HTTP contract (imported
-// byte-identical) behind a synthetic LK2 consumer transport and the real @phub/api-sdk client.
+// byte-identical) behind actual #684 routes/runtime/HTTP client and the real @phub/api-sdk client.
 // Viva/CUP ports, the clock and the order store are synthetic and in memory.
 const userA = { tenantId: 'synthetic-tenant', userId: 'user-a' };
 const userB = { tenantId: 'synthetic-tenant', userId: 'user-b' };
@@ -78,7 +79,15 @@ async function buyAndOpenPayment(h: OwnerHarness, storage?: Storage) {
 afterEach(() => cleanup());
 
 describe('imported owner snapshot', () => {
-  it('is byte-identical to lk#443 @ adc9c644', () => {
+  it('pins actual consumer modules to #684 d92b978', () => {
+    expect(verifyConsumerSnapshot()).toEqual([
+      'client-residency-order-routes.ts',
+      'client-residency-order-runtime.ts',
+      'client-residency-owner-client.ts',
+      'residency-owner-paths.ts',
+    ]);
+  });
+  it('is byte-identical to lk#443 @ 4d04a05c', () => {
     expect(verifyOwnerSnapshot()).toEqual([
       'residency-lifecycle.mjs',
       'residency-lifecycle-http.mjs',
@@ -98,7 +107,7 @@ describe('status, catalog and unavailable backend', () => {
     expect(screen.queryByLabelText('Преимущества')).not.toBeInTheDocument();
   });
 
-  it('offers renewal for an active residency', async () => {
+  it('shows the server early-renewal date without a payment confirmation', async () => {
     const h = createOwnerWorld();
     h.setResidency('user-a', {
       state: 'ACTIVE',
@@ -108,7 +117,9 @@ describe('status, catalog and unavailable backend', () => {
     mount(h);
     expect(await screen.findByText('Активно')).toBeInTheDocument();
     expect(screen.getByText('1 декабря 2026 г.')).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Продлить резидентство' })).toBeEnabled();
+    expect(await screen.findByText(/Продление доступно с/)).toHaveTextContent('01.12.2026');
+    expect(screen.queryByRole('button', { name: 'Продлить резидентство' })).not.toBeInTheDocument();
+    expect(h.world.providerCreates).toBe(0);
   });
 
   it('never shows a failed status read as absence and offers no purchase', async () => {
@@ -201,7 +212,7 @@ describe('order flow through the real owner', () => {
     h.setResidency('user-a', {
       state: 'ACTIVE',
       validFrom: '2026-11-01T09:00:00.000Z',
-      validUntil: '2026-12-01T09:00:00.000Z',
+      validUntil: '2026-11-18T09:00:00.000Z',
     });
     h.world.lk2ReadLags = true;
     const m = mount(h);
@@ -217,12 +228,12 @@ describe('order flow through the real owner', () => {
     mount(h, m.storage);
     // The owner activated the extension, but the LK2 read still shows the old end date.
     expect(await screen.findByText(/Ждём подтверждения нового срока/)).toBeInTheDocument();
-    expect(screen.getByText('1 декабря 2026 г.')).toBeInTheDocument();
+    expect(screen.getByText('18 ноября 2026 г.')).toBeInTheDocument();
     expect(screen.queryByText('Резидентство продлено')).not.toBeInTheDocument();
     h.syncLk2Read('user-a');
     fireEvent.click(screen.getByRole('button', { name: 'Проверить статус' }));
     expect(await screen.findByText('Резидентство продлено')).toBeInTheDocument();
-    expect(screen.getByText(/действует до 31 декабря 2026 г\./)).toBeInTheDocument();
+    expect(screen.getByText(/действует до 18 декабря 2026 г\./)).toBeInTheDocument();
   });
 
   it('a delayed bank confirmation keeps an honest, bounded wait', async () => {
@@ -256,7 +267,7 @@ describe('order flow through the real owner', () => {
     await buyAndOpenPayment(h);
     expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Отменить заказ' })).not.toBeInTheDocument();
-    expect(screen.getByText(/закроется\s+автоматически/)).toBeInTheDocument();
+    expect(screen.queryByText(/закроется\s+автоматически/)).not.toBeInTheDocument();
     // Contract evidence: the real owner refuses to cancel an order whose payment is PENDING.
     const { client } = h.gateway('user-a');
     const orderId = h.ordersOf('user-a')[0]!.orderId;
@@ -304,13 +315,12 @@ describe('lost responses and recovery', () => {
     expect(listResidencyAttempts(storage, userA)[0]!.orderId).toBeNull();
     cleanup();
     h.world.dropResponse = null;
-    mount(h, storage); // reload: no automatic POST
-    expect(await screen.findByText('Заказ отправлен')).toBeInTheDocument();
-    expect(posts(h, '/residency/orders')).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Проверить заказ' }));
+    mount(h, storage); // reload: unresolved read restores the order, no automatic POST
     expect(await screen.findByText('Ожидает оплаты')).toBeInTheDocument();
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить сохранённую попытку' }));
+    await waitFor(() => expect(posts(h, '/residency/orders')).toHaveLength(2));
     const keys = posts(h, '/residency/orders').map((l) => l.key);
-    expect(keys).toHaveLength(2);
     expect(keys[0]).toBe(keys[1]);
     expect(h.ordersOf('user-a')).toHaveLength(1);
     expect(h.world.providerCreates).toBe(1);
@@ -342,9 +352,7 @@ describe('lost responses and recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Проверить заказ' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('доступно только продление');
     expect(listResidencyAttempts(storage, userA)).toHaveLength(0);
-    expect(
-      await screen.findByRole('button', { name: 'Продлить резидентство' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Продление доступно с/)).toBeInTheDocument();
     expect(posts(h, '/residency/orders').map((l) => l.key)).toEqual([
       posts(h, '/residency/orders')[0]!.key,
       posts(h, '/residency/orders')[0]!.key,
@@ -402,7 +410,7 @@ describe('lost responses and recovery', () => {
     h.world.priceMinor = 99_000;
     fireEvent.click(button);
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Сумма заказа 990 ₽ отличается от подтверждённой 790 ₽',
+      'Цена выросла до 990 ₽. Вы подтвердили 790 ₽',
     );
     expect(m.opened).toHaveLength(0);
   });
@@ -468,7 +476,7 @@ describe('uncertain payment and club review', () => {
     fireEvent.click(await confirm());
     expect(await screen.findByText('Результат оплаты не подтверждён')).toBeInTheDocument();
     const order = h.ordersOf('user-a')[0]!;
-    expect(order.state).toBe('CANCELLED');
+    expect(order.state).toBe('PENDING_PAYMENT');
     expect(screen.queryByText(/отклонил|не прошла|Заказ отменён/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /Оформить|Перейти к оплате/ }),
@@ -529,4 +537,247 @@ describe('account boundaries', () => {
     expect(screen.queryByText('Активно')).not.toBeInTheDocument();
     expect(screen.queryByText('Резидентство (синтетика)')).not.toBeInTheDocument();
   });
+});
+
+describe('contract v2 composed chain: web → SDK → consumer routes/runtime/client → owner HTTP/domain', () => {
+  const productId = '4037a3a3-e551-4f9a-a9db-1410e46b8635';
+  it('rejects missing consent in the actual consumer before any provider POST', async () => {
+    const h = createOwnerWorld();
+    const response = await h.fetchImplementation(
+      'https://lk2.synthetic.test/user/api/v1/synthetic/residency/orders',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer synthetic-token:user-a',
+          'Content-Type': 'application/json',
+          'Idempotency-Key': 'residency:' + randomUuid(),
+        },
+        body: JSON.stringify({ mode: 'NEW' }),
+      },
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: 'RESIDENCY_PRICE_CONSENT_REQUIRED' });
+    expect(h.world.providerCreates).toBe(0);
+  });
+  it('accepts a decrease, keeps the original consent ceiling, and does not reprice replay', async () => {
+    const h = createOwnerWorld();
+    const m = mount(h);
+    const button = await confirm();
+    h.world.priceMinor = 69000;
+    fireEvent.click(button);
+    await waitFor(() => expect(m.opened).toHaveLength(1));
+    const attempt = listResidencyAttempts(m.storage, userA)[0]!;
+    expect(attempt.createPayload).toEqual({
+      mode: 'NEW',
+      expectedTotalMinor: 79000,
+      expectedProductId: productId,
+    });
+    h.world.priceMinor = 99000;
+    const replay = await h
+      .gateway('user-a')
+      .client.createResidencyOrder(attempt.createPayload!, attempt.key);
+    expect(replay).toMatchObject({
+      idempotentReplay: true,
+      order: { pricing: { totalMinor: 69000 }, consent: { expectedTotalMinor: 79000 } },
+    });
+    expect(posts(h, '/residency/orders').map((l) => l.body)).toEqual([
+      attempt.createPayload,
+      attempt.createPayload,
+    ]);
+    expect(h.world.providerCreates).toBe(1);
+  });
+  it('lost response replay uses the original payload after a catalog change', async () => {
+    const h = createOwnerWorld();
+    h.world.dropResponse = (method, path) => method === 'POST' && path === '/residency/orders';
+    const m = mount(h);
+    fireEvent.click(await confirm());
+    await screen.findByRole('alert');
+    const original = listResidencyAttempts(m.storage, userA)[0]!;
+    h.world.dropResponse = null;
+    h.world.priceMinor = 99000;
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить заказ' }));
+    await screen.findByText('Ожидает оплаты');
+    expect(posts(h, '/residency/orders').map((l) => [l.key, l.body])).toEqual([
+      [original.key, original.createPayload],
+      [original.key, original.createPayload],
+    ]);
+    expect(h.world.providerCreates).toBe(1);
+  });
+  it('early-renewal refusal exposes eligibleAt details and sends zero provider POSTs', async () => {
+    const h = createOwnerWorld();
+    h.setResidency('user-a', {
+      state: 'ACTIVE',
+      validFrom: '2026-11-01T09:00:00.000Z',
+      validUntil: '2026-12-01T09:00:00.000Z',
+    });
+    await expect(
+      h
+        .gateway('user-a')
+        .client.createResidencyOrder(
+          { mode: 'RENEWAL', expectedTotalMinor: 79000, expectedProductId: productId },
+          'residency:' + randomUuid(),
+        ),
+    ).rejects.toMatchObject({
+      code: 'RESIDENCY_RENEWAL_TOO_EARLY',
+      details: {
+        eligibleAt: '2026-12-01T09:00:00.000Z',
+        reason: 'REMAINING_DAYS_NOT_TRANSFERABLE',
+      },
+    });
+    expect(h.world.providerCreates).toBe(0);
+    expect(h.ordersOf('user-a')).toHaveLength(0);
+  });
+  it('finds an unresolved order on a new device with no local state and no create', async () => {
+    const h = createOwnerWorld();
+    await buyAndOpenPayment(h);
+    cleanup();
+    const other = mount(h, new MemoryStorage());
+    await screen.findByText('Ожидает оплаты');
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
+    expect(listResidencyAttempts(other.storage, userA)[0]!.key).toMatch(/^residency-lookup:/);
+    expect(h.world.log.some((l) => l.method === 'GET' && l.path === '/residency/orders')).toBe(
+      true,
+    );
+  });
+  it('overdue PENDING stays unresolved and offers no payment even though owner retains its URL', async () => {
+    const h = createOwnerWorld();
+    const { storage } = await buyAndOpenPayment(h);
+    cleanup();
+    h.world.now += 60 * 60 * 1000;
+    mount(h, storage);
+    await screen.findByText(/Время ожидания истекло/);
+    expect(
+      screen.queryByRole('button', { name: /Оформить|Перейти к оплате/ }),
+    ).not.toBeInTheDocument();
+    expect(h.ordersOf('user-a')[0]!.state).toBe('PENDING_PAYMENT');
+    expect(h.world.providerCreates).toBe(1);
+  });
+  it('reauth provides a Viva action and preserves the original operation through a new session', async () => {
+    const h = createOwnerWorld();
+    const m = mount(h);
+    const button = await confirm();
+    h.world.consumer = 'reauth';
+    fireEvent.click(button);
+    const login = await screen.findByRole('button', { name: 'Войти повторно через Viva' });
+    const original = listResidencyAttempts(m.storage, userA)[0]!;
+    fireEvent.click(login);
+    await waitFor(() => expect(h.world.reauthorizations).toBe(1));
+    expect(listResidencyAttempts(m.storage, userA)).toEqual([original]);
+    cleanup();
+    h.world.consumer = 'ok';
+    mount(h, m.storage);
+    fireEvent.click(await screen.findByRole('button', { name: 'Проверить заказ' }));
+    await screen.findByText('Ожидает оплаты');
+    expect(posts(h, '/residency/orders').map((l) => l.key)).toEqual([original.key, original.key]);
+    expect(h.world.providerCreates).toBe(1);
+  });
+  it('legacy records never acquire consent from a fresh catalog and never replay a create', async () => {
+    const h = createOwnerWorld();
+    h.world.failBeforeOwner = (method, path) => method === 'POST' && path === '/residency/orders';
+    const m = mount(h);
+    fireEvent.click(await confirm());
+    await screen.findByRole('alert');
+    cleanup();
+    const key = m.storage.key(0)!;
+    const value = JSON.parse(m.storage.getItem(key)!) as Record<string, unknown>;
+    delete value.createPayload;
+    m.storage.setItem(key, JSON.stringify(value));
+    h.world.failBeforeOwner = null;
+    mount(h, m.storage);
+    await screen.findByText(/Сохранена прежняя попытка/);
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить заказ' }));
+    await screen.findByRole('alert');
+    expect(posts(h, '/residency/orders')).toHaveLength(1);
+    expect(h.world.providerCreates).toBe(0);
+    expect(m.storage.getItem(key)).toBe(JSON.stringify(value));
+  });
+  it.each(['orderId', 'removed'] as const)(
+    'two visible windows: recover synchronizes %s without visibilitychange',
+    async (outcome) => {
+      const h = createOwnerWorld();
+      h.world.failBeforeOwner = (method, path) => method === 'POST' && path === '/residency/orders';
+      const store = new MemoryStorage();
+      const a = mount(h, store);
+      fireEvent.click(await confirm());
+      await within(a.view.container).findByRole('alert');
+      const b = mount(h, store);
+      await within(b.view.container).findByText('Заказ отправлен');
+      h.world.failBeforeOwner = null;
+      if (outcome === 'removed') {
+        h.setResidency('user-a', {
+          state: 'ACTIVE',
+          validFrom: '2026-11-01T09:00:00.000Z',
+          validUntil: '2026-12-01T09:00:00.000Z',
+        });
+      }
+      fireEvent.click(within(b.view.container).getByRole('button', { name: 'Проверить заказ' }));
+      if (outcome === 'orderId') await within(b.view.container).findByText('Ожидает оплаты');
+      else await waitFor(() => expect(listResidencyAttempts(store, userA)).toHaveLength(0));
+      const before = posts(h, '/residency/orders').length;
+      fireEvent.click(within(a.view.container).getByRole('button', { name: 'Проверить заказ' }));
+      await waitFor(() =>
+        expect(within(a.view.container).queryByText('Заказ отправлен')).not.toBeInTheDocument(),
+      );
+      if (outcome === 'orderId') await within(a.view.container).findByText('Ожидает оплаты');
+      expect(posts(h, '/residency/orders')).toHaveLength(before);
+    },
+  );
+});
+
+it('a competing device create after initial lookup is found immediately on pending refusal', async () => {
+  const h = createOwnerWorld();
+  mount(h);
+  const confirmButton = await confirm();
+  await h
+    .gateway('user-a')
+    .client.createResidencyOrder(
+      { mode: 'NEW', expectedTotalMinor: 79000 },
+      'residency:' + randomUuid(),
+    );
+  fireEvent.click(confirmButton);
+  await screen.findByText('Ожидает оплаты');
+  expect(screen.queryByRole('button', { name: 'Оформить резидентство' })).not.toBeInTheDocument();
+  expect(h.world.providerCreates).toBe(1);
+});
+
+it('retries an initially unavailable unresolved lookup without reload', async () => {
+  const h = createOwnerWorld();
+  h.world.failBeforeOwner = (method, path) => method === 'GET' && path === '/residency/orders';
+  mount(h);
+  const retry = await screen.findByRole('button', { name: 'Проверить заказы' });
+  await waitFor(() => expect(retry).toBeEnabled());
+  expect(screen.queryByRole('button', { name: 'Оформить резидентство' })).not.toBeInTheDocument();
+  h.world.failBeforeOwner = null;
+  fireEvent.click(retry);
+  await screen.findByRole('button', { name: 'Оформить резидентство' });
+  expect(posts(h, '/residency/orders')).toHaveLength(0);
+});
+
+it('a malformed consent echo never launches payment and retains custody', async () => {
+  const h = createOwnerWorld();
+  const g = h.gateway('user-a');
+  const storage = new MemoryStorage();
+  const gateway = {
+    ...g.gateway,
+    createResidencyOrder: async (...args: Parameters<typeof g.gateway.createResidencyOrder>) => {
+      const result = (await g.gateway.createResidencyOrder(...args)) as {
+        order: { consent: { expectedTotalMinor: number } };
+      };
+      result.order.consent.expectedTotalMinor = 69000;
+      return result;
+    },
+  };
+  render(
+    <ResidencyPage
+      gateway={gateway}
+      principal={userA}
+      storage={() => storage}
+      randomUuid={randomUuid}
+      pollLimit={0}
+    />,
+  );
+  fireEvent.click(await confirm());
+  await screen.findByRole('alert');
+  expect(g.opened).toHaveLength(0);
+  expect(listResidencyAttempts(storage, userA)).toHaveLength(1);
 });

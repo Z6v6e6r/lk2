@@ -17,7 +17,9 @@ export interface ResidencyGateway {
   readonly residencyPrincipal: () => string | null;
   readonly getClientResidency: () => Promise<unknown>;
   readonly getResidencyCatalog: () => Promise<unknown>;
-  readonly createResidencyOrder: (mode: ResidencyOrderMode, key: string) => Promise<unknown>;
+  readonly listUnresolvedResidencyOrders: () => Promise<unknown>;
+  readonly reauthorizeResidency: () => Promise<void>;
+  readonly createResidencyOrder: (input: ResidencyCreateInput, key: string) => Promise<unknown>;
   readonly getResidencyOrder: (orderId: string) => Promise<unknown>;
   readonly getResidencyOrderPayment: (orderId: string) => Promise<unknown>;
   readonly reconcileResidencyOrder: (orderId: string, key: string) => Promise<unknown>;
@@ -27,8 +29,42 @@ export interface ResidencyGateway {
 }
 
 export type ResidencyOrderMode = 'NEW' | 'RENEWAL';
+export interface ResidencyCreateInput {
+  readonly mode: ResidencyOrderMode;
+  readonly expectedTotalMinor: number;
+  readonly expectedProductId?: string;
+}
+export interface ResidencyRenewal {
+  readonly eligible: boolean;
+  readonly reason: string | null;
+  readonly eligibleAt: string | null;
+  readonly currentValidUntil: string | null;
+  readonly expected: {
+    readonly termDays: number;
+    readonly startsAt: 'PAYMENT_DATE';
+    readonly earliestValidUntil: string | null;
+  } | null;
+}
+const RECOVERY_STATES = [
+  'NONE',
+  'AWAITING_PAYMENT',
+  'AWAITING_CONFIRMATION',
+  'UNKNOWN_OUTCOME',
+  'ACTIVATION_PENDING',
+  'REVIEW_REQUIRED',
+  'TERMINAL',
+] as const;
+export interface ResidencyRecovery {
+  readonly state: (typeof RECOVERY_STATES)[number];
+  readonly required: boolean;
+  readonly reason: string | null;
+  readonly action: 'NONE' | 'PAY' | 'RETRY_RECONCILE' | 'CONTACT_SUPPORT' | 'START_NEW_ORDER';
+  readonly retryable: boolean;
+  readonly since: string;
+}
 
 export interface ResidencyCatalog {
+  readonly renewal: ResidencyRenewal;
   readonly productId: string;
   readonly title: string;
   readonly termDays: number;
@@ -56,6 +92,14 @@ const PAYMENT_STATUSES = ['NONE', 'PENDING', 'PAID', 'FAILED', 'UNKNOWN'] as con
 export type ResidencyPaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
 export interface ResidencyOrder {
+  readonly productId: string;
+  readonly consent: {
+    readonly expectedTotalMinor: number;
+    readonly productId: string;
+    readonly acceptedAt: string;
+  } | null;
+  readonly recovery: ResidencyRecovery;
+  readonly overdue: boolean;
   readonly orderId: string;
   readonly mode: ResidencyOrderMode;
   readonly state: ResidencyOrderState;
@@ -68,6 +112,8 @@ export interface ResidencyOrder {
   readonly residencyValidUntil: string | null;
 }
 export interface ResidencyPayment {
+  readonly recovery: ResidencyRecovery;
+  readonly overdue: boolean;
   readonly orderId: string;
   readonly state: ResidencyOrderState;
   readonly paymentStatus: ResidencyPaymentStatus;
@@ -86,10 +132,12 @@ export interface ResidencyPrincipal {
  */
 export interface ResidencyAttempt extends ResidencyPrincipal {
   readonly version: 3;
+  /** Absent on legacy records: never invent consent or replay those creates. */
+  readonly createPayload?: ResidencyCreateInput;
   readonly key: string;
   readonly mode: ResidencyOrderMode;
   readonly orderId: string | null;
-  /** The catalog price the user confirmed; the order total must match before payment opens. */
+  /** The catalog price the user confirmed; the order total must not exceed it before payment opens. */
   readonly confirmedPriceMinor: number;
   readonly createdAt: string;
 }
@@ -147,6 +195,39 @@ export function parseClientResidencyStatus(v: unknown): ClientResidencyStatus {
   return s as unknown as ClientResidencyStatus;
 }
 
+function parseRenewal(v: unknown): ResidencyRenewal {
+  const r = object(v);
+  const e = r.expected === null ? null : object(r.expected);
+  if (
+    typeof r.eligible !== 'boolean' ||
+    (r.reason !== null && !text(r.reason, 64)) ||
+    (r.eligibleAt !== null && !instant(r.eligibleAt)) ||
+    (r.currentValidUntil !== null && !instant(r.currentValidUntil)) ||
+    (e &&
+      (!Number.isSafeInteger(e.termDays) ||
+        (e.termDays as number) <= 0 ||
+        e.startsAt !== 'PAYMENT_DATE' ||
+        (e.earliestValidUntil !== null && !instant(e.earliestValidUntil))))
+  )
+    return fail();
+  return r as unknown as ResidencyRenewal;
+}
+function parseRecovery(v: unknown): ResidencyRecovery {
+  const r = object(v);
+  if (
+    !oneOf(RECOVERY_STATES, r.state) ||
+    typeof r.required !== 'boolean' ||
+    typeof r.retryable !== 'boolean' ||
+    (r.reason !== null && !text(r.reason, 64)) ||
+    !instant(r.since) ||
+    !oneOf(
+      ['NONE', 'PAY', 'RETRY_RECONCILE', 'CONTACT_SUPPORT', 'START_NEW_ORDER'] as const,
+      r.action,
+    )
+  )
+    return fail();
+  return r as unknown as ResidencyRecovery;
+}
 export function parseResidencyCatalog(v: unknown): ResidencyCatalog {
   const c = object(v);
   const p = object(c.product);
@@ -164,6 +245,7 @@ export function parseResidencyCatalog(v: unknown): ResidencyCatalog {
   )
     return fail();
   return {
+    renewal: parseRenewal(c.renewal),
     productId: p.productId,
     title: p.title,
     termDays: p.termDays as number,
@@ -179,6 +261,17 @@ export function parseResidencyOrder(v: unknown, expectedOrderId?: string): Resid
   const product = object(o.product);
   const pricing = object(o.pricing);
   const payment = object(o.payment);
+  const recovery = parseRecovery(o.recovery);
+  const consent = o.consent === null ? null : object(o.consent);
+  if (
+    !uuid(product.productId) ||
+    typeof payment.overdue !== 'boolean' ||
+    (consent &&
+      (!money(consent.expectedTotalMinor) ||
+        !uuid(consent.productId) ||
+        !instant(consent.acceptedAt)))
+  )
+    return fail();
   const activation = o.activation === undefined ? {} : object(o.activation);
   const residency = o.residency === null ? null : object(o.residency);
   if (
@@ -201,6 +294,10 @@ export function parseResidencyOrder(v: unknown, expectedOrderId?: string): Resid
   )
     return fail();
   return {
+    productId: product.productId,
+    consent: consent as ResidencyOrder['consent'],
+    recovery,
+    overdue: payment.overdue,
     orderId: o.orderId.toLowerCase(),
     mode: o.mode,
     state: o.state,
@@ -236,6 +333,8 @@ export function parseResidencyPayment(v: unknown, orderId: string): ResidencyPay
   )
     return fail();
   return {
+    recovery: parseRecovery(p.recovery),
+    overdue: typeof p.overdue === 'boolean' ? p.overdue : fail(),
     orderId: p.orderId.toLowerCase(),
     state: p.state,
     paymentStatus: p.paymentStatus,
@@ -245,6 +344,33 @@ export function parseResidencyPayment(v: unknown, orderId: string): ResidencyPay
         ? httpsUrl(p.paymentUrl)
         : null,
     expiresAt: p.expiresAt ?? null,
+  };
+}
+
+export function parseUnresolvedResidencyOrders(v: unknown): ResidencyOrder[] {
+  const e = object(v);
+  if (
+    e.schemaVersion !== 1 ||
+    !Array.isArray(e.orders) ||
+    e.count !== e.orders.length ||
+    e.orders.length > 20
+  )
+    return fail();
+  return e.orders.map((o) => parseResidencyOrder(o));
+}
+
+export function discoveredResidencyAttempt(
+  p: ResidencyPrincipal,
+  order: ResidencyOrder,
+): ResidencyAttempt {
+  return {
+    ...p,
+    version: 3,
+    key: 'residency-lookup:' + order.orderId,
+    mode: order.mode,
+    orderId: order.orderId,
+    confirmedPriceMinor: order.consent?.expectedTotalMinor ?? order.totalMinor,
+    createdAt: order.consent?.acceptedAt ?? order.recovery.since,
   };
 }
 
@@ -266,8 +392,8 @@ function parseAttempt(raw: string, p: ResidencyPrincipal, storageKey: string): R
     a.tenantId !== p.tenantId ||
     a.userId !== p.userId ||
     typeof a.key !== 'string' ||
-    !/^residency:[0-9a-f-]{36}$/.test(a.key) ||
-    !uuid(a.key.slice('residency:'.length)) ||
+    !/^residency(?:-lookup)?:[0-9a-f-]{36}$/.test(a.key) ||
+    !uuid(a.key.split(':')[1]) ||
     storageKey !== attemptPrefix(p) + a.key ||
     !oneOf(['NEW', 'RENEWAL'] as const, a.mode) ||
     (a.orderId !== null && !uuid(a.orderId)) ||
@@ -275,7 +401,24 @@ function parseAttempt(raw: string, p: ResidencyPrincipal, storageKey: string): R
     !instant(a.createdAt)
   )
     return fail();
+  let createPayload: ResidencyCreateInput | undefined;
+  if (a.createPayload !== undefined) {
+    const c = object(a.createPayload);
+    if (
+      c.mode !== a.mode ||
+      c.expectedTotalMinor !== a.confirmedPriceMinor ||
+      !money(c.expectedTotalMinor) ||
+      (c.expectedProductId !== undefined && !uuid(c.expectedProductId))
+    )
+      return fail();
+    createPayload = {
+      mode: c.mode as ResidencyOrderMode,
+      expectedTotalMinor: c.expectedTotalMinor,
+      ...(c.expectedProductId === undefined ? {} : { expectedProductId: c.expectedProductId }),
+    };
+  }
   return {
+    ...(createPayload ? { createPayload } : {}),
     version: 3,
     tenantId: p.tenantId,
     userId: p.userId,
@@ -318,11 +461,17 @@ export function newResidencyAttempt(
   confirmedPriceMinor: number,
   randomUuid: () => string,
   now: () => number = Date.now,
+  expectedProductId?: string,
 ): ResidencyAttempt {
   return {
     version: 3,
     tenantId: p.tenantId,
     userId: p.userId,
+    createPayload: {
+      mode,
+      expectedTotalMinor: confirmedPriceMinor,
+      ...(expectedProductId === undefined ? {} : { expectedProductId }),
+    },
     key: 'residency:' + randomUuid(),
     mode,
     orderId: null,
@@ -349,8 +498,7 @@ const DEFINITIVE_CREATE_REFUSALS = new Set([
   'RESIDENCY_CATALOG_UNAVAILABLE',
   'RESIDENCY_PRICING_UNAVAILABLE',
   'RESIDENCY_PRICING_INVALID',
-  'RESIDENCY_MODE_INVALID',
-  'RESIDENCY_IDEMPOTENCY_KEY_REQUIRED',
+  'RESIDENCY_RENEWAL_TOO_EARLY',
 ]);
 export function residencyErrorCode(error: unknown): string | null {
   return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
@@ -362,9 +510,21 @@ export function residencyErrorStatus(error: unknown): number | null {
     ? error.status
     : null;
 }
-export function isDefinitiveCreateRefusal(error: unknown): boolean {
+export function isDefinitiveCreateRefusal(error: unknown, attempt?: ResidencyAttempt): boolean {
   const code = residencyErrorCode(error);
   const status = residencyErrorStatus(error);
+  const d = residencyErrorDetails(error);
+  if (
+    code === 'RESIDENCY_PRICE_CHANGED' &&
+    status === 409 &&
+    attempt?.createPayload &&
+    d.expectedTotalMinor === attempt.createPayload.expectedTotalMinor &&
+    money(d.totalMinor) &&
+    d.totalMinor > attempt.createPayload.expectedTotalMinor &&
+    d.currency === 'RUB' &&
+    d.productId === attempt.createPayload.expectedProductId
+  )
+    return true;
   return (
     code !== null &&
     DEFINITIVE_CREATE_REFUSALS.has(code) &&
@@ -374,10 +534,54 @@ export function isDefinitiveCreateRefusal(error: unknown): boolean {
   );
 }
 
+export function residencyErrorDetails(error: unknown): Record<string, unknown> {
+  if (
+    !error ||
+    typeof error !== 'object' ||
+    !('details' in error) ||
+    !error.details ||
+    typeof error.details !== 'object' ||
+    Array.isArray(error.details)
+  )
+    return {};
+  return error.details as Record<string, unknown>;
+}
+export function renewalUnavailableMessage(
+  r: Pick<ResidencyRenewal, 'reason' | 'eligibleAt'>,
+): string {
+  const reason =
+    r.reason === 'REMAINING_DAYS_NOT_TRANSFERABLE'
+      ? 'Оставшиеся дни не переносятся в новый срок.'
+      : r.reason === 'STATUS_UNAVAILABLE'
+        ? 'Клуб не смог проверить срок резидентства.'
+        : r.reason === 'NOT_ACTIVE'
+          ? 'Нет активного резидентства для продления.'
+          : 'Продление пока недоступно.';
+  return (
+    reason +
+    (r.eligibleAt
+      ? ' Продление доступно с ' +
+        new Date(r.eligibleAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) +
+        ' (МСК).'
+      : '')
+  );
+}
+
 /** Stable owner and consumer error codes the UI explains; anything else is generic. */
 const ORDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  RESIDENCY_PRICE_CONSENT_REQUIRED:
+    'Не удалось подтвердить исходное согласие на цену. Операция сохранена: проверьте заказ или обратитесь в поддержку.',
+  RESIDENCY_PRICE_CHANGED:
+    'Цена или продукт изменились. Проверьте условия; исходное согласие не изменено.',
+  RESIDENCY_REAUTH_REQUIRED:
+    'Для проверки операции нужно повторно войти через Viva. Операция сохранена.',
+  RESIDENCY_REAUTH_UNAVAILABLE:
+    'Повторный вход временно недоступен. Операция сохранена, попробуйте позже.',
+  RESIDENCY_LEGACY_ATTEMPT:
+    'Сохранена прежняя попытка без полного согласия. Новый заказ не создаётся. Проверьте найденный заказ или обратитесь в поддержку.',
+
   RESIDENCY_ORDER_ALREADY_PENDING:
-    'У вас уже есть незавершённый заказ резидентства, начатый в другой вкладке или на другом устройстве. Завершите его там; новый заказ станет доступен, когда тот будет оплачен, отменён или истечёт.',
+    'У вас уже есть незавершённый заказ резидентства, начатый в другой вкладке или на другом устройстве. Проверьте заказ: новый платёж недоступен до подтверждения результата.',
   RESIDENCY_RENEWAL_REQUIRED:
     'Резидентство уже активно, поэтому доступно только продление. Статус обновлён.',
   RESIDENCY_RENEWAL_NOT_ELIGIBLE:
@@ -397,6 +601,18 @@ const ORDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
 export function residencyErrorMessage(error: unknown, fallback: string): string {
   const code = residencyErrorCode(error);
   const status = residencyErrorStatus(error);
+  if (code === 'RESIDENCY_RENEWAL_TOO_EARLY') {
+    const d = residencyErrorDetails(error);
+    return renewalUnavailableMessage({
+      reason: typeof d.reason === 'string' ? d.reason : null,
+      eligibleAt: instant(d.eligibleAt) ? d.eligibleAt : null,
+    });
+  }
+  if (code === 'RESIDENCY_PRICE_CHANGED') {
+    const d = residencyErrorDetails(error);
+    if (money(d.totalMinor) && money(d.expectedTotalMinor))
+      return `Цена выросла до ${formatRub(d.totalMinor)}. Вы подтвердили ${formatRub(d.expectedTotalMinor)}. Подтвердите новые условия отдельно.`;
+  }
   if (code && ORDER_ERROR_MESSAGES[code]) return ORDER_ERROR_MESSAGES[code];
   if (status === 401) return 'Сессия истекла. Войдите снова и проверьте заказ.';
   if (status === 403) return 'Нет доступа к оформлению резидентства для этого аккаунта.';
@@ -481,9 +697,20 @@ export function residencyOrderPhase(
   if (!attempt) return 'idle';
   if (!attempt.orderId) return 'creating';
   if (!order) return 'confirming';
+  if (order.recovery.state === 'UNKNOWN_OUTCOME' || order.paymentStatus === 'UNKNOWN')
+    return 'uncertain';
+  if (order.recovery.state === 'REVIEW_REQUIRED') return 'review';
+  if (
+    order.overdue ||
+    order.recovery.state === 'AWAITING_CONFIRMATION' ||
+    order.recovery.state === 'ACTIVATION_PENDING'
+  )
+    return 'confirming';
   switch (order.state) {
     case 'PENDING_PAYMENT':
-      return order.paymentStatus === 'UNKNOWN' ? 'confirming' : 'payment-pending';
+      return order.recovery.state === 'AWAITING_PAYMENT' && order.recovery.action === 'PAY'
+        ? 'payment-pending'
+        : 'confirming';
     case 'PAID':
     case 'PAID_ACTIVATION_PENDING':
       return 'confirming';
@@ -498,9 +725,8 @@ export function residencyOrderPhase(
       // A terminal order whose provider outcome is unknown is not a failure and not a
       // cancellation: the payment may exist. No new payment is offered until it is resolved.
       if (
-        order.paymentStatus === 'UNKNOWN' ||
-        (order.activationErrorCode !== null &&
-          UNKNOWN_DISPATCH_CODES.has(order.activationErrorCode))
+        order.activationErrorCode !== null &&
+        UNKNOWN_DISPATCH_CODES.has(order.activationErrorCode)
       )
         return 'uncertain';
       return 'failed';

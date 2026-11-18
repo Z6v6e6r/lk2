@@ -1,17 +1,20 @@
 /**
- * Synthetic LK2 world around the real LK1 residency lifecycle owner (lk#443 @ adc9c644, imported
- * byte-identical under contracts/imported): in-memory order store, Viva/CUP ports, clock and a
- * synthetic LK2 consumer transport that maps `/user/api/v1/{tenant}/residency/...` to the owner's
- * `/lk/residency/...` 1:1, plus the ADR 0027 status read. Used by tests (Node) and the local
- * visual QA preview (browser). Not shipped in the application bundle; contacts no provider.
+ * LOCAL composed chain: real screen/SDK → #684 routes/runtime/HTTP client → #443 HTTP/domain.
+ * Pinned source bytes are checked in residency-owner.test-helper.ts. Fastify inject replaces
+ * the physical network; credential issuance/auth middleware, store, clock, status read and
+ * Viva/CUP ports are synthetic. No live provider calls. This helper is test-only.
  */
+import Fastify from 'fastify';
+import { ClientResidencyOwnerClient } from '../../../contracts/imported/lk2-residency-consumer/d92b978/client-residency-owner-client.js';
+import { createResidencyOrderRuntime } from '../../../contracts/imported/lk2-residency-consumer/d92b978/client-residency-order-runtime.js';
+import { registerClientResidencyOrderRoutes } from '../../../contracts/imported/lk2-residency-consumer/d92b978/client-residency-order-routes.js';
 import { PadlHubApiClient } from '@phub/api-sdk';
 
 import {
   RESIDENCY_PRODUCT_ID,
   createResidencyLifecycle,
-} from '../../../contracts/imported/lk1-residency-lifecycle/adc9c644/residency-lifecycle.mjs';
-import { createResidencyLifecycleApi } from '../../../contracts/imported/lk1-residency-lifecycle/adc9c644/residency-lifecycle-http.mjs';
+} from '../../../contracts/imported/lk1-residency-lifecycle/4d04a05c/residency-lifecycle.mjs';
+import { createResidencyLifecycleApi } from '../../../contracts/imported/lk1-residency-lifecycle/4d04a05c/residency-lifecycle-http.mjs';
 import { moscowDay, type ResidencyGateway } from './residency-purchase.js';
 
 export const SYNTHETIC_BASE = 'https://lk2.synthetic.test';
@@ -85,6 +88,13 @@ function memoryStore() {
         ) ?? null,
       );
     },
+    listUnresolvedOrders(tenantId: string, userId: string) {
+      return Promise.resolve(
+        [...orders.values()]
+          .filter((o) => o.tenantId === tenantId && o.userId === userId && o.activeSlot === 1)
+          .map((o) => structuredClone(o)),
+      );
+    },
     listExpiredPending(tenantId: string, nowIso: string) {
       return Promise.resolve(
         [...orders.values()]
@@ -106,13 +116,15 @@ export interface Residency {
   validFrom?: string;
   validUntil?: string;
 }
-export type ConsumerMode = 'ok' | 'absent' | 'disabled' | 'html' | 'forbidden' | 'unauthorized';
+export type ConsumerMode =
+  'ok' | 'absent' | 'disabled' | 'html' | 'forbidden' | 'unauthorized' | 'reauth';
 type Match = (method: string, path: string) => boolean;
 
 export interface TransportLog {
   readonly method: string;
   readonly path: string;
   readonly key: string | null;
+  readonly body: unknown;
   readonly status: number | 'network';
 }
 
@@ -143,6 +155,7 @@ export function createOwnerWorld(init: {
     gate: null as ((method: string, path: string) => Promise<void>) | null,
     log: [] as TransportLog[],
     providerCreates: 0,
+    reauthorizations: 0,
     store: memoryStore(),
   };
   let txnSeq = 0;
@@ -155,6 +168,18 @@ export function createOwnerWorld(init: {
 
   const lifecycleFor = () =>
     createResidencyLifecycle({
+      config: {
+        returnTargets: {
+          widget: {
+            successUrl: 'https://widget.example.test/',
+            failUrl: 'https://widget.example.test/',
+          },
+          lk2: {
+            successUrl: 'https://lk2.synthetic.test/residency',
+            failUrl: 'https://lk2.synthetic.test/residency',
+          },
+        },
+      },
       clock: { now: () => world.now },
       ids: {
         orderId: (tenantId: string, keyHash: string) => {
@@ -251,13 +276,7 @@ export function createOwnerWorld(init: {
           const paidAt = Date.parse(
             world.bank.get(providerTransactionId)?.paidAt ?? iso(world.now),
           );
-          const current = world.residency.get(userId);
-          // CUP extends from the current end when a residency is active (the owner's renewal
-          // guard), otherwise the window starts at the payment.
-          const from =
-            current?.state === 'ACTIVE' && current.validUntil
-              ? Date.parse(current.validUntil)
-              : paidAt;
+          const from = paidAt;
           const until = from + world.termDays * DAY_MS;
           setResidency(userId, { state: 'ACTIVE', validFrom: iso(from), validUntil: iso(until) });
           return Promise.resolve({
@@ -278,6 +297,55 @@ export function createOwnerWorld(init: {
       status,
       headers: { 'content-type': 'application/json' },
     });
+
+  // Actual #684 HTTP routes, runtime validation, delegation boundary and owner HTTP client.
+  // Only credential issuance/auth middleware and the physical network are synthetic.
+  const consumerClient = new ClientResidencyOwnerClient({
+    baseUrl: 'https://owner.synthetic.test/',
+    environment: 'development',
+    timeoutMs: 10000,
+    fetchImplementation: async (input, request) => {
+      const url = new URL(
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+      );
+      const headers = Object.fromEntries(new Headers(request?.headers).entries());
+      const userId = headers.authorization!.slice('Bearer synthetic-owner-token:'.length);
+      const response = await owner.handle({
+        method: request?.method ?? 'GET',
+        path: url.pathname + url.search,
+        headers,
+        body: request?.body,
+        actor: { tenantId: OWNER_TENANT, userId },
+      });
+      return json(response.statusCode, response.body);
+    },
+  });
+  const app = Fastify();
+  const runtime = createResidencyOrderRuntime({
+    enabled: true,
+    productId: RESIDENCY_PRODUCT_ID,
+    tenantKey: SYNTHETIC_TENANT_KEY,
+    client: consumerClient,
+    token: (actor) =>
+      world.consumer === 'reauth'
+        ? Promise.reject(Object.assign(new Error('expired'), { code: 'VIVA_REAUTH_REQUIRED' }))
+        : Promise.resolve({
+            token: 'synthetic-owner-token:' + actor.userId,
+            expiresAt: iso(Date.now() + 3600000),
+          }),
+  });
+  registerClientResidencyOrderRoutes(app, { runtime, readHandlers: [], commandHandlers: [] });
+  app.addHook('onRequest', (request, _reply, done) => {
+    Object.assign(request, {
+      tenantId: OWNER_TENANT,
+      padlHubClaims: {
+        sub: request.headers.authorization?.slice('Bearer synthetic-token:'.length),
+        sid: 'synthetic-session',
+        roles: ['client'],
+      },
+    });
+    done();
+  });
 
   /** LK2 status read (ADR 0027): calendar days, complete-read timestamp, no Viva payload. */
   const lk2Status = (userId: string) => {
@@ -315,7 +383,14 @@ export function createOwnerWorld(init: {
     const root = `/user/api/v1/${SYNTHETIC_TENANT_KEY}`;
     const path = url.pathname.startsWith(root) ? url.pathname.slice(root.length) : url.pathname;
     const key = headers['idempotency-key'] ?? null;
-    const record = (status: number | 'network') => world.log.push({ method, path, key, status });
+    const record = (status: number | 'network') =>
+      world.log.push({
+        method,
+        path,
+        key,
+        status,
+        body: typeof initArg?.body === 'string' ? (JSON.parse(initArg.body) as unknown) : null,
+      });
     const bearer = /^Bearer synthetic-token:(.+)$/.exec(headers.authorization ?? '');
     if (!bearer || world.consumer === 'unauthorized') {
       record(401);
@@ -357,12 +432,11 @@ export function createOwnerWorld(init: {
       throw new TypeError('Failed to fetch');
     }
     if (world.gate) await world.gate(method, path);
-    const response = await owner.handle({
-      method,
-      path: '/lk' + path,
+    const response = await app.inject({
+      method: method as 'GET' | 'POST',
+      url: url.pathname + url.search,
       headers,
-      body: typeof initArg?.body === 'string' ? initArg.body : undefined,
-      actor: { tenantId: OWNER_TENANT, userId },
+      ...(typeof initArg?.body === 'string' ? { payload: initArg.body } : {}),
     });
     if (world.dropResponse?.(method, path)) {
       // The owner committed the command; only the response is lost on the way back.
@@ -372,13 +446,14 @@ export function createOwnerWorld(init: {
     record(response.statusCode);
     const body =
       response.statusCode >= 400
-        ? { ...(response.body as object), correlationId: 'corr-synthetic' }
-        : response.body;
+        ? { ...response.json<Record<string, unknown>>(), correlationId: 'corr-synthetic' }
+        : response.json<unknown>();
     return json(response.statusCode, body);
   };
 
   return {
     world,
+    close: () => app.close(),
     setResidency,
     /** Lets the LK2 read catch up with CUP. */
     syncLk2Read(userId: string) {
@@ -411,7 +486,12 @@ export function createOwnerWorld(init: {
         residencyPrincipal: principal,
         getClientResidency: () => client.getClientResidency(),
         getResidencyCatalog: () => client.getResidencyCatalog(),
-        createResidencyOrder: (mode, key) => client.createResidencyOrder(mode, key),
+        createResidencyOrder: (input, key) => client.createResidencyOrder(input, key),
+        listUnresolvedResidencyOrders: () => client.listUnresolvedResidencyOrders(),
+        reauthorizeResidency: () => {
+          world.reauthorizations += 1;
+          return Promise.resolve();
+        },
         getResidencyOrder: (id) => client.getResidencyOrder(id),
         getResidencyOrderPayment: (id) => client.getResidencyOrderPayment(id),
         reconcileResidencyOrder: (id, key) => client.reconcileResidencyOrder(id, key),
