@@ -12,6 +12,17 @@ const diagnosticsRunner = fileURLToPath(
 );
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const linuxOnly = process.platform === 'linux';
+// Declared ceiling for the supervisor's whole finalization sequence. It must match
+// CI_TEST_FINALIZATION_BUDGET_SECONDS in scripts/run-ci-tests-with-diagnostics.sh; the guard below
+// fails if the two drift apart, so the harness bound cannot be inflated on its own.
+const supervisorFinalizationBudgetSeconds = 30;
+// Documented headroom over the declared budget: process spawn, node bootstrap of the supervisor
+// itself, and scheduler delay on a loaded runner. The supervisor must stay inside its budget, so
+// this bound still fails a supervisor that hangs, it is not a substitute for the budget.
+const supervisorSpawnHeadroomMilliseconds = 15_000;
+const supervisorSpawnTimeoutMilliseconds =
+  supervisorFinalizationBudgetSeconds * 1_000 + supervisorSpawnHeadroomMilliseconds;
+const supervisorCaseTimeoutMilliseconds = supervisorSpawnTimeoutMilliseconds + 5_000;
 const temporaryDirectories: string[] = [];
 
 describe('CI workflow finalization budget', () => {
@@ -53,6 +64,30 @@ describe('CI workflow finalization budget', () => {
     expect(Number.isSafeInteger(terminationGrace) && terminationGrace > 0).toBe(true);
     // Final resource snapshots/redaction/helper shutdown must finish before Actions kills the step.
     expect(stepDeadline - watchdog - terminationGrace).toBeGreaterThanOrEqual(60);
+    // The supervisor bounds its own finalization; that declared budget has to fit inside the window
+    // the workflow leaves between the watchdog deadline and the Actions step timeout, with margin.
+    const declaredBudget = Number(
+      runner.match(/CI_TEST_FINALIZATION_BUDGET_SECONDS:-([0-9]+)/u)?.[1],
+    );
+    expect(declaredBudget).toBe(supervisorFinalizationBudgetSeconds);
+    expect(stepDeadline - watchdog - terminationGrace - declaredBudget).toBeGreaterThanOrEqual(30);
+    // The harness bound is derived from that budget and can never drift away from it: raising the
+    // spawn bound alone would break this assertion.
+    expect(supervisorSpawnTimeoutMilliseconds).toBeGreaterThanOrEqual(declaredBudget * 1_000);
+    expect(supervisorSpawnTimeoutMilliseconds).toBeLessThanOrEqual(declaredBudget * 2 * 1_000);
+    expect(supervisorCaseTimeoutMilliseconds).toBeGreaterThan(supervisorSpawnTimeoutMilliseconds);
+    // Every bounded stage must take its duration from what is left of the declared budget, and the
+    // fixed post-kill sleep must stay gone (it is a poll now, so teardown is never a fixed wait).
+    expect(runner).toContain('run_command_in_own_group_bounded');
+    expect(runner).toContain(
+      '"$(finalization_stage_milliseconds "$redaction_budget_milliseconds")"',
+    );
+    expect(runner).toContain(
+      'snapshot_timeout="$(finalization_stage_timeout "$(milliseconds_from_duration "$final_snapshot_timeout")")"',
+    );
+    expect(runner).toContain('wait_for_process_group_exit "$process_group_settle_milliseconds"');
+    expect(runner).not.toContain('sleep "$external_kill_after_seconds"');
+    expect(runner).not.toContain('$((SECONDS + helper_shutdown_seconds))');
   });
 });
 
@@ -278,7 +313,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         cwd: repositoryRoot,
         encoding: 'utf8',
         env: testEnvironment(directory),
-        timeout: 10_000,
+        timeout: supervisorSpawnTimeoutMilliseconds,
       });
 
       expect(result.error).toBeUndefined();
@@ -302,7 +337,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         { code: 'ENOENT' },
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -314,7 +349,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         cwd: repositoryRoot,
         encoding: 'utf8',
         env: testEnvironment(directory),
-        timeout: 10_000,
+        timeout: supervisorSpawnTimeoutMilliseconds,
       });
 
       expect(result.error).toBeUndefined();
@@ -341,7 +376,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         { code: 'ENOENT' },
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -359,7 +394,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           cwd: repositoryRoot,
           encoding: 'utf8',
           env: testEnvironment(directory),
-          timeout: 10_000,
+          timeout: supervisorSpawnTimeoutMilliseconds,
         },
       );
 
@@ -373,7 +408,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
       );
       await expectProcessGone(descendantPid);
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -393,7 +428,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           ...testEnvironment(directory),
           CI_TEST_MONITOR_HELPER_COMMAND: monitorCommand,
         },
-        timeout: 10_000,
+        timeout: supervisorSpawnTimeoutMilliseconds,
       });
 
       expect(result.error).toBeUndefined();
@@ -411,7 +446,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         await expectProcessGone(helperPid);
       }
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -431,7 +466,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           ...testEnvironment(directory),
           CI_TEST_WATCHDOG_HELPER_COMMAND: watchdogCommand,
         },
-        timeout: 10_000,
+        timeout: supervisorSpawnTimeoutMilliseconds,
       });
 
       expect(result.error).toBeUndefined();
@@ -442,7 +477,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
       );
       await expectProcessGone(await waitForPositivePid(join(directory, 'watchdog-child.pid')));
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -458,7 +493,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           ...testEnvironment(directory),
           CI_TEST_PROCESS_GROUP_PROBE_COMMAND: stalledProbe,
         },
-        timeout: 10_000,
+        timeout: supervisorSpawnTimeoutMilliseconds,
       });
 
       expect(result.error).toBeUndefined();
@@ -471,7 +506,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         'reason=finalization_budget_exceeded phase=process_group_probe',
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -493,7 +528,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
             ...testEnvironment(directory),
             CI_TEST_PROCESS_GROUP_PROBE_COMMAND: failedProbe,
           },
-          timeout: 10_000,
+          timeout: supervisorSpawnTimeoutMilliseconds,
         },
       );
 
@@ -506,7 +541,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         await waitForPositivePid(join(directory, 'unexpected-probe-descendant.pid')),
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -530,7 +565,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
             CI_TEST_PROCESS_GROUP_PROBE_COMMAND: stalledProbe,
             CI_TEST_WATCHDOG_SECONDS: '0.1',
           },
-          timeout: 10_000,
+          timeout: supervisorSpawnTimeoutMilliseconds,
         },
       );
 
@@ -542,7 +577,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
       );
       await expectProcessGroupGone(await waitForPositivePid(join(directory, 'test.pid')));
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   for (const watchdogExitHook of [
@@ -562,7 +597,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
             cwd: repositoryRoot,
             encoding: 'utf8',
             env: { ...testEnvironment(directory), [watchdogExitHook]: 'true' },
-            timeout: 10_000,
+            timeout: supervisorSpawnTimeoutMilliseconds,
           },
         );
 
@@ -574,7 +609,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         );
         await expectProcessGroupGone(await waitForPositivePid(join(directory, 'test.pid')));
       },
-      15_000,
+      supervisorCaseTimeoutMilliseconds,
     );
   }
 
@@ -589,7 +624,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           ...testEnvironment(directory),
           CI_TEST_WATCHDOG_FAILURE_ON_STOP: 'true',
         },
-        timeout: 10_000,
+        timeout: supervisorSpawnTimeoutMilliseconds,
       });
 
       expect(result.error).toBeUndefined();
@@ -598,7 +633,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         'child_exit_status=7\nexit_status=126\ntermination=supervisor_cleanup_failure\nfinalization=complete\ncleanup_failure_phase=watchdog_failure_on_stop\n',
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -615,7 +650,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           CI_TEST_HELPER_SHUTDOWN_SECONDS: '5',
           CI_TEST_WATCHDOG_SIGKILL_ON_STOP: 'true',
         },
-        timeout: 10_000,
+        timeout: supervisorSpawnTimeoutMilliseconds,
       });
 
       expect(result.error).toBeUndefined();
@@ -624,7 +659,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         'child_exit_status=7\nexit_status=126\ntermination=supervisor_cleanup_failure\nfinalization=complete\ncleanup_failure_phase=watchdog_unexpected_exit\n',
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -723,7 +758,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
       );
       expect(finalStatus).not.toContain('termination=pending_finalization');
     },
-    20_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -739,7 +774,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           CI_TEST_FINAL_SNAPSHOT_COMMAND: stalledSnapshot,
           CI_TEST_FINAL_SNAPSHOT_TIMEOUT: '0.5s',
         },
-        timeout: 10_000,
+        timeout: supervisorSpawnTimeoutMilliseconds,
       });
 
       expect(result.error).toBeUndefined();
@@ -748,7 +783,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         'child_exit_status=7\nexit_status=126\ntermination=supervisor_cleanup_failure\nfinalization=complete\ncleanup_failure_phase=final_resource_snapshot\n',
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -769,7 +804,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           CI_TEST_MONITOR_HELPER_COMMAND: stubbornHelper,
           CI_TEST_WATCHDOG_HELPER_COMMAND: stubbornHelper,
         },
-        timeout: 10_000,
+        timeout: supervisorSpawnTimeoutMilliseconds,
       });
 
       expect(result.error).toBeUndefined();
@@ -781,7 +816,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         await expectProcessGone(helperPid);
       }
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -800,7 +835,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           cwd: repositoryRoot,
           encoding: 'utf8',
           env: { ...testEnvironment(directory), CI_TEST_SECRET_SENTINEL: secretSentinel },
-          timeout: 10_000,
+          timeout: supervisorSpawnTimeoutMilliseconds,
         },
       );
 
@@ -835,7 +870,9 @@ describe.sequential('CI test diagnostics supervisor', () => {
             CI_TEST_OUTPUT_REDACTION_TIMEOUT: '0.5s',
             CI_TEST_SECRET_SENTINEL: secretSentinel,
           },
-          timeout: 10_000,
+          // The supervisor bounds its own stages (0.5s redaction, 1s group probes, 5s snapshot);
+          // the external bound must leave headroom for cleanup on a loaded runner.
+          timeout: supervisorSpawnTimeoutMilliseconds,
         },
       );
 
@@ -848,7 +885,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         'exit_status=126\ntermination=supervisor_cleanup_failure\nfinalization=complete\ncleanup_failure_phase=output_redaction\n',
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -866,7 +903,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           cwd: repositoryRoot,
           encoding: 'utf8',
           env: testEnvironment(directory),
-          timeout: 10_000,
+          timeout: supervisorSpawnTimeoutMilliseconds,
         },
       );
 
@@ -883,7 +920,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
       );
       await expectProcessGone(descendantPid);
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -901,7 +938,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
           cwd: repositoryRoot,
           encoding: 'utf8',
           env: { ...testEnvironment(directory), CI_TEST_WATCHDOG_SECONDS: '1' },
-          timeout: 10_000,
+          timeout: supervisorSpawnTimeoutMilliseconds,
         },
       );
 
@@ -925,7 +962,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         await expectProcessGone(helperPid);
       }
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -956,7 +993,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         'exit_status=126\ntermination=supervisor_cleanup_failure\nfinalization=complete\n',
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   it.runIf(linuxOnly)(
@@ -984,7 +1021,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         'exit_status=126\ntermination=supervisor_cleanup_failure\nfinalization=complete\ncleanup_failure_phase=watchdog_process_group_probe\n',
       );
     },
-    15_000,
+    supervisorCaseTimeoutMilliseconds,
   );
 
   for (const [signal, expectedStatus] of [
@@ -1023,8 +1060,17 @@ describe.sequential('CI test diagnostics supervisor', () => {
         const descendantPid = await waitForPositivePid(join(directory, 'descendant.pid'));
         child.kill(signal);
         const result = await waitForExit(child);
+        const supervisorStatus =
+          (await readFileIfPresent(join(directory, 'status.txt'))) ?? '<status.txt absent>';
+        const supervisorEvents =
+          (await readFileIfPresent(join(directory, 'watchdog-events.log'))) ??
+          '<watchdog-events.log absent>';
 
-        expect(result).toEqual({ code: expectedStatus, signal: null });
+        expect(
+          result,
+          `supervisor exited ${JSON.stringify(result)} instead of ${expectedStatus}\n` +
+            `status.txt:\n${supervisorStatus}\nwatchdog-events.log:\n${supervisorEvents}`,
+        ).toEqual({ code: expectedStatus, signal: null });
         expect(await readFile(join(directory, 'status.txt'), 'utf8')).toContain(
           `exit_status=${expectedStatus}\ntermination=external_signal_${signal.slice(3)}\n`,
         );
@@ -1041,7 +1087,225 @@ describe.sequential('CI test diagnostics supervisor', () => {
         expect(diagnostics).not.toContain(secretSentinel);
         expect(diagnostics).not.toContain(credentialUrl);
       },
-      15_000,
+      supervisorCaseTimeoutMilliseconds,
     );
   }
+});
+
+// These primitives are portable bash, so they are proven on every host rather than only on the
+// Linux runners: the tests extract the real function bodies from the supervisor and execute them.
+const supervisorPrimitiveFunctions = [
+  'log_watchdog_event',
+  'now_milliseconds',
+  'milliseconds_from_duration',
+  'finalization_stage_milliseconds',
+  'finalization_stage_timeout',
+  'finalization_remaining_milliseconds',
+  'helper_group_has_live_processes',
+  'process_group_alive',
+  'wait_for_process_group_exit',
+  'run_command_in_own_group_bounded',
+  'terminate_test_group',
+] as const;
+
+const portableProcessGroupProbeBody = [
+  'pgid="$1"',
+  `ps -A -o pgid=,stat= 2>/dev/null | awk -v pgid="$pgid" '$1 == pgid && $2 !~ /^Z/ { found = 1 } END { exit(found ? 0 : 1) }'`,
+].join('\n');
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function extractSupervisorFunctions(source: string, names: readonly string[]): string {
+  const blocks = new Map<string, string>();
+  const lines = source.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    const opener = /^([a-z][a-z0-9_]*)\(\) \{$/u.exec(lines[index] ?? '');
+    if (opener === null) continue;
+    const body: string[] = [];
+    let cursor = index;
+    for (; cursor < lines.length; cursor += 1) {
+      body.push(lines[cursor] ?? '');
+      if (cursor > index && lines[cursor] === '}') break;
+    }
+    blocks.set(opener[1] ?? '', body.join('\n'));
+    index = cursor;
+  }
+  return names
+    .map((name) => {
+      const block = blocks.get(name);
+      if (block === undefined) throw new Error(`Supervisor function ${name} is missing`);
+      return block;
+    })
+    .join('\n\n');
+}
+
+async function runSupervisorPrimitives(
+  directory: string,
+  script: string,
+  settleMilliseconds = 1_000,
+): Promise<{ readonly status: number | null; readonly stdout: string; readonly stderr: string }> {
+  const functions = extractSupervisorFunctions(
+    await readFile(diagnosticsRunner, 'utf8'),
+    supervisorPrimitiveFunctions,
+  );
+  const probe = await createExecutable(
+    directory,
+    'portable-pgid-probe.sh',
+    portableProcessGroupProbeBody,
+  );
+  const preamble = [
+    'set -uo pipefail',
+    `diagnostics_dir=${shellQuote(directory)}`,
+    'export diagnostics_dir',
+    'watchdog_log="$diagnostics_dir/watchdog-events.log"',
+    ': >"$watchdog_log"',
+    "finalization_started_milliseconds=''",
+    "finalization_deadline_milliseconds=''",
+    'process_group_probe_status=1',
+    'process_group_probe_timeout=2s',
+    `process_group_probe_command=${shellQuote(probe)}`,
+    `finalization_budget_seconds=${supervisorFinalizationBudgetSeconds}`,
+    `process_group_settle_milliseconds=${settleMilliseconds}`,
+    "cleanup_failure_phase=''",
+    "launcher_pid=''",
+    'external_kill_after_seconds=0.1',
+  ].join('\n');
+  const result = spawnSync('bash', ['-c', `${preamble}\n${functions}\n${script}`], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    timeout: supervisorSpawnTimeoutMilliseconds,
+  });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function readKeyedOutput(stdout: string, key: string): string | undefined {
+  return new RegExp(`^${key}=(.*)$`, 'mu').exec(stdout)?.[1];
+}
+
+describe('CI supervisor finalization primitives', () => {
+  it('kills the whole redaction command group when its budget expires', async () => {
+    const directory = await createDiagnosticsDirectory();
+    const result = await runSupervisorPrimitives(
+      directory,
+      [
+        "# A stalled redactor whose grandchild would otherwise hold the supervisor's pipes open.",
+        `run_command_in_own_group_bounded 300 output_redaction bash -c 'echo $$ > "$diagnostics_dir/redactor.pid"; ( trap "" TERM; while :; do sleep 5; done ) & echo $! > "$diagnostics_dir/grandchild.pid"; wait'`,
+        'status=$?',
+        'grandchild_pid=$(cat "$diagnostics_dir/grandchild.pid")',
+        'if kill -0 "$grandchild_pid" 2>/dev/null; then echo "grandchild=alive"; else echo "grandchild=gone"; fi',
+        'printf \'status=%s\n\' "$status"',
+      ].join('\n'),
+    );
+
+    expect(result.stderr).toBe('');
+    expect(readKeyedOutput(result.stdout, 'grandchild')).toBe('gone');
+    expect(Number(readKeyedOutput(result.stdout, 'status'))).toBeGreaterThan(0);
+    // The budget expiry is reported, so a stalled redactor stays visible in CI evidence.
+    expect(await readFile(join(directory, 'watchdog-events.log'), 'utf8')).toContain(
+      'reason=finalization_budget_exceeded phase=output_redaction action=SIGKILL',
+    );
+  });
+
+  it('propagates the redaction status without waiting out its budget', async () => {
+    const directory = await createDiagnosticsDirectory();
+    const result = await runSupervisorPrimitives(
+      directory,
+      [
+        'started=$(now_milliseconds)',
+        "run_command_in_own_group_bounded 20000 output_redaction bash -c 'exit 7'",
+        'status=$?',
+        'elapsed=$(( $(now_milliseconds) - started ))',
+        'printf \'status=%s\n\' "$status"',
+        'printf \'elapsed=%s\n\' "$elapsed"',
+      ].join('\n'),
+    );
+
+    expect(readKeyedOutput(result.stdout, 'status')).toBe('7');
+    // Early exit: a finishing command is reaped at once instead of sleeping for its whole budget.
+    expect(Number(readKeyedOutput(result.stdout, 'elapsed'))).toBeLessThan(3_000);
+  });
+
+  it('waits out a tearing-down process group instead of reporting a residual process', async () => {
+    const directory = await createDiagnosticsDirectory();
+    const result = await runSupervisorPrimitives(
+      directory,
+      [
+        '# Leader exits immediately, its same-group child keeps running for 0.3s.',
+        "set -m; bash -c 'sleep 0.3 & exit 0' & test_pgid=$!; set +m",
+        'sleep 0.05',
+        'started=$(now_milliseconds)',
+        'wait_for_process_group_exit 2000',
+        'probe_status=$?',
+        'elapsed=$(( $(now_milliseconds) - started ))',
+        'kill -KILL -- "-$test_pgid" 2>/dev/null || true',
+        'printf \'probe=%s\\n\' "$probe_status"',
+        'printf \'elapsed=%s\\n\' "$elapsed"',
+      ].join('\n'),
+    );
+
+    // 1 = gone. A single instantaneous probe at t=0.05s would have said "alive" and failed the run.
+    expect(readKeyedOutput(result.stdout, 'probe')).toBe('1');
+    expect(Number(readKeyedOutput(result.stdout, 'elapsed'))).toBeLessThan(2_000);
+  });
+
+  it('reaps a TERM-ignoring test group without reporting a cleanup failure', async () => {
+    const directory = await createDiagnosticsDirectory();
+    const result = await runSupervisorPrimitives(
+      directory,
+      [
+        "# The supervisor's own external-signal path: child and descendant both ignore TERM.",
+        `set -m; bash -c '( trap "" TERM; while :; do sleep 1; done ) & echo $! > "$diagnostics_dir/descendant.pid"; trap "" TERM; while :; do sleep 1; done' & launcher_pid=$!; test_pgid=$launcher_pid; set +m`,
+        'sleep 0.2',
+        'started=$(now_milliseconds)',
+        'terminate_test_group',
+        'terminate_status=$?',
+        'elapsed=$(( $(now_milliseconds) - started ))',
+        'descendant_pid=$(cat "$diagnostics_dir/descendant.pid")',
+        'if kill -0 "$descendant_pid" 2>/dev/null; then echo "descendant=alive"; else echo "descendant=gone"; fi',
+        'printf \'status=%s\\n\' "$terminate_status"',
+        'printf \'phase=%s\\n\' "${cleanup_failure_phase:-none}"',
+        'printf \'elapsed=%s\\n\' "$elapsed"',
+      ].join('\n'),
+    );
+
+    // 0 = cleaned up. Any other status here is what turned a 143 exit into supervisor failure 126.
+    expect(readKeyedOutput(result.stdout, 'status')).toBe('0');
+    expect(readKeyedOutput(result.stdout, 'phase')).toBe('none');
+    expect(readKeyedOutput(result.stdout, 'descendant')).toBe('gone');
+    expect(Number(readKeyedOutput(result.stdout, 'elapsed'))).toBeLessThan(3_000);
+  });
+
+  it('clamps every stage timeout to the declared finalization budget', async () => {
+    const directory = await createDiagnosticsDirectory();
+    const nowBefore = Date.now();
+    const result = await runSupervisorPrimitives(
+      directory,
+      [
+        'printf \'stage_full=%s\\n\' "$(finalization_stage_timeout 3000)"',
+        'printf \'stage_ceiling=%s\\n\' "$(finalization_stage_timeout 60000)"',
+        'finalization_started_milliseconds=$(( $(now_milliseconds) - 60000 ))',
+        'finalization_deadline_milliseconds=$(( finalization_started_milliseconds + 30000 ))',
+        'printf \'remaining=%s\\n\' "$(finalization_remaining_milliseconds)"',
+        'printf \'stage_exhausted=%s\\n\' "$(finalization_stage_timeout 3000)"',
+        'printf \'duration_ms=%s\\n\' "$(milliseconds_from_duration 0.5s)"',
+        'printf \'whole_seconds_ms=%s\\n\' "$(milliseconds_from_duration 1)"',
+        'printf \'now=%s\\n\' "$(now_milliseconds)"',
+      ].join('\n'),
+    );
+
+    expect(readKeyedOutput(result.stdout, 'stage_full')).toBe('3.000s');
+    // A stage may never ask for more than the remaining budget, even if configured to.
+    expect(readKeyedOutput(result.stdout, 'stage_ceiling')).toBe(
+      `${supervisorFinalizationBudgetSeconds}.000s`,
+    );
+    expect(readKeyedOutput(result.stdout, 'remaining')).toBe('0');
+    expect(readKeyedOutput(result.stdout, 'stage_exhausted')).toBe('0.050s');
+    expect(readKeyedOutput(result.stdout, 'duration_ms')).toBe('500');
+    expect(readKeyedOutput(result.stdout, 'whole_seconds_ms')).toBe('1000');
+    const now = Number(readKeyedOutput(result.stdout, 'now'));
+    expect(Number.isSafeInteger(now)).toBe(true);
+    expect(Math.abs(now - nowBefore)).toBeLessThan(60_000);
+  });
 });
