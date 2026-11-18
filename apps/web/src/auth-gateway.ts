@@ -638,6 +638,8 @@ export interface AuthGateway {
   readonly joinPaidGame?: PadlHubApiClient['joinPaidGame'];
   /** Readback of the same commercial operation by its original idempotency key. */
   readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
+  /** Explicit cancel of a still-pending payment; only after the server confirms CLOSED. */
+  readonly cancelPaidJoin?: PadlHubApiClient['cancelPaidJoin'];
   readonly reconcilePaidJoinOperation?: PadlHubApiClient['reconcilePaidJoinOperation'];
   readonly leaveGame: PadlHubApiClient['leaveGame'];
   readonly reconcileManagedLeaveOperation?: PadlHubApiClient['reconcileManagedLeaveOperation'];
