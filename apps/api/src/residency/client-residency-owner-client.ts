@@ -50,6 +50,29 @@ interface OwnerClientOptions {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
+/**
+ * Which facts a failure is allowed to teach the shared circuit breaker.
+ *
+ * - `availability`: the owner did not answer, answered with a server error or answered
+ *   with something that is not a stable owner refusal. Three in a row open the breaker.
+ * - `business`: a completed round trip carrying a stable 4xx refusal for this user's
+ *   operation. It proves the owner is reachable, so it resets the counter and never opens
+ *   the breaker for other users.
+ * - `local-user`: this user's delegation is missing, malformed or expired. It says
+ *   nothing about the owner, so it neither opens nor resets the breaker.
+ */
+type OwnerFailureKind = 'availability' | 'business' | 'local-user';
+
+const FAILURE_KINDS = new WeakMap<ResidencyOwnerError, OwnerFailureKind>();
+
+function markFailure<T extends ResidencyOwnerError>(error: T, kind: OwnerFailureKind): T {
+  FAILURE_KINDS.set(error, kind);
+  return error;
+}
+
+const failureKind = (error: ResidencyOwnerError): OwnerFailureKind =>
+  FAILURE_KINDS.get(error) ?? 'availability';
+
 export const isOrderId = (value: string): boolean => UUID.test(value);
 
 function assertBaseUrl(baseUrl: string, environment: 'development' | 'production'): void {
@@ -121,17 +144,15 @@ export class ClientResidencyOwnerClient {
     body?: unknown,
   ): Promise<unknown> {
     if (!isRecord(call) || typeof call.credential?.token !== 'string') {
-      throw new ResidencyOwnerError(
-        503,
-        'RESIDENCY_OWNER_UNAVAILABLE',
-        'Owner credential is missing',
+      throw markFailure(
+        new ResidencyOwnerError(503, 'RESIDENCY_OWNER_UNAVAILABLE', 'Owner credential is missing'),
+        'local-user',
       );
     }
     if (/[\r\n]/.test(call.credential.token) || !/^[!-~]{16,4096}$/.test(call.credential.token)) {
-      throw new ResidencyOwnerError(
-        503,
-        'RESIDENCY_OWNER_UNAVAILABLE',
-        'Owner credential is invalid',
+      throw markFailure(
+        new ResidencyOwnerError(503, 'RESIDENCY_OWNER_UNAVAILABLE', 'Owner credential is invalid'),
+        'local-user',
       );
     }
     if (
@@ -139,10 +160,13 @@ export class ClientResidencyOwnerClient {
       !Number.isFinite(Date.parse(call.credential.expiresAt)) ||
       Date.parse(call.credential.expiresAt) <= Date.now() + 10_000
     ) {
-      throw new ResidencyOwnerError(
-        409,
-        'RESIDENCY_REAUTH_REQUIRED',
-        'The provider delegation expired',
+      throw markFailure(
+        new ResidencyOwnerError(
+          409,
+          'RESIDENCY_REAUTH_REQUIRED',
+          'The provider delegation expired',
+        ),
+        'local-user',
       );
     }
     if (typeof path !== 'string' || !path.startsWith('/lk/residency/') || /[\r\n]/.test(path)) {
@@ -228,7 +252,14 @@ export class ClientResidencyOwnerClient {
         typeof record.code === 'string' && STABLE_OWNER_CODE.test(record.code) ? record.code : null;
       const message =
         typeof record.message === 'string' ? record.message.slice(0, 300) : 'Owner request failed';
-      if (code && (response.status < 500 || response.status === 503))
+      if (code && response.status < 500)
+        // A stable 4xx is a correct business refusal about this user's operation: the owner
+        // answered, so it must never contribute to a shared availability breaker.
+        throw markFailure(
+          new ResidencyOwnerError(response.status, code, message, record.details),
+          'business',
+        );
+      if (code && response.status === 503)
         throw new ResidencyOwnerError(response.status, code, message, record.details);
       throw new ResidencyOwnerError(503, 'RESIDENCY_OWNER_UNAVAILABLE', 'The owner is unavailable');
     };
@@ -239,10 +270,19 @@ export class ClientResidencyOwnerClient {
       outcome = 'success';
       return value;
     } catch (error) {
-      this.failures += 1;
-      if (this.failures >= 3) this.openUntil = Date.now() + 30_000;
-      if (error instanceof ResidencyOwnerError) throw error;
-      throw new ResidencyOwnerError(503, 'RESIDENCY_OWNER_UNAVAILABLE', 'The owner is unavailable');
+      const failure =
+        error instanceof ResidencyOwnerError
+          ? error
+          : new ResidencyOwnerError(503, 'RESIDENCY_OWNER_UNAVAILABLE', 'The owner is unavailable');
+      const kind = failureKind(failure);
+      if (kind === 'business') {
+        // The round trip completed: this user's refusal is not an outage signal.
+        this.failures = 0;
+      } else if (kind === 'availability') {
+        this.failures += 1;
+        if (this.failures >= 3) this.openUntil = Date.now() + 30_000;
+      }
+      throw failure;
     } finally {
       if (timer) clearTimeout(timer);
       try {
