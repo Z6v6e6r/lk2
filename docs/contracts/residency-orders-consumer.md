@@ -192,7 +192,7 @@ use it as a sandbox payment or Viva readback.
 # Consumer checkout at this PR head; owner checkout at the compatible LK1 PR head.
 LK2="${LK2:?path to the lk2 checkout at this PR head}"
 LK1="${LK1:?path to the lk checkout at Z6v6e6r/lk#443}"
-EXPECTED_OWNER_SHA=4d04a05c05561047fb4293498812c6d8af38b88c
+EXPECTED_OWNER_SHA=93692e64853df63bb2165ddc54145d86cf8a078a
 
 test "$(git -C "$LK1" rev-parse HEAD)" = "$EXPECTED_OWNER_SHA" || {
   echo "owner checkout is not the reviewed head"; exit 2; }
@@ -204,9 +204,11 @@ LK1_RESIDENCY_MODULES_ROOT="$LK1" \
 
 Expected: 7 tests pass (catalog/renewal, purchase + exact-total refusal + replay, unknown
 outcome, paid create with a failed Admin read, overdue/TTL for PENDING and UNKNOWN, previous-format
-recovery, reauth/owner-unavailable/product mismatch). The compatibility pair pinned by this command is LK1
-`4d04a05c05561047fb4293498812c6d8af38b88c` + LK2 consumer
-`d92b978221f8800521583b5926402a3c2a593dd3` (plus the CI-main merge on the consumer branch).
+recovery, reauth/owner-unavailable/product mismatch). The original reviewed pair was LK1
+`4d04a05c05561047fb4293498812c6d8af38b88c` + LK2 `d92b978221f8800521583b5926402a3c2a593dd3`.
+This handoff adds the exact-total rule at LK1
+`93692e64853df63bb2165ddc54145d86cf8a078a` and the consumer commit on this branch; the test
+asserts the behavior rather than a stale tree.
 
 The equivalent owner-side suites are run in the LK1 checkout:
 
