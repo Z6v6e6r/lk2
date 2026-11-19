@@ -860,6 +860,78 @@ describe('PadlHub web authentication', () => {
     expect(replaceState).toHaveBeenCalledWith({ test: true }, '', '/community-invite?source=share');
   });
 
+  it('renders the dashboard before the notification and friend-request badges', async () => {
+    // requestIdleCallback is stubbed so the deferred badge reads stay queued until this test
+    // releases them; jsdom otherwise falls back to a zero-delay timer.
+    const idleTasks: (() => void)[] = [];
+    vi.stubGlobal('requestIdleCallback', (task: () => void) => {
+      idleTasks.push(task);
+      return idleTasks.length;
+    });
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    const getHomeBase = vi.fn<AuthGateway['getHomeBase']>().mockResolvedValue(homeBase);
+    const listNotifications = vi
+      .fn<AuthGateway['listNotifications']>()
+      .mockResolvedValue(notificationInbox);
+    const listProfileFriendRequests = vi
+      .fn<AuthGateway['listProfileFriendRequests']>()
+      .mockResolvedValue({ items: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getHomeBase,
+      listNotifications,
+      listProfileFriendRequests,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Анна Петрова' }, { timeout: 3_000 }),
+    ).toBeVisible();
+    expect(getHomeBase).toHaveBeenCalled();
+    expect(listNotifications).not.toHaveBeenCalled();
+    expect(listProfileFriendRequests).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const task of idleTasks.splice(0)) task();
+    });
+
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    expect(listProfileFriendRequests).toHaveBeenCalled();
+  });
+
+  it('loads the profile card before its secondary blocks', async () => {
+    window.history.replaceState({}, '', '/profile');
+    const idleTasks: (() => void)[] = [];
+    vi.stubGlobal('requestIdleCallback', (task: () => void) => {
+      idleTasks.push(task);
+      return idleTasks.length;
+    });
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    const getPlayerProfile = vi
+      .fn<AuthGateway['getPlayerProfile']>()
+      .mockResolvedValue(userProfile);
+    const listMyCommunities = vi
+      .fn<AuthGateway['listMyCommunities']>()
+      .mockResolvedValue({ items: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getPlayerProfile,
+      listMyCommunities,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await waitFor(() => expect(getPlayerProfile).toHaveBeenCalled());
+    expect(listMyCommunities).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const task of idleTasks.splice(0)) task();
+    });
+
+    await waitFor(() => expect(listMyCommunities).toHaveBeenCalled());
+  });
+
   it('retries an initial Home projection read before showing the unavailable screen', async () => {
     const getHomeBase = vi
       .fn<AuthGateway['getHomeBase']>()
