@@ -4,6 +4,7 @@ import {
   CUP_PLAYER_LEVEL_PROJECTION_EVENT_TYPES,
   type CupPlayerLevelProjectionRepository,
 } from '@phub/database';
+import { padelGradeForScore } from '@phub/domain';
 import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { z } from 'zod';
 
@@ -119,6 +120,15 @@ export function registerCupPlayerLevelProjectionRoutes(
           400,
           'CUP_PLAYER_LEVEL_FORMULA_MISMATCH',
           'Версия формулы уровня не поддерживается.',
+        );
+      }
+      if (padelGradeForScore(parsed.data.level.numericValue) !== parsed.data.level.code) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'CUP_PLAYER_LEVEL_GRADE_MISMATCH',
+          'Число и буквенный уровень не соответствуют шкале ЦУП.',
         );
       }
       const key = idempotencyKey(request);
