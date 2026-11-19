@@ -207,26 +207,24 @@ function stringArray(value: unknown): readonly string[] | undefined {
   return value as readonly string[];
 }
 
+export function padelGradeForScore(
+  score: number,
+): (LevelAssessmentResult & { readonly outcome: 'completed' })['levelCode'] {
+  if (score < 2) return 'D';
+  if (score < 3) return 'D+';
+  if (score < 3.5) return 'C';
+  if (score < 4) return 'C+';
+  if (score < 4.7) return 'B';
+  if (score < 5.5) return 'B+';
+  return 'A';
+}
+
 function levelCode(score: number): LevelAssessmentResult & { readonly outcome: 'completed' } {
-  const code =
-    score < 2
-      ? 'D'
-      : score < 3
-        ? 'D+'
-        : score < 3.5
-          ? 'C'
-          : score < 4
-            ? 'C+'
-            : score < 4.7
-              ? 'B'
-              : score < 5.5
-                ? 'B+'
-                : 'A';
   return {
     outcome: 'completed',
     version: PADEL_LEVEL_ASSESSMENT_VERSION,
     numericScore: Number(score.toFixed(5)),
-    levelCode: code,
+    levelCode: padelGradeForScore(score),
   };
 }
 

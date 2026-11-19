@@ -28,7 +28,7 @@ paths:
         '200':
           description: Applied, replayed or stale projection.
         '400':
-          description: Invalid strict contract or idempotency key.
+          description: Invalid contract, inconsistent numeric and letter level, or invalid idempotency key.
         '403':
           description: Invalid server credential or tenant outside its exact configured scope.
         '409':

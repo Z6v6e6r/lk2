@@ -87,6 +87,24 @@ describe('CUP player level projection routes', () => {
     expect(apply.mock.calls[0]?.[0]).not.toHaveProperty('playerId');
   });
 
+  it('refuses an inconsistent numeric and letter level from an authenticated sender', async () => {
+    const apply = vi.fn();
+    const app = await appWith({ apply });
+    const body = payload();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/player-level-projections',
+      headers: {
+        'x-cup-player-level-token': token,
+        'idempotency-key': body.sourceEventId,
+      },
+      payload: { ...body, level: { code: 'B', numericValue: 3.99999 } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'CUP_PLAYER_LEVEL_GRADE_MISMATCH' });
+    expect(apply).not.toHaveBeenCalled();
+  });
+
   it('is fail-closed when disabled or supplied with a wrong server token', async () => {
     const apply = vi.fn();
     const disabled = await appWith({ apply }, false);
