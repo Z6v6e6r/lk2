@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { assertClosedApplicationMigrationsNotPending } from './closed-schema-migration-guard.js';
+import {
+  assertClosedApplicationMigrationsNotPending,
+  assertCupLevelProjection0119NotPending,
+} from './closed-schema-migration-guard.js';
 
 import {
   assertMigrationExecutionAllowed,
@@ -82,6 +85,11 @@ try {
           )
         ).rows[0]?.empty_database_catalog ?? false)
       : false;
+  assertCupLevelProjection0119NotPending({
+    applied,
+    packaged: packagedMigrations,
+    emptyDatabaseCatalogVerified,
+  });
   assertMigrationExecutionAllowed({
     appliedFilenames,
     packagedFilenames: packagedMigrations.map((migration) => migration.filename),

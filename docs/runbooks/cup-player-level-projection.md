@@ -87,6 +87,7 @@ Legacy profile and match/booking history remains available as history. The level
 does not label an old history point as the current level.
 
 Migration `0119_cup_calculated_player_levels.sql` widens the existing provenance check.
+For a populated Timeweb database, use the [separate 0119 admission and private pilot plan](timeweb-cup-level-pilot.md).
 The receiver records calculated game and tournament event types exactly and uses the existing
 `CALCULATED` classification in its projection. Sender and receiver need the paired calculated
 event allowlist. Existing first-assignment deliveries retain their `RATING_MANUALLY_CHANGED`

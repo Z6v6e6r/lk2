@@ -1,0 +1,42 @@
+{
+	admin off
+	auto_https disable_redirects
+	servers {
+		protocols h1 h2
+		strict_sni_host on
+	}
+}
+
+https://{$LK2_CUP_PILOT_HOST}:{$LK2_CUP_PILOT_PORT} {
+	bind {$LK2_CUP_PILOT_BIND:127.0.0.1}
+	tls {$LK2_CUP_PILOT_SERVER_CERT} {$LK2_CUP_PILOT_SERVER_KEY} {
+		client_auth {
+			mode require_and_verify
+			trust_pool file {$LK2_CUP_PILOT_CLIENT_CA}
+		}
+	}
+
+	@projection {
+		method POST
+		expression `{http.request.orig_uri} == '/internal/api/v1/local-padel/player-level-projections'`
+	}
+	handle @projection {
+		request_body {
+			max_size 16KiB
+		}
+		request_header -Forwarded
+		request_header -X-Forwarded-*
+		request_header -X-Real-IP
+		request_header -Client-Cert*
+		request_header -X-SSL-Client-*
+		reverse_proxy {$LK2_CUP_PILOT_API_UPSTREAM} {
+			transport http {
+				dial_timeout 2s
+				response_header_timeout 4s
+			}
+		}
+	}
+	handle {
+		respond 404
+	}
+}
