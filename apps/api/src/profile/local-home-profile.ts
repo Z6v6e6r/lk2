@@ -1,15 +1,5 @@
 import type { HomeProfile } from '@phub/home-projection';
 
-const PROFILE_LEVEL_VALUES: Readonly<Record<string, number>> = {
-  D: 0,
-  'D+': 2.5,
-  C: 3,
-  'C+': 3.5,
-  B: 4.5,
-  'B+': 5,
-  A: 6,
-};
-
 /**
  * `avatarUrl` in `homeProfileSchema` accepts an absolute URL or the PadlHub
  * profile-photo delivery path. A locally stored photo reference is only
@@ -57,9 +47,10 @@ export function localProfileLevel(
 ): LocalProfileLevel | undefined {
   const label = levelLabel?.trim();
   if (!label) return undefined;
-  const value = levelValue ?? PROFILE_LEVEL_VALUES[label];
-  if (value === undefined || !Number.isFinite(value) || value < 0 || value > 10) return undefined;
-  return { label, value, assessmentRequired: false };
+  if (levelValue == null || !Number.isFinite(levelValue) || levelValue < 1 || levelValue > 7) {
+    return undefined;
+  }
+  return { label, value: levelValue, assessmentRequired: false };
 }
 
 function localAvatarUrl(candidate: unknown): string | undefined {
@@ -107,19 +98,14 @@ export function freshProviderObservation<T extends ProviderProfileObservation>(
  * dashboard projection does not exist. Only observable, PadlHub-owned values
  * are published: provider-owned money fields and an unassessed level are
  * omitted instead of being filled with `0`, `RUB` or a synthetic level. A
- * fresh provider observation may add those two fields, never fabricate them.
+ * fresh provider observation can add balance. Levels only come from the CUP projection.
  */
 export function buildLocalHomeProfile(input: LocalHomeProfileInput): HomeProfile {
   const displayName = input.displayName.trim() || input.displayName;
   const names = nameParts(displayName);
   const avatarUrl = localAvatarUrl(input.avatarUrl);
   const observation = input.observation;
-  // A directly observed provider level is newer than the cached summary level, so it wins when
-  // both exist; the cached level remains the fallback when the observation carries none.
-  const observedLevel = observation?.level
-    ? localProfileLevel(observation.level.label, observation.level.value)
-    : undefined;
-  const level = observedLevel ?? localProfileLevel(input.levelLabel, input.levelValue);
+  const level = localProfileLevel(input.levelLabel, input.levelValue);
   const balanceMinor = observation?.balanceMinor;
   return {
     userId: input.userId,

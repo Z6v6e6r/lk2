@@ -12,13 +12,50 @@ const memberId = '22222222-2222-4222-8222-222222222222';
 const messageId = '33333333-3333-4333-8333-333333333333';
 const gameId = '44444444-4444-4444-8444-444444444444';
 
-function poolWithQuery(query: ReturnType<typeof vi.fn>) {
+type MockQueryArguments = [text: string, values?: readonly unknown[]];
+
+function poolWithQuery(query: (...args: MockQueryArguments) => unknown, readableCupLevels = true) {
   return {
-    connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    connect: vi.fn().mockResolvedValue({
+      query: (...args: MockQueryArguments) =>
+        args[0].includes('pg_catalog.has_schema_privilege')
+          ? Promise.resolve({ rows: [{ readable: readableCupLevels }] })
+          : query(...args),
+      release: vi.fn(),
+    }),
   };
 }
 
 describe('messaging repository', () => {
+  it.each([true, false])(
+    'keeps CUP levels optional under existing ACL (readable=%s)',
+    async (readable) => {
+      const query = vi.fn(() => Promise.resolve({ rows: [] }));
+      const repository = createMessagingRepository(poolWithQuery(query, readable) as never);
+
+      await expect(repository.listConversations({ tenantId, userId, limit: 10 })).resolves.toEqual(
+        [],
+      );
+
+      const reads = query.mock.calls
+        .map((values: unknown[]) => String(values[0]))
+        .filter((sql) => sql.includes('from messaging.conversations conversation'));
+      expect(reads).toHaveLength(2);
+      for (const sql of reads) {
+        if (readable) {
+          expect(sql).toContain('left join eligibility.cup_player_level_projections');
+          expect(sql).toContain("sport_code = 'PADEL'");
+        } else {
+          expect(sql).not.toMatch(
+            /eligibility\.|(?:other_summary|participant_summary)\.level_(label|value)/,
+          );
+          expect(sql).toContain('null::text');
+          expect(sql).toContain('null::numeric');
+        }
+      }
+    },
+  );
+
   it('does not use PostgreSQL session keywords as relation aliases', async () => {
     const source = await readFile(new URL('./messaging-repository.ts', import.meta.url), 'utf8');
 
@@ -2351,9 +2388,7 @@ describe('messaging repository', () => {
 });
 
 describe('messaging notification policy', () => {
-  function policyQuery(
-    handler: (text: string, values?: readonly unknown[]) => unknown,
-  ): ReturnType<typeof vi.fn> {
+  function policyQuery(handler: (text: string, values?: readonly unknown[]) => unknown) {
     return vi.fn((text: string, values?: readonly unknown[]) => {
       if (
         text === 'begin' ||

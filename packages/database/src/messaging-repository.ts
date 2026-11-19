@@ -667,7 +667,40 @@ async function attachmentsForMessages(
   return grouped;
 }
 
-const CONVERSATION_SELECT = `
+/** Restricted messaging roles can load profiles and chat without access to eligibility. */
+async function canReadCupLevels(client: PoolClient): Promise<boolean> {
+  const projection = await queryOne<QueryResultRow & { readonly readable: boolean }>(
+    client,
+    `select pg_catalog.has_schema_privilege(namespace.oid, 'USAGE')
+            and pg_catalog.has_table_privilege(relation.oid, 'SELECT') as readable
+       from pg_catalog.pg_class relation
+       join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+      where namespace.nspname = 'eligibility' and relation.relname = 'cup_player_level_projections'`,
+    [],
+  );
+  return projection?.readable === true;
+}
+
+function cupLevelSql(
+  enabled: boolean,
+  summaryAlias: 'summary' | 'other_summary' | 'participant_summary',
+  projectionAlias: 'sender_cup' | 'other_cup' | 'participant_cup',
+): { readonly label: string; readonly value: string; readonly join: string } {
+  return enabled
+    ? {
+        label: `case when ${projectionAlias}.player_id is not null then ${summaryAlias}.level_label end`,
+        value: `case when ${projectionAlias}.player_id is not null then ${summaryAlias}.level_value end`,
+        join: `left join eligibility.cup_player_level_projections ${projectionAlias}
+          on ${projectionAlias}.tenant_id = ${summaryAlias}.tenant_id
+         and ${projectionAlias}.player_id = ${summaryAlias}.user_id
+         and ${projectionAlias}.sport_code = 'PADEL'`,
+      }
+    : { label: 'null::text', value: 'null::numeric', join: '' };
+}
+
+function conversationSelect(readableCupLevels: boolean): string {
+  const cup = cupLevelSql(readableCupLevels, 'other_summary', 'other_cup');
+  return `
   select conversation.id,
          conversation.kind,
          other_member.user_id as other_user_id,
@@ -679,11 +712,11 @@ const CONVERSATION_SELECT = `
          case when other_privacy.user_id is null
                     or (other_privacy.visibility_mode <> 'PRIVATE'
                         and other_privacy.section_visibility->>'levelAndRating' = 'true')
-              then other_summary.level_label end as other_level_label,
+              then ${cup.label} end as other_level_label,
          case when other_privacy.user_id is null
                     or (other_privacy.visibility_mode <> 'PRIVATE'
                         and other_privacy.section_visibility->>'levelAndRating' = 'true')
-              then other_summary.level_value end as other_level_value,
+              then ${cup.value} end as other_level_value,
          greatest(
            (conversation.next_sequence - 1) - current_member.last_read_sequence,
            0
@@ -729,6 +762,7 @@ const CONVERSATION_SELECT = `
     left join profile.user_summaries other_summary
       on other_summary.tenant_id = other_member.tenant_id
      and other_summary.user_id = other_member.user_id
+    ${cup.join}
     left join integration.user_profile_photo_sync other_photo
       on other_photo.tenant_id = other_member.tenant_id
      and other_photo.user_id = other_member.user_id
@@ -755,8 +789,11 @@ const CONVERSATION_SELECT = `
           and ((block.blocker_user_id = current_member.user_id and block.blocked_user_id = other_member.user_id)
             or (block.blocker_user_id = other_member.user_id and block.blocked_user_id = current_member.user_id))
      )`;
+}
 
-const GAME_CONVERSATION_SELECT = `
+function gameConversationSelect(readableCupLevels: boolean): string {
+  const cup = cupLevelSql(readableCupLevels, 'participant_summary', 'participant_cup');
+  return `
   select conversation.id,
          conversation.context_id,
          game.title,
@@ -825,8 +862,8 @@ const GAME_CONVERSATION_SELECT = `
                  participant.role,
                  coalesce(participant_summary.display_name, 'Участник') as display_name,
                  participant_photo.delivery_id,
-                 participant_summary.level_label,
-                 participant_summary.level_value
+                 ${cup.label} as level_label,
+                 ${cup.value} as level_value
             from games.participations participant
             join identity.users participant_user
               on participant_user.tenant_id = participant.tenant_id
@@ -835,6 +872,7 @@ const GAME_CONVERSATION_SELECT = `
             left join profile.user_summaries participant_summary
               on participant_summary.tenant_id = participant.tenant_id
              and participant_summary.user_id = participant.user_id
+            ${cup.join}
             left join integration.user_profile_photo_sync participant_photo
               on participant_photo.tenant_id = participant.tenant_id
              and participant_photo.user_id = participant.user_id
@@ -861,6 +899,7 @@ const GAME_CONVERSATION_SELECT = `
      and conversation.kind = 'GAME'
      and conversation.context_type = 'GAME'
      and conversation.state = 'OPEN'`;
+}
 
 async function getConversation(
   client: PoolClient,
@@ -868,9 +907,10 @@ async function getConversation(
   userId: string,
   conversationId: string,
 ): Promise<ConversationSummary | undefined> {
+  const readableCupLevels = await canReadCupLevels(client);
   const row = await queryOne<ConversationRow>(
     client,
-    `${CONVERSATION_SELECT}
+    `${conversationSelect(readableCupLevels)}
        and conversation.id = $3`,
     [tenantId, userId, conversationId],
   );
@@ -883,9 +923,10 @@ async function getGameConversation(
   userId: string,
   conversationId: string,
 ): Promise<GameConversationSummary | undefined> {
+  const readableCupLevels = await canReadCupLevels(client);
   const row = await queryOne<GameConversationRow>(
     client,
-    `${GAME_CONVERSATION_SELECT}
+    `${gameConversationSelect(readableCupLevels)}
        and conversation.id = $3`,
     [tenantId, userId, conversationId],
   );
@@ -982,6 +1023,7 @@ async function getMessage(
   userId: string,
   conversationId: string,
   messageId: string,
+  cup: ReturnType<typeof cupLevelSql>,
 ): Promise<MessageRow | undefined> {
   return queryOne<MessageRow>(
     client,
@@ -995,11 +1037,11 @@ async function getMessage(
             case when sender_privacy.user_id is null
                        or (sender_privacy.visibility_mode <> 'PRIVATE'
                            and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                 then summary.level_label end as sender_level_label,
+                 then ${cup.label} end as sender_level_label,
             case when sender_privacy.user_id is null
                        or (sender_privacy.visibility_mode <> 'PRIVATE'
                            and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                 then summary.level_value end as sender_level_value,
+                 then ${cup.value} end as sender_level_value,
             message.message_type, message.body, message.created_at::text as created_at,
             message.client_message_id, message.idempotency_key
        from messaging.messages message
@@ -1019,6 +1061,7 @@ async function getMessage(
        left join profile.user_summaries summary
          on summary.tenant_id = sender.tenant_id
         and summary.user_id = sender.user_id
+       ${cup.join}
        left join integration.user_profile_photo_sync photo
          on photo.tenant_id = sender.tenant_id
         and photo.user_id = sender.user_id
@@ -1200,14 +1243,15 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
 
     listConversations(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const readableCupLevels = await canReadCupLevels(client);
         const direct = await client.query<ConversationRow>(
-          `${CONVERSATION_SELECT}
+          `${conversationSelect(readableCupLevels)}
             order by conversation.updated_at desc, conversation.id desc
             limit $3`,
           [input.tenantId, input.userId, input.limit],
         );
         const games = await client.query<GameConversationRow>(
-          `${GAME_CONVERSATION_SELECT}
+          `${gameConversationSelect(readableCupLevels)}
             order by conversation.updated_at desc, conversation.id desc
             limit $3`,
           [input.tenantId, input.userId, input.limit],
@@ -1227,8 +1271,9 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
       ].slice(0, MAX_GAME_CONVERSATION_GAME_IDS);
       if (gameIds.length === 0) return Promise.resolve([]);
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const readableCupLevels = await canReadCupLevels(client);
         const games = await client.query<GameConversationRow>(
-          `${GAME_CONVERSATION_SELECT}
+          `${gameConversationSelect(readableCupLevels)}
              and conversation.context_id = any($3::uuid[])`,
           [input.tenantId, input.userId, gameIds],
         );
@@ -1778,6 +1823,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           input.conversationId,
         );
         if (!member) return { outcome: 'not_found' };
+        const cup = cupLevelSql(await canReadCupLevels(client), 'summary', 'sender_cup');
         const result = await client.query<MessageRow>(
           `select message.id, message.conversation_id, message.sequence,
                   sender.user_id as sender_user_id,
@@ -1789,11 +1835,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                   case when sender_privacy.user_id is null
                              or (sender_privacy.visibility_mode <> 'PRIVATE'
                                  and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                       then summary.level_label end as sender_level_label,
+                       then ${cup.label} end as sender_level_label,
                   case when sender_privacy.user_id is null
                              or (sender_privacy.visibility_mode <> 'PRIVATE'
                                  and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                       then summary.level_value end as sender_level_value,
+                       then ${cup.value} end as sender_level_value,
                   message.client_message_id, message.message_type, message.body,
                   message.created_at::text as created_at
              from messaging.messages message
@@ -1804,6 +1850,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              left join profile.user_summaries summary
                on summary.tenant_id = sender.tenant_id
               and summary.user_id = sender.user_id
+             ${cup.join}
              left join integration.user_profile_photo_sync photo
                on photo.tenant_id = sender.tenant_id
               and photo.user_id = sender.user_id
@@ -1920,6 +1967,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
             `${input.tenantId}:MESSAGE_CLIENT:${input.userId}:${input.clientMessageId}`,
           ]);
+          const cup = cupLevelSql(await canReadCupLevels(client), 'summary', 'sender_cup');
           const previous = await queryOne<MessageRow>(
             client,
             `select message.id, message.conversation_id, message.sequence,
@@ -1932,11 +1980,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                   case when sender_privacy.user_id is null
                              or (sender_privacy.visibility_mode <> 'PRIVATE'
                                  and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                       then summary.level_label end as sender_level_label,
+                       then ${cup.label} end as sender_level_label,
                   case when sender_privacy.user_id is null
                              or (sender_privacy.visibility_mode <> 'PRIVATE'
                                  and sender_privacy.section_visibility->>'levelAndRating' = 'true')
-                       then summary.level_value end as sender_level_value,
+                       then ${cup.value} end as sender_level_value,
                   message.message_type, message.body, message.created_at::text as created_at,
                   message.client_message_id, message.idempotency_key
              from messaging.messages message
@@ -1947,6 +1995,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              left join profile.user_summaries summary
                on summary.tenant_id = sender.tenant_id
               and summary.user_id = sender.user_id
+             ${cup.join}
              left join integration.user_profile_photo_sync photo
                on photo.tenant_id = sender.tenant_id
               and photo.user_id = sender.user_id
@@ -2123,6 +2172,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             input.userId,
             input.conversationId,
             inserted.id,
+            cup,
           );
           if (!message) throw new Error('MESSAGING_MESSAGE_READBACK_FAILED');
           const readbackAttachments = await attachmentsForMessages(client, {

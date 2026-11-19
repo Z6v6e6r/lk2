@@ -1,12 +1,38 @@
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { assertClosedApplicationMigrationsNotPending } from './closed-schema-migration-guard.js';
+import {
+  assertClosedApplicationMigrationsNotPending,
+  assertCupLevelProjection0119NotPending,
+} from './closed-schema-migration-guard.js';
 
 const photo = { filename: '0102_location_recommendation_photos.sql' };
 const game = { filename: '0103_game_start_notification_scenarios.sql' };
 const subject = { filename: '0104_identity_external_subject_link_commands.sql' };
 const packaged = [photo, game, subject];
+const projection = { filename: '0119_cup_calculated_player_levels.sql' };
+
+describe('0119 admission', () => {
+  it('requires separate admission unless 0119 was applied or the ordinary bootstrap catalog is empty', () => {
+    const inventory = [...packaged, projection];
+    for (const applied of [[], packaged]) {
+      expect(() =>
+        assertCupLevelProjection0119NotPending({ applied, packaged: inventory }),
+      ).toThrow('CUP_LEVEL_PROJECTION_0119_ADMISSION_REQUIRED');
+    }
+    expect(() =>
+      assertCupLevelProjection0119NotPending({
+        applied: [],
+        packaged: inventory,
+        emptyDatabaseCatalogVerified: true,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertCupLevelProjection0119NotPending({ applied: inventory, packaged: inventory }),
+    ).not.toThrow();
+  });
+});
+
 describe('ordinary migration safety for GAME and authenticated subject linking', () => {
   it('preserves historical error precedence in the executable entrypoint guard blocks', async () => {
     const legacy = [

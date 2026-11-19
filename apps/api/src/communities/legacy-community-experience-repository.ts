@@ -1,3 +1,4 @@
+import type { CupProjectedProfileLevel, ProfileSummaryRepository } from '@phub/database';
 import { z } from 'zod';
 import { stationHistoryBoundary, stationHistoryPage } from './station-history-page.js';
 import type { LegacyCommunityToken } from '@phub/communities';
@@ -131,6 +132,7 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
       readonly circuitFailureThreshold: number;
       readonly circuitResetMs: number;
       readonly bridge: CommunityLegacyBridgeRepository;
+      readonly readCupLevels?: ProfileSummaryRepository['getCupProjectedLevelsByVivaClientId'];
       readonly token?: LegacyCommunityToken;
       readonly stationMessageRequests?: boolean;
       readonly fetchImplementation?: typeof fetch;
@@ -315,12 +317,21 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
     if (!record(body) || body.calculationVersion !== 'community-rating-v1.3.0')
       throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_VERSION_UNAVAILABLE');
     if (!Array.isArray(sourceRows)) invalid('rating-rows');
+    const rows = sourceRows.slice(0, 100).map((value) => {
+      if (!record(value)) invalid('rating-row');
+      const candidate = z.uuid().safeParse(value.playerId);
+      return { value, vivaClientId: candidate.success ? candidate.data : undefined };
+    });
+    const projected =
+      (await this.options.readCupLevels?.(
+        input.tenantId,
+        rows.flatMap((row) => (row.vivaClientId ? [row.vivaClientId] : [])),
+      )) ?? new Map<string, CupProjectedProfileLevel>();
     return {
       period: input.period,
       tab: input.tab,
       calculationVersion: 'community-rating-v1.3.0',
-      rows: sourceRows.slice(0, 100).map((value, index) => {
-        if (!record(value)) invalid('rating-row');
+      rows: rows.map(({ value, vivaClientId }, index) => {
         return {
           place: requiredPositive(value.place ?? value.rank ?? index + 1, 'rating-place'),
           displayName: requiredText(
@@ -328,7 +339,7 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
             120,
             'rating-name',
           ),
-          currentLevel: requiredNumber(value.currentLevel ?? value.level ?? 0, 'rating-level'),
+          currentLevel: vivaClientId ? (projected.get(vivaClientId)?.value ?? null) : null,
           score: requiredNumber(value.overallScore ?? value.score ?? 0, 'rating-score'),
           delta: requiredNumber(
             value.levelDelta ?? value.lastRatingDelta ?? value.delta ?? 0,

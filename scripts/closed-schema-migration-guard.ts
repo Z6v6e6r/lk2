@@ -5,10 +5,27 @@ const closedApplicationMigrations = new Set([
   '0104_identity_external_subject_link_commands.sql',
 ]);
 
-export function assertClosedApplicationMigrationsNotPending(input: {
+const cupLevelProjection0119 = '0119_cup_calculated_player_levels.sql';
+
+type MigrationInventory = {
   applied: readonly { filename: string }[];
   packaged: readonly { filename: string }[];
-}): void {
+};
+
+// The retired beta lane names the database that now holds production data.
+export function assertCupLevelProjection0119NotPending(
+  input: MigrationInventory & { emptyDatabaseCatalogVerified?: boolean },
+): void {
+  if (
+    input.packaged.some((row) => row.filename === cupLevelProjection0119) &&
+    !input.applied.some((row) => row.filename === cupLevelProjection0119) &&
+    !(input.applied.length === 0 && input.emptyDatabaseCatalogVerified === true)
+  ) {
+    throw new Error('CUP_LEVEL_PROJECTION_0119_ADMISSION_REQUIRED');
+  }
+}
+
+export function assertClosedApplicationMigrationsNotPending(input: MigrationInventory): void {
   if (input.applied.length === 0) return;
   const applied = new Set(input.applied.map((row) => row.filename));
   if (

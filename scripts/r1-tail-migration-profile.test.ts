@@ -39,6 +39,7 @@ describe('fixed R1 tail inventory and admission', () => {
       '0116_profile_provider_observations.sql',
       '0117_viva_subscription_owners.sql',
       '0118_push_attribution.sql',
+      '0119_cup_calculated_player_levels.sql',
     ]);
     expect(r1PackagedInventory(frozen)).toEqual(frozen);
     expect(r1LedgerCount(frozen.map(({ filename, checksum }) => ({ checksum, filename })))).toBe(

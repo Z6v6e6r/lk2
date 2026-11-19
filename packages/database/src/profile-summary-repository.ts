@@ -4,6 +4,7 @@ import { profilePhotoDeliveryUrl } from '@phub/domain';
 import type { Pool, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
+import { PlayerLevelProjectionConflictError } from './player-level-repository.js';
 
 export interface PlayerProfileSummary {
   readonly userId: string;
@@ -11,6 +12,11 @@ export interface PlayerProfileSummary {
   readonly avatarUrl: string | null;
   readonly levelLabel: string | null;
   readonly levelValue: number | null;
+}
+
+export interface CupProjectedProfileLevel {
+  readonly label: string;
+  readonly value: number;
 }
 
 export interface ProfileSummaryRepository {
@@ -28,10 +34,14 @@ export interface ProfileSummaryRepository {
     tenantId: string,
     userIds: readonly string[],
   ): Promise<ReadonlyMap<string, string>>;
-  getLevelValues(
+  getCupProjectedLevels(
     tenantId: string,
     userIds: readonly string[],
-  ): Promise<ReadonlyMap<string, number>>;
+  ): Promise<ReadonlyMap<string, CupProjectedProfileLevel>>;
+  getCupProjectedLevelsByVivaClientId(
+    tenantId: string,
+    clientIds: readonly string[],
+  ): Promise<ReadonlyMap<string, CupProjectedProfileLevel>>;
   reserveClientAssistedPhoto?(input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -202,14 +212,64 @@ function levelValue(value: number | string | null): number | null {
 }
 
 export function createProfileSummaryRepository(pool: Pool): ProfileSummaryRepository {
+  function readCupProjectedLevels(
+    tenantId: string,
+    ids: readonly string[],
+    byVivaClientId: boolean,
+  ): Promise<ReadonlyMap<string, CupProjectedProfileLevel>> {
+    if (ids.length === 0) return Promise.resolve(new Map());
+    const mappingJoin = byVivaClientId
+      ? `join integration.external_entity_map mapping
+           on mapping.tenant_id = cup.tenant_id and mapping.id = cup.external_mapping_id
+          and mapping.internal_id = cup.player_id and mapping.external_system = 'VIVA'
+          and mapping.entity_type = 'viva_profile'
+         join identity.users actor
+           on actor.tenant_id = cup.tenant_id and actor.id = cup.player_id
+          and actor.status = 'ACTIVE'`
+      : '';
+    const idColumn = byVivaClientId ? 'mapping.external_id' : 'cup.player_id';
+    const idType = byVivaClientId ? 'text' : 'uuid';
+    return withTenantTransaction(pool, tenantId, async (client) => {
+      const rows = await client.query<
+        Pick<ProfileSummaryRow, 'user_id' | 'level_label' | 'level_value'>
+      >(
+        `select ${idColumn} as user_id, level.code as level_label, profile.level_value
+           from eligibility.cup_player_level_projections cup
+           ${mappingJoin}
+           join eligibility.canonical_levels level
+             on level.tenant_id = cup.tenant_id and level.sport_code = cup.sport_code
+            and level.id = cup.level_id
+           left join profile.user_summaries profile
+             on profile.tenant_id = cup.tenant_id and profile.user_id = cup.player_id
+            and profile.level_label = level.code
+          where cup.tenant_id = $1 and cup.sport_code = 'PADEL'
+            and ${idColumn} = any($2::${idType}[])`,
+        [tenantId, [...new Set(ids)]],
+      );
+      return new Map(
+        rows.rows.map((row) => {
+          const value = levelValue(row.level_value);
+          if (!row.level_label || value === null || value < 1 || value > 7) {
+            throw new PlayerLevelProjectionConflictError();
+          }
+          return [row.user_id, { label: row.level_label, value }];
+        }),
+      );
+    });
+  }
   return {
     get(tenantId, userId) {
       return withTenantTransaction(pool, tenantId, async (client) => {
         const row = await queryOne<ProfileSummaryRow>(
           client,
-          `select user_id, display_name, photo_url, level_label, level_value
-             from profile.user_summaries
-            where tenant_id = $1 and user_id = $2`,
+          `select summary.user_id, summary.display_name, summary.photo_url,
+                  case when cup.player_id is not null then summary.level_label end as level_label,
+                  case when cup.player_id is not null then summary.level_value end as level_value
+             from profile.user_summaries summary
+             left join eligibility.cup_player_level_projections cup
+               on cup.tenant_id = summary.tenant_id and cup.player_id = summary.user_id
+              and cup.sport_code = 'PADEL'
+            where summary.tenant_id = $1 and summary.user_id = $2`,
           [tenantId, userId],
         );
         return row
@@ -609,24 +669,12 @@ export function createProfileSummaryRepository(pool: Pool): ProfileSummaryReposi
       });
     },
 
-    getLevelValues(tenantId, userIds) {
-      if (userIds.length === 0) return Promise.resolve(new Map());
-      return withTenantTransaction(pool, tenantId, async (client) => {
-        const rows = await client.query<
-          { readonly user_id: string; readonly level_value: number | string } & QueryResultRow
-        >(
-          `select user_id, level_value
-             from profile.user_summaries
-            where tenant_id = $1 and user_id = any($2::uuid[]) and level_value is not null`,
-          [tenantId, [...new Set(userIds)]],
-        );
-        return new Map(
-          rows.rows.flatMap((row) => {
-            const value = levelValue(row.level_value);
-            return value === null ? [] : [[row.user_id, value] as const];
-          }),
-        );
-      });
+    getCupProjectedLevels(tenantId, userIds) {
+      return readCupProjectedLevels(tenantId, userIds, false);
+    },
+
+    getCupProjectedLevelsByVivaClientId(tenantId, clientIds) {
+      return readCupProjectedLevels(tenantId, clientIds, true);
     },
   };
 }

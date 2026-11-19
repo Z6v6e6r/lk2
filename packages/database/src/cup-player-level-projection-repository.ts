@@ -3,6 +3,34 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { queryOne, withTenantTransaction } from './connection.js';
 import type { PlayerSportLevelView } from './player-level-repository.js';
 
+const CALCULATED_PROJECTION_EVENT_TYPES = [
+  'RATING_BOOTSTRAPPED_FROM_GAME_RESULT',
+  'RATING_BOOTSTRAPPED_FROM_TOURNAMENT',
+  'RATING_TOURNAMENT_CANONICAL_RECONCILED',
+  'RATING_LEVEL_CORRECTION_APPLIED',
+  'FPR_CANONICAL_RECONCILIATION_APPLIED',
+  'GAME_RESULT_SUBMITTED_APPLIED',
+  'GAME_RESULT_CORRECTION_APPLIED',
+  'GAME_RESULT_CORRECTION_REVERTED',
+  'GAME_RESULT_DISPUTED_REVERTED',
+  'GAME_RESULT_EXPIRED_REVERTED',
+  'GAME_RESULT_CONFIRMED',
+  'GAME_RESULT_TIMEOUT_CONFIRMED',
+  'TOURNAMENT_RATING_FINALIZED',
+  'TOURNAMENT_RATING_CORRECTION_APPLIED',
+  'TOURNAMENT_RATING_REOPENED_REVERTED',
+  'TOURNAMENT_RATING_ANNULLED',
+  'TOURNAMENT_RATING_CORRECTION_REVERTED',
+  'TOURNAMENT_START_RATING_CHANGED',
+] as const;
+
+export const CUP_PLAYER_LEVEL_PROJECTION_EVENT_TYPES = [
+  'RATING_INITIAL_IMPORTED',
+  'RATING_BOOTSTRAPPED_FROM_VIVA',
+  'RATING_MANUALLY_CHANGED',
+  ...CALCULATED_PROJECTION_EVENT_TYPES,
+] as const;
+
 export interface ApplyCupPlayerLevelProjectionInput {
   readonly tenantId: string;
   readonly externalClientId: string;
@@ -11,8 +39,7 @@ export interface ApplyCupPlayerLevelProjectionInput {
   readonly numericValue: number;
   readonly sourceRevision: number;
   readonly sourceEventId: string;
-  readonly sourceEventType:
-    'RATING_INITIAL_IMPORTED' | 'RATING_BOOTSTRAPPED_FROM_VIVA' | 'RATING_MANUALLY_CHANGED';
+  readonly sourceEventType: (typeof CUP_PLAYER_LEVEL_PROJECTION_EVENT_TYPES)[number];
   readonly formulaVersion: 'padel-rating-grade-v1';
   readonly occurredAt: string;
   readonly requestHash: string;
@@ -102,6 +129,7 @@ function projectionSource(
     case 'RATING_MANUALLY_CHANGED':
       return 'MANUAL';
     default:
+      if (CALCULATED_PROJECTION_EVENT_TYPES.some((type) => type === eventType)) return 'CALCULATED';
       throw new Error('CUP_LEVEL_PROJECTION_EVENT_TYPE_UNSUPPORTED');
   }
 }

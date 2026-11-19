@@ -37,7 +37,7 @@ function input() {
   return {
     tenantId,
     playerId,
-    sportCode: 'PADEL',
+    sportCode: 'TENNIS',
     levelId,
     source: 'SELF_DECLARED' as const,
     idempotencyKey: 'profile-level-command-0001',
@@ -54,8 +54,10 @@ describe('player level repository', () => {
       if (text.includes('from eligibility.canonical_levels')) {
         return Promise.resolve({ rows: [levelRow] });
       }
-      if (text.includes('from eligibility.player_sport_levels player')) {
-        return Promise.resolve({ rows: [savedRow] });
+      if (text.includes('from eligibility.cup_player_level_projections cup')) {
+        return Promise.resolve({
+          rows: [{ ...savedRow, source: 'MANUAL', numeric_value: '3.63129' }],
+        });
       }
       throw new Error(`Unexpected query: ${text}`);
     });
@@ -64,11 +66,12 @@ describe('player level repository', () => {
     ).resolves.toMatchObject({
       scaleVersion: 1,
       levels: [{ id: levelId, code: 'C+', rank: 4 }],
-      currentLevel: { levelId, source: 'SELF_DECLARED' },
+      projectionStatus: 'PROJECTED',
+      currentLevel: { levelId, source: 'MANUAL', numericValue: 3.63129 },
     });
   });
 
-  it('updates the canonical projection and profile atomically with audit and idempotency', async () => {
+  it('updates the other-sport level and compatibility summary atomically with audit and idempotency', async () => {
     const query = vi.fn((text: string) => {
       if (text === 'begin' || text === 'commit') return Promise.resolve({ rows: [] });
       if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
@@ -113,7 +116,7 @@ describe('player level repository', () => {
   it('does not repeat profile writes for an idempotent replay', async () => {
     const stored = {
       playerId,
-      sportCode: 'PADEL',
+      sportCode: 'TENNIS',
       levelId,
       code: 'C+',
       title: 'C+',
@@ -181,26 +184,22 @@ describe('player level repository', () => {
     expect(
       query.mock.calls.some(
         ([text]) =>
-          text.includes('update profile.user_summaries') && text.includes('level_value = $4'),
+          text.includes('update profile.user_summaries') &&
+          text.includes('else profile.level_value'),
       ),
     ).toBe(true);
   });
 
-  it('does not let self-declared or onboarding writes replace a CUP-authoritative level', async () => {
-    const query = vi.fn((text: string) => {
-      if (text === 'begin' || text === 'commit') return Promise.resolve({ rows: [] });
-      if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
-      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] });
-      if (text.includes('from eligibility.cup_player_level_projections')) {
-        return Promise.resolve({ rows: [{ present: 1 }] });
-      }
-      throw new Error(`Unexpected query: ${text}`);
-    });
-    await expect(
-      createPlayerLevelRepository(pool(query) as never).setLevel(input()),
-    ).resolves.toEqual({ outcome: 'cup_authoritative' });
-    expect(query.mock.calls.some(([text]) => text.includes('update profile.user_summaries'))).toBe(
-      false,
-    );
+  it('rejects self-declared and onboarding PADEL writes before accessing the database', async () => {
+    const query = vi.fn();
+    const repository = createPlayerLevelRepository(pool(query) as never);
+    for (const source of ['SELF_DECLARED', 'ONBOARDING'] as const) {
+      await expect(
+        repository.setLevel({ ...input(), sportCode: 'PADEL', source }),
+      ).resolves.toEqual({
+        outcome: 'cup_authoritative',
+      });
+    }
+    expect(query).not.toHaveBeenCalled();
   });
 });

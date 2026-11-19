@@ -81,7 +81,7 @@ function summaryRepository() {
 }
 
 describe('GET profile fallback with a provider observation', () => {
-  it('adds a fresh provider level and balance to the local slice', async () => {
+  it('adds a fresh provider balance without the legacy level to the local slice', async () => {
     const observations = observationRepository({
       level: { label: 'C+', value: 3.8 },
       balanceMinor: 54_000,
@@ -109,10 +109,10 @@ describe('GET profile fallback with a provider observation', () => {
     expect(response.json()).toMatchObject({
       userId,
       displayName: 'Сергеев Алексей',
-      level: { label: 'C+', value: 3.8, assessmentRequired: false },
       balanceMinor: 54_000,
       currency: 'RUB',
     });
+    expect(response.json()).not.toHaveProperty('level');
     expect(observations.get).toHaveBeenCalledWith(tenantId, userId);
   });
 
@@ -200,7 +200,7 @@ describe('GET profile fallback with a provider observation', () => {
     expect(response.json()).not.toHaveProperty('balanceMinor');
   });
 
-  it('keeps the complete projection authoritative over the observation', async () => {
+  it('replaces the saved Home level with the CUP projection and keeps Home balance', async () => {
     const generatedAt = new Date();
     const dashboard = buildMockHomeDashboard({
       tenantId,
@@ -241,7 +241,12 @@ describe('GET profile fallback with a provider observation', () => {
             updatedAt: payload.snapshot.generatedAt,
           }),
       },
-      profileSummaryRepository: summaryRepository(),
+      profileSummaryRepository: {
+        ...summaryRepository(),
+        getCupProjectedLevels: vi
+          .fn()
+          .mockResolvedValue(new Map([[userId, { label: 'B+', value: 4.81234 }]])),
+      },
       profileProviderObservationRepository: observations,
     });
     apps.push(app);
@@ -253,7 +258,10 @@ describe('GET profile fallback with a provider observation', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(payload.profile);
+    expect(response.json()).toEqual({
+      ...payload.profile,
+      level: { label: 'B+', value: 4.81234, assessmentRequired: false },
+    });
     expect(observations.get).not.toHaveBeenCalled();
   });
 

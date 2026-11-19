@@ -48,7 +48,18 @@ export interface TournamentOwnerReceipt {
     operationId: string;
     action: 'JOIN' | 'LEAVE';
     outcome: 'REGISTERED' | 'LEFT' | 'REJECTED';
-    reason: 'REGISTERED' | 'LEFT' | 'FULL' | 'MEMBERSHIP_EXISTS' | 'GENERATION_NOT_CURRENT';
+    reason:
+      | 'REGISTERED'
+      | 'LEFT'
+      | 'FULL'
+      | 'MEMBERSHIP_EXISTS'
+      | 'GENERATION_NOT_CURRENT'
+      | 'LEVEL_NOT_ALLOWED'
+      | 'PLAYER_LEVEL_REQUIRED'
+      | 'PLAYER_LEVEL_UNKNOWN'
+      | 'ACTIVITY_LEVEL_INVALID'
+      | 'PLAYER_GENDER_REQUIRED'
+      | 'GENDER_NOT_ALLOWED';
     generation: string | null;
     committedAt: string;
   };
@@ -179,7 +190,18 @@ export function parseTournamentReceipt(
     if (
       o.generation !== null ||
       !(
-        command.action === 'JOIN' ? ['FULL', 'MEMBERSHIP_EXISTS'] : ['GENERATION_NOT_CURRENT']
+        command.action === 'JOIN'
+          ? [
+              'FULL',
+              'MEMBERSHIP_EXISTS',
+              'LEVEL_NOT_ALLOWED',
+              'PLAYER_LEVEL_REQUIRED',
+              'PLAYER_LEVEL_UNKNOWN',
+              'ACTIVITY_LEVEL_INVALID',
+              'PLAYER_GENDER_REQUIRED',
+              'GENDER_NOT_ALLOWED',
+            ]
+          : ['GENERATION_NOT_CURRENT']
       ).includes(o.reason as string)
     )
       return bad();
