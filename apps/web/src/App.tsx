@@ -23,6 +23,11 @@ import yandexIconUrl from './assets/yandex-auth.svg';
 import { connectChatRealtime } from './chat-realtime-client.js';
 import type { ChatRealtimeConnectionState } from './chat-realtime-client.js';
 import type { ChatRealtimeUiState, ChatUiError, PendingChatMessage } from './ChatsPage.js';
+import {
+  clearAuthCallbackError,
+  readAuthCallbackError,
+  type AuthCallbackError,
+} from './auth-callback-error.js';
 import { consumeCommunityInviteToken } from './community-invite-token.js';
 import {
   clearGameChatNavigation,
@@ -286,6 +291,7 @@ interface AuthState {
   readonly notice: string | null;
   readonly publicOfferAccepted: boolean;
   readonly personalDataPolicyAccepted: boolean;
+  readonly callbackError: AuthCallbackError | null;
 }
 
 type AuthAction =
@@ -316,7 +322,8 @@ type AuthAction =
       readonly type: 'logout-completed';
       readonly entryView: AuthEntryView;
       readonly message?: string;
-    };
+    }
+  | { readonly type: 'callback-error-dismissed' };
 
 const initialState: AuthState = {
   view: 'restoring',
@@ -330,16 +337,23 @@ const initialState: AuthState = {
   notice: null,
   publicOfferAccepted: false,
   personalDataPolicyAccepted: false,
+  callbackError: null,
 };
 
 function reducer(state: AuthState, action: AuthAction): AuthState {
   switch (action.type) {
     case 'restore-completed':
       return action.session
-        ? { ...state, view: 'home', session: action.session, error: null }
+        ? { ...state, view: 'home', session: action.session, error: null, callbackError: null }
         : { ...state, view: action.entryView, session: null, error: null };
     case 'restore-failed':
-      return { ...state, view: action.entryView, error: action.message };
+      // A callback failure already explains why the login could not finish; the generic restore
+      // message would contradict it on the same screen.
+      return {
+        ...state,
+        view: action.entryView,
+        error: state.callbackError ? null : action.message,
+      };
     case 'oauth-view':
       return { ...state, view: 'oauth', busy: null, error: null, notice: null };
     case 'phone-changed':
@@ -408,6 +422,8 @@ function reducer(state: AuthState, action: AuthAction): AuthState {
         error: action.message ?? null,
         notice: action.message ? null : 'Вы вышли из аккаунта',
       };
+    case 'callback-error-dismissed':
+      return { ...state, callbackError: null, busy: null, error: null, notice: null };
   }
 }
 
@@ -930,7 +946,18 @@ export function App({
   realtimeUrl,
   devicePush,
 }: AppProps): React.JSX.Element {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const [state, dispatch] = useReducer(reducer, initialState, (base) => ({
+    ...base,
+    // Reading the callback marker is pure, so StrictMode's repeated initializer keeps the same
+    // conflict; the marker leaves the URL once in the effect below.
+    callbackError: typeof window === 'undefined' ? null : readAuthCallbackError(window.location),
+  }));
+  useEffect(() => {
+    // The marker is one-shot for the URL, not for the session: clear it even when a restored
+    // session supersedes the conflict screen. The call is a no-op without the marker.
+    if (typeof window === 'undefined') return;
+    clearAuthCallbackError(window.location, window.history);
+  }, []);
   const communityRealtimeTransport = useMemo(() => {
     if (!realtimeUrl || typeof WebSocket === 'undefined') return undefined;
     return createCommunityRealtimeTransport({
@@ -3648,7 +3675,46 @@ export function App({
       <section className="auth-panel">
         <div className="auth-card">
           <Brand />
-          {state.view === 'oauth' ? (
+          {state.callbackError ? (
+            <>
+              <span className="step-label">Вход через Viva</span>
+              <h1 id="auth-title">Выйти из аккаунта?</h1>
+              <p className="form-lead" role="alert">
+                Профиль Viva, под которым вы пытаетесь войти, уже связан с другим аккаунтом ПадлхАБ.
+                Выйдите из аккаунта и попробуйте войти под другим аккаунтом.
+              </p>
+              {state.callbackError.correlationId ? (
+                <p className="field-help" id="auth-conflict-support">
+                  Если ошибка повторится, обратитесь в поддержку и укажите код обращения{' '}
+                  {state.callbackError.correlationId}.
+                </p>
+              ) : null}
+              {state.error ? (
+                <p className="error-message" role="alert">
+                  {state.error}
+                </p>
+              ) : null}
+              <PrimaryButton
+                className="primary-button"
+                type="button"
+                disabled={state.busy === 'logout'}
+                aria-busy={state.busy === 'logout'}
+                onClick={handleLogout}
+              >
+                {state.busy === 'logout' ? 'Выходим…' : 'Выйти из аккаунта'}
+              </PrimaryButton>
+              <div className="form-actions">
+                <button
+                  className="text-button"
+                  type="button"
+                  disabled={state.busy === 'logout'}
+                  onClick={() => dispatch({ type: 'callback-error-dismissed' })}
+                >
+                  Вернуться ко входу
+                </button>
+              </div>
+            </>
+          ) : state.view === 'oauth' ? (
             <>
               <h1 id="auth-title" className="auth-badge">
                 Войти в личный кабинет

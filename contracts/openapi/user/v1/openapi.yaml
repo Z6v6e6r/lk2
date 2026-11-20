@@ -1070,6 +1070,11 @@ paths:
           description: |
             The browser is redirected to the configured cabinet URL. Initial sign-in sets the
             PadlHub refresh cookie; authenticated recovery preserves the existing refresh cookie.
+            A Viva profile that resolves to a different PadlHub user is redirected to the same
+            cabinet URL with the one-shot fragment
+            `#viva_auth_error=AUTH_IDENTITY_CONFLICT&viva_correlation_id=...` instead of a JSON
+            body, so the cabinet can offer a sign-out; no session, delegation or refresh cookie is
+            created. Other callback failures keep the JSON error response.
             Android launches redirect to the fixed verified App Link, clear only the browser-binding
             nonce cookie, and never expose a session or provider credential in the browser.
           headers:
