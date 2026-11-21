@@ -124,6 +124,67 @@ afterEach(() => {
 });
 
 describe('CreateGamePage durable create recovery', () => {
+  it('preserves the mobile wizard choices on Back and submits one attempt for a rapid double click', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      window.history.replaceState({}, '', '/games/new');
+      const response = deferred<GameCommandResult>();
+      const createGame = vi.fn<AuthGateway['createGame']>().mockReturnValue(response.promise);
+      const user = userEvent.setup();
+      const navigate = vi.fn();
+      page(createGame, { navigate });
+
+      await user.click(await screen.findByRole('button', { name: /Селигерская/ }));
+      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      expect(screen.getByRole('heading', { name: 'Дата и время' })).toBeVisible();
+      await user.click(screen.getByRole('button', { name: '120 мин' }));
+      const savedStart = (screen.getByLabelText('Начало') as HTMLInputElement).value;
+      const savedEnd = (screen.getByLabelText('Окончание') as HTMLInputElement).value;
+      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      await user.clear(screen.getByLabelText('Название'));
+      await user.type(screen.getByLabelText('Название'), 'QA мобильный мастер');
+      await user.selectOptions(screen.getByLabelText('Доступ'), 'PRIVATE');
+
+      await user.click(screen.getByRole('button', { name: 'Назад', exact: true }));
+      expect(await screen.findByRole('heading', { name: 'Дата и время' })).toBeVisible();
+      expect(screen.getByRole('button', { name: '120 мин' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      expect(screen.getByLabelText('Начало')).toHaveValue(savedStart);
+      expect(screen.getByLabelText('Окончание')).toHaveValue(savedEnd);
+      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+
+      expect(screen.getByLabelText('Название')).toHaveValue('QA мобильный мастер');
+      expect(screen.getByLabelText('Доступ')).toHaveValue('PRIVATE');
+      expect(createGame).not.toHaveBeenCalled();
+      await user.dblClick(screen.getByRole('button', { name: 'Создать игру', exact: true }));
+      await waitFor(() => expect(createGame).toHaveBeenCalledTimes(1));
+      expect(createGame.mock.calls[0]?.[0]).toMatchObject({
+        title: 'QA мобильный мастер',
+        stationId,
+        visibility: 'PRIVATE',
+        paymentMode: 'NO_PAYMENT',
+        startsAt: new Date(savedStart).toISOString(),
+        endsAt: new Date(savedEnd).toISOString(),
+      });
+      response.resolve(result());
+      await waitFor(() => expect(navigate).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole('button', { name: 'Создать игру', exact: true }));
+      expect(createGame).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('offers only server-returned test courts and creates a private game on the selected court', async () => {
     const createGame = vi.fn<AuthGateway['createGame']>().mockResolvedValue(result());
     const user = userEvent.setup();
@@ -930,7 +991,7 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     );
   });
 
-  it('lets the operator abandon one pending wait explicitly without resending a create', async () => {
+  it('retains the pending operation even when the user returned with explicit new intent', async () => {
     openManagedCreate();
     const attempt = await prepareCreateGameAttempt(
       principal,
@@ -950,20 +1011,21 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     const createPaidGame = vi.fn<NonNullable<AuthGateway['createPaidGame']>>();
     const navigate = vi.fn();
     const user = userEvent.setup();
-    page(vi.fn(), {
-      api: paidApi({ createPaidGame, getGameOperation: vi.fn() }),
-      navigate,
-    });
+    const getGameOperation = vi.fn().mockRejectedValue(new Error('status unavailable'));
+    window.history.replaceState({}, '', '/games/new?new=1&commercialCreate=1');
+    page(vi.fn(), { api: paidApi({ createPaidGame, getGameOperation }), navigate });
 
-    await screen.findByText(/останется в обработке на сервере/);
-    await user.click(screen.getByRole('button', { name: 'Создать другую игру' }));
-    await waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith('/games/new?new=1&commercialCreate=1'),
-    );
-    expect(createPaidGame).not.toHaveBeenCalled();
     expect(
-      loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt,
-    ).toBeUndefined();
+      await screen.findByRole('heading', { name: 'Игра ожидает подтверждения' }),
+    ).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Создать другую игру' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Проверить статус' }));
+    expect(getGameOperation).toHaveBeenCalledWith(managedOperationId);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(createPaidGame).not.toHaveBeenCalled();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      { state: 'PENDING_CONFIRMATION', idempotencyKey: 'managed-abandon-key-0001' },
+    );
   });
 
   it('keeps the protected attempt after an ambiguous owner failure and replays the same key', async () => {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { GameCreateWizardHeader, useGameCreateWizard } from './GameCreateWizard.js';
 import {
   GameJoinConditionsPanel,
   type GameJoinConditionsClient,
@@ -351,10 +352,23 @@ function GameTab(props: {
     onJoinRetry,
     readOnly = false,
   } = props;
+  const wizard = useGameCreateWizard();
   const [lineupPicker, setLineupPicker] = useState<LineupPickerState | null>(null);
   const gameConversation = game.conversation;
   const chatEntry = readOnly ? 'NONE' : gameChatEntry(game);
   const primaryAction = readOnly ? undefined : gamePrimaryAction(game);
+  const joiningFromMobile = wizard.active && primaryAction === 'JOIN';
+  const joinReview =
+    joiningFromMobile && wizard.step === 1 && (!joinFlow || joinFlow.kind === 'IDLE');
+  function executePrimary(action: GameCardAction) {
+    if (RESULT_ACTIONS.has(action)) {
+      onResultOpen();
+    } else if (joiningFromMobile && wizard.step === 0) {
+      wizard.advance(1);
+    } else {
+      onAction(action);
+    }
+  }
   const primaryLabel =
     primaryAction && RESULT_ACTIONS.has(primaryAction) && primaryAction !== 'SUBMIT_RESULT'
       ? 'Посмотреть результат'
@@ -631,6 +645,27 @@ function GameTab(props: {
         />
       ) : null}
 
+      {joinReview && !primaryBlocked ? (
+        <section
+          className="game-detail-card game-create-wizard__section"
+          aria-label="Подтверждение участия"
+        >
+          <GameCreateWizardHeader
+            title="Присоединиться к игре"
+            step={1}
+            total={2}
+            label="Подтверждение"
+            href="/games"
+            busy={busy}
+            back={wizard.back}
+          />
+          <p className="game-create-wizard__context">
+            {game.title} · {game.station.name}
+            {game.court?.name ? ' · ' + game.court.name : ''}
+          </p>
+        </section>
+      ) : null}
+
       <div className="game-detail-actions">
         {primaryAction && primaryLabel && primaryBlocked ? (
           // Custody or consent owns the next action: no duplicate purchase button is rendered.
@@ -640,11 +675,9 @@ function GameTab(props: {
             className="game-detail-primary"
             type="button"
             disabled={busy || ['PAY', 'RETRY_PAYMENT'].includes(primaryAction)}
-            onClick={() =>
-              RESULT_ACTIONS.has(primaryAction) ? onResultOpen() : onAction(primaryAction)
-            }
+            onClick={() => executePrimary(primaryAction)}
           >
-            {busy ? 'Обновляем…' : primaryLabel}
+            {busy ? 'Обновляем…' : joinReview ? 'Продолжить запись' : primaryLabel}
           </button>
         ) : (
           <p className="game-detail-state">{gameStateLabel(game.displayState)}</p>
