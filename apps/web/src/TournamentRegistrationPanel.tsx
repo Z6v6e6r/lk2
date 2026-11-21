@@ -2,6 +2,8 @@ import './TournamentRegistrationPanel.css';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import type { TournamentLocalResult } from '@phub/api-contracts';
 import type { AuthGateway } from './auth-gateway.js';
+import { GameCreateWizardHeader } from './GameCreateWizard.js';
+import { useGameCreateWizard } from './use-game-create-wizard.js';
 import { TournamentLocalAttempts } from './tournament-local-attempt.js';
 import {
   PARTICIPATION_LEVEL_UNAVAILABLE_MESSAGE,
@@ -84,6 +86,7 @@ export function TournamentRegistrationPanel({
     [error, setError] = useState<string | null>(null),
     [pending, setPending] = useState(false),
     [commandsEnabled, setCommandsEnabled] = useState(false);
+  const wizard = useGameCreateWizard();
   const hasCustody = useCallback(() => {
     try {
       return Boolean(attempts.load(tournamentId));
@@ -181,8 +184,26 @@ export function TournamentRegistrationPanel({
     result?.registration.status === 'REGISTERED' &&
     result.operation.status === 'REGISTERED' &&
     result.operation.generation === result.operation.id;
+  const activeReview =
+    wizard.active && wizard.step === 1 && !unknown && !registered && commandsEnabled;
   return (
     <div className="tournament-registration" aria-live="polite">
+      {activeReview ? (
+        <>
+          <GameCreateWizardHeader
+            title="Запись на турнир"
+            step={1}
+            total={2}
+            label="Подтверждение"
+            href="/tournaments"
+            busy={busy}
+            back={wizard.back}
+          />
+          <p className="game-create-wizard__context">
+            При записи сервер проверит допуск и наличие места.
+          </p>
+        </>
+      ) : null}
       {error ? <p role="alert">{error}</p> : null}
       {!busy && !commandsEnabled && !error ? (
         <p>Запись сейчас недоступна. Можно проверить сохранённую операцию.</p>
@@ -213,9 +234,15 @@ export function TournamentRegistrationPanel({
           disabled={
             busy || !commandsEnabled || Boolean(result && result.registration.status === 'UNKNOWN')
           }
-          onClick={() => void run('join')}
+          onClick={() => {
+            if (wizard.active && !activeReview) {
+              wizard.advance(1);
+              return;
+            }
+            void run('join');
+          }}
         >
-          Записаться на турнир
+          {activeReview ? 'Подтвердить запись' : 'Записаться на турнир'}
         </button>
       )}
       <button type="button" disabled={busy} onClick={() => void run('read')}>

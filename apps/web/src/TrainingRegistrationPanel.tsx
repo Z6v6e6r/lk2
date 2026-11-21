@@ -1,6 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import type { TrainingRegistrationResult } from '@phub/api-contracts';
 import type { AuthGateway } from './auth-gateway.js';
+import {
+  GameCreateWizardHeader,
+  GameCreateWizardNext,
+  GameCreateWizardSection,
+} from './GameCreateWizard.js';
+import { useGameCreateWizard } from './use-game-create-wizard.js';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
 import { TrainingRegistrationAttempts } from './training-registration-attempt.js';
 import {
@@ -93,6 +99,8 @@ function TrainingRegistrationSession({
         return null;
       }
     });
+  const wizard = useGameCreateWizard();
+  const mobileSteps = wizard.active && !stored && !result;
   const dateHint = new Date(Date.parse(training.startsAt) + 10800000).toISOString().slice(0, 10);
   const run = async (read: boolean) => {
     if (busy) return;
@@ -159,21 +167,50 @@ function TrainingRegistrationSession({
       aria-labelledby="training-registration-title"
       aria-busy={busy}
     >
+      {mobileSteps ? (
+        <GameCreateWizardHeader
+          title="Запись на тренировку"
+          step={wizard.step}
+          label={(['Тренировка', 'Способ записи', 'Подтверждение'] as const)[wizard.step]}
+          href="/trainings"
+          busy={busy}
+          back={wizard.back}
+        />
+      ) : null}
       <h2 id="training-registration-title">{training.title}</h2>
       <p>
         {new Date(training.startsAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })} ·
         Москва
       </p>
-      <p>Запись по доступной подписке. Доплата и покупка здесь не поддерживаются.</p>
-      {!stored ? (
-        <GameJoinSubscriptionPicker
-          gateway={gateway}
-          {...(selected ? { value: selected } : {})}
-          onChange={setSelected}
+      {mobileSteps && wizard.step === 0 ? (
+        <GameCreateWizardNext
+          disabled={busy || !gateway.registerTraining}
+          onClick={() => wizard.advance(1)}
         />
-      ) : (
-        <p>Сохранён исходный запрос. Повторная отправка использует ту же подписку.</p>
-      )}
+      ) : null}
+      <GameCreateWizardSection hidden={mobileSteps && wizard.step !== 1}>
+        <p>Запись по доступной подписке. Доплата и покупка здесь не поддерживаются.</p>
+        {!stored ? (
+          <GameJoinSubscriptionPicker
+            gateway={gateway}
+            {...(selected ? { value: selected } : {})}
+            onChange={setSelected}
+          />
+        ) : (
+          <p>Сохранён исходный запрос. Повторная отправка использует ту же подписку.</p>
+        )}
+        {mobileSteps && wizard.step === 1 ? (
+          <GameCreateWizardNext
+            disabled={busy || !selected || !gateway.registerTraining}
+            onClick={() => wizard.advance(2)}
+          />
+        ) : null}
+      </GameCreateWizardSection>
+      {mobileSteps && wizard.step === 2 ? (
+        <p className="game-create-wizard__context">
+          Запись по выбранной подписке. Сервер проверит применимость при подтверждении.
+        </p>
+      ) : null}
       {result?.registration.status === 'CONFIRMED' ? (
         <p role="status">Запись подтверждена по последней проверке.</p>
       ) : result?.operation.status === 'REJECTED_NOT_DISPATCHED' ? (
@@ -195,14 +232,16 @@ function TrainingRegistrationSession({
         />
       ) : null}
       <div className="games-level-recovery__actions">
-        <button
-          className="games-level-recovery__primary"
-          type="button"
-          disabled={busy || (!stored && !selected) || !gateway.registerTraining}
-          onClick={() => void run(false)}
-        >
-          {stored ? 'Продолжить исходный запрос' : 'Записаться по подписке'}
-        </button>
+        {!mobileSteps || wizard.step === 2 ? (
+          <button
+            className="games-level-recovery__primary"
+            type="button"
+            disabled={busy || (!stored && !selected) || !gateway.registerTraining}
+            onClick={() => void run(false)}
+          >
+            {stored ? 'Продолжить исходный запрос' : 'Записаться по подписке'}
+          </button>
+        ) : null}
         {stored ? (
           <button
             className="games-level-recovery__secondary"
