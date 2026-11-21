@@ -35,7 +35,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-async function value() {
+async function value(gameId: string | null = null) {
   const c = JSON.parse(localStorage.getItem(quarterStorageKey(principal))!) as QuarterCustody,
     h = Array.from(
       new Uint8Array(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(c.key))),
@@ -51,7 +51,7 @@ async function value() {
       draftId: await quarterDraftId(c),
       status: 'CONFIRMED',
     },
-    gameProjection: { status: 'PENDING', gameId: null },
+    gameProjection: { status: gameId ? 'AVAILABLE' : 'PENDING', gameId },
     registration: { status: 'UNKNOWN', asOf: null },
     reason: null,
   };
@@ -143,6 +143,47 @@ it('actual form uses typed location and explicit subscription; confirmation show
     screen.queryByRole('button', { name: 'Продолжить исходную операцию' }),
   ).not.toBeInTheDocument();
 });
+it('returns to the selected court in a new mobile wizard after a confirmed game', async () => {
+  const h = setup();
+  const user = userEvent.setup();
+  vi.stubGlobal('matchMedia', () => ({
+    matches: true,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  window.history.replaceState({}, '', '/games/new?quarterCreate=1');
+  h.g.createQuarterGame.mockImplementationOnce(() => value(input.stationId));
+  render(
+    <QuarterCreatePanel
+      gateway={h.gateway}
+      principal={principal}
+      attemptStorage={localStorage}
+      attemptLockManager={locks}
+    />,
+  );
+  await screen.findByRole('option', { name: 'Synthetic station · Court1' });
+  await user.selectOptions(screen.getByLabelText('Корт'), input.courtId);
+  await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+  await user.type(screen.getByLabelText(/^Начало — ваше местное время/), '2030-01-01T15:00');
+  await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+  await user.selectOptions(
+    await screen.findByRole('combobox', { name: 'Выберите подписку' }),
+    input.subscriptionId,
+  );
+  await user.click(screen.getByRole('button', { name: 'Создать игру по подписке' }));
+
+  await user.click(await screen.findByRole('button', { name: 'Создать другую игру' }));
+  const court = await screen.findByLabelText('Корт');
+  await waitFor(() => expect(court).toBeEnabled());
+  await user.selectOptions(court, input.courtId);
+  await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+  await user.click(screen.getByRole('button', { name: 'Назад' }));
+
+  expect(await screen.findByRole('heading', { name: 'Место' })).toBeVisible();
+  expect(court).toHaveValue(input.courtId);
+  expect(h.g.createQuarterGame).toHaveBeenCalledTimes(1);
+});
+
 it('reload reads custody only and storage-denied fails closed without mutating HTTP', async () => {
   const h = setup();
   localStorage.setItem(

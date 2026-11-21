@@ -3,6 +3,13 @@ import { quarterBrowserStorage, quarterStorageKey } from './quarter-create-attem
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
+import {
+  GameCreateDateStrip,
+  GameCreateWizardHeader,
+  GameCreateWizardNext,
+  GameCreateWizardSection,
+  useGameCreateWizard,
+} from './GameCreateWizard.js';
 import type { AuthGateway, CreateGameRequest } from './auth-gateway.js';
 import {
   browserCreateGameAttemptLockManager,
@@ -193,6 +200,8 @@ function LegacyCreateGamePage({
   >([]);
   const [startsAt, setStartsAt] = useState(defaults.startsAt);
   const [endsAt, setEndsAt] = useState(defaults.endsAt);
+  const [stationSearch, setStationSearch] = useState('');
+  const wizard = useGameCreateWizard(restoredPending ? 2 : 0);
   const [capacity, setCapacity] = useState<2 | 4>(restoredPayload?.capacity ?? 4);
   const [visibility, setVisibility] = useState<'PUBLIC' | 'PRIVATE'>(
     restoredPayload?.visibility === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC',
@@ -209,6 +218,8 @@ function LegacyCreateGamePage({
     restoredPending ?? restoredConfirmation,
   );
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
+  const leaving = useRef(false);
   const [error, setError] = useState<string | null>(
     restored.error ? commandError(restored.error) : null,
   );
@@ -232,7 +243,8 @@ function LegacyCreateGamePage({
   }, [explicitNewIntent]);
 
   useEffect(() => {
-    if (!restoredResolved || explicitNewIntent || restoredConfirmation) return;
+    if (!restoredResolved || explicitNewIntent || restoredConfirmation || leaving.current) return;
+    leaving.current = true;
     navigate(`/games/${encodeURIComponent(restoredResolved.gameId)}?created=1&recovered=1`);
   }, [explicitNewIntent, navigate, restoredConfirmation, restoredResolved]);
 
@@ -267,7 +279,7 @@ function LegacyCreateGamePage({
 
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (busy) return;
+    if (busy || submitting.current || leaving.current) return;
     if (!storage || !lockManager || restored.error) {
       setError(
         commandError(
@@ -334,6 +346,7 @@ function LegacyCreateGamePage({
             }
           : null,
     };
+    submitting.current = true;
     setBusy(true);
     let attempt: PendingCreateGameAttempt | undefined;
     try {
@@ -349,8 +362,8 @@ function LegacyCreateGamePage({
       );
       if (prepared.state === 'RESOLVED') {
         setActiveAttempt(null);
+        leaving.current = true;
         navigate(`/games/${encodeURIComponent(prepared.gameId)}?created=1&recovered=1`);
-        setBusy(false);
         return;
       }
       if (prepared.state === 'PENDING_CONFIRMATION') {
@@ -358,7 +371,6 @@ function LegacyCreateGamePage({
         setNotice(
           'Игра создана и ожидает подтверждения. Платёж и бронь не выполнены; проверьте статус операции.',
         );
-        setBusy(false);
         return;
       }
       attempt = prepared;
@@ -385,7 +397,6 @@ function LegacyCreateGamePage({
             'Ответ о создании не подтверждён. Сохранённые параметры и ключ оставлены для безопасного повтора.',
           );
         }
-        setBusy(false);
         return;
       }
       if (paid) {
@@ -407,7 +418,6 @@ function LegacyCreateGamePage({
           setNotice(
             'Игра создана и ожидает подтверждения. Платёж и бронь не выполнены; проверьте статус операции.',
           );
-          setBusy(false);
           return;
         }
         if (result.operation.status === 'SUCCEEDED' && result.operation.gameId) {
@@ -419,28 +429,23 @@ function LegacyCreateGamePage({
             lockManager,
           );
           setActiveAttempt(null);
+          leaving.current = true;
           navigate(
             `/games/${encodeURIComponent(result.operation.gameId)}?created=1${
               result.replayed ? '&recovered=1' : ''
             }`,
           );
-          setBusy(false);
           return;
         }
         setError(
           'Ответ о создании не подтверждён. Сохранённые параметры и ключ оставлены для безопасного повтора.',
         );
-        setBusy(false);
         return;
       }
-      if (
-        !result.operation.gameId ||
-        ['ACCEPTED', 'PROCESSING'].includes(result.operation.status)
-      ) {
+      if (!result.operation.gameId || result.operation.status !== 'SUCCEEDED') {
         setError(
           'Ответ о создании не подтверждён. Сохранённые параметры и ключ оставлены для безопасного повтора.',
         );
-        setBusy(false);
         return;
       }
       await resolveCreateGameAttempt(
@@ -453,6 +458,7 @@ function LegacyCreateGamePage({
       setActiveAttempt(null);
       const recovered = result.replayed ? '&recovered=1' : '';
       const revision = result.operation.aggregateRevision ?? 0;
+      leaving.current = true;
       navigate(
         `/games/${encodeURIComponent(result.operation.gameId)}?created=1&revision=${revision}${recovered}`,
       );
@@ -474,6 +480,8 @@ function LegacyCreateGamePage({
           'Связь прервалась, результат неизвестен. Сохранённые параметры и ключ оставлены — повторите восстановление.',
         );
       }
+    } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -487,13 +495,14 @@ function LegacyCreateGamePage({
 
   async function checkConfirmation(): Promise<void> {
     const confirmation = activeConfirmation;
-    if (!confirmation || busy) return;
+    if (!confirmation || busy || submitting.current || leaving.current) return;
     if (!storage || !lockManager) {
       setError(commandError(new CreateGameAttemptError('ATTEMPT_STORAGE_UNAVAILABLE')));
       return;
     }
     setError(null);
     setNotice(null);
+    submitting.current = true;
     setBusy(true);
     try {
       const result = await gateway.getGameOperation(confirmation.operationId);
@@ -528,6 +537,7 @@ function LegacyCreateGamePage({
           lockManager,
         );
         setActiveAttempt(null);
+        leaving.current = true;
         navigate(`/games/${encodeURIComponent(result.operation.gameId)}?created=1&recovered=1`);
       } else {
         setNotice('Пока не подтверждено. Платёж и бронь не выполнены; проверьте статус позже.');
@@ -535,22 +545,7 @@ function LegacyCreateGamePage({
     } catch {
       setNotice('Не удалось проверить статус. Повторите проверку позже.');
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function startAnotherGame(): Promise<void> {
-    const confirmation = activeConfirmation;
-    if (!confirmation || busy) return;
-    if (!storage || !lockManager) return;
-    setBusy(true);
-    try {
-      await clearCreateGameAttempt(scopedPrincipal, confirmation, storage, lockManager);
-      setActiveAttempt(null);
-      navigate(`/games/new?new=1${paidCreateAvailable ? '&commercialCreate=1' : ''}`);
-    } catch (cause) {
-      setError(commandError(cause));
-    } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -562,6 +557,47 @@ function LegacyCreateGamePage({
     !locations.some((location) => location.id === stationId);
   const stationTestCourts = testCourts.filter((court) => court.stationId === stationId);
   const selectedTestCourt = stationTestCourts.some((court) => court.id === courtId);
+  const station = locations.find((location) => location.id === stationId);
+  const search = stationSearch.trim().toLocaleLowerCase('ru-RU');
+  const visibleStations = locations.filter((location) =>
+    (location.title + ' ' + location.city).toLocaleLowerCase('ru-RU').includes(search),
+  );
+  const duration = (new Date(endsAt).getTime() - new Date(startsAt).getTime()) / 60_000;
+  const canContinue = stationId && !locationsError && !busy;
+  const validTime = duration > 0 && (Boolean(activeAttempt) || new Date(startsAt) > new Date());
+
+  function chooseStation(id: string) {
+    if (id === stationId) return;
+    setStationId(id);
+    setCourtId('');
+  }
+
+  function chooseStart(next: string) {
+    setStartsAt(next);
+    const startTime = new Date(next).getTime();
+    if (wizard.active && Number.isFinite(startTime) && duration > 0) {
+      setEndsAt(localDateTime(new Date(startTime + duration * 60_000)));
+    }
+  }
+
+  function chooseDuration(minutes: number) {
+    const startTime = new Date(startsAt).getTime();
+    if (Number.isFinite(startTime)) {
+      setEndsAt(localDateTime(new Date(startTime + minutes * 60_000)));
+    }
+  }
+
+  const titleField = (
+    <label>
+      <span>Название</span>
+      <input
+        value={title}
+        maxLength={160}
+        required
+        onChange={(event) => setTitle(event.target.value)}
+      />
+    </label>
+  );
 
   const pageHeader = (
     <header className="games-header">
@@ -610,18 +646,6 @@ function LegacyCreateGamePage({
           >
             {busy ? 'Проверяем статус…' : 'Проверить статус'}
           </button>
-          <button
-            className="game-detail-secondary"
-            type="button"
-            disabled={busy}
-            onClick={() => void startAnotherGame()}
-          >
-            Создать другую игру
-          </button>
-          <p className="games-message">
-            Новая игра начнёт новую операцию. Это ожидание исчезнет с устройства, но останется в
-            обработке на сервере — его статус можно уточнить в поддержке.
-          </p>
         </section>
         <MainBottomNavigation active="games" gamesDestination="games" />
       </main>
@@ -629,12 +653,35 @@ function LegacyCreateGamePage({
   }
 
   return (
-    <main className="games-page games-page--create">
-      {pageHeader}
+    <main
+      className={'games-page games-page--create' + (wizard.active ? ' game-create-wizard' : '')}
+    >
+      {wizard.active ? (
+        <GameCreateWizardHeader
+          title="Создать игру"
+          step={wizard.step}
+          label={(['Место', 'Дата и время', 'Условия игры'] as const)[wizard.step]}
+          href="/games"
+          busy={busy}
+          back={wizard.back}
+        />
+      ) : (
+        pageHeader
+      )}
       {paidCreateIntent ? (
         <a href="/games/new?quarterCreate=1">Игра по подписке: четверть корта</a>
       ) : null}
-      <form className="game-create-form" onSubmit={(event) => void submit(event)} noValidate>
+      <form
+        className="game-create-form"
+        onSubmit={(event) => {
+          if (wizard.active && wizard.step !== 2) {
+            event.preventDefault();
+            return;
+          }
+          void submit(event);
+        }}
+        noValidate
+      >
         {locationsError ? (
           <p className="games-message is-error" role="alert">
             {locationsError}
@@ -657,185 +704,257 @@ function LegacyCreateGamePage({
           </p>
         ) : null}
 
-        <label>
-          <span>Название</span>
-          <input
-            value={title}
-            maxLength={160}
-            required
-            onChange={(event) => setTitle(event.target.value)}
-          />
-        </label>
-        <label>
-          <span>Станция</span>
-          <select
-            value={stationId}
-            required
-            disabled={locations.length === 0}
-            onChange={(event) => {
-              setStationId(event.target.value);
-              setCourtId('');
-            }}
-          >
-            {restoredStationUnavailable ? (
-              <option value={stationId}>Сохранённая станция (нет в списке)</option>
-            ) : null}
-            {locations.map((location) => (
-              <option value={location.id} key={location.id}>
-                {location.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        {stationTestCourts.length > 0 ? (
-          <label>
-            <span>Тестовый корт</span>
-            <select
-              value={courtId}
-              onChange={(event) => {
-                setCourtId(event.target.value);
-                if (event.target.value) setVisibility('PRIVATE');
-              }}
-            >
-              <option value="">Без выбора корта</option>
-              {stationTestCourts.map((court) => (
-                <option key={court.id} value={court.id}>
-                  {court.title}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : courtId && activeAttempt ? (
-          <p className="games-message" role="status">
-            Сохранённый корт оставлен для восстановления прежней попытки.
-          </p>
-        ) : null}
-        {selectedTestCourt ? (
-          <p className="games-message">
-            Игра доступна только тестовым аккаунтам. Бронь корта в Viva не создаётся.
-          </p>
-        ) : null}
-        <div className="game-create-form__row">
-          <label>
-            <span>Начало</span>
-            <input
-              type="datetime-local"
-              value={startsAt}
-              required
-              onChange={(event) => setStartsAt(event.target.value)}
-            />
-          </label>
-          <label>
-            <span>Окончание</span>
-            <input
-              type="datetime-local"
-              value={endsAt}
-              required
-              onChange={(event) => setEndsAt(event.target.value)}
-            />
-          </label>
-        </div>
-        <div className="game-create-form__row">
-          <label>
-            <span>Игроков</span>
-            <select
-              value={capacity}
-              onChange={(event) => setCapacity(Number(event.target.value) as 2 | 4)}
-            >
-              <option value={2}>2 игрока</option>
-              <option value={4}>4 игрока</option>
-            </select>
-          </label>
-          <label>
-            <span>Доступ</span>
-            <select
-              value={visibility}
-              disabled={selectedTestCourt}
-              onChange={(event) => setVisibility(event.target.value as 'PUBLIC' | 'PRIVATE')}
-            >
-              <option value="PUBLIC">Открытая</option>
-              <option value="PRIVATE">По ссылке</option>
-            </select>
-          </label>
-        </div>
-        <fieldset>
-          <legend>Уровень</legend>
-          <div className="game-create-form__row">
+        {!wizard.active ? titleField : null}
+        <GameCreateWizardSection hidden={wizard.active && wizard.step !== 0}>
+          {wizard.active ? (
+            <>
+              <label>
+                <span>Станция</span>
+                <input
+                  className="game-create-wizard__search"
+                  type="search"
+                  placeholder="Найти станцию"
+                  value={stationSearch}
+                  onChange={(event) => setStationSearch(event.currentTarget.value)}
+                />
+              </label>
+              <div className="game-create-wizard__places" role="group" aria-label="Станции">
+                {visibleStations.map((location) => (
+                  <button
+                    key={location.id}
+                    type="button"
+                    className="game-create-wizard__place"
+                    aria-pressed={location.id === stationId}
+                    disabled={busy}
+                    onClick={() => chooseStation(location.id)}
+                  >
+                    <strong>{location.title}</strong>
+                    {location.city ? <small>{location.city}</small> : null}
+                    <span aria-hidden="true">{location.id === stationId ? '✓' : '›'}</span>
+                  </button>
+                ))}
+              </div>
+              {locations.length > 0 && visibleStations.length === 0 ? (
+                <p>Станции не найдены.</p>
+              ) : null}
+            </>
+          ) : (
             <label>
-              <span>От</span>
-              <select value={levelFrom} onChange={(event) => setLevelFrom(event.target.value)}>
-                <option value="">Любой</option>
-                {LEVELS.map((level) => (
-                  <option value={level} key={level}>
-                    {level}
+              <span>Станция</span>
+              <select
+                value={stationId}
+                required
+                disabled={locations.length === 0}
+                onChange={(event) => chooseStation(event.currentTarget.value)}
+              >
+                {restoredStationUnavailable ? (
+                  <option value={stationId}>Сохранённая станция (нет в списке)</option>
+                ) : null}
+                {locations.map((location) => (
+                  <option value={location.id} key={location.id}>
+                    {location.title}
                   </option>
                 ))}
               </select>
             </label>
+          )}
+          {wizard.active && wizard.step === 0 ? (
+            <GameCreateWizardNext disabled={!canContinue} onClick={() => wizard.advance(1)} />
+          ) : null}
+        </GameCreateWizardSection>
+        <GameCreateWizardSection hidden={wizard.active && wizard.step !== 1}>
+          {wizard.active && station ? (
+            <p className="game-create-wizard__context">{station.title}</p>
+          ) : null}
+          {stationTestCourts.length > 0 ? (
             <label>
-              <span>До</span>
-              <select value={levelTo} onChange={(event) => setLevelTo(event.target.value)}>
-                <option value="">Любой</option>
-                {LEVELS.map((level) => (
-                  <option value={level} key={level}>
-                    {level}
+              <span>Тестовый корт</span>
+              <select
+                value={courtId}
+                onChange={(event) => {
+                  setCourtId(event.target.value);
+                  if (event.target.value) setVisibility('PRIVATE');
+                }}
+              >
+                <option value="">Без выбора корта</option>
+                {stationTestCourts.map((court) => (
+                  <option key={court.id} value={court.id}>
+                    {court.title}
                   </option>
                 ))}
+              </select>
+            </label>
+          ) : courtId && activeAttempt ? (
+            <p className="games-message" role="status">
+              Сохранённый корт оставлен для восстановления прежней попытки.
+            </p>
+          ) : null}
+          {selectedTestCourt ? (
+            <p className="games-message">
+              Игра доступна только тестовым аккаунтам. Бронь корта в Viva не создаётся.
+            </p>
+          ) : null}
+          {wizard.active ? (
+            <>
+              <p className="game-create-wizard__label">Продолжительность</p>
+              <div
+                className="game-create-wizard__quick"
+                role="group"
+                aria-label="Продолжительность"
+              >
+                {[60, 90, 120].map((minutes) => (
+                  <button
+                    type="button"
+                    key={minutes}
+                    aria-pressed={duration === minutes}
+                    disabled={!startsAt || busy}
+                    onClick={() => chooseDuration(minutes)}
+                  >
+                    {minutes} мин
+                  </button>
+                ))}
+              </div>
+              <GameCreateDateStrip start={startsAt} onSelect={chooseStart} />
+            </>
+          ) : null}
+          <div className="game-create-form__row">
+            <label>
+              <span>Начало</span>
+              <input
+                type="datetime-local"
+                value={startsAt}
+                required
+                onChange={(event) => chooseStart(event.currentTarget.value)}
+              />
+            </label>
+            <label>
+              <span>Окончание</span>
+              <input
+                type="datetime-local"
+                value={endsAt}
+                required
+                onChange={(event) => setEndsAt(event.target.value)}
+              />
+            </label>
+          </div>
+          {wizard.active && wizard.step === 1 ? (
+            <GameCreateWizardNext
+              disabled={!canContinue || !validTime}
+              onClick={() => wizard.advance(2)}
+            />
+          ) : null}
+        </GameCreateWizardSection>
+        <GameCreateWizardSection hidden={wizard.active && wizard.step !== 2}>
+          {wizard.active ? titleField : null}
+          <div className="game-create-form__row">
+            <label>
+              <span>Игроков</span>
+              <select
+                value={capacity}
+                onChange={(event) => setCapacity(Number(event.target.value) as 2 | 4)}
+              >
+                <option value={2}>2 игрока</option>
+                <option value={4}>4 игрока</option>
+              </select>
+            </label>
+            <label>
+              <span>Доступ</span>
+              <select
+                value={visibility}
+                disabled={selectedTestCourt}
+                onChange={(event) => setVisibility(event.target.value as 'PUBLIC' | 'PRIVATE')}
+              >
+                <option value="PUBLIC">Открытая</option>
+                <option value="PRIVATE">По ссылке</option>
               </select>
             </label>
           </div>
-        </fieldset>
-        {paidCreateAvailable ? (
-          <label>
-            <span>Оплата</span>
-            <select
-              value={paymentMode}
-              disabled={Boolean(activeAttempt)}
-              onChange={(event) =>
-                setPaymentMode(event.target.value as 'NO_PAYMENT' | 'SPLIT' | 'SUBSCRIPTION')
-              }
-            >
-              <option value="NO_PAYMENT">Бесплатно</option>
-              <option value="SPLIT">Делится между игроками (beta)</option>
-              <option value="SUBSCRIPTION">По подписке (beta)</option>
-            </select>
+          <fieldset>
+            <legend>Уровень</legend>
+            <div className="game-create-form__row">
+              <label>
+                <span>От</span>
+                <select value={levelFrom} onChange={(event) => setLevelFrom(event.target.value)}>
+                  <option value="">Любой</option>
+                  {LEVELS.map((level) => (
+                    <option value={level} key={level}>
+                      {level}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>До</span>
+                <select value={levelTo} onChange={(event) => setLevelTo(event.target.value)}>
+                  <option value="">Любой</option>
+                  {LEVELS.map((level) => (
+                    <option value={level} key={level}>
+                      {level}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </fieldset>
+          {paidCreateAvailable ? (
+            <label>
+              <span>Оплата</span>
+              <select
+                value={paymentMode}
+                disabled={Boolean(activeAttempt)}
+                onChange={(event) =>
+                  setPaymentMode(event.target.value as 'NO_PAYMENT' | 'SPLIT' | 'SUBSCRIPTION')
+                }
+              >
+                <option value="NO_PAYMENT">Бесплатно</option>
+                <option value="SPLIT">Делится между игроками (beta)</option>
+                <option value="SUBSCRIPTION">По подписке (beta)</option>
+              </select>
+            </label>
+          ) : null}
+          {paymentMode !== 'NO_PAYMENT' ? (
+            <p className="games-message" role="status">
+              Платёж и бронь не выполняются в beta-контуре. Игра создаётся и появляется в списке
+              после подтверждения операции.
+            </p>
+          ) : null}
+          <div className="game-create-form__summary">
+            <strong>
+              {paymentMode === 'NO_PAYMENT'
+                ? 'Стоимость: бесплатно'
+                : paymentMode === 'SUBSCRIPTION'
+                  ? 'Стоимость: по подписке (beta)'
+                  : 'Стоимость: делится между игроками (beta)'}
+            </strong>
+            {wizard.active && station ? (
+              <span>
+                {station.title} · {new Date(startsAt).toLocaleString('ru-RU')} · {capacity} игрока
+              </span>
+            ) : null}
+            <span>
+              {paymentMode === 'NO_PAYMENT'
+                ? wizard.active
+                  ? 'Корт не бронируется.'
+                  : 'Платёжный и provider-контур не используется.'
+                : 'Списание и бронь не выполняются до подтверждения.'}
+            </span>
+          </div>
+          <label className="game-create-form__check">
+            <input
+              type="checkbox"
+              checked={waitlistEnabled}
+              onChange={(event) => setWaitlistEnabled(event.target.checked)}
+            />
+            <span>Включить лист ожидания</span>
           </label>
-        ) : null}
-        {paymentMode !== 'NO_PAYMENT' ? (
-          <p className="games-message" role="status">
-            Платёж и бронь не выполняются в beta-контуре. Игра создаётся и появляется в списке после
-            подтверждения операции.
-          </p>
-        ) : null}
-        <div className="game-create-form__summary">
-          <strong>
-            {paymentMode === 'NO_PAYMENT'
-              ? 'Стоимость: бесплатно'
-              : paymentMode === 'SUBSCRIPTION'
-                ? 'Стоимость: по подписке (beta)'
-                : 'Стоимость: делится между игроками (beta)'}
-          </strong>
-          <span>
-            {paymentMode === 'NO_PAYMENT'
-              ? 'Платёжный и provider-контур не используется.'
-              : 'Списание и бронь не выполняются до подтверждения.'}
-          </span>
-        </div>
-        <label className="game-create-form__check">
-          <input
-            type="checkbox"
-            checked={waitlistEnabled}
-            onChange={(event) => setWaitlistEnabled(event.target.checked)}
-          />
-          <span>Включить лист ожидания</span>
-        </label>
-        <button
-          className="game-detail-primary"
-          type="submit"
-          disabled={busy || Boolean(locationsError)}
-        >
-          {busy ? 'Создаём игру…' : 'Создать игру'}
-        </button>
+          <button
+            className="game-detail-primary"
+            type="submit"
+            disabled={busy || Boolean(locationsError)}
+          >
+            {busy ? 'Создаём игру…' : 'Создать игру'}
+          </button>
+        </GameCreateWizardSection>
       </form>
       <MainBottomNavigation active="games" gamesDestination="games" />
     </main>

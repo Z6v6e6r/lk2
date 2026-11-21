@@ -1,3 +1,8 @@
+import {
+  GameCreateWizardHeader,
+  GameCreateWizardSection,
+  useGameCreateWizard,
+} from './GameCreateWizard.js';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GameCard } from '@phub/api-sdk';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
@@ -81,6 +86,7 @@ export function NativeGameJoin({
     })();
     return () => lifetime.deactivate();
   }, [lifetime, game.id, game.revision]);
+  const wizard = useGameCreateWizard();
   async function run(action: 'conditions' | 'submit' | 'read' | 'retry') {
     const attempts = lifetime.attempts;
     if (!attempts || !lifetime.current() || inFlight.current) return;
@@ -94,6 +100,7 @@ export function NativeGameJoin({
         if (lifetime.current()) {
           setConditions(value);
           setConsent(false);
+          if (wizard.active) wizard.advance(1);
         }
       } else {
         if (action === 'submit' && gameJoinRequiresPaidFlow(game) && (!consent || !conditions))
@@ -138,32 +145,47 @@ export function NativeGameJoin({
     attempt?.state !== 'CONFIRMED' ||
     (attempt.membershipRevision !== undefined &&
       game.revision > Math.max(attempt.revision, attempt.membershipRevision));
+  const reviewing = wizard.active && wizard.step === 1;
+  const hasPrice = typeof conditions?.price.amountMinor === 'number';
   if (!game.allowedActions.includes('JOIN') && !attempt && !notice) return null;
   return (
     <section aria-label="Запись в игру" aria-busy={busy}>
       {!pending && freshAllowed && game.allowedActions.includes('JOIN') && (
         <>
+          {reviewing ? (
+            <GameCreateWizardHeader
+              title="Запись в игру"
+              step={1}
+              total={2}
+              label="Подтверждение"
+              href="/games"
+              busy={busy}
+              back={wizard.back}
+            />
+          ) : null}
           {paid && (
             <>
-              <fieldset disabled={busy}>
-                <GameJoinSubscriptionPicker
-                  gateway={gateway}
-                  {...(subscription ? { value: subscription } : {})}
-                  onChange={(id) => {
-                    setSubscription(id);
-                    setConditions(undefined);
-                    setConsent(false);
-                  }}
-                />
-              </fieldset>
-              <button
-                type="button"
-                disabled={busy || !subscription || !lifetime.attempts}
-                onClick={() => void run('conditions')}
-              >
-                Проверить условия записи
-              </button>
-              {conditions && (
+              <GameCreateWizardSection hidden={reviewing}>
+                <fieldset disabled={busy}>
+                  <GameJoinSubscriptionPicker
+                    gateway={gateway}
+                    {...(subscription ? { value: subscription } : {})}
+                    onChange={(id) => {
+                      setSubscription(id);
+                      setConditions(undefined);
+                      setConsent(false);
+                    }}
+                  />
+                </fieldset>
+                <button
+                  type="button"
+                  disabled={busy || !subscription || !lifetime.attempts}
+                  onClick={() => void run('conditions')}
+                >
+                  Проверить условия записи
+                </button>
+              </GameCreateWizardSection>
+              {conditions && hasPrice && (!wizard.active || reviewing) && (
                 <label>
                   <input
                     type="checkbox"
@@ -172,18 +194,29 @@ export function NativeGameJoin({
                     onChange={(e) => setConsent(e.currentTarget.checked)}
                   />
                   Подтверждаю запись по подписке, стоимость{' '}
-                  {(conditions.price.amountMinor ?? 0) / 100} ₽
+                  {Number(conditions.price.amountMinor) / 100} ₽
                 </label>
               )}
             </>
           )}
-          <button
-            type="button"
-            disabled={busy || !lifetime.attempts || (paid && (!consent || !conditions))}
-            onClick={() => void run('submit')}
-          >
-            {paid ? 'Записаться по подписке' : 'Присоединиться к игре'}
-          </button>
+          {!wizard.active || reviewing || !paid ? (
+            <button
+              type="button"
+              disabled={
+                busy || !lifetime.attempts || (paid && (!consent || !conditions || !hasPrice))
+              }
+              onClick={() => {
+                if (wizard.active && !reviewing) wizard.advance(1);
+                else void run('submit');
+              }}
+            >
+              {paid
+                ? 'Записаться по подписке'
+                : reviewing
+                  ? 'Подтвердить участие'
+                  : 'Присоединиться к игре'}
+            </button>
+          ) : null}
         </>
       )}
       {attempt && (

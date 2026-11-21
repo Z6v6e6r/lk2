@@ -1,0 +1,168 @@
+.game-create-wizard__header {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 16px 12px;
+  text-align: center;
+}
+
+.game-create-wizard__header p {
+  margin: 0 0 4px;
+  color: var(--games-muted, #615b68);
+  font-size: 12px;
+}
+
+.game-create-wizard__header h1 {
+  margin: 0;
+  color: var(--games-ink, #1e1a23);
+  font-size: 23px;
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+}
+
+.game-create-wizard__header h1:focus {
+  outline: none;
+}
+
+.game-create-wizard__back {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid var(--games-line, #ded8e8);
+  border-radius: 50%;
+  background: var(--games-surface, #fff);
+  color: var(--games-ink, #1e1a23);
+  font-size: 23px;
+  text-decoration: none;
+}
+
+.game-create-wizard__section {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.game-create-wizard__section[hidden] {
+  display: none;
+}
+
+.game-create-wizard__section > .game-create-wizard__label {
+  margin: 0;
+  color: var(--games-ink, #1e1a23);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.game-create-wizard__places,
+.game-create-wizard__section .game-create-wizard__quick {
+  display: grid;
+  gap: 8px;
+}
+
+.game-create-wizard__quick {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.game-create-wizard__place,
+.game-create-wizard__quick button,
+.game-create-wizard__dates button {
+  min-height: 44px;
+  border: 1px solid var(--games-line, #ded8e8);
+  border-radius: 12px;
+  background: var(--games-surface, #fff);
+  color: var(--games-ink, #1e1a23);
+  font: inherit;
+}
+
+.game-create-wizard__place {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 13px 14px;
+  text-align: left;
+}
+
+.game-create-wizard__place small {
+  grid-column: 1;
+  color: var(--games-muted, #615b68);
+}
+
+.game-create-wizard__place span {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.game-create-wizard__place[aria-pressed='true'],
+.game-create-wizard__quick button[aria-pressed='true'],
+.game-create-wizard__dates button[aria-pressed='true'] {
+  border-color: var(--games-accent, #704fcd);
+  background: #eee8fc;
+}
+
+.game-create-wizard__dates {
+  display: flex;
+  overflow-x: auto;
+  gap: 7px;
+  padding: 2px 2px 5px;
+  scroll-padding: 2px;
+}
+
+.game-create-wizard__dates button {
+  display: grid;
+  flex: 0 0 52px;
+  gap: 2px;
+  min-height: 63px;
+  padding: 5px 4px;
+  font-size: 11px;
+  text-align: center;
+}
+
+.game-create-wizard__dates strong {
+  font-size: 18px;
+}
+
+.game-create-wizard__context {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--games-line, #ded8e8);
+  border-radius: 12px;
+  background: var(--games-surface, #fff);
+  color: var(--games-ink, #1e1a23);
+}
+
+.game-create-wizard__search {
+  width: 100%;
+}
+
+.game-create-wizard__actions {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.game-create-wizard__actions button {
+  width: 100%;
+  min-height: 46px;
+}
+
+.game-create-wizard__back:focus-visible,
+.game-create-wizard__place:focus-visible,
+.game-create-wizard__quick button:focus-visible,
+.game-create-wizard__dates button:focus-visible {
+  outline: 2px solid var(--games-accent, #704fcd);
+  outline-offset: 2px;
+}
+
+@media (max-width: 680px) {
+  .game-create-wizard .game-create-form {
+    min-width: 0;
+    padding-top: 8px;
+  }
+
+  .game-create-wizard .game-create-form__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
