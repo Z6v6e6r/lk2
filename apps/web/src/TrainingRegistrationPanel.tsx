@@ -5,8 +5,8 @@ import {
   GameCreateWizardHeader,
   GameCreateWizardNext,
   GameCreateWizardSection,
-  useGameCreateWizard,
 } from './GameCreateWizard.js';
+import { useGameCreateWizard } from './use-game-create-wizard.js';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
 import { TrainingRegistrationAttempts } from './training-registration-attempt.js';
 import {

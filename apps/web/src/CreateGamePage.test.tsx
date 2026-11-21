@@ -145,8 +145,8 @@ describe('CreateGamePage durable create recovery', () => {
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(screen.getByRole('heading', { name: 'Дата и время' })).toBeVisible();
       await user.click(screen.getByRole('button', { name: '120 мин' }));
-      const savedStart = (screen.getByLabelText('Начало') as HTMLInputElement).value;
-      const savedEnd = (screen.getByLabelText('Окончание') as HTMLInputElement).value;
+      const savedStart = screen.getByLabelText<HTMLInputElement>('Начало').value;
+      const savedEnd = screen.getByLabelText<HTMLInputElement>('Окончание').value;
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       await user.clear(screen.getByLabelText('Название'));
       await user.type(screen.getByLabelText('Название'), 'QA мобильный мастер');

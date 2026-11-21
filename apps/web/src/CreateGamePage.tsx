@@ -8,8 +8,8 @@ import {
   GameCreateWizardHeader,
   GameCreateWizardNext,
   GameCreateWizardSection,
-  useGameCreateWizard,
 } from './GameCreateWizard.js';
+import { useGameCreateWizard } from './use-game-create-wizard.js';
 import type { AuthGateway, CreateGameRequest } from './auth-gateway.js';
 import {
   browserCreateGameAttemptLockManager,

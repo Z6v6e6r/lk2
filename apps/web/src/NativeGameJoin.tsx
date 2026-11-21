@@ -1,8 +1,5 @@
-import {
-  GameCreateWizardHeader,
-  GameCreateWizardSection,
-  useGameCreateWizard,
-} from './GameCreateWizard.js';
+import { GameCreateWizardHeader, GameCreateWizardSection } from './GameCreateWizard.js';
+import { useGameCreateWizard } from './use-game-create-wizard.js';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GameCard } from '@phub/api-sdk';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
