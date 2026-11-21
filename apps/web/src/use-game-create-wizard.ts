@@ -11,11 +11,11 @@ function historyRecord(state: unknown): Record<string, unknown> {
   return state !== null && typeof state === 'object' ? (state as Record<string, unknown>) : {};
 }
 
-export function useGameCreateWizard() {
+export function useGameCreateWizard(initialStep: GameCreateStep = 0) {
   const id = useId();
   const [active, setActive] = useState(() => window.matchMedia?.(MOBILE).matches ?? false);
-  const [step, setStep] = useState<GameCreateStep>(0);
-  const anchorStep = useRef<GameCreateStep>(0);
+  const [step, setStep] = useState(initialStep);
+  const anchorStep = useRef(initialStep);
   const generation = useRef(0);
 
   useEffect(() => {

@@ -152,7 +152,7 @@ describe('CreateGamePage durable create recovery', () => {
       await user.type(screen.getByLabelText('Название'), 'QA мобильный мастер');
       await user.selectOptions(screen.getByLabelText('Доступ'), 'PRIVATE');
 
-      await user.click(screen.getByRole('button', { name: 'Назад', exact: true }));
+      await user.click(screen.getByRole('button', { name: 'Назад' }));
       expect(await screen.findByRole('heading', { name: 'Дата и время' })).toBeVisible();
       expect(screen.getByRole('button', { name: '120 мин' })).toHaveAttribute(
         'aria-pressed',
@@ -165,7 +165,7 @@ describe('CreateGamePage durable create recovery', () => {
       expect(screen.getByLabelText('Название')).toHaveValue('QA мобильный мастер');
       expect(screen.getByLabelText('Доступ')).toHaveValue('PRIVATE');
       expect(createGame).not.toHaveBeenCalled();
-      await user.dblClick(screen.getByRole('button', { name: 'Создать игру', exact: true }));
+      await user.dblClick(screen.getByRole('button', { name: 'Создать игру' }));
       await waitFor(() => expect(createGame).toHaveBeenCalledTimes(1));
       expect(createGame.mock.calls[0]?.[0]).toMatchObject({
         title: 'QA мобильный мастер',
@@ -177,7 +177,7 @@ describe('CreateGamePage durable create recovery', () => {
       });
       response.resolve(result());
       await waitFor(() => expect(navigate).toHaveBeenCalledTimes(1));
-      await user.click(screen.getByRole('button', { name: 'Создать игру', exact: true }));
+      await user.click(screen.getByRole('button', { name: 'Создать игру' }));
       expect(createGame).toHaveBeenCalledTimes(1);
       expect(navigate).toHaveBeenCalledTimes(1);
     } finally {
