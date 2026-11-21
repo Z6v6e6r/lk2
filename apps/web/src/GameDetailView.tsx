@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { GameCreateWizardHeader, useGameCreateWizard } from './GameCreateWizard.js';
+import { GameCreateWizardHeader } from './GameCreateWizard.js';
+import { useGameCreateWizard } from './use-game-create-wizard.js';
 import {
   GameJoinConditionsPanel,
   type GameJoinConditionsClient,

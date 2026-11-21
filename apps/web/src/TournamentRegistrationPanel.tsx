@@ -2,7 +2,8 @@ import './TournamentRegistrationPanel.css';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import type { TournamentLocalResult } from '@phub/api-contracts';
 import type { AuthGateway } from './auth-gateway.js';
-import { GameCreateWizardHeader, useGameCreateWizard } from './GameCreateWizard.js';
+import { GameCreateWizardHeader } from './GameCreateWizard.js';
+import { useGameCreateWizard } from './use-game-create-wizard.js';
 import { TournamentLocalAttempts } from './tournament-local-attempt.js';
 import {
   PARTICIPATION_LEVEL_UNAVAILABLE_MESSAGE,
