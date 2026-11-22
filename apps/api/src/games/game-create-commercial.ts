@@ -256,9 +256,9 @@ export type CommercialCreateResult =
       readonly message: string;
     }
   | {
-      /** Stable local-writer rejections keep their existing route mapping (400). */
+      /** Stable local-writer rejections keep their route mapping. */
       readonly kind: 'create_rejected';
-      readonly code: 'GAME_LOCATION_INVALID' | 'GAME_START_TIME_PASSED';
+      readonly code: Extract<CreateStoredGameResult, { outcome: 'rejected' }>['code'];
     };
 
 export const COMMERCIAL_CREATE_FAILURE_MESSAGES: Readonly<

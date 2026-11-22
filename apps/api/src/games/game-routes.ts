@@ -421,6 +421,27 @@ function errorMessage(code: GameRosterCommandErrorCode): string {
   return ERROR_MESSAGES[code] ?? 'Команду нельзя выполнить в текущем состоянии игры.';
 }
 
+function sendCreateRejection(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  code: Extract<CreateStoredGameResult, { outcome: 'rejected' }>['code'],
+) {
+  switch (code) {
+    case 'GAME_LOCATION_INVALID':
+      return sendApiError(
+        request,
+        reply,
+        400,
+        'INVALID_REQUEST',
+        'Проверьте параметры и время игры.',
+      );
+    case 'GAME_START_TIME_PASSED':
+      return sendApiError(request, reply, 400, code, 'Время начала игры должно быть в будущем.');
+    case 'GAME_SLOT_UNAVAILABLE':
+      return sendApiError(request, reply, 409, code, 'Выбранное время корта уже занято.');
+  }
+}
+
 function operationBody(
   result: Extract<GameRosterCommandResult, { outcome: 'applied' }>,
   type: UserRosterCommand,
@@ -763,24 +784,8 @@ export function registerGameRoutes(
             result.message,
           );
         }
-        if (result.kind === 'create_rejected') {
-          if (result.code === 'GAME_LOCATION_INVALID') {
-            return sendApiError(
-              request,
-              reply,
-              400,
-              'INVALID_REQUEST',
-              'Проверьте параметры и время игры.',
-            );
-          }
-          return sendApiError(
-            request,
-            reply,
-            400,
-            'GAME_START_TIME_PASSED',
-            'Время начала игры должно быть в будущем.',
-          );
-        }
+        if (result.kind === 'create_rejected')
+          return sendCreateRejection(request, reply, result.code);
         return reply.status(202).send(result.body);
       }
       const result = await options.managementRepository.create({
@@ -801,24 +806,7 @@ export function registerGameRoutes(
           'Idempotency-Key уже использован для другой команды.',
         );
       }
-      if (result.outcome === 'rejected') {
-        if (result.code === 'GAME_LOCATION_INVALID') {
-          return sendApiError(
-            request,
-            reply,
-            400,
-            'INVALID_REQUEST',
-            'Проверьте параметры и время игры.',
-          );
-        }
-        return sendApiError(
-          request,
-          reply,
-          400,
-          'GAME_START_TIME_PASSED',
-          'Время начала игры должно быть в будущем.',
-        );
-      }
+      if (result.outcome === 'rejected') return sendCreateRejection(request, reply, result.code);
       return reply.status(202).send(managementOperationBody(result, 'CREATE_GAME'));
     },
   );
