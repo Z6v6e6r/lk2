@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TrainingRegistrationResult } from '@phub/api-contracts';
 import type { AuthGateway } from './auth-gateway.js';
 import {
@@ -100,10 +100,12 @@ function TrainingRegistrationSession({
       }
     });
   const wizard = useGameCreateWizard();
+  const inFlight = useRef(false);
   const mobileSteps = wizard.active && !stored && !result;
   const dateHint = new Date(Date.parse(training.startsAt) + 10800000).toISOString().slice(0, 10);
   const run = async (read: boolean) => {
-    if (busy) return;
+    if (inFlight.current || !lifetime.current(gateway)) return;
+    inFlight.current = true;
     setBusy(true);
     setError(null);
     setLevelSetup(false);
@@ -135,6 +137,7 @@ function TrainingRegistrationSession({
         setError('Не удалось проверить запись. Сохранённый запрос не заменён; повторите проверку.');
       }
     } finally {
+      inFlight.current = false;
       if (lifetime.current(gateway)) setBusy(false);
     }
   };

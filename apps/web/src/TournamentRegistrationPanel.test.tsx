@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TournamentRegistrationPanel } from './TournamentRegistrationPanel.js';
@@ -32,6 +32,51 @@ describe('rendered actual tournament registration panel', () => {
     });
   });
   afterEach(cleanup);
+  it('confirms one mobile JOIN after Back, even when two clicks enter before rerender', async () => {
+    vi.stubGlobal('matchMedia', () => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    window.history.replaceState({}, '', '/tournaments');
+    const response = Promise.withResolvers<TournamentLocalResult>();
+    const command = vi.fn(() => response.promise);
+    const gateway = {
+      tournamentPrincipal: () => `${id}:${id}:0:0`,
+      getTournamentRegistration: vi.fn().mockResolvedValue({ commandsEnabled: true, result: null }),
+      commandTournament: command,
+    } as unknown as AuthGateway;
+    try {
+      const user = userEvent.setup();
+      render(
+        <TournamentRegistrationPanel
+          gateway={gateway}
+          principal={{ tenantId: id, userId: id }}
+          tournamentId={id}
+        />,
+      );
+      const start = screen.getByRole('button', { name: 'Записаться на турнир' });
+      await waitFor(() => expect(start).toBeEnabled());
+      await user.click(start);
+      await user.click(screen.getByRole('button', { name: 'Назад' }));
+      await screen.findByRole('button', { name: 'Записаться на турнир' });
+      expect(command).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole('button', { name: 'Записаться на турнир' }));
+      const confirm = screen.getByRole('button', { name: 'Подтвердить запись' });
+      act(() => {
+        fireEvent.click(confirm);
+        fireEvent.click(confirm);
+      });
+      await waitFor(() => expect(command).toHaveBeenCalledOnce());
+      response.resolve(joined);
+
+      expect(await screen.findByText('Запись подтверждена.')).toBeVisible();
+      expect(command).toHaveBeenCalledExactlyOnceWith(id, { action: 'JOIN' }, expect.any(String));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it('level refusal offers a self-declared level and retries JOIN under the same key', async () => {
     const levels = ['D', 'C', 'B'].map((code, index) => ({
       id: `3333333${index}-3333-4333-a333-333333333333`,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, cleanup, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, it, expect, vi } from 'vitest';
 import { TrainingRegistrationPanel } from './TrainingRegistrationPanel.js';
@@ -44,6 +44,54 @@ function setup() {
     } as unknown as AuthGateway;
   return { gateway, registerTraining, getTrainingRegistration, result };
 }
+it('retains the mobile subscription on Back and sends one registration for two rapid clicks', async () => {
+  vi.stubGlobal('matchMedia', () => ({
+    matches: true,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  window.history.replaceState({}, '', '/trainings');
+  const h = setup();
+  const response = Promise.withResolvers<typeof h.result>();
+  h.registerTraining.mockReturnValue(response.promise);
+  try {
+    const user = userEvent.setup();
+    render(
+      <TrainingRegistrationPanel
+        gateway={h.gateway}
+        principal={{ tenantId, userId }}
+        training={training}
+        onClose={() => undefined}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.selectOptions(await screen.findByLabelText('Выберите подписку'), subscriptionId);
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.click(screen.getByLabelText('Назад'));
+    expect(await screen.findByRole('heading', { name: 'Способ записи' })).toBeVisible();
+    expect(screen.getByLabelText('Выберите подписку')).toHaveValue(subscriptionId);
+    expect(h.registerTraining).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    const confirm = screen.getByRole('button', { name: 'Записаться по подписке' });
+    act(() => {
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+    });
+    await waitFor(() => expect(h.registerTraining).toHaveBeenCalledOnce());
+    response.resolve(h.result);
+
+    await screen.findByText('Текущая запись не подтверждена. Проверка не создаёт новую запись.');
+    expect(h.registerTraining).toHaveBeenCalledExactlyOnceWith(
+      training.id,
+      { dateHint: '2035-04-02', subscriptionId },
+      expect.any(String),
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 it('requires explicit choice, preserves pending key and never renders historical success as attendance', async () => {
   const h = setup();
   render(
