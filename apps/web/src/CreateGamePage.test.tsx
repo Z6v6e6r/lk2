@@ -786,7 +786,7 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     expect(screen.queryByLabelText('Оплата')).not.toBeInTheDocument();
   });
 
-  it('submits the managed create once and keeps the accepted operation for readback', async () => {
+  it('submits the managed create once on double click and keeps the accepted operation', async () => {
     openManagedCreate();
     const createPaidGame = vi
       .fn<NonNullable<AuthGateway['createPaidGame']>>()
@@ -802,7 +802,7 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
 
     await screen.findByRole('option', { name: 'Селигерская' });
     await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
-    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await user.dblClick(screen.getByRole('button', { name: 'Создать игру' }));
 
     await screen.findByRole('heading', { name: 'Игра ожидает подтверждения' });
     expect(createPaidGame).toHaveBeenCalledOnce();
