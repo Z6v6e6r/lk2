@@ -327,6 +327,38 @@ export interface CreateStoredGameInput {
    */
   readonly gameId?: string;
   readonly operationId?: string;
+  readonly wholeCourtCheckout?: WholeCourtCheckoutBinding;
+}
+
+export interface WholeCourtCheckoutBinding {
+  readonly providerClientId: string;
+  readonly providerStationId: string;
+  readonly providerRoomId: string;
+  readonly amountMinor: number;
+}
+
+export interface WholeCourtCheckoutReceipt {
+  readonly provider: 'VIVA';
+  readonly transactionId: string;
+  readonly bookingId: string;
+  readonly exerciseId: string;
+  readonly amountMinor: number;
+  readonly currency: 'RUB';
+  readonly confirmedAt: string;
+}
+
+function validWholeCourtBinding(
+  binding: WholeCourtCheckoutBinding,
+  validId: (value: unknown) => boolean,
+): boolean {
+  return (
+    Object.keys(binding).sort().join() ===
+      'amountMinor,providerClientId,providerRoomId,providerStationId' &&
+    [binding.providerClientId, binding.providerStationId, binding.providerRoomId].every(validId) &&
+    Number.isSafeInteger(binding.amountMinor) &&
+    binding.amountMinor > 0 &&
+    binding.amountMinor <= 10_000_000
+  );
 }
 
 export type CreateStoredGameResult =
@@ -340,7 +372,7 @@ export type CreateStoredGameResult =
     }
   | {
       readonly outcome: 'rejected';
-      readonly code: 'GAME_START_TIME_PASSED' | 'GAME_LOCATION_INVALID';
+      readonly code: 'GAME_START_TIME_PASSED' | 'GAME_LOCATION_INVALID' | 'GAME_SLOT_UNAVAILABLE';
     }
   | { readonly outcome: 'idempotency_conflict' };
 
@@ -897,6 +929,19 @@ export function createGameRepository(
 
     create(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        if (input.wholeCourtCheckout) {
+          // The provider validators are only needed for this pilot path.
+          const { qcId } = await import('@phub/domain/quarter-create');
+          if (
+            !validWholeCourtBinding(input.wholeCourtCheckout, qcId) ||
+            input.paymentMode !== 'ORGANIZER_PAYS' ||
+            !input.gameId ||
+            !input.operationId ||
+            !input.courtId ||
+            input.visibility !== 'PRIVATE'
+          )
+            throw new Error('WHOLE_COURT_DRAFT_INVALID');
+        }
         if (
           isRestrictedGameTestCourt(input.tenantId, input.courtId) &&
           (!options.testCourtsEnabled ||
@@ -915,6 +960,20 @@ export function createGameRepository(
         ]);
         const replay = replayCreate(await existingCommand(client, input), input.requestHash);
         if (replay) return replay;
+
+        if (input.wholeCourtCheckout) {
+          await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+            `whole-court-create:${input.tenantId}:${input.courtId}`,
+          ]);
+          const occupied = await queryOne<{ id: string }>(
+            client,
+            `select id from games.games where tenant_id=$1 and court_id=$2
+              and starts_at < $4 and ends_at > $3
+              and lifecycle_state not in ('CANCELLED','FINISHED') limit 1`,
+            [input.tenantId, input.courtId, input.startsAt, input.endsAt],
+          );
+          if (occupied) return { outcome: 'rejected', code: 'GAME_SLOT_UNAVAILABLE' };
+        }
 
         const station = await queryOne<{ readonly id: string }>(
           client,
@@ -1070,7 +1129,7 @@ export function createGameRepository(
               JSON.stringify({ gameId: game.id, expectedRevision: String(game.revision) }),
             ],
           );
-        } else {
+        } else if (!input.wholeCourtCheckout) {
           await client.query(
             `insert into games.scheduled_commands (
                tenant_id, game_id, command_type, due_at, expected_revision, payload
@@ -1100,7 +1159,14 @@ export function createGameRepository(
             input.idempotencyKey,
             input.requestHash,
             game.id,
-            JSON.stringify(result),
+            JSON.stringify({
+              ...result,
+              ...(input.wholeCourtCheckout
+                ? {
+                    wholeCourtCheckout: input.wholeCourtCheckout,
+                  }
+                : {}),
+            }),
           ],
         );
         await client.query(
@@ -2286,4 +2352,225 @@ export async function readNotificationGameCandidate(
   return result.rows[0]
     ? gameCardProjectionInputSchema.parse(result.rows[0].base_payload)
     : undefined;
+}
+
+export interface WholeCourtCheckoutScope {
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly operationId: string;
+  readonly idempotencyKey: string;
+}
+
+interface WholeCourtCheckoutRow {
+  readonly game_id: string;
+  readonly state: string;
+  readonly lifecycle_state: string;
+  readonly revision: string;
+  readonly starts_at: Date;
+  readonly ends_at: Date;
+  readonly created_at: Date;
+  readonly updated_at: Date;
+  readonly binding: unknown;
+  readonly receipt: unknown;
+  readonly projection_event_id: string | null;
+}
+
+async function wholeCourtCheckoutRow(
+  client: PoolClient,
+  scope: WholeCourtCheckoutScope,
+  lock = false,
+) {
+  return queryOne<WholeCourtCheckoutRow>(
+    client,
+    `select g.id as game_id, o.state, g.lifecycle_state, g.revision, g.starts_at, g.ends_at,
+            o.created_at, o.updated_at, j.result_payload->'wholeCourtCheckout' as binding,
+            j.result_payload->'wholeCourtReceipt' as receipt,
+            j.result_payload->>'wholeCourtProjectionEventId' as projection_event_id
+       from games.command_idempotency j
+       join games.operations o on o.tenant_id=j.tenant_id and o.id=j.id and o.game_id=j.aggregate_id
+       join games.games g on g.tenant_id=j.tenant_id and g.id=j.aggregate_id
+      where j.tenant_id=$1 and j.actor_user_id=$2 and j.id=$3 and j.idempotency_key=$4
+        and j.command_type='game.create.v1' and j.state='COMPLETED'
+        and j.result_payload ? 'wholeCourtCheckout'
+        and o.kind='CREATE_GAME' and o.requested_by_user_id=$2
+        and g.organizer_user_id=$2 and g.payment_mode='ORGANIZER_PAYS' and g.visibility='PRIVATE'
+        and not exists (select 1 from integration.legacy_game_merge_redirects r
+                         where r.tenant_id=g.tenant_id and r.source_game_id=g.id)
+      ${lock ? 'for update of j, o, g' : ''}`,
+    [scope.tenantId, scope.userId, scope.operationId, scope.idempotencyKey],
+  );
+}
+
+export function createWholeCourtCheckoutRepository(pool: Pool) {
+  return {
+    async read(scope: WholeCourtCheckoutScope) {
+      return withTenantTransaction(pool, scope.tenantId, async (client) => {
+        const row = await wholeCourtCheckoutRow(client, scope);
+        return row
+          ? {
+              gameId: row.game_id,
+              state: row.state,
+              revision: positiveInteger(row.revision),
+              startsAt: timestamp(row.starts_at),
+              endsAt: timestamp(row.ends_at),
+              createdAt: timestamp(row.created_at),
+              updatedAt: timestamp(row.updated_at),
+              binding: row.binding,
+              receipt: row.receipt,
+              projectionEventId: row.projection_event_id,
+            }
+          : undefined;
+      });
+    },
+    async finalize(
+      input: WholeCourtCheckoutScope & {
+        readonly gameId: string;
+        readonly correlationId: string;
+        readonly binding: WholeCourtCheckoutBinding;
+        readonly receipt: WholeCourtCheckoutReceipt;
+      },
+    ): Promise<void> {
+      const [{ isDeepStrictEqual }, { qcId, qcIso }] = await Promise.all([
+        import('node:util'),
+        import('@phub/domain/quarter-create'),
+      ]);
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await wholeCourtCheckoutRow(client, input, true);
+        const paid = input.receipt;
+        if (
+          !row ||
+          row.game_id !== input.gameId ||
+          !validWholeCourtBinding(input.binding, qcId) ||
+          !isDeepStrictEqual(row.binding, input.binding) ||
+          input.binding.amountMinor !== paid.amountMinor ||
+          Object.keys(paid).sort().join() !==
+            'amountMinor,bookingId,confirmedAt,currency,exerciseId,provider,transactionId' ||
+          ![paid.bookingId, paid.exerciseId, paid.transactionId].every(qcId) ||
+          paid.provider !== 'VIVA' ||
+          paid.currency !== 'RUB' ||
+          !qcIso(paid.confirmedAt) ||
+          Date.parse(paid.confirmedAt) + 5_000 < Date.parse(timestamp(row.created_at))
+        )
+          throw new Error('WHOLE_COURT_CONFIRM_BINDING_MISMATCH');
+        // If a concurrent request committed, the caller reads only the already stored receipt.
+        if (row.state === 'SUCCEEDED') {
+          if (!isDeepStrictEqual(row.receipt, input.receipt))
+            throw new Error('WHOLE_COURT_RECEIPT_CONFLICT');
+          return;
+        }
+        if (row.state !== 'PENDING' || row.lifecycle_state !== 'PROVISIONING')
+          throw new Error('WHOLE_COURT_CONFIRM_STATE_CONFLICT');
+
+        // Reserve all three provider identities in the same transaction as the only game update.
+        // A provider exercise with a pre-existing canonical game is never adopted or overwritten.
+        await client.query(
+          `insert into integration.external_entity_map
+             (tenant_id,external_system,entity_type,internal_id,external_id,sync_status,last_synced_at)
+           values ($1,'VIVA','exercise',$2,$3,'synced',now()),
+                  ($1,'VIVA','game_checkout_booking',$2,$4,'synced',now()),
+                  ($1,'VIVA','game_checkout_transaction',$2,$5,'synced',now())
+           on conflict do nothing`,
+          [input.tenantId, input.gameId, paid.exerciseId, paid.bookingId, paid.transactionId],
+        );
+        const claims = await client.query<{ entity_type: string; external_id: string }>(
+          `select entity_type,external_id from integration.external_entity_map
+            where tenant_id=$1 and external_system='VIVA' and internal_id=$2
+              and entity_type in ('exercise','game_checkout_booking','game_checkout_transaction')
+              and sync_status='synced' and sync_error_code is null for share`,
+          [input.tenantId, input.gameId],
+        );
+        const ids = new Map(claims.rows.map((claim) => [claim.entity_type, claim.external_id]));
+        if (
+          ids.size !== 3 ||
+          ids.get('exercise') !== paid.exerciseId ||
+          ids.get('game_checkout_booking') !== paid.bookingId ||
+          ids.get('game_checkout_transaction') !== paid.transactionId
+        )
+          throw new Error('WHOLE_COURT_PROVIDER_ID_CONFLICT');
+        const game = await queryOne<{ revision: string; updated_at: Date }>(
+          client,
+          `update games.games set lifecycle_state='SCHEDULED',revision=revision+1,updated_at=clock_timestamp()
+            where tenant_id=$1 and id=$2 and lifecycle_state='PROVISIONING' and booking_id is null
+            returning revision,updated_at`,
+          [input.tenantId, input.gameId],
+        );
+        if (!game) throw new Error('WHOLE_COURT_CONFIRM_GAME_LOST');
+        const organizer = await client.query(
+          `update games.participations set payment_state='PAID'
+            where tenant_id=$1 and game_id=$2 and user_id=$3 and role='ORGANIZER' and state='ACTIVE'
+              and payment_state='NOT_REQUIRED'`,
+          [input.tenantId, input.gameId, input.userId],
+        );
+        if (organizer.rowCount !== 1) throw new Error('WHOLE_COURT_CONFIRM_ORGANIZER_LOST');
+        const revision = positiveInteger(game.revision);
+        const occurredAt = timestamp(game.updated_at);
+        const eventId = randomUUID();
+        const operation = await client.query(
+          `update games.operations set state='SUCCEEDED',updated_at=$3,completed_at=$3
+            where tenant_id=$1 and id=$2 and state='PENDING' and game_id=$4 and requested_by_user_id=$5`,
+          [input.tenantId, input.operationId, occurredAt, input.gameId, input.userId],
+        );
+        const command = await client.query(
+          `update games.command_idempotency set result_payload=result_payload || $3::jsonb
+            where tenant_id=$1 and id=$2 and command_type='game.create.v1' and aggregate_id=$4
+              and actor_user_id=$5 and not (result_payload ? 'wholeCourtReceipt')`,
+          [
+            input.tenantId,
+            input.operationId,
+            JSON.stringify({
+              revision,
+              committedAt: occurredAt,
+              wholeCourtReceipt: paid,
+              wholeCourtProjectionEventId: eventId,
+            }),
+            input.gameId,
+            input.userId,
+          ],
+        );
+        if (operation.rowCount !== 1 || command.rowCount !== 1)
+          throw new Error('WHOLE_COURT_CONFIRM_CUSTODY_LOST');
+        await client.query(
+          `insert into games.scheduled_commands
+             (tenant_id,game_id,command_type,due_at,expected_revision,payload)
+           values ($1,$2,'game.lifecycle.start.v1',$3,$5,$6::jsonb),
+                  ($1,$2,'game.lifecycle.finish.v1',$4,$5,$6::jsonb)`,
+          [
+            input.tenantId,
+            input.gameId,
+            row.starts_at,
+            row.ends_at,
+            revision,
+            JSON.stringify({ gameId: input.gameId, expectedRevision: String(revision) }),
+          ],
+        );
+        await client.query(
+          `insert into audit.audit_log
+             (tenant_id,actor_id,action,resource_type,resource_id,result,correlation_id,new_value)
+           values ($1,$2,'GAME_WHOLE_COURT_CONFIRMED','GAME',$3,'SUCCESS',$4,$5::jsonb)`,
+          [
+            input.tenantId,
+            input.userId,
+            input.gameId,
+            input.correlationId,
+            JSON.stringify({ operationId: input.operationId, revision }),
+          ],
+        );
+        await insertOutboxEvent(client, {
+          id: eventId,
+          tenantId: input.tenantId,
+          aggregateId: input.gameId,
+          type: 'game.scheduled.v1',
+          correlationId: input.correlationId,
+          occurredAt,
+          payload: {
+            gameId: input.gameId,
+            aggregateRevision: String(revision),
+            causationId: input.operationId,
+            actorUserId: input.userId,
+            organizerUserId: input.userId,
+          },
+        });
+      });
+    },
+  };
 }

@@ -161,6 +161,7 @@ import {
 } from './event-avatar-media.js';
 import { registerCoachGameSummaryRoutes } from './coach-games/coach-game-summary-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
+import type { WholeCourtRuntime } from './games/game-whole-court-create.js';
 import type { GameCommercialCreateOptions } from './games/game-create-commercial-runtime.js';
 import type { GameCommercialJoinOptions } from './games/game-routes.js';
 import { registerLegacyGameRosterBridgeRoutes } from './games/legacy-game-roster-bridge-routes.js';
@@ -480,6 +481,7 @@ export interface BuildAppOptions {
   readonly joinableSubscriptions?: JoinableSubscriptionsOptions;
   /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
   readonly gameCommercialCreate?: GameCommercialCreateOptions;
+  readonly gameWholeCourt?: WholeCourtRuntime;
   readonly gameQuarterCreate?: QuarterCreateRuntime;
   readonly monthlyPurchase?: MonthlyPurchaseRuntime;
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
@@ -1337,6 +1339,7 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.gameCommercialJoin ? { commercialJoin: options.gameCommercialJoin } : {}),
     ...(options.gameManagedSelfLeave ? { managedSelfLeave: options.gameManagedSelfLeave } : {}),
     ...(options.gameCommercialCreate ? { commercialCreate: options.gameCommercialCreate } : {}),
+    ...(options.gameWholeCourt ? { wholeCourt: options.gameWholeCourt } : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });

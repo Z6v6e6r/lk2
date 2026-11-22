@@ -19,6 +19,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandl
 
 import { sendApiError } from '../http-errors.js';
 import { subscriptionRuntimeIdempotencyKeySha256 } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
+import { WholeCourtCreateError, type WholeCourtRuntime } from './game-whole-court-create.js';
 import {
   executeCommercialCreate,
   readCommercialCreateOperation,
@@ -420,6 +421,27 @@ function errorMessage(code: GameRosterCommandErrorCode): string {
   return ERROR_MESSAGES[code] ?? 'Команду нельзя выполнить в текущем состоянии игры.';
 }
 
+function sendCreateRejection(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  code: Extract<CreateStoredGameResult, { outcome: 'rejected' }>['code'],
+) {
+  switch (code) {
+    case 'GAME_LOCATION_INVALID':
+      return sendApiError(
+        request,
+        reply,
+        400,
+        'INVALID_REQUEST',
+        'Проверьте параметры и время игры.',
+      );
+    case 'GAME_START_TIME_PASSED':
+      return sendApiError(request, reply, 400, code, 'Время начала игры должно быть в будущем.');
+    case 'GAME_SLOT_UNAVAILABLE':
+      return sendApiError(request, reply, 409, code, 'Выбранное время корта уже занято.');
+  }
+}
+
 function operationBody(
   result: Extract<GameRosterCommandResult, { outcome: 'applied' }>,
   type: UserRosterCommand,
@@ -580,10 +602,82 @@ export function registerGameRoutes(
     readonly managedSelfLeave?: ManagedSelfLeaveRuntime;
     /** Composed only when the managed commercial CREATE contour is enabled (default OFF). */
     readonly commercialCreate?: GameCommercialCreateOptions;
+    readonly wholeCourt?: WholeCourtRuntime;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
+  const checkoutActor = (
+    request: FastifyRequest,
+    current: NonNullable<ReturnType<typeof principal>>,
+  ) => ({
+    tenantId: current.tenantId,
+    userId: current.userId,
+    sessionId: sessionId(request),
+    tenantKey: (request.params as { tenantKey: string }).tenantKey,
+    correlationId: request.id,
+  });
+  app.get(
+    '/user/api/v1/:tenantKey/games/whole-court-offer',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store');
+      const current = principal(request);
+      if (!current)
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      return options.wholeCourt?.offer(checkoutActor(request, current)) ?? { offer: null };
+    },
+  );
+  app.post(
+    '/user/api/v1/:tenantKey/game-operations/:operationId/whole-court',
+    { preHandler: [...options.commandHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store').header('Referrer-Policy', 'no-referrer');
+      const current = principal(request);
+      if (!current)
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      const operationId = (request.params as { operationId: string }).operationId;
+      const body = request.body as { mode?: unknown } | undefined;
+      if (
+        !UUID_PATTERN.test(operationId) ||
+        !body ||
+        Object.keys(body).length !== 1 ||
+        (body.mode !== 'reserve' && body.mode !== 'confirm')
+      )
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          'Проверьте параметры операции.',
+        );
+      if (!options.wholeCourt)
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'GAME_OPERATION_NOT_FOUND',
+          'Операция не найдена.',
+        );
+      try {
+        const result = await options.wholeCourt.resume(checkoutActor(request, current), {
+          mode: body.mode,
+          operationId,
+          idempotencyKey: idempotencyKey(request),
+        });
+        return reply.status(result.operation.status === 'SUCCEEDED' ? 200 : 202).send(result);
+      } catch (error) {
+        if (!(error instanceof WholeCourtCreateError)) throw error;
+        return sendApiError(
+          request,
+          reply,
+          error.status,
+          error.code,
+          'Операция создания игры недоступна.',
+        );
+      }
+    },
+  );
   app.get(
     '/user/api/v1/:tenantKey/games/test-courts',
     { preHandler: [...options.authenticatedTenantHandlers] },
@@ -607,9 +701,42 @@ export function registerGameRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.managementRepository) return unavailable(request, reply);
-      const parsed = parseCreateBody(request, reply, options.commercialCreate !== undefined);
+      const wholeCourtRequest =
+        options.wholeCourt &&
+        typeof request.body === 'object' &&
+        request.body !== null &&
+        'paymentMode' in request.body &&
+        request.body.paymentMode === 'ORGANIZER_PAYS';
+      const parsed = parseCreateBody(
+        request,
+        reply,
+        options.commercialCreate !== undefined || !!wholeCourtRequest,
+      );
       if (!parsed) return reply;
       const { payload, commercial } = parsed;
+      if (options.wholeCourt && payload.paymentMode === 'ORGANIZER_PAYS') {
+        const key = idempotencyKey(request);
+        reply.header('Referrer-Policy', 'no-referrer');
+        try {
+          const result = await options.wholeCourt.start({
+            ...checkoutActor(request, current),
+            payload,
+            ...commercial,
+            idempotencyKey: key,
+            idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(key),
+          });
+          return reply.status(result.operation.status === 'SUCCEEDED' ? 200 : 202).send(result);
+        } catch (error) {
+          if (!(error instanceof WholeCourtCreateError)) throw error;
+          return sendApiError(
+            request,
+            reply,
+            error.status,
+            error.code,
+            'Не удалось подготовить оплату корта.',
+          );
+        }
+      }
       if (payload.paymentMode !== 'NO_PAYMENT') {
         // The blanket beta guard stays byte-identical while the managed contour is not composed.
         if (!options.commercialCreate) {
@@ -657,24 +784,8 @@ export function registerGameRoutes(
             result.message,
           );
         }
-        if (result.kind === 'create_rejected') {
-          if (result.code === 'GAME_LOCATION_INVALID') {
-            return sendApiError(
-              request,
-              reply,
-              400,
-              'INVALID_REQUEST',
-              'Проверьте параметры и время игры.',
-            );
-          }
-          return sendApiError(
-            request,
-            reply,
-            400,
-            'GAME_START_TIME_PASSED',
-            'Время начала игры должно быть в будущем.',
-          );
-        }
+        if (result.kind === 'create_rejected')
+          return sendCreateRejection(request, reply, result.code);
         return reply.status(202).send(result.body);
       }
       const result = await options.managementRepository.create({
@@ -695,24 +806,7 @@ export function registerGameRoutes(
           'Idempotency-Key уже использован для другой команды.',
         );
       }
-      if (result.outcome === 'rejected') {
-        if (result.code === 'GAME_LOCATION_INVALID') {
-          return sendApiError(
-            request,
-            reply,
-            400,
-            'INVALID_REQUEST',
-            'Проверьте параметры и время игры.',
-          );
-        }
-        return sendApiError(
-          request,
-          reply,
-          400,
-          'GAME_START_TIME_PASSED',
-          'Время начала игры должно быть в будущем.',
-        );
-      }
+      if (result.outcome === 'rejected') return sendCreateRejection(request, reply, result.code);
       return reply.status(202).send(managementOperationBody(result, 'CREATE_GAME'));
     },
   );

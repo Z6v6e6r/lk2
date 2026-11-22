@@ -71,7 +71,7 @@ export interface PendingConfirmationCreateGameAttempt {
   readonly payload: CreateGameRequest;
   readonly gameId: string;
   readonly operationId: string;
-  readonly paymentMode: 'SPLIT' | 'SUBSCRIPTION';
+  readonly paymentMode: ManagedPaymentMode;
 }
 
 export type ActiveCreateGameAttempt =
@@ -164,10 +164,16 @@ export function normalizeCreateGamePayload(input: CreateGameRequest): CreateGame
   };
 }
 
-type ManagedPaymentMode = 'SPLIT' | 'SUBSCRIPTION';
+type ManagedPaymentMode = 'SPLIT' | 'SUBSCRIPTION' | 'ORGANIZER_PAYS';
 
 function parseManagedPaymentMode(value: unknown): 'NO_PAYMENT' | ManagedPaymentMode | null {
-  if (value === 'NO_PAYMENT' || value === 'SPLIT' || value === 'SUBSCRIPTION') return value;
+  if (
+    value === 'NO_PAYMENT' ||
+    value === 'SPLIT' ||
+    value === 'SUBSCRIPTION' ||
+    value === 'ORGANIZER_PAYS'
+  )
+    return value;
   return null;
 }
 
@@ -238,6 +244,14 @@ function parsePayload(value: unknown): CreateGameRequest | null {
   const priceConsent =
     value.priceConsent === undefined ? undefined : parsePriceConsent(value.priceConsent);
   if (value.priceConsent !== undefined && priceConsent === null) return null;
+  if (
+    paymentMode === 'ORGANIZER_PAYS' &&
+    (!priceConsent?.amountMinor ||
+      !value.courtId ||
+      value.visibility !== 'PRIVATE' ||
+      value.subscriptionInstanceId !== undefined)
+  )
+    return null;
 
   let levelRange: CreateGameRequest['levelRange'] = null;
   if (value.levelRange !== undefined && value.levelRange !== null) {
@@ -402,7 +416,9 @@ function parsePendingConfirmation(
     !UUID_PATTERN.test(value.gameId) ||
     !isString(value.operationId) ||
     !UUID_PATTERN.test(value.operationId) ||
-    (value.paymentMode !== 'SPLIT' && value.paymentMode !== 'SUBSCRIPTION')
+    (value.paymentMode !== 'SPLIT' &&
+      value.paymentMode !== 'SUBSCRIPTION' &&
+      value.paymentMode !== 'ORGANIZER_PAYS')
   ) {
     throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
   }
@@ -845,7 +861,7 @@ export async function recordCreateGameConfirmation(
   if (!UUID_PATTERN.test(accepted.gameId) || !UUID_PATTERN.test(accepted.operationId)) {
     throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
   }
-  if (attempt.payload.paymentMode !== 'SPLIT' && attempt.payload.paymentMode !== 'SUBSCRIPTION') {
+  if (attempt.payload.paymentMode === 'NO_PAYMENT') {
     throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
   }
   const paymentMode = attempt.payload.paymentMode;

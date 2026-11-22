@@ -27,6 +27,8 @@ import {
 } from '@phub/domain/quarter-create';
 import { withTenantTransaction } from './connection.js';
 import { resolveGameCreateLocationBinding } from './game-create-location-binding-repository.js';
+
+export { resolveGameCreateLocationBinding };
 export interface QuarterScope {
   tenantId: string;
   userId: string;

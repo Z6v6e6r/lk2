@@ -1,6 +1,7 @@
 import { QuarterCreatePanel } from './QuarterCreatePanel.js';
 import { quarterBrowserStorage, quarterStorageKey } from './quarter-create-attempt.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { WholeCourtCheckoutOffer } from '@phub/api-sdk';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 import {
@@ -70,6 +71,8 @@ function commandError(error: unknown): string {
     if (code === 'GAME_COMMERCIAL_ATTEMPT_CONFLICT')
       return 'Ключ незавершённой попытки уже связан с другой командой. Новая команда не отправлена.';
     if (code === 'GAME_START_TIME_PASSED') return 'Время начала уже прошло.';
+    if (code === 'GAME_SLOT_UNAVAILABLE' || code === 'GAME_LOCATION_INVALID')
+      return 'Выбранный корт недоступен для этой игры.';
     if (code === 'IDEMPOTENCY_KEY_REUSED') {
       return 'Ключ незавершённой попытки уже связан с другими параметрами. Новая команда не отправлена; обратитесь в поддержку.';
     }
@@ -91,6 +94,8 @@ function errorCode(error: unknown): unknown {
  */
 const TERMINAL_CREATE_REFUSALS: ReadonlySet<unknown> = new Set([
   'GAME_START_TIME_PASSED',
+  'GAME_SLOT_UNAVAILABLE',
+  'GAME_LOCATION_INVALID',
   'GAME_PAYMENT_REQUIRED',
   'GAME_PAYMENT_MODE_MISMATCH',
   'GAME_PRICE_CONFIRMATION_REQUIRED',
@@ -115,6 +120,32 @@ function isKnownCreateFailureCode(code: unknown): boolean {
   return KNOWN_CREATE_FAILURE_CODES.has(code);
 }
 
+function hasConfirmedPayment(
+  operation: Awaited<ReturnType<AuthGateway['getGameOperation']>>['operation'],
+): boolean {
+  return (
+    operation.type === 'CREATE_GAME' &&
+    operation.status === 'SUCCEEDED' &&
+    operation.commercial?.attemptState === 'OWNER_CONFIRMED' &&
+    operation.commercial.receipt?.provider === 'VIVA' &&
+    operation.commercial.receipt.status === 'CONFIRMED'
+  );
+}
+
+function checkoutUrl(
+  action: Awaited<ReturnType<AuthGateway['getGameOperation']>>['operation']['nextAction'],
+) {
+  if (action.type !== 'OPEN_PAYMENT' || !(Date.parse(action.expiresAt) > Date.now())) return null;
+  try {
+    const url = new URL(action.url);
+    return url.origin === 'https://pay.vivacrm.ru' && !url.username && !url.password && !url.hash
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function browserAttemptStorage(): Storage | undefined {
   if (typeof window === 'undefined') return undefined;
   try {
@@ -122,6 +153,12 @@ function browserAttemptStorage(): Storage | undefined {
   } catch {
     return undefined;
   }
+}
+
+function checkoutReturnOperationId(): string | null {
+  return typeof window === 'undefined'
+    ? null
+    : new URLSearchParams(window.location.search).get('paymentReturn');
 }
 
 function LegacyCreateGamePage({
@@ -162,6 +199,7 @@ function LegacyCreateGamePage({
     [],
   );
   const paidCreateAvailable = paidCreateIntent && typeof gateway.createPaidGame === 'function';
+  const paymentReturnOperationId = useMemo(() => checkoutReturnOperationId(), []);
   const restored = useMemo(() => {
     if (!storage) {
       return {
@@ -217,9 +255,11 @@ function LegacyCreateGamePage({
   const [activeAttempt, setActiveAttempt] = useState<ActiveCreateGameAttempt | null>(
     restoredPending ?? restoredConfirmation,
   );
+  const [wholeCourtOffer, setWholeCourtOffer] = useState<WholeCourtCheckoutOffer | null>(null);
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
   const leaving = useRef(false);
+  const checkedPaymentReturn = useRef(false);
   const [error, setError] = useState<string | null>(
     restored.error ? commandError(restored.error) : null,
   );
@@ -227,7 +267,7 @@ function LegacyCreateGamePage({
     restoredPending
       ? 'Найдена незавершённая попытка. Проверьте сохранённые параметры и повторите восстановление тем же ключом.'
       : restoredConfirmation
-        ? 'Игра создана и ожидает подтверждения. Платёж и бронь не выполнены; проверьте статус операции.'
+        ? 'Найдена незавершённая попытка. Проверьте статус операции.'
         : null,
   );
 
@@ -250,6 +290,14 @@ function LegacyCreateGamePage({
 
   useEffect(() => {
     let active = true;
+    void gateway.getWholeCourtCheckoutOffer?.().then(
+      (result) => {
+        if (active) setWholeCourtOffer(result.offer);
+      },
+      () => {
+        if (active) setWholeCourtOffer(null);
+      },
+    );
     void gateway.listGameTestCourts?.().then(
       (result) => {
         if (active) setTestCourts(result.items);
@@ -277,7 +325,10 @@ function LegacyCreateGamePage({
     };
   }, [gateway]);
 
-  async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+  async function submit(
+    event: React.SyntheticEvent,
+    offer?: WholeCourtCheckoutOffer,
+  ): Promise<void> {
     event.preventDefault();
     if (busy || submitting.current || leaving.current) return;
     if (!storage || !lockManager || restored.error) {
@@ -293,24 +344,47 @@ function LegacyCreateGamePage({
     }
     setError(null);
     setNotice(null);
+    const savedWholeCourt =
+      activeAttempt?.payload.paymentMode === 'ORGANIZER_PAYS' ? activeAttempt.payload : null;
+    const pilotInput: CreateGameRequest | null =
+      savedWholeCourt ??
+      (offer
+        ? {
+            title: title.trim() || 'Игра с оплатой корта',
+            kind: 'FRIENDLY',
+            visibility: 'PRIVATE',
+            stationId: offer.stationId,
+            courtId: offer.courtId,
+            startsAt: offer.startsAt,
+            endsAt: offer.endsAt,
+            timezone: 'Europe/Moscow',
+            capacity: 4,
+            paymentMode: 'ORGANIZER_PAYS',
+            waitlistEnabled,
+            levelRange: null,
+            priceConsent: { amountMinor: offer.amountMinor, currency: offer.currency },
+          }
+        : null);
     const start = new Date(startsAt);
     const end = new Date(endsAt);
     if (
-      !stationId ||
-      !title.trim() ||
-      Number.isNaN(start.getTime()) ||
-      Number.isNaN(end.getTime()) ||
-      end <= start ||
-      (start <= new Date() && !activeAttempt)
+      !pilotInput &&
+      (!stationId ||
+        !title.trim() ||
+        Number.isNaN(start.getTime()) ||
+        Number.isNaN(end.getTime()) ||
+        end <= start ||
+        (start <= new Date() && !activeAttempt))
     ) {
       setError('Проверьте название, станцию и будущее время игры.');
       return;
     }
-    if ((levelFrom && !levelTo) || (!levelFrom && levelTo)) {
+    if (!pilotInput && ((levelFrom && !levelTo) || (!levelFrom && levelTo))) {
       setError('Укажите обе границы уровня или оставьте любой уровень.');
       return;
     }
     if (
+      !pilotInput &&
       levelFrom &&
       levelTo &&
       LEVELS.indexOf(levelFrom as (typeof LEVELS)[number]) >
@@ -319,11 +393,11 @@ function LegacyCreateGamePage({
       setError('Начальный уровень не может быть выше конечного.');
       return;
     }
-    if (paymentMode !== 'NO_PAYMENT' && !gateway.createPaidGame) {
+    if ((pilotInput || paymentMode !== 'NO_PAYMENT') && !gateway.createPaidGame) {
       setError('Платный режим на этом клиенте недоступен. Выберите бесплатную игру.');
       return;
     }
-    const input: CreateGameRequest = {
+    const input: CreateGameRequest = pilotInput ?? {
       title: title.trim(),
       kind: 'FRIENDLY',
       visibility,
@@ -368,9 +442,7 @@ function LegacyCreateGamePage({
       }
       if (prepared.state === 'PENDING_CONFIRMATION') {
         setActiveAttempt(prepared);
-        setNotice(
-          'Игра создана и ожидает подтверждения. Платёж и бронь не выполнены; проверьте статус операции.',
-        );
+        setNotice('Игра ожидает подтверждения. Проверьте статус операции.');
         return;
       }
       attempt = prepared;
@@ -404,6 +476,7 @@ function LegacyCreateGamePage({
         // unresolved. Record the acceptance and let the user re-read that operation; never resolve
         // it as a created/published game and never send a replacement POST.
         if (
+          result.operation.type === 'CREATE_GAME' &&
           result.operation.gameId &&
           ['UNKNOWN', 'PROCESSING', 'ACCEPTED'].includes(result.operation.status)
         ) {
@@ -415,12 +488,19 @@ function LegacyCreateGamePage({
             lockManager,
           );
           setActiveAttempt(confirmation);
-          setNotice(
-            'Игра создана и ожидает подтверждения. Платёж и бронь не выполнены; проверьте статус операции.',
-          );
+          const url =
+            confirmation.paymentMode === 'ORGANIZER_PAYS'
+              ? checkoutUrl(result.operation.nextAction)
+              : null;
+          if (url) {
+            leaving.current = true;
+            navigate(url);
+            return;
+          }
+          setNotice('Игра ожидает подтверждения. Проверьте статус операции.');
           return;
         }
-        if (result.operation.status === 'SUCCEEDED' && result.operation.gameId) {
+        if (result.operation.gameId && hasConfirmedPayment(result.operation)) {
           await resolveCreateGameAttempt(
             scopedPrincipal,
             attempt,
@@ -493,62 +573,89 @@ function LegacyCreateGamePage({
     if (activeConfirmation) confirmationHeadingRef.current?.focus();
   }, [activeConfirmation]);
 
-  async function checkConfirmation(): Promise<void> {
-    const confirmation = activeConfirmation;
-    if (!confirmation || busy || submitting.current || leaving.current) return;
-    if (!storage || !lockManager) {
-      setError(commandError(new CreateGameAttemptError('ATTEMPT_STORAGE_UNAVAILABLE')));
-      return;
-    }
-    setError(null);
-    setNotice(null);
-    submitting.current = true;
-    setBusy(true);
-    try {
-      const result = await gateway.getGameOperation(confirmation.operationId);
-      // The readback must describe exactly the accepted operation and draft; anything else is a
-      // conflict, never a reason to resolve, navigate or repeat a create.
-      if (
-        result.operation.type !== 'CREATE_GAME' ||
-        result.operation.id !== confirmation.operationId
-      ) {
-        setError(
-          'Статус операции не совпал с ожидаемым. Новая команда не отправлена; обратитесь в поддержку.',
-        );
+  const checkConfirmation = useCallback(
+    async (mode: 'confirm' | 'reserve' = 'confirm'): Promise<void> => {
+      const confirmation = activeConfirmation;
+      if (!confirmation || submitting.current || leaving.current) return;
+      if (!storage || !lockManager) {
+        setError(commandError(new CreateGameAttemptError('ATTEMPT_STORAGE_UNAVAILABLE')));
         return;
       }
-      if (result.operation.status === 'FAILED') {
-        await clearCreateGameAttempt(scopedPrincipal, confirmation, storage, lockManager);
-        setActiveAttempt(null);
-        setNotice(null);
-        setError('Создание игры отклонено. Игра не создана.');
-      } else if (result.operation.status === 'SUCCEEDED' && result.operation.gameId) {
-        if (result.operation.gameId !== confirmation.gameId) {
+      setError(null);
+      setNotice(null);
+      submitting.current = true;
+      setBusy(true);
+      try {
+        const result =
+          confirmation.paymentMode === 'ORGANIZER_PAYS'
+            ? await gateway.advanceWholeCourtCheckout?.(
+                confirmation.operationId,
+                confirmation.idempotencyKey,
+                mode,
+              )
+            : await gateway.getGameOperation(confirmation.operationId);
+        if (!result) throw new Error('WHOLE_COURT_CHECKOUT_UNAVAILABLE');
+        // The readback must describe exactly the accepted operation and draft; anything else is a
+        // conflict, never a reason to resolve, navigate or repeat a create.
+        if (
+          result.operation.type !== 'CREATE_GAME' ||
+          result.operation.id !== confirmation.operationId
+        ) {
           setError(
-            'Подтверждённая игра не совпала с ожидаемой. Новая команда не отправлена; обратитесь в поддержку.',
+            'Статус операции не совпал с ожидаемым. Новая команда не отправлена; обратитесь в поддержку.',
           );
           return;
         }
-        await resolveCreateGameAttempt(
-          scopedPrincipal,
-          confirmation,
-          result.operation.gameId,
-          storage,
-          lockManager,
-        );
-        setActiveAttempt(null);
-        leaving.current = true;
-        navigate(`/games/${encodeURIComponent(result.operation.gameId)}?created=1&recovered=1`);
-      } else {
-        setNotice('Пока не подтверждено. Платёж и бронь не выполнены; проверьте статус позже.');
+        if (result.operation.gameId !== confirmation.gameId) {
+          setError('Игра в ответе не совпала с сохранённой попыткой. Обратитесь в поддержку.');
+          return;
+        }
+        const url =
+          mode === 'reserve' && confirmation.paymentMode === 'ORGANIZER_PAYS'
+            ? checkoutUrl(result.operation.nextAction)
+            : null;
+        if (url) {
+          leaving.current = true;
+          navigate(url);
+          return;
+        }
+        if (hasConfirmedPayment(result.operation)) {
+          await resolveCreateGameAttempt(
+            scopedPrincipal,
+            confirmation,
+            confirmation.gameId,
+            storage,
+            lockManager,
+          );
+          setActiveAttempt(null);
+          leaving.current = true;
+          navigate(`/games/${encodeURIComponent(confirmation.gameId)}?created=1&recovered=1`);
+        } else if (result.operation.status === 'FAILED') {
+          setError('Операция завершилась с ошибкой. Исходная попытка сохранена для сверки.');
+        } else {
+          setNotice('Пока не подтверждено. Проверьте статус позже.');
+        }
+      } catch {
+        setNotice('Не удалось проверить статус. Повторите проверку позже.');
+      } finally {
+        submitting.current = false;
+        setBusy(false);
       }
-    } catch {
-      setNotice('Не удалось проверить статус. Повторите проверку позже.');
-    } finally {
-      submitting.current = false;
-      setBusy(false);
+    },
+    [activeConfirmation, gateway, lockManager, navigate, scopedPrincipal, storage],
+  );
+
+  useEffect(() => {
+    if (
+      !activeConfirmation ||
+      paymentReturnOperationId !== activeConfirmation.operationId ||
+      checkedPaymentReturn.current
+    ) {
+      return;
     }
-  }
+    checkedPaymentReturn.current = true;
+    void checkConfirmation();
+  }, [activeConfirmation, checkConfirmation, paymentReturnOperationId]);
 
   const restoredStationUnavailable =
     Boolean(activeAttempt) &&
@@ -625,8 +732,8 @@ function LegacyCreateGamePage({
             Игра ожидает подтверждения
           </h2>
           <p className="games-message" role="status">
-            Платёж и бронь не выполнены. Игра появится в списке после подтверждения операции. Не
-            создавайте новую игру с другими параметрами, пока эта операция не завершена.
+            После подтверждения операции откроется карточка игры. Пока идёт проверка, сохранённая
+            попытка остаётся активной.
           </p>
           {error ? (
             <p className="games-message is-error" role="alert">
@@ -646,6 +753,11 @@ function LegacyCreateGamePage({
           >
             {busy ? 'Проверяем статус…' : 'Проверить статус'}
           </button>
+          {activeConfirmation.paymentMode === 'ORGANIZER_PAYS' && (
+            <button type="button" disabled={busy} onClick={() => void checkConfirmation('reserve')}>
+              Открыть исходную оплату
+            </button>
+          )}
         </section>
         <MainBottomNavigation active="games" gamesDestination="games" />
       </main>
@@ -671,6 +783,31 @@ function LegacyCreateGamePage({
       {paidCreateIntent ? (
         <a href="/games/new?quarterCreate=1">Игра по подписке: четверть корта</a>
       ) : null}
+      {wholeCourtOffer &&
+        !activeAttempt &&
+        gateway.createPaidGame &&
+        gateway.advanceWholeCourtCheckout && (
+          <section className="game-create-form" aria-label="Оплата всего корта">
+            <strong>
+              {(wholeCourtOffer.amountMinor / 100).toLocaleString('ru-RU')} ₽ за весь корт
+            </strong>
+            <p>
+              {locations.find((item) => item.id === wholeCourtOffer.stationId)?.title ?? 'Корт'} ·{' '}
+              {new Date(wholeCourtOffer.startsAt).toLocaleString('ru-RU', {
+                timeZone: 'Europe/Moscow',
+              })}{' '}
+              (МСК) · игра по ссылке
+            </p>
+            <button
+              type="button"
+              className="game-detail-primary"
+              disabled={busy}
+              onClick={(event) => void submit(event, wholeCourtOffer)}
+            >
+              Оплатить весь корт
+            </button>
+          </section>
+        )}
       <form
         className="game-create-form"
         onSubmit={(event) => {
@@ -964,6 +1101,19 @@ function LegacyCreateGamePage({
 export function CreateGamePage(
   props: Parameters<typeof LegacyCreateGamePage>[0],
 ): React.JSX.Element {
+  const paymentReturnOperationId = checkoutReturnOperationId();
+  let matchesSavedReturn = false;
+  if (paymentReturnOperationId) {
+    try {
+      const storage = props.attemptStorage ?? browserAttemptStorage();
+      const attempt = storage && loadCreateGameAttempt(props.principal, storage);
+      matchesSavedReturn =
+        isPendingConfirmationAttempt(attempt) && attempt.operationId === paymentReturnOperationId;
+    } catch {
+      // Keep the normal flow selection if the return cannot be matched to a saved operation.
+    }
+  }
+  if (matchesSavedReturn) return <LegacyCreateGamePage {...props} />;
   let quarter =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('quarterCreate') === '1';

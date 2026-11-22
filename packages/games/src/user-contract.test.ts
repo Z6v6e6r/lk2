@@ -72,13 +72,18 @@ describe('authenticated games contract', () => {
         if (path.endsWith('/game-operations/{operationId}/reconcile')) {
           expect(method).toBe('post');
           expect(operation.responses).toHaveProperty('200');
+        } else if (path.endsWith('/game-operations/{operationId}/whole-court')) {
+          expect(method).toBe('post');
+          expect(operation.responses).toHaveProperty('200');
+          expect(operation.responses).toHaveProperty('202');
+          expect(operation.responses).toHaveProperty('404');
         } else {
           expect(operation.responses).toHaveProperty('409');
         }
       }
     }
 
-    expect(commandCount).toBe(12);
+    expect(commandCount).toBe(13);
   });
 
   it('does not accept identity selectors, provider identifiers or caller-owned roster state', () => {

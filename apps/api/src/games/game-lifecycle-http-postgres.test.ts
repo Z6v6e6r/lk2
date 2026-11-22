@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   createGameRepository,
   createGameRosterRepository,
+  createWholeCourtCheckoutRepository,
   withTenantTransaction,
 } from '@phub/database';
 import { loadConfig } from '@phub/config';
@@ -332,6 +333,126 @@ describePostgres('FREE/LOCAL game lifecycle through HTTP and PostgreSQL', () => 
   afterAll(async () => {
     await app?.close();
     await pool.end();
+  });
+
+  it('keeps one whole-court draft and one immutable payment receipt across concurrent confirmation', async () => {
+    const courtId = randomUUID();
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      await client.query(
+        `insert into integration.external_entity_map
+          (tenant_id,external_system,entity_type,internal_id,external_id,sync_status)
+          values ($1,'VIVA','game_court',$2,$3,'synced')`,
+        [tenantId, courtId, randomUUID()],
+      );
+    });
+    const binding = {
+      providerClientId: 'fixture-client',
+      providerStationId: 'fixture-studio',
+      providerRoomId: 'fixture-room',
+      amountMinor: 120000,
+    };
+    const operationId = randomUUID(),
+      gameId = randomUUID(),
+      idempotencyKey = randomUUID();
+    const input = {
+      tenantId,
+      actorUserId: ownerId,
+      ...createPayload('paid private'),
+      kind: 'FRIENDLY' as const,
+      visibility: 'PRIVATE' as const,
+      paymentMode: 'ORGANIZER_PAYS' as const,
+      wholeCourtCheckout: binding,
+      courtId,
+      gameId,
+      operationId,
+      idempotencyKey,
+      requestHash: hash('whole-court-pg-fixture'),
+      correlationId: randomUUID(),
+    };
+    const [first, repeat] = await Promise.all([management.create(input), management.create(input)]);
+    expect(first).toMatchObject({ outcome: 'applied', gameId, operationId });
+    expect(repeat).toMatchObject({ outcome: 'applied', gameId, operationId });
+    await expect(
+      management.create({
+        ...input,
+        operationId: randomUUID(),
+        gameId: randomUUID(),
+        idempotencyKey: randomUUID(),
+      }),
+    ).resolves.toEqual({ outcome: 'rejected', code: 'GAME_SLOT_UNAVAILABLE' });
+    const store = createWholeCourtCheckoutRepository(pool);
+    const scope = { tenantId, userId: ownerId, operationId, idempotencyKey };
+    const receipt = {
+      provider: 'VIVA' as const,
+      bookingId: randomUUID(),
+      transactionId: randomUUID(),
+      exerciseId: randomUUID(),
+      amountMinor: binding.amountMinor,
+      currency: 'RUB' as const,
+      confirmedAt: new Date().toISOString(),
+    };
+    const command = { ...scope, gameId, receipt, binding, correlationId: input.correlationId };
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      await client.query(
+        `insert into integration.external_entity_map
+          (tenant_id,external_system,entity_type,internal_id,external_id,sync_status)
+          values ($1,'VIVA','game_checkout_transaction',$2,$3,'synced')`,
+        [tenantId, randomUUID(), receipt.transactionId],
+      );
+    });
+    await expect(store.finalize(command)).rejects.toThrow('WHOLE_COURT_PROVIDER_ID_CONFLICT');
+    await expect(store.read(scope)).resolves.toMatchObject({
+      state: 'PENDING',
+      revision: 1,
+      receipt: null,
+    });
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      const after = await client.query(
+        `select 1 from integration.external_entity_map where tenant_id=$1 and internal_id=$2 and external_system='VIVA'`,
+        [tenantId, gameId],
+      );
+      expect(after.rowCount).toBe(0);
+      await client.query(
+        `delete from integration.external_entity_map where tenant_id=$1 and external_system='VIVA'
+          and entity_type='game_checkout_transaction' and external_id=$2`,
+        [tenantId, receipt.transactionId],
+      );
+    });
+    await Promise.all([store.finalize(command), store.finalize(command)]);
+    await expect(
+      store.finalize({ ...command, receipt: { ...receipt, transactionId: randomUUID() } }),
+    ).rejects.toThrow('WHOLE_COURT_RECEIPT_CONFLICT');
+    const settled = await store.read(scope);
+    expect(settled).toMatchObject({ gameId, state: 'SUCCEEDED', receipt, revision: 2 });
+    if (!settled?.projectionEventId) throw new Error('expected original projection event');
+    await management.projectCardEvent({ tenantId, gameId, eventId: settled.projectionEventId });
+    await expect(management.getCardProjection(tenantId, gameId)).resolves.toMatchObject({
+      gameId,
+      aggregateRevision: 2,
+    });
+    const counts = await withTenantTransaction(
+      pool,
+      tenantId,
+      async (client) =>
+        (
+          await client.query<{
+            games: number;
+            bookings: number;
+            payments: number;
+            scheduled: number;
+          }>(
+            `select (select count(*) from games.games where tenant_id=$1 and court_id=$2)::int as games,
+          (select count(*) from integration.external_entity_map where tenant_id=$1 and internal_id=$3
+            and entity_type='game_checkout_booking')::int as bookings,
+          (select count(*) from integration.external_entity_map where tenant_id=$1 and internal_id=$3
+            and entity_type='game_checkout_transaction')::int as payments,
+          (select count(*) from audit.outbox_events where tenant_id=$1 and aggregate_id=$3
+            and event_type='game.scheduled.v1')::int as scheduled`,
+            [tenantId, courtId, gameId],
+          )
+        ).rows[0],
+    );
+    expect(counts).toEqual({ games: 1, bookings: 1, payments: 1, scheduled: 1 });
   });
 
   it('creates durably, replays the exact command, and rejects invalid or changed-key requests', async () => {

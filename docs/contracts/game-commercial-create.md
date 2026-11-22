@@ -88,6 +88,14 @@ commercial attempt keeps the existing `PENDING` local operation; no writer delet
 compensates it in WARN. A trusted receipt (`confirm` below) is the only future path to
 `SUCCEEDED`; an owner HTTP 200 or booking id is not financial success.
 
+For a hosted checkout, the API can direct the browser back to
+`/games/new?paymentReturn=<operationId>`. Web uses this value only to trigger a read of the
+same pending operation already saved for the signed-in user. It accepts the result only for
+the saved draft and opens the card in the same tab once `SUCCEEDED` carries an
+`OWNER_CONFIRMED` Viva receipt. `FAILED` on a previously accepted operation leaves the
+original key in place. A replacement requires server evidence that the original booking and
+payment effects are closed. WARN does not generate a checkout or a return URL.
+
 ## LK2 -> LK1 contract (frozen here, mandatory before ENFORCE)
 
 All calls are server-to-server with an RS256, audience-bound, single-use actor delegation

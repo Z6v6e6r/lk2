@@ -90,7 +90,7 @@ describe('required physical game CI boundary', () => {
   it('accepts only the exact CI repository/job and existing loopback services', () => {
     expect(validateContext(env).postgres).toContain('127.0.0.1:5432/phub');
     expect(suites.map((suite) => [suite.cases.length, suite.guards.length])).toEqual([
-      [14, 6],
+      [15, 6],
       [10, 1],
       [4, 1],
       [4, 0],

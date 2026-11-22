@@ -319,6 +319,7 @@ export type AndroidPushEndpointCommandResult = WebPushEndpointCommandResult;
 export type GameCard = components['schemas']['GameCardView'];
 export type GameCardPage = components['schemas']['GameCardPage'];
 export type GameCommandResult = components['schemas']['GameCommandResult'];
+export type WholeCourtCheckoutOffer = components['schemas']['WholeCourtCheckoutOffer'];
 export type CreateGameRequest = components['schemas']['CreateGameRequest'];
 /** Same generated request surface; named for the managed commercial (paid) create path. */
 export type PaidGameCreateRequest = components['schemas']['CreateGameRequest'];
@@ -1940,6 +1941,24 @@ export class PadlHubApiClient {
       body: jsonRequestBody(input),
       retryOnUnauthorized: false,
       cache: 'no-store',
+    });
+  }
+
+  public getWholeCourtCheckoutOffer(): Promise<{ readonly offer: WholeCourtCheckoutOffer | null }> {
+    return this.request('/games/whole-court-offer', { cache: 'no-store' });
+  }
+
+  public advanceWholeCourtCheckout(
+    operationId: string,
+    idempotencyKey: string,
+    mode: 'reserve' | 'confirm',
+  ): Promise<GameCommandResult> {
+    return this.request(`/game-operations/${encodeURIComponent(operationId)}/whole-court`, {
+      method: 'POST',
+      idempotencyKey,
+      body: jsonRequestBody({ mode }),
+      cache: 'no-store',
+      retryOnUnauthorized: false,
     });
   }
 

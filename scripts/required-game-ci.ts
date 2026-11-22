@@ -16,6 +16,7 @@ export const suites = [
     physical: 'FREE/LOCAL game lifecycle through HTTP and PostgreSQL',
     guard: 'game lifecycle PostgreSQL verifier guard',
     cases: [
+      'keeps one whole-court draft and one immutable payment receipt across concurrent confirmation',
       'creates durably, replays the exact command, and rejects invalid or changed-key requests',
       'rolls back every create side effect when the transactional outbox write fails',
       'enforces join revisions, retries, permission and actor-scoped operation readback',

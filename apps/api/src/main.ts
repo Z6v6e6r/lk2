@@ -4,7 +4,10 @@ import { MonthlyPurchaseOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createTournamentChatOwner } from './tournaments/tournament-chat-owner-client.js';
 import { createOrganizerProfileLookup } from './tournaments/organizer-profile-lookup-runtime.js';
 import { createCommunityActorToken } from './communities/community-actor-token.js';
-import { createQuarterCreateRepository } from '@phub/database/quarter-create';
+import {
+  createQuarterCreateRepository,
+  resolveGameCreateLocationBinding,
+} from '@phub/database/quarter-create';
 import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createQuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
 import { createTournamentLocalRepository } from '@phub/database';
@@ -117,6 +120,9 @@ import { createProviderAccountMappingRepository } from '../../../packages/databa
 import { ProviderAccountOwnerClient } from '../../../packages/subscription-runtime-adapter/src/provider-account-attestation.js';
 import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
 import { createGameCommercialCreateRuntime } from './games/game-create-commercial-runtime.js';
+import { createWholeCourtRuntime, parseWholeCourtPilot } from './games/game-whole-court-create.js';
+import { createWholeCourtOwner } from './games/game-whole-court-owner.js';
+import { createWholeCourtCheckoutRepository, withTenantTransaction } from '@phub/database';
 import { createGameJoinConditionsContextRepository } from '../../../packages/database/src/game-join-conditions-context-repository.js';
 import { createResidencyRepository } from '../../../packages/database/src/residency-repository.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
@@ -1091,6 +1097,63 @@ const gameQuarterCreate = (() => {
     },
   });
 })();
+const gameWholeCourt = (() => {
+  if (!config.GAME_WHOLE_COURT_CHECKOUT_PILOT) return undefined;
+  const url = config.GAME_WHOLE_COURT_CHECKOUT_OWNER_URL;
+  const rawKeys = config.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS;
+  const keyId = config.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID;
+  const issuer = config.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER;
+  const audience = config.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE;
+  if (
+    !gameCommandRepository ||
+    !config.GAMES_READ_ENABLED ||
+    !config.VIVA_OAUTH_ENABLED ||
+    !url ||
+    !rawKeys ||
+    !keyId ||
+    !issuer ||
+    !audience ||
+    config.VIVA_AUTH_TENANT_KEY !== 'iSkq6G' ||
+    !['sandbox', 'production'].includes(config.VIVA_MODE)
+  )
+    throw new Error('WHOLE_COURT_PILOT_CONFIGURATION_INCOMPLETE');
+  const key = (JSON.parse(rawKeys) as Record<string, unknown>)[keyId];
+  if (typeof key !== 'string') throw new Error('WHOLE_COURT_PILOT_CONFIGURATION_INCOMPLETE');
+  return createWholeCourtRuntime({
+    onMetric: (outcome) => logger.info({ outcome }, 'whole-court reconciliation'),
+    pilot: parseWholeCourtPilot(config.GAME_WHOLE_COURT_CHECKOUT_PILOT),
+    games: gameCommandRepository,
+    repository: createWholeCourtCheckoutRepository(pool),
+    context: createSubscriptionRuntimeActorContextRepository(pool),
+    issuer: new SubscriptionRuntimeActorDelegationIssuer({
+      keyId,
+      issuer,
+      audience,
+      privateKeyPem: key,
+      ttlSeconds: config.SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS,
+    }),
+    token: async (actor) => {
+      const issued = await authService.issueVivaAccessToken(actor);
+      return { token: issued.accessToken, expiresAt: issued.expiresAt };
+    },
+    location: async (actor) =>
+      withTenantTransaction(pool, actor.tenantId, async (client) => {
+        const result = await resolveGameCreateLocationBinding(client, actor);
+        return result
+          ? {
+              providerStationId: result.provider_studio_id,
+              providerRoomId: result.provider_room_id,
+            }
+          : undefined;
+      }),
+    owner: createWholeCourtOwner({
+      baseUrl: url,
+      allowLoopback: ['local', 'ci'].includes(config.APP_ENV),
+      timeoutMs: config.GAME_WHOLE_COURT_CHECKOUT_TIMEOUT_MS,
+      onMetric: (mode, outcome) => logger.info({ mode, outcome }, 'whole-court owner operation'),
+    }),
+  });
+})();
 const monthlyPurchase = (() => {
   const repository = createMonthlyPurchaseRepository(pool);
   if (!config.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED)
@@ -1125,6 +1188,7 @@ const monthlyPurchase = (() => {
 const organizerProfileLookup = createOrganizerProfileLookup(config, pool, redis);
 const app = await buildApp({
   monthlyPurchase,
+  ...(gameWholeCourt ? { gameWholeCourt } : {}),
   ...(gameQuarterCreate ? { gameQuarterCreate } : {}),
   config,
   logger,
