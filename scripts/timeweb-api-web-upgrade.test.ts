@@ -210,6 +210,27 @@ describe('explicit API/Web upgrade boundary', () => {
       for(const raw of [header+'\\0path',header+'\\0\\0',header+'\\0path\\0extra\\0',header.replace(' M',' R100')+'\\0old\\0new\\0',header.replace('a'.repeat(40),'a'.repeat(7))+'\\0path\\0'])assert.throws(()=>parseRuntimeDelta(raw));
     `);
   });
+  it('admits only the pinned #693 OpenAPI and pilot environment transition', () => {
+    scenario(String.raw`
+      const {execFileSync}=await import('node:child_process');
+      const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim();
+      const previousSha='0a4d640965e921e6d06eeb22de6cc6dcae07f0b1';
+      const application='fa6253a5e87bacd36502d077162b3e1fa11f8935';
+      const path='deploy/timeweb/runtime-environment.contract.json';
+      const config={path,status:'M',oldMode:'100644',newMode:'100644',oldType:'blob',newType:'blob',
+        oldOid:git('rev-parse',previousSha+':'+path),newOid:git('hash-object',path)};
+      const entries=[...parseRuntimeDelta(git('diff','--raw','--no-abbrev','--no-renames','-z',previousSha,application))
+        .map(v=>({...v,oldType:v.oldMode==='000000'?null:'blob',newType:'blob'})),config];
+      const identity={previousSha,candidateSha:git('rev-parse','HEAD'),candidateTree:git('rev-parse','HEAD^{tree}')};
+      const tail=[{status:'M',path},{status:'M',path:'scripts/timeweb-api-web-upgrade.js'}];
+      validateRuntimeUpgrade(identity,entries,tail);
+      assert.throws(()=>validateRuntimeUpgrade(identity,entries),/callback_runtime_bridge/);
+      assert.throws(()=>validateRuntimeUpgrade({...identity,previousSha:application},entries,tail),/whole_court_runtime_bridge/);
+      assert.throws(()=>validateRuntimeUpgrade(identity,entries,[...tail,{status:'M',path:'apps/api/src/main.ts'}]),/whole_court_runtime_bridge/);
+      assert.throws(()=>validateRuntimeUpgrade(identity,entries.map(v=>v.path===path?{...v,newOid:v.oldOid}:v),tail),/whole_court_runtime_bridge/);
+      assert.throws(()=>validateRuntimeUpgrade(identity,[...entries,{path:'packages/database/migrations/0123.sql'}],tail),/runtime_definition_changed/);
+    `);
+  });
   it('derives independent previous overlay bytes and detects changed command inputs', () => {
     scenario(`const op=${JSON.stringify(operation)};const plan={candidate:{api:{releaseId:op.candidateSha+'-456-1',image:op.expectedApi.image},web:{releaseId:op.candidateSha+'-456-1',image:op.expectedWeb.image}},previous:{api:op.expectedApi,web:op.expectedWeb}};
       assert.equal(overlayBytes(plan,'previous-api'), 'PHUB_RELEASE_ID='+op.expectedApi.releaseId+'\\nAPI_IMAGE_DIGEST='+op.expectedApi.image.split('@')[1]+'\\n');

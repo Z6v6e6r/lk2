@@ -1,5 +1,44 @@
 import { createPrivateKey } from 'node:crypto';
 
+function validateWholeCourtPilot(raw, fail) {
+  let pilot;
+  try {
+    pilot = JSON.parse(raw);
+  } catch {
+    fail('whole_court_pilot_invalid');
+  }
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+  const instant = (v) =>
+    typeof v === 'string' &&
+    v.length === 24 &&
+    Number.isFinite(Date.parse(v)) &&
+    new Date(v).toISOString() === v;
+  if (
+    !pilot ||
+    JSON.stringify(pilot) !== raw ||
+    Object.keys(pilot).sort().join() !==
+      'amountMinor,courtId,endsAt,startsAt,stationId,tenantId,userId' ||
+    ![pilot.tenantId, pilot.userId, pilot.stationId, pilot.courtId].every(
+      (id) => typeof id === 'string' && id.length === 36 && uuid.test(id),
+    ) ||
+    !instant(pilot.startsAt) ||
+    !instant(pilot.endsAt) ||
+    !Number.isSafeInteger(pilot.amountMinor) ||
+    pilot.amountMinor < 1 ||
+    pilot.amountMinor > 10_000_000
+  )
+    fail('whole_court_pilot_invalid');
+  const start = Date.parse(pilot.startsAt),
+    end = Date.parse(pilot.endsAt);
+  const moscowDay = (ms) => new Date(ms + 180 * 60_000).toISOString().slice(0, 10);
+  if (
+    start % 60_000 !== 0 ||
+    ![60, 90, 120].includes((end - start) / 60_000) ||
+    moscowDay(start) !== moscowDay(end)
+  )
+    fail('whole_court_pilot_invalid');
+}
+
 export function parseTimewebDelegationKeyring(value, fail) {
   let entries;
   try {
@@ -69,6 +108,7 @@ export function validateTimewebCommercialRuntime(api, fail) {
   const monthly = api.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED === 'true';
   const quarterCreate = api.GAME_COMMERCIAL_CREATE_ENABLED === 'true';
   const active = api.GAME_COMMERCIAL_JOIN_ENABLED === 'true';
+  const wholeCourt = api.GAME_WHOLE_COURT_CHECKOUT_PILOT !== undefined;
   if (active && mode !== 'WARN') fail('commercial_join_boundary_required');
   const secureBase = (value) => {
     try {
@@ -98,6 +138,24 @@ export function validateTimewebCommercialRuntime(api, fail) {
       new URL(api.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL).href !== 'https://padlhub.su/'
     )
       fail('commercial_create_owner_invalid');
+  }
+  if (wholeCourt) {
+    validateWholeCourtPilot(api.GAME_WHOLE_COURT_CHECKOUT_PILOT, fail);
+    if (
+      api.GAME_WHOLE_COURT_CHECKOUT_OWNER_URL !== 'https://padlhub.su/' ||
+      api.GAME_WHOLE_COURT_CHECKOUT_TIMEOUT_MS !== '25000' ||
+      api.GAMES_COMMANDS_ENABLED !== 'true' ||
+      api.GAMES_READ_ENABLED !== 'true' ||
+      api.VIVA_OAUTH_ENABLED !== 'true' ||
+      (api.VIVA_AUTH_TENANT_KEY ?? 'iSkq6G') !== 'iSkq6G' ||
+      api.VIVA_MODE !== 'production'
+    )
+      fail('whole_court_owner_unavailable');
+  } else if (
+    api.GAME_WHOLE_COURT_CHECKOUT_OWNER_URL !== undefined ||
+    api.GAME_WHOLE_COURT_CHECKOUT_TIMEOUT_MS !== undefined
+  ) {
+    fail('whole_court_owner_without_pilot');
   }
   for (const key of ['SUBSCRIPTION_RUNTIME_BASE_URL', 'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL']) {
     if (api[key] !== undefined && !secureBase(api[key]))
@@ -134,7 +192,7 @@ export function validateTimewebCommercialRuntime(api, fail) {
     )
       fail('commercial_create_owner_unavailable');
   }
-  if (mode === 'WARN' || monthly || quarterCreate) {
+  if (mode === 'WARN' || monthly || quarterCreate || wholeCourt) {
     const required = [
       'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
       'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
