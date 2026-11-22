@@ -559,6 +559,7 @@ function GamesPageContent({
   } | null>(null);
   const [joinBusy, setJoinBusy] = useState(false);
   const joinInFlight = useRef(false);
+  const directJoinInFlight = useRef(false);
   const joinConditionsInFlight = useRef(false);
   const readbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readbackGeneration = useRef(0);
@@ -1971,6 +1972,10 @@ function GamesPageContent({
       const decision = await startPaidJoin(game);
       if (decision === 'handled') return;
     }
+    if (action === 'JOIN') {
+      if (directJoinInFlight.current) return;
+      directJoinInFlight.current = true;
+    }
     setBusyGameId(game.id);
     setError(null);
     setNotice(null);
@@ -2107,6 +2112,7 @@ function GamesPageContent({
       setError(errorMessage(cause));
       setReloadToken((current) => current + 1);
     } finally {
+      if (action === 'JOIN') directJoinInFlight.current = false;
       if (joinPageActive.current) setBusyGameId(null);
     }
   }

@@ -51,6 +51,10 @@ it('retains the mobile subscription on Back and sends one registration for two r
     removeEventListener: vi.fn(),
   }));
   window.history.replaceState({}, '', '/trainings');
+  let previousStep: unknown;
+  const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {
+    window.dispatchEvent(new PopStateEvent('popstate', { state: previousStep }));
+  });
   const h = setup();
   const response = Promise.withResolvers<typeof h.result>();
   h.registerTraining.mockReturnValue(response.promise);
@@ -65,6 +69,7 @@ it('retains the mobile subscription on Back and sends one registration for two r
       />,
     );
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    previousStep = window.history.state;
     await user.selectOptions(await screen.findByLabelText('Выберите подписку'), subscriptionId);
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     await user.click(screen.getByLabelText('Назад'));
@@ -88,6 +93,7 @@ it('retains the mobile subscription on Back and sends one registration for two r
       expect.any(String),
     );
   } finally {
+    browserBack.mockRestore();
     vi.unstubAllGlobals();
   }
 });

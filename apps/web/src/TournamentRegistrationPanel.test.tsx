@@ -39,6 +39,9 @@ describe('rendered actual tournament registration panel', () => {
       removeEventListener: vi.fn(),
     }));
     window.history.replaceState({}, '', '/tournaments');
+    const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+    });
     const response = Promise.withResolvers<TournamentLocalResult>();
     const command = vi.fn(() => response.promise);
     const gateway = {
@@ -74,6 +77,7 @@ describe('rendered actual tournament registration panel', () => {
       expect(await screen.findByText('Запись подтверждена.')).toBeVisible();
       expect(command).toHaveBeenCalledExactlyOnceWith(id, { action: 'JOIN' }, expect.any(String));
     } finally {
+      browserBack.mockRestore();
       vi.unstubAllGlobals();
     }
   });

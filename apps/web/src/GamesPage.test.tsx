@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -2079,7 +2079,7 @@ describe('GamesPage paid JOIN', () => {
     expect(screen.queryByText(/по правилам клуба/)).toBeNull();
   });
 
-  it('keeps the untouched free JOIN when the gateway also supports paid join', async () => {
+  it.each([false, true])('dispatches one free JOIN (mobile: %s)', async (mobile) => {
     const base = gateway();
     const freeGame = {
       ...game,
@@ -2125,15 +2125,32 @@ describe('GamesPage paid JOIN', () => {
     };
     const user = userEvent.setup();
 
-    render(<GamesPage gateway={api} gameId={freeGame.id} joinPrincipal={paidPrincipal} />);
-    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+    if (mobile) {
+      vi.stubGlobal('matchMedia', () => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+    }
+    try {
+      render(<GamesPage gateway={api} gameId={freeGame.id} joinPrincipal={paidPrincipal} />);
+      await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+      if (mobile) {
+        expect(joinGame).not.toHaveBeenCalled();
+        const confirm = screen.getByRole('button', { name: 'Продолжить запись' });
+        act(() => {
+          fireEvent.click(confirm);
+          fireEvent.click(confirm);
+        });
+      }
 
-    await waitFor(() =>
-      expect(api.joinGame).toHaveBeenCalledWith(freeGame.id, freeGame.revision, undefined),
-    );
-    expect(joinPaidGame).not.toHaveBeenCalled();
-    expect(getGameJoinConditions).not.toHaveBeenCalled();
-    expect(await screen.findByText(/Вы в игре/)).toBeVisible();
+      expect(await screen.findByText(/Вы в игре/)).toBeVisible();
+      expect(joinGame).toHaveBeenCalledExactlyOnceWith(freeGame.id, freeGame.revision, undefined);
+      expect(joinPaidGame).not.toHaveBeenCalled();
+      expect(getGameJoinConditions).not.toHaveBeenCalled();
+    } finally {
+      if (mobile) vi.unstubAllGlobals();
+    }
   });
 
   it('asks for a subscription first and re-enables JOIN after an explicit selection', async () => {

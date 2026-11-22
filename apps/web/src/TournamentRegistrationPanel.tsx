@@ -144,15 +144,14 @@ export function TournamentRegistrationPanel({
     setLevelSetup(false);
     let levelRefused = false;
     try {
+      let next: TournamentLocalResult | null;
       if (kind === 'read') {
         const r = await attempts.read(tournamentId);
-        if (life.active) {
-          setResult(r.result);
-          setCommandsEnabled(r.commandsEnabled);
-        }
+        next = r.result;
+        if (life.active) setCommandsEnabled(r.commandsEnabled);
       } else {
         if (!commandsEnabled) return;
-        const r =
+        next =
           kind === 'retry'
             ? await attempts.retry(tournamentId, result)
             : await attempts.submit(
@@ -161,9 +160,11 @@ export function TournamentRegistrationPanel({
                   ? { action: 'JOIN' }
                   : { action: 'LEAVE', originalJoinOperationId: result!.operation.generation! },
               );
-        if (life.active) {
-          setResult(r);
-          if (r.operation.status === 'REGISTERED' || r.operation.status === 'LEFT') wizard.reset();
+      }
+      if (life.active) {
+        setResult(next);
+        if (next?.operation.status === 'REGISTERED' || next?.operation.status === 'LEFT') {
+          wizard.reset();
         }
       }
     } catch (e) {
