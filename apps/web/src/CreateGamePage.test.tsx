@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CreateGamePage } from './CreateGamePage.js';
+import { quarterStorageKey } from './quarter-create-attempt.js';
 import type { AuthGateway, GameCommandResult } from './auth-gateway.js';
 import {
   createGameAttemptStorageKey,
@@ -722,6 +723,21 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
             ? { type: 'WAIT_FOR_RECONCILIATION', retryAfterSeconds: 5 }
             : { type: 'NONE' },
         error: null,
+        ...(status === 'SUCCEEDED'
+          ? {
+              commercial: {
+                attemptState: 'OWNER_CONFIRMED' as const,
+                price: null,
+                reservation: null,
+                receipt: {
+                  provider: 'VIVA' as const,
+                  status: 'CONFIRMED' as const,
+                  confirmedAt: committedAt,
+                },
+                reason: null,
+              },
+            }
+          : {}),
         ...overrides,
       },
       game: null,
@@ -825,6 +841,78 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     });
   });
 
+  it('reads the original operation on checkout return and opens its card once in the current tab', async () => {
+    const attempt = await prepareCreateGameAttempt(
+      principal,
+      { ...savedPayload(), paymentMode: 'SPLIT' },
+      window.localStorage,
+      locks(),
+      { createIdempotencyKey: () => 'managed-return-key-0001' },
+    );
+    if (attempt.state !== 'PENDING') throw new Error('expected pending attempt');
+    await recordCreateGameConfirmation(
+      principal,
+      attempt,
+      { gameId: managedGameId, operationId: managedOperationId },
+      window.localStorage,
+      locks(),
+    );
+    window.localStorage.setItem(quarterStorageKey(principal), '{}');
+    window.history.replaceState({}, '', `/games/new?paymentReturn=${managedOperationId}`);
+    const createPaidGame = vi.fn<NonNullable<AuthGateway['createPaidGame']>>();
+    const getGameOperation = vi.fn().mockResolvedValue(managedResult('SUCCEEDED'));
+    const navigate = vi.fn();
+    page(vi.fn(), { api: paidApi({ createPaidGame, getGameOperation }), navigate });
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledOnce());
+    expect(navigate).toHaveBeenCalledWith(`/games/${managedGameId}?created=1&recovered=1`);
+    expect(getGameOperation).toHaveBeenCalledExactlyOnceWith(managedOperationId);
+    expect(createPaidGame).not.toHaveBeenCalled();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage)).toMatchObject({
+      resolvedAttempts: [{ gameId: managedGameId, idempotencyKey: attempt.idempotencyKey }],
+    });
+  });
+
+  it('ignores a different payment return id and keeps an unproved success pending', async () => {
+    const attempt = await prepareCreateGameAttempt(
+      principal,
+      { ...savedPayload(), paymentMode: 'SPLIT' },
+      window.localStorage,
+      locks(),
+      { createIdempotencyKey: () => 'managed-return-key-0002' },
+    );
+    if (attempt.state !== 'PENDING') throw new Error('expected pending attempt');
+    await recordCreateGameConfirmation(
+      principal,
+      attempt,
+      { gameId: managedGameId, operationId: managedOperationId },
+      window.localStorage,
+      locks(),
+    );
+    window.history.replaceState({}, '', '/games/new?paymentReturn=foreign-operation');
+    const createPaidGame = vi.fn<NonNullable<AuthGateway['createPaidGame']>>();
+    const getGameOperation = vi
+      .fn()
+      .mockResolvedValue(managedResult('SUCCEEDED', { commercial: null }));
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(vi.fn(), { api: paidApi({ createPaidGame, getGameOperation }), navigate });
+
+    const check = await screen.findByRole('button', { name: 'Проверить статус' });
+    expect(getGameOperation).not.toHaveBeenCalled();
+    await user.click(check);
+    expect(await screen.findByText(/Пока не подтверждено/)).toBeVisible();
+    expect(getGameOperation).toHaveBeenCalledExactlyOnceWith(managedOperationId);
+    expect(createPaidGame).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      {
+        state: 'PENDING_CONFIRMATION',
+        idempotencyKey: attempt.idempotencyKey,
+      },
+    );
+  });
+
   it('restores a pending confirmation across remount without offering a replacement create', async () => {
     openManagedCreate();
     const attempt = await prepareCreateGameAttempt(
@@ -883,7 +971,7 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     expect(screen.getByLabelText('Оплата')).toHaveValue('SPLIT');
   });
 
-  it('clears the attempt and drops the stale pending copy after a FAILED readback', async () => {
+  it('keeps the accepted attempt after FAILED readback without proof of a clean release', async () => {
     openManagedCreate();
     const createPaidGame = vi
       .fn<NonNullable<AuthGateway['createPaidGame']>>()
@@ -904,12 +992,17 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
     await user.click(screen.getByRole('button', { name: 'Создать игру' }));
     await user.click(await screen.findByRole('button', { name: 'Проверить статус' }));
-    expect(await screen.findByText(/Создание игры отклонено. Игра не создана/)).toBeVisible();
-    expect(screen.queryByText(/Игра ожидает подтверждения/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Пока не подтверждено/)).not.toBeInTheDocument();
-    expect(
-      loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt,
-    ).toBeUndefined();
+    expect(await screen.findByText(/Исходная попытка сохранена для сверки/)).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Игра ожидает подтверждения' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Создать игру' })).not.toBeInTheDocument();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      {
+        state: 'PENDING_CONFIRMATION',
+        operationId: managedOperationId,
+        idempotencyKey: createPaidGame.mock.calls[0]?.[1],
+      },
+    );
+    expect(createPaidGame).toHaveBeenCalledOnce();
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -960,7 +1053,9 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
     await user.click(screen.getByRole('button', { name: 'Создать игру' }));
     await user.click(await screen.findByRole('button', { name: 'Проверить статус' }));
-    expect(await screen.findByText(/Подтверждённая игра не совпала с ожидаемой/)).toBeVisible();
+    expect(
+      await screen.findByText(/Игра в ответе не совпала с сохранённой попыткой/),
+    ).toBeVisible();
     expect(navigate).not.toHaveBeenCalled();
     expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
       { state: 'PENDING_CONFIRMATION', gameId: managedGameId },
