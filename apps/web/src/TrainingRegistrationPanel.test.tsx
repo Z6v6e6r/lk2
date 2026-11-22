@@ -56,8 +56,11 @@ it('retains the mobile subscription on Back and sends one registration for two r
     window.dispatchEvent(new PopStateEvent('popstate', { state: previousStep }));
   });
   const h = setup();
-  const response = Promise.withResolvers<typeof h.result>();
-  h.registerTraining.mockReturnValue(response.promise);
+  let finish!: (value: typeof h.result) => void;
+  const response = new Promise<typeof h.result>((resolve) => {
+    finish = resolve;
+  });
+  h.registerTraining.mockReturnValue(response);
   try {
     const user = userEvent.setup();
     render(
@@ -84,7 +87,7 @@ it('retains the mobile subscription on Back and sends one registration for two r
       fireEvent.click(confirm);
     });
     await waitFor(() => expect(h.registerTraining).toHaveBeenCalledOnce());
-    response.resolve(h.result);
+    finish(h.result);
 
     await screen.findByText('Текущая запись не подтверждена. Проверка не создаёт новую запись.');
     expect(h.registerTraining).toHaveBeenCalledExactlyOnceWith(

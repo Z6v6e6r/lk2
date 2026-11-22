@@ -42,8 +42,11 @@ describe('rendered actual tournament registration panel', () => {
     const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {
       window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
     });
-    const response = Promise.withResolvers<TournamentLocalResult>();
-    const command = vi.fn(() => response.promise);
+    let finish!: (value: TournamentLocalResult) => void;
+    const response = new Promise<TournamentLocalResult>((resolve) => {
+      finish = resolve;
+    });
+    const command = vi.fn(() => response);
     const gateway = {
       tournamentPrincipal: () => `${id}:${id}:0:0`,
       getTournamentRegistration: vi.fn().mockResolvedValue({ commandsEnabled: true, result: null }),
@@ -72,7 +75,7 @@ describe('rendered actual tournament registration panel', () => {
         fireEvent.click(confirm);
       });
       await waitFor(() => expect(command).toHaveBeenCalledOnce());
-      response.resolve(joined);
+      finish(joined);
 
       expect(await screen.findByText('Запись подтверждена.')).toBeVisible();
       expect(command).toHaveBeenCalledExactlyOnceWith(id, { action: 'JOIN' }, expect.any(String));
