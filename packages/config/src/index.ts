@@ -326,6 +326,14 @@ const environmentSchema = z.object({
   // Removal/review condition: replace or extend when the ENFORCE owner transport is approved, and
   // review this flag no later than the next delivery batch.
   GAME_COMMERCIAL_CREATE_ENABLED: booleanFromEnvironment,
+  GAME_WHOLE_COURT_CHECKOUT_PILOT: z.string().min(2).max(2048).optional(),
+  GAME_WHOLE_COURT_CHECKOUT_OWNER_URL: z.string().url().optional(),
+  GAME_WHOLE_COURT_CHECKOUT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(30_000)
+    .default(25_000),
   GAME_COMMERCIAL_CREATE_OWNER_BASE_URL: z.string().url().optional(),
   GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS: z.coerce
     .number()

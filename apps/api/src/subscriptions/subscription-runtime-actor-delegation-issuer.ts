@@ -46,6 +46,13 @@ import { createHash, createPrivateKey, randomUUID } from 'node:crypto';
 
 import { importPKCS8, SignJWT } from 'jose';
 import {
+  wholeCourtOwnerHash,
+  wholeCourtOwnerPath,
+  wholeCourtOwnerScope,
+  type WholeCourtMode,
+  type WholeCourtOwnerBody,
+} from '../games/game-whole-court-owner.js';
+import {
   MANAGED_SELF_LEAVE_ADMISSION_PATH,
   MANAGED_SELF_LEAVE_READ_PREFIX,
   MANAGED_SELF_LEAVE_ADMISSION_SCOPE,
@@ -1076,6 +1083,70 @@ export class SubscriptionRuntimeActorDelegationIssuer {
       .setExpirationTime(now + this.options.ttlSeconds)
       .setJti(randomUUID())
       .sign(key);
+  }
+
+  /** Exact LK1 #485 scope. Other booking delegations carry a different claim set. */
+  async issueWholeCourtCheckout(input: {
+    readonly mode: WholeCourtMode;
+    readonly body: WholeCourtOwnerBody;
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly providerClientId: string;
+    readonly correlationId: string;
+    readonly idempotencyKeySha256: string;
+    readonly actorToken: { readonly token: string; readonly expiresAt: string };
+  }): Promise<string> {
+    if (
+      input.tenantKey !== 'iSkq6G' ||
+      ![input.tenantId, input.userId, input.sessionId].every(qcUuid) ||
+      !qcId(input.providerClientId) ||
+      !qcDigest(input.idempotencyKeySha256) ||
+      !correlationPattern.test(input.correlationId) ||
+      /[\r\n]/.test(input.correlationId) ||
+      !/^[!-~]{16,4096}$/.test(input.actorToken.token) ||
+      !qcIso(input.actorToken.expiresAt) ||
+      Date.parse(input.actorToken.expiresAt) <= Date.now() + 5_000 ||
+      (await qcOperationId(input.tenantId, input.userId, input.idempotencyKeySha256)) !==
+        input.body.operationId
+    )
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      contract_version: 1,
+      scope: wholeCourtOwnerScope(input.mode),
+      caller: 'lk2-api',
+      method: 'POST',
+      path: wholeCourtOwnerPath(input.mode),
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: input.providerClientId,
+      operation_id: input.body.operationId,
+      correlation_id: input.correlationId,
+      request_sha256: wholeCourtOwnerHash(input.mode, input.body),
+      idempotency_key_sha256: input.idempotencyKeySha256,
+      actor_token_sha256:
+        'sha256:' + createHash('sha256').update(input.actorToken.token).digest('hex'),
+      actor_token_expires_at: input.actorToken.expiresAt,
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + this.options.ttlSeconds)
+      .setJti(randomUUID())
+      .sign(await importPKCS8(this.options.privateKeyPem, 'RS256'));
   }
 
   async issueBookedOperationRead(input: {

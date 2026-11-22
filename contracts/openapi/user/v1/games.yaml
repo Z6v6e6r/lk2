@@ -579,6 +579,78 @@ paths:
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 
+  /{tenantKey}/games/whole-court-offer:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [games]
+      operationId: getWholeCourtCheckoutOffer
+      summary: Read the approved whole-court checkout offer for this organizer
+      responses:
+        '200':
+          description: The pinned offer or null when unavailable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [offer]
+                additionalProperties: false
+                properties:
+                  offer:
+                    oneOf:
+                      - type: 'null'
+                      - $ref: '#/components/schemas/WholeCourtCheckoutOffer'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+
+  /{tenantKey}/game-operations/{operationId}/whole-court:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/OperationId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [games]
+      operationId: advanceWholeCourtCheckout
+      summary: Resume or confirm the original whole-court operation
+      description: Pass the same Idempotency-Key as the accepted create. Confirmation only reads the original Viva transaction before applying its verified receipt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [reserve, confirm]
+      responses:
+        '200':
+          description: The original game is confirmed and its card is ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameCommandResult'
+        '202':
+          description: The original checkout or reconciliation action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+
   /{tenantKey}/game-operations/{operationId}/reconcile:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -1455,6 +1527,17 @@ components:
         note:
           type: [string, 'null']
           maxLength: 500
+    WholeCourtCheckoutOffer:
+      type: object
+      additionalProperties: false
+      required: [stationId, courtId, startsAt, endsAt, amountMinor, currency]
+      properties:
+        stationId: { type: string, format: uuid }
+        courtId: { type: string, format: uuid }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        amountMinor: { type: integer, minimum: 1, maximum: 10000000 }
+        currency: { type: string, const: RUB }
     GameCommandResult:
       type: object
       additionalProperties: false
@@ -1767,6 +1850,7 @@ components:
         - GAME_PRICE_CONFIRMATION_REQUIRED
         - GAME_SUBSCRIPTION_SELECTION_REQUIRED
         - GAME_SERVICE_BLOCKED
+        - GAME_SLOT_UNAVAILABLE
         - GAME_RECONCILIATION_REQUIRED
         - GAME_COMMERCIAL_ATTEMPT_CONFLICT
         - GAME_OWNER_UNAVAILABLE

@@ -613,6 +613,8 @@ export interface AuthGateway {
    * without it keeps the untouched free-create behavior.
    */
   readonly createPaidGame?: PadlHubApiClient['createPaidGame'];
+  readonly getWholeCourtCheckoutOffer?: PadlHubApiClient['getWholeCourtCheckoutOffer'];
+  readonly advanceWholeCourtCheckout?: PadlHubApiClient['advanceWholeCourtCheckout'];
   readonly monthlyPurchase?: MonthlyPurchaseGateway;
   readonly quarterCreatePrincipal?: () => string | null;
   /** Close the quarter command before native async cleanup. */
@@ -2895,6 +2897,12 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
     createPaidGame(input, idempotencyKey) {
       return client.createPaidGame(input, idempotencyKey);
+    },
+    getWholeCourtCheckoutOffer() {
+      return client.getWholeCourtCheckoutOffer();
+    },
+    advanceWholeCourtCheckout(operationId, key, mode) {
+      return client.advanceWholeCourtCheckout(operationId, key, mode);
     },
 
     gameCancelPrincipal: quarterCreatePrincipal,

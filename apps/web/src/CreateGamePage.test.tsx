@@ -841,6 +841,66 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     });
   });
 
+  it('opens the whole-court checkout once and confirms the same operation after return', async () => {
+    const startsAt = new Date(Date.now() + 86400000).toISOString();
+    const endsAt = new Date(Date.parse(startsAt) + 3600000).toISOString();
+    const paymentUrl = 'https://pay.vivacrm.ru/fixture';
+    const createPaidGame = vi.fn<NonNullable<AuthGateway['createPaidGame']>>().mockResolvedValue(
+      managedResult('PROCESSING', {
+        nextAction: { type: 'OPEN_PAYMENT', url: paymentUrl, expiresAt: endsAt },
+      }),
+    );
+    const advanceWholeCourtCheckout = vi
+      .fn<NonNullable<AuthGateway['advanceWholeCourtCheckout']>>()
+      .mockResolvedValue(managedResult('SUCCEEDED'));
+    const getGameOperation = vi.fn();
+    const api: AuthGateway = {
+      ...paidApi({ createPaidGame, getGameOperation }),
+      advanceWholeCourtCheckout,
+      getWholeCourtCheckoutOffer: vi.fn().mockResolvedValue({
+        offer: {
+          stationId,
+          courtId: gameId,
+          startsAt,
+          endsAt,
+          currency: 'RUB',
+          amountMinor: 120000,
+        },
+      }),
+    };
+    const navigate = vi.fn();
+    page(vi.fn(), { api, navigate });
+    const user = userEvent.setup();
+    await user.dblClick(await screen.findByRole('button', { name: 'Оплатить весь корт' }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith(paymentUrl));
+    expect(createPaidGame).toHaveBeenCalledOnce();
+    const [payload, key] = createPaidGame.mock.calls[0]!;
+    expect(payload).toMatchObject({
+      paymentMode: 'ORGANIZER_PAYS',
+      courtId: gameId,
+      visibility: 'PRIVATE',
+      priceConsent: { currency: 'RUB', amountMinor: 120000 },
+    });
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      { operationId: managedOperationId, gameId: managedGameId, idempotencyKey: key },
+    );
+    cleanup();
+    window.history.replaceState({}, '', '/games/new?paymentReturn=' + managedOperationId);
+    page(vi.fn(), { api, navigate });
+    await waitFor(() =>
+      expect(navigate).toHaveBeenLastCalledWith(
+        '/games/' + managedGameId + '?created=1&recovered=1',
+      ),
+    );
+    expect(advanceWholeCourtCheckout).toHaveBeenCalledExactlyOnceWith(
+      managedOperationId,
+      key,
+      'confirm',
+    );
+    expect(createPaidGame).toHaveBeenCalledOnce();
+    expect(getGameOperation).not.toHaveBeenCalled();
+  });
+
   it('reads the original operation on checkout return and opens its card once in the current tab', async () => {
     const attempt = await prepareCreateGameAttempt(
       principal,
