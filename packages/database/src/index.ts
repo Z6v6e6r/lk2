@@ -101,5 +101,3 @@ export type {
   GameJoinConditionsContext,
 } from './game-join-conditions-context-repository.js';
 export * from './tournament-local-repository.js';
-
-export { resolveGameCreateLocationBinding } from './game-create-location-binding-repository.js';

@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
-import { qcId, qcIso } from '@phub/domain/quarter-create';
 
 import {
   gameCardProjectionInputSchema,
@@ -349,11 +347,14 @@ export interface WholeCourtCheckoutReceipt {
   readonly confirmedAt: string;
 }
 
-function validWholeCourtBinding(binding: WholeCourtCheckoutBinding): boolean {
+function validWholeCourtBinding(
+  binding: WholeCourtCheckoutBinding,
+  validId: (value: unknown) => boolean,
+): boolean {
   return (
     Object.keys(binding).sort().join() ===
       'amountMinor,providerClientId,providerRoomId,providerStationId' &&
-    [binding.providerClientId, binding.providerStationId, binding.providerRoomId].every(qcId) &&
+    [binding.providerClientId, binding.providerStationId, binding.providerRoomId].every(validId) &&
     Number.isSafeInteger(binding.amountMinor) &&
     binding.amountMinor > 0 &&
     binding.amountMinor <= 10_000_000
@@ -928,16 +929,18 @@ export function createGameRepository(
 
     create(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        if (
-          input.wholeCourtCheckout &&
-          (!validWholeCourtBinding(input.wholeCourtCheckout) ||
+        if (input.wholeCourtCheckout) {
+          // The provider validators are only needed for this pilot path.
+          const { qcId } = await import('@phub/domain/quarter-create');
+          if (
+            !validWholeCourtBinding(input.wholeCourtCheckout, qcId) ||
             input.paymentMode !== 'ORGANIZER_PAYS' ||
             !input.gameId ||
             !input.operationId ||
             !input.courtId ||
-            input.visibility !== 'PRIVATE')
-        ) {
-          throw new Error('WHOLE_COURT_DRAFT_INVALID');
+            input.visibility !== 'PRIVATE'
+          )
+            throw new Error('WHOLE_COURT_DRAFT_INVALID');
         }
         if (
           isRestrictedGameTestCourt(input.tenantId, input.courtId) &&
@@ -2427,13 +2430,17 @@ export function createWholeCourtCheckoutRepository(pool: Pool) {
         readonly receipt: WholeCourtCheckoutReceipt;
       },
     ): Promise<void> {
+      const [{ isDeepStrictEqual }, { qcId, qcIso }] = await Promise.all([
+        import('node:util'),
+        import('@phub/domain/quarter-create'),
+      ]);
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const row = await wholeCourtCheckoutRow(client, input, true);
         const paid = input.receipt;
         if (
           !row ||
           row.game_id !== input.gameId ||
-          !validWholeCourtBinding(input.binding) ||
+          !validWholeCourtBinding(input.binding, qcId) ||
           !isDeepStrictEqual(row.binding, input.binding) ||
           input.binding.amountMinor !== paid.amountMinor ||
           Object.keys(paid).sort().join() !==

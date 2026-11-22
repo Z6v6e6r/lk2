@@ -4,7 +4,10 @@ import { MonthlyPurchaseOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createTournamentChatOwner } from './tournaments/tournament-chat-owner-client.js';
 import { createOrganizerProfileLookup } from './tournaments/organizer-profile-lookup-runtime.js';
 import { createCommunityActorToken } from './communities/community-actor-token.js';
-import { createQuarterCreateRepository } from '@phub/database/quarter-create';
+import {
+  createQuarterCreateRepository,
+  resolveGameCreateLocationBinding,
+} from '@phub/database/quarter-create';
 import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createQuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
 import { createTournamentLocalRepository } from '@phub/database';
@@ -119,11 +122,7 @@ import { createGameCommercialJoinRuntime } from './games/game-commercial-join-ru
 import { createGameCommercialCreateRuntime } from './games/game-create-commercial-runtime.js';
 import { createWholeCourtRuntime, parseWholeCourtPilot } from './games/game-whole-court-create.js';
 import { createWholeCourtOwner } from './games/game-whole-court-owner.js';
-import {
-  createWholeCourtCheckoutRepository,
-  resolveGameCreateLocationBinding,
-  withTenantTransaction,
-} from '@phub/database';
+import { createWholeCourtCheckoutRepository, withTenantTransaction } from '@phub/database';
 import { createGameJoinConditionsContextRepository } from '../../../packages/database/src/game-join-conditions-context-repository.js';
 import { createResidencyRepository } from '../../../packages/database/src/residency-repository.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
