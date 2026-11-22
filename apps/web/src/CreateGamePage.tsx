@@ -180,7 +180,7 @@ function LegacyCreateGamePage({
     [],
   );
   const paidCreateAvailable = paidCreateIntent && typeof gateway.createPaidGame === 'function';
-  const paymentReturnOperationId = useMemo(checkoutReturnOperationId, []);
+  const paymentReturnOperationId = useMemo(() => checkoutReturnOperationId(), []);
   const restored = useMemo(() => {
     if (!storage) {
       return {
@@ -988,20 +988,18 @@ export function CreateGamePage(
   props: Parameters<typeof LegacyCreateGamePage>[0],
 ): React.JSX.Element {
   const paymentReturnOperationId = checkoutReturnOperationId();
+  let matchesSavedReturn = false;
   if (paymentReturnOperationId) {
     try {
       const storage = props.attemptStorage ?? browserAttemptStorage();
       const attempt = storage && loadCreateGameAttempt(props.principal, storage);
-      if (
-        isPendingConfirmationAttempt(attempt) &&
-        attempt.operationId === paymentReturnOperationId
-      ) {
-        return <LegacyCreateGamePage {...props} />;
-      }
+      matchesSavedReturn =
+        isPendingConfirmationAttempt(attempt) && attempt.operationId === paymentReturnOperationId;
     } catch {
       // Keep the normal flow selection if the return cannot be matched to a saved operation.
     }
   }
+  if (matchesSavedReturn) return <LegacyCreateGamePage {...props} />;
   let quarter =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('quarterCreate') === '1';
