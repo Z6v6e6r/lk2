@@ -1748,6 +1748,66 @@ export const CALLBACK_RUNTIME_BRIDGE = {
     },
   ],
 };
+// This release adds the #693 OpenAPI surface and an API-only environment admission.
+// Git proves the application ancestor and the complete controller delta at execution.
+const WHOLE_COURT_PREDECESSOR = '0a4d640965e921e6d06eeb22de6cc6dcae07f0b1';
+const WHOLE_COURT_APPLICATION = 'fa6253a5e87bacd36502d077162b3e1fa11f8935';
+const WHOLE_COURT_APPLICATION_TREE = '60b1e406e440a191b3a269d744ce4bf0e1919ae2';
+const WHOLE_COURT_RUNTIME_FILES = new Map([
+  [
+    'contracts/openapi/user/v1/games.yaml',
+    ['1b970798653c134286fadc3c340ae0fd7e2b1c5e', '7b3d498d1daf395f0d7c6bc6dfe08f7dc1047389'],
+  ],
+  [
+    'contracts/openapi/user/v1/openapi.yaml',
+    ['004f61e8bb7cdbbac4b96daae3efc422d283f9b2', '4ba386ed5969c9864794d09dce63a73dc188958b'],
+  ],
+  [
+    'deploy/timeweb/runtime-environment.contract.json',
+    ['6c239e3b55d64d5a9dcd4132f6c0575acd2e628c', '152ce28631763f1699a3fc44d0b70d28aed3bbab'],
+  ],
+]);
+const WHOLE_COURT_CONTROLLER_FILES = new Set([
+  'deploy/timeweb/runtime-environment.contract.json',
+  'scripts/timeweb-api-web-upgrade.js',
+  'scripts/timeweb-api-web-upgrade.test.ts',
+  'scripts/timeweb-commercial-runtime-contract.js',
+  'scripts/provision-timeweb-beta-runtime-secrets.test.ts',
+  'docs/runbooks/timeweb-standard-delivery.md',
+]);
+
+function validateWholeCourtRuntimeBridge(identity, entries, tail) {
+  if (
+    identity.previousSha !== WHOLE_COURT_PREDECESSOR ||
+    !tail?.length ||
+    new Set(tail.map(({ path }) => path)).size !== tail.length ||
+    tail.some(({ status, path }) => status !== 'M' || !WHOLE_COURT_CONTROLLER_FILES.has(path)) ||
+    !tail.some(({ path }) => path === 'deploy/timeweb/runtime-environment.contract.json')
+  )
+    fail('whole_court_runtime_bridge');
+  const definitionChanges = entries.filter(({ path }) => WHOLE_COURT_RUNTIME_FILES.has(path));
+  if (
+    definitionChanges.length !== WHOLE_COURT_RUNTIME_FILES.size ||
+    definitionChanges.some(
+      ({ path, status, oldMode, newMode, oldType, newType, oldOid, newOid }) => {
+        const [before, after] = WHOLE_COURT_RUNTIME_FILES.get(path);
+        return (
+          status !== 'M' ||
+          oldMode !== '100644' ||
+          newMode !== '100644' ||
+          oldType !== 'blob' ||
+          newType !== 'blob' ||
+          oldOid !== before ||
+          newOid !== after
+        );
+      },
+    )
+  )
+    fail('whole_court_runtime_bridge');
+  validateRuntimeDelta(
+    entries.filter(({ path }) => !WHOLE_COURT_RUNTIME_FILES.has(path)).map(({ path }) => path),
+  );
+}
 export function parseRuntimeDelta(raw) {
   if (raw === '') return [];
   const parts = raw.split('\0');
@@ -1766,7 +1826,7 @@ export function parseRuntimeDelta(raw) {
     };
   });
 }
-export function validateRuntimeUpgrade(identity, entries) {
+export function validateRuntimeUpgrade(identity, entries, wholeCourtTail) {
   if (!Array.isArray(entries) || new Set(entries.map((v) => v.path)).size !== entries.length)
     fail('invalid_runtime_delta');
   const paths = entries.map((v) => v.path);
@@ -1776,6 +1836,8 @@ export function validateRuntimeUpgrade(identity, entries) {
   } catch (error) {
     if (error.message !== 'runtime_definition_changed') throw error;
   }
+  if (wholeCourtTail !== undefined)
+    return validateWholeCourtRuntimeBridge(identity, entries, wholeCourtTail);
   const bridge = CALLBACK_RUNTIME_BRIDGE;
   if (
     identity.previousSha !== bridge.previousSha ||
@@ -3216,7 +3278,21 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         oldType: v.oldOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.oldOid]),
         newType: v.newOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.newOid]),
       }));
-      if (!join)
+      if (!join) {
+        let wholeCourtTail;
+        if (
+          isCanonicalOwnerDirectedUpgrade(op) &&
+          predecessorSource(previous) === WHOLE_COURT_PREDECESSOR &&
+          op.candidateSha === op.controllerSha &&
+          entries.some(({ path }) => path === 'contracts/openapi/user/v1/games.yaml')
+        ) {
+          git(['merge-base', '--is-ancestor', WHOLE_COURT_APPLICATION, op.candidateSha]);
+          if (
+            git(['rev-parse', `${WHOLE_COURT_APPLICATION}^{tree}`]) !== WHOLE_COURT_APPLICATION_TREE
+          )
+            fail('whole_court_runtime_bridge');
+          wholeCourtTail = delta(WHOLE_COURT_APPLICATION, op.candidateSha);
+        }
         validateRuntimeUpgrade(
           {
             previousSha: predecessorSource(previous),
@@ -3224,7 +3300,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
             candidateTree: op.candidateTree,
           },
           entries,
+          wholeCourtTail,
         );
+      }
     }
     if (join) {
       for (const sha of [op.candidateSha, previousApi.releaseId.slice(0, 40)]) {

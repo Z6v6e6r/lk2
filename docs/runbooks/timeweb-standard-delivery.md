@@ -1936,3 +1936,23 @@ The existing 61-round, at least 900-second observation, private readiness, publi
 image entrypoint smoke, zero unexpected restarts, unchanged excluded services and tested rollback
 remain required. See the [canonical fresh backup profile](timeweb-prerequisite-producers.md#canonical-predecessor-fresh-dump)
 for historical restore custody. Keep LOCAL, CI, publication and PRODUCTION proof distinct.
+
+### Whole-court checkout application release
+
+The canonical API/Worker/Web upgrade admits the #693 application tree from the
+installed `0a4d640965e9` predecessor. The controller verifies the #693 Git ancestry
+and allows only its listed controller files after that application tree. The two
+OpenAPI files and the runtime environment contract are matched by their exact old
+and new blobs. The generic restrictions on runtime definitions and migrations apply
+to all remaining paths. The application and controller use the same final main
+revision and canonical manifest. The usual backup, health, observation and rollback
+checks apply.
+
+Install this release with the whole-court pilot absent from the runtime secret set.
+The API environment contract recognizes `GAME_WHOLE_COURT_CHECKOUT_PILOT`,
+`GAME_WHOLE_COURT_CHECKOUT_OWNER_URL` and `GAME_WHOLE_COURT_CHECKOUT_TIMEOUT_MS` for a
+separately guarded activation. Validate the exact actor, court, time and price
+against the matching LK1 target, the installed signing boundary and the provider
+quote. The canonical application upgrade preserves the existing secret set.
+Keep both sides of the original checkout available until its transaction is
+resolved. A release rollback cannot reverse a provider booking or payment.

@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createHash, createPublicKey, generateKeyPairSync } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -1163,5 +1163,78 @@ describe('quarter CREATE API-only release inputs', () => {
     const env = quarter();
     env[role]!.GAME_COMMERCIAL_CREATE_ENABLED = 'false';
     expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+});
+
+describe('whole-court pilot API runtime admission', () => {
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const scope = {
+    tenantId: randomUUID(),
+    userId: randomUUID(),
+    stationId: randomUUID(),
+    courtId: randomUUID(),
+    startsAt: '2030-12-06T11:00:00.000Z',
+    endsAt: '2030-12-06T12:30:00.000Z',
+    amountMinor: 320000,
+  };
+  const validate = (env: ReturnType<typeof safeRuntimeEnvironments>) =>
+    validateTimewebRuntimeEnvironments(env, { host, tenantKey });
+  function enabled() {
+    const env = safeRuntimeEnvironments();
+    Object.assign(env.api!, {
+      GAMES_COMMANDS_ENABLED: 'true',
+      GAMES_READ_ENABLED: 'true',
+      GAME_WHOLE_COURT_CHECKOUT_PILOT: JSON.stringify(scope),
+      GAME_WHOLE_COURT_CHECKOUT_OWNER_URL: 'https://padlhub.su/',
+      GAME_WHOLE_COURT_CHECKOUT_TIMEOUT_MS: '25000',
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({
+        'synthetic-owner': privateKey,
+      }),
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'synthetic-owner',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://issuer.example.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'synthetic-owner',
+    });
+    return env;
+  }
+  it('admits the existing off state and a complete single-slot API setting', () => {
+    expect(() => validate(safeRuntimeEnvironments())).not.toThrow();
+    expect(() => validate(enabled())).not.toThrow();
+    expect(loadConfig(enabled().api).GAME_WHOLE_COURT_CHECKOUT_PILOT).toBe(JSON.stringify(scope));
+  });
+  it.each([
+    { GAME_WHOLE_COURT_CHECKOUT_PILOT: JSON.stringify({ ...scope, extra: true }) },
+    { GAME_WHOLE_COURT_CHECKOUT_PILOT: JSON.stringify({ ...scope, amountMinor: 0 }) },
+    {
+      GAME_WHOLE_COURT_CHECKOUT_PILOT: JSON.stringify({
+        ...scope,
+        endsAt: '2030-12-06T13:01:00.000Z',
+      }),
+    },
+    { GAME_WHOLE_COURT_CHECKOUT_OWNER_URL: 'https://padlhub.su/public' },
+    { GAME_WHOLE_COURT_CHECKOUT_TIMEOUT_MS: '30001' },
+    { GAMES_COMMANDS_ENABLED: 'false' },
+    { GAMES_READ_ENABLED: 'false' },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'unknown' },
+  ])('refuses unsupported pilot settings %o', (changes) => {
+    const env = enabled();
+    Object.assign(env.api!, changes);
+    expect(() => validate(env)).toThrow();
+  });
+  it('requires the pilot and keeps its configuration out of other processes', () => {
+    const partial = enabled();
+    delete partial.api!.GAME_WHOLE_COURT_CHECKOUT_PILOT;
+    expect(() => validate(partial)).toThrow();
+    const missingTimeout = enabled();
+    delete missingTimeout.api!.GAME_WHOLE_COURT_CHECKOUT_TIMEOUT_MS;
+    expect(() => validate(missingTimeout)).toThrow();
+    for (const role of ['worker', 'realtime', 'migrator']) {
+      const env = enabled();
+      env[role]!.GAME_WHOLE_COURT_CHECKOUT_PILOT = JSON.stringify(scope);
+      expect(() => validate(env)).toThrow();
+    }
   });
 });
