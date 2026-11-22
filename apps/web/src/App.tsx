@@ -894,6 +894,7 @@ function NativeCreatedGame({
               </button>
             )}
             <NativeGameJoin
+              key={`join:${game.id}`}
               game={game}
               gateway={joinGateway}
               scope={scope}

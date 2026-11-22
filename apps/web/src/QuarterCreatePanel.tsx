@@ -4,6 +4,13 @@ import type { QuarterCreateResult } from '@phub/api-contracts';
 import type { AuthGateway } from './auth-gateway.js';
 import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
 import {
+  GameCreateDateStrip,
+  GameCreateWizardHeader,
+  GameCreateWizardNext,
+  GameCreateWizardSection,
+} from './GameCreateWizard.js';
+import { useGameCreateWizard } from './use-game-create-wizard.js';
+import {
   browserCreateGameAttemptLockManager,
   type CreateGameAttemptLockManager,
 } from './create-game-attempt.js';
@@ -101,6 +108,10 @@ function QuarterCreateSession({
         return null;
       }
     });
+  const wizard = useGameCreateWizard();
+  const mobileSteps = wizard.active && !stored;
+  const selectedCourt = pairs.find((item) => item.courtId === pair);
+  const canContinueTime = Boolean(start) && new Date(start) > new Date();
   useEffect(() => {
     let disposed = false;
     void (async () => {
@@ -147,6 +158,7 @@ function QuarterCreateSession({
         if (attempts.isCurrent()) {
           setStored(null);
           setResult(null);
+          wizard.reset();
           setPair('');
           setStart('');
           setSubscription(undefined);
@@ -194,11 +206,27 @@ function QuarterCreateSession({
     }
   };
   return (
-    <main className="games-page games-page--create quarter-create-page">
-      <header className="games-page-header">
-        <a href={gamesHref}>{gamesHref === '/' ? 'На главную' : 'Игры'}</a>
-        <h1>Игра по подписке</h1>
-      </header>
+    <main
+      className={
+        'games-page games-page--create quarter-create-page' +
+        (mobileSteps ? ' game-create-wizard' : '')
+      }
+    >
+      {mobileSteps ? (
+        <GameCreateWizardHeader
+          title="Игра по подписке"
+          step={wizard.step}
+          label={(['Место', 'Дата и время', 'Подписка'] as const)[wizard.step]}
+          href={gamesHref}
+          busy={busy}
+          back={wizard.back}
+        />
+      ) : (
+        <header className="games-page-header">
+          <a href={gamesHref}>{gamesHref === '/' ? 'На главную' : 'Игры'}</a>
+          <h1>Игра по подписке</h1>
+        </header>
+      )}
       <section className="game-create-form" aria-busy={busy}>
         <p>
           60 минут, четыре места. Подписка покрывает вашу четверть корта. Остальные участники
@@ -222,45 +250,77 @@ function QuarterCreateSession({
           </>
         ) : (
           <>
-            <label>
-              Корт
-              <select
-                value={pair}
-                disabled={!available || busy}
-                onChange={(e) => setPair(e.currentTarget.value)}
-              >
-                <option value="">Выберите корт</option>
-                {pairs.map((x) => (
-                  <option key={x.courtId} value={x.courtId}>
-                    {x.stationTitle} · {x.courtName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              {localTimeLabel}
-              <input
-                type="datetime-local"
-                value={start}
-                disabled={!available || busy}
-                onChange={(e) => setStart(e.currentTarget.value)}
+            <GameCreateWizardSection hidden={mobileSteps && wizard.step !== 0}>
+              <label>
+                Корт
+                <select
+                  value={pair}
+                  disabled={!available || busy}
+                  onChange={(e) => setPair(e.currentTarget.value)}
+                >
+                  <option value="">Выберите корт</option>
+                  {pairs.map((x) => (
+                    <option key={x.courtId} value={x.courtId}>
+                      {x.stationTitle} · {x.courtName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {mobileSteps && wizard.step === 0 ? (
+                <GameCreateWizardNext
+                  disabled={!available || busy || !pair}
+                  onClick={() => wizard.advance(1)}
+                />
+              ) : null}
+            </GameCreateWizardSection>
+            <GameCreateWizardSection hidden={mobileSteps && wizard.step !== 1}>
+              {mobileSteps && selectedCourt ? (
+                <p className="game-create-wizard__context">
+                  {selectedCourt.stationTitle} · {selectedCourt.courtName}
+                </p>
+              ) : null}
+              {mobileSteps && available ? (
+                <GameCreateDateStrip start={start} onSelect={setStart} />
+              ) : null}
+              <label>
+                {localTimeLabel}
+                <input
+                  type="datetime-local"
+                  value={start}
+                  disabled={!available || busy}
+                  onChange={(e) => setStart(e.currentTarget.value)}
+                />
+              </label>
+              {mobileSteps && wizard.step === 1 ? (
+                <GameCreateWizardNext
+                  disabled={!available || busy || !canContinueTime}
+                  onClick={() => wizard.advance(2)}
+                />
+              ) : null}
+            </GameCreateWizardSection>
+            <GameCreateWizardSection hidden={mobileSteps && wizard.step !== 2}>
+              {mobileSteps && selectedCourt && canContinueTime ? (
+                <p className="game-create-wizard__context">
+                  {selectedCourt.stationTitle} · {selectedCourt.courtName} ·{' '}
+                  {new Date(start).toLocaleString('ru-RU')}
+                </p>
+              ) : null}
+              <GameJoinSubscriptionPicker
+                gateway={subscriptionGateway}
+                {...(subscription ? { value: subscription } : {})}
+                onChange={(value) => {
+                  if (attempts.isCurrent()) setSubscription(value);
+                }}
               />
-            </label>
-            <GameJoinSubscriptionPicker
-              gateway={subscriptionGateway}
-              {...(subscription ? { value: subscription } : {})}
-              onChange={(value) => {
-                if (attempts.isCurrent()) setSubscription(value);
-              }}
-            />
-            <button
-              className="game-detail-primary"
-              type="button"
-              disabled={!available || busy || !pair || !start || !subscription}
-              onClick={() => void run('submit')}
-            >
-              Создать игру по подписке
-            </button>
+              <button
+                className="game-detail-primary"
+                type="button"
+                disabled={!available || busy || !pair || !start || !subscription}
+                onClick={() => void run('submit')}
+              >
+                Создать игру по подписке
+              </button>
+            </GameCreateWizardSection>
           </>
         )}
         {result ? (
