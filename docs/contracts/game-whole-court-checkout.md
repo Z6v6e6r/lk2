@@ -48,7 +48,8 @@ outside explicit loopback development.
 The pilot covers the approved private Web game. Before a live run, the Timeweb
 runtime contract has to admit the exact pilot variables, LK1 and LK2 revisions must
 be verified on their target runtimes, and the outbound provider response must match
-the known proof contract. No provider operation is performed by build, tests or this
+the known proof contract. The public OpenAPI change requires the standard immutable
+release path. No provider operation is performed by build, tests or this
 source change. If an opaque asynchronous ID is returned, the original attempt remains
 in reconciliation. Closing admission must preserve this original journal and any
 existing provider booking.
