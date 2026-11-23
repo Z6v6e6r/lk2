@@ -314,6 +314,7 @@ const environmentSchema = z.object({
   LK_STATION_MEMBERSHIP_LIFETIME_ENABLED: booleanFromEnvironment,
   LK2_STATION_MEMBERSHIP_DELEGATION_AUDIENCE: z.string().min(1).max(256).optional(),
   GAME_COMMERCIAL_JOIN_ENABLED: booleanFromEnvironment,
+  GAME_COMMERCIAL_JOIN_V3_ENABLED: booleanFromEnvironment,
   GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: z.string().url().optional(),
   GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(5_000).default(3_000),
   // Managed commercial CREATE (WARN contour, docs/contracts/game-commercial-create.md).
@@ -1009,6 +1010,20 @@ export function loadConfig(
     (parsed.data.APP_ENV !== 'staging' || !parsed.data.GAMES_COMMANDS_ENABLED)
   ) {
     throw new Error('GAMES_TEST_COURTS_ENABLED requires staging and GAMES_COMMANDS_ENABLED=true');
+  }
+  if (parsed.data.GAME_COMMERCIAL_JOIN_V3_ENABLED) {
+    if (
+      !parsed.data.GAME_COMMERCIAL_JOIN_ENABLED ||
+      !parsed.data.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE
+    ) {
+      throw new Error(
+        'GAME_COMMERCIAL_JOIN_V3_ENABLED requires JOIN, owner URL and delegation configuration',
+      );
+    }
   }
   if (parsed.data.GAME_COMMERCIAL_CREATE_ENABLED) {
     if (!parsed.data.GAMES_READ_ENABLED || !parsed.data.GAMES_COMMANDS_ENABLED) {

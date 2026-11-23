@@ -119,6 +119,7 @@ import { createLk1OwnedSubscriptionReader } from './games/lk1-owned-subscription
 import { createProviderAccountMappingRepository } from '../../../packages/database/src/provider-account-mapping-repository.js';
 import { ProviderAccountOwnerClient } from '../../../packages/subscription-runtime-adapter/src/provider-account-attestation.js';
 import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
+import { startPaidJoinReconciliation } from './games/paid-join-reconciler.js';
 import { createGameCommercialCreateRuntime } from './games/game-create-commercial-runtime.js';
 import { createWholeCourtRuntime, parseWholeCourtPilot } from './games/game-whole-court-create.js';
 import { createWholeCourtOwner } from './games/game-whole-court-owner.js';
@@ -1376,8 +1377,26 @@ const app = await buildApp({
   rateLimitRedis: redis,
 });
 
+// Paid JOIN reconciliation is part of the commercial JOIN composition: it only runs when the
+// runtime, the roster repository and the owner client are all present.
+const stopPaidJoinReconciliation =
+  gameCommercialJoin && gameRosterRepository
+    ? startPaidJoinReconciliation({
+        tenantIds: async () => {
+          const tenants = await pool.query<{ id: string }>(
+            'select id from identity.tenants where active = true order by id',
+          );
+          return tenants.rows.map((tenant) => tenant.id);
+        },
+        repository: gameRosterRepository,
+        owner: gameCommercialJoin.owner,
+        logger,
+      })
+    : undefined;
+
 const shutdown = async (signal: string): Promise<void> => {
   logger.info({ signal }, 'shutting down');
+  stopPaidJoinReconciliation?.();
   await app.close();
   await redis.quit().catch(() => redis.disconnect());
   await pool.end();

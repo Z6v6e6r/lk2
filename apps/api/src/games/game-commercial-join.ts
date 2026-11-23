@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 
 import type {
   PaidJoinProviderBinding,
+  PaidJoinSettlementBinding,
+  FailPaidJoinResult,
   ConfirmGamePaymentInput,
   GameRosterCommandResult,
 } from '@phub/database';
@@ -57,7 +59,8 @@ export type CommercialJoinFailureCode =
   | 'GAME_ALREADY_JOINED'
   | 'GAME_PAYMENT_MODE_MISMATCH'
   | 'GAME_RESERVATION_EXPIRED'
-  | 'GAME_RESERVATION_NOT_FOUND';
+  | 'GAME_RESERVATION_NOT_FOUND'
+  | 'GAME_JOIN_CANCELLED';
 
 export interface CommercialJoinPrice {
   readonly amountMinor: number;
@@ -87,6 +90,17 @@ export type CommercialJoinAttemptState =
 /** Server-side port onto the existing write owner of the games aggregate. */
 export interface CommercialJoinRepositoryPort {
   confirmPayment?(input: ConfirmGamePaymentInput): Promise<GameRosterCommandResult>;
+  /**
+   * Durable fence written before the external owner call. When absent the attempt is still
+   * recoverable, but an expired reservation cannot be released without an owner read.
+   */
+  markDispatchStarted(input: {
+    readonly tenantId: string;
+    readonly actorUserId: string;
+    readonly gameId: string;
+    readonly operationId: string;
+    readonly reservationId: string;
+  }): Promise<boolean>;
   beginPaidJoin(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -103,6 +117,7 @@ export interface CommercialJoinRepositoryPort {
     readonly providerBinding?: PaidJoinProviderBinding;
     readonly bindingRefs?: CommercialBindingRefs;
     readonly managedJoin?: ManagedJoinBinding;
+    readonly settlement?: PaidJoinSettlementBinding;
     readonly stationMembership?: StationMarker;
   }): Promise<CommercialJoinBeginResult>;
   getPaidJoinAttempt(input: {
@@ -117,7 +132,7 @@ export interface CommercialJoinRepositoryPort {
     readonly gameId: string;
     readonly code: string;
     readonly correlationId: string;
-  }): Promise<unknown>;
+  }): Promise<FailPaidJoinResult | undefined>;
 }
 
 export interface CommercialJoinAppliedResult {
@@ -155,6 +170,7 @@ export interface CommercialJoinAttemptView {
   readonly managedReceipt?: ManagedJoinReceipt;
   readonly bindingRefs?: CommercialBindingRefs;
   readonly providerBinding?: PaidJoinProviderBinding;
+  readonly settlement?: PaidJoinSettlementBinding;
   readonly commandId: string;
   readonly gameId: string;
   readonly state: 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
@@ -252,6 +268,74 @@ export type CommercialJoinOwnerOutcome =
         'GAME_SERVICE_BLOCKED' | 'GAME_PAYMENT_REQUIRED' | 'GAME_SUBSCRIPTION_SELECTION_REQUIRED';
     };
 
+/** One server-owned v3 settlement. It never carries a client price or a client payment decision. */
+export interface CommercialJoinSettlement {
+  readonly quoteId: string;
+  readonly amountMinor: number;
+  readonly toPayMinor: number;
+  readonly checkoutUrl: string;
+  readonly expiresAt: string;
+  readonly requestSha256: string;
+}
+
+export interface CommercialJoinSettlementReceipt {
+  readonly receiptId: string;
+  readonly confirmedAt: string;
+  readonly bookingRef: string;
+  readonly usageRef?: string;
+  readonly appliedRule: string;
+  readonly priceCharged: { readonly amountMinor: number; readonly currency: 'RUB' };
+  readonly provider: 'VIVA';
+}
+
+export type CommercialJoinSettlementRead =
+  | { readonly status: 'PAYMENT_REQUIRED'; readonly settlement: CommercialJoinSettlement }
+  | { readonly status: 'PENDING' }
+  | { readonly status: 'CONFIRMED'; readonly receipt: CommercialJoinSettlementReceipt }
+  | { readonly status: 'CANCELLED' }
+  | { readonly status: 'UNKNOWN' };
+
+export interface CommercialJoinSettlementOwner {
+  prepare(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly subscriptionInstanceId: string;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly idempotencyKey: string;
+    readonly price: CommercialJoinPrice;
+  }): Promise<CommercialJoinSettlement>;
+  execute(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly idempotencyKey: string;
+    readonly subscriptionInstanceId: string;
+    readonly reservationId: string;
+    readonly settlement: CommercialJoinSettlement;
+  }): Promise<
+    | { readonly status: 'PAYMENT_REQUIRED'; readonly settlement: CommercialJoinSettlement }
+    | { readonly status: 'PENDING' }
+    | { readonly status: 'UNKNOWN' }
+    | { readonly status: 'REJECTED'; readonly code: 'GAME_PAYMENT_REQUIRED' }
+  >;
+  read(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly settlement: CommercialJoinSettlement;
+  }): Promise<CommercialJoinSettlementRead>;
+  cancel(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly settlement: CommercialJoinSettlement;
+  }): Promise<{
+    readonly status: 'CLOSING' | 'CLOSED' | 'PAID' | 'UNKNOWN';
+    readonly limitReleased: boolean;
+    readonly visitReturned: boolean;
+  }>;
+}
+
 export interface CommercialJoinCommandEnvelope {
   readonly tenantId: string;
   readonly tenantKey: string;
@@ -307,7 +391,8 @@ export interface CommercialJoinResponseBody {
     readonly updatedAt: string;
     readonly nextAction:
       | { readonly type: 'NONE' }
-      | { readonly type: 'WAIT_FOR_RECONCILIATION'; readonly retryAfterSeconds: number };
+      | { readonly type: 'WAIT_FOR_RECONCILIATION'; readonly retryAfterSeconds: number }
+      | { readonly type: 'OPEN_PAYMENT'; readonly url: string };
     readonly error: { readonly code: string; readonly message: string } | null;
     readonly commercial: CommercialJoinCommercialView;
   };
@@ -336,6 +421,7 @@ const FAILURE_MESSAGES: Readonly<Record<CommercialJoinFailureCode, string>> = {
   GAME_PAYMENT_MODE_MISMATCH: 'У игры другой платёжный режим.',
   GAME_RESERVATION_EXPIRED: 'Резерв места истёк. Повторите проверку условий.',
   GAME_RESERVATION_NOT_FOUND: 'Резерв места не найден.',
+  GAME_JOIN_CANCELLED: 'Неоплаченная попытка отменена, место освобождается после подтверждения.',
 };
 
 export function commercialFailure(
@@ -437,10 +523,22 @@ export interface CommercialJoinDependencies {
   readonly repository: CommercialJoinRepositoryPort;
   readonly conditionsOwner: GameJoinConditionsOwner;
   readonly owner: CommercialJoinOwnerPort;
+  /** v3 settlement owner; absent means positive surcharge stays GAME_PAYMENT_REQUIRED. */
+  readonly settlementOwner?: CommercialJoinSettlementOwner;
   readonly now?: () => number;
   readonly reservationTtlSeconds?: number;
   readonly reconciliationRetryAfterSeconds?: number;
   readonly onReconciliationFailure?: (code: string) => void;
+}
+
+function isSafeCheckoutUrl(value: string): boolean {
+  if (!/^https:\/\/\S+$/.test(value)) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
 }
 
 function attemptView(
@@ -464,6 +562,7 @@ function operationBody(input: {
   readonly error?: { readonly code: string; readonly message: string } | null;
   readonly commercial: CommercialJoinCommercialView;
   readonly replayed: boolean;
+  readonly nextAction?: CommercialJoinResponseBody['operation']['nextAction'];
 }): CommercialJoinResponseBody {
   return {
     commandId: input.operationId,
@@ -476,9 +575,10 @@ function operationBody(input: {
       createdAt: input.createdAt,
       updatedAt: input.updatedAt,
       nextAction:
-        input.retryAfterSeconds === undefined
+        input.nextAction ??
+        (input.retryAfterSeconds === undefined
           ? { type: 'NONE' }
-          : { type: 'WAIT_FOR_RECONCILIATION', retryAfterSeconds: input.retryAfterSeconds },
+          : { type: 'WAIT_FOR_RECONCILIATION', retryAfterSeconds: input.retryAfterSeconds }),
       error: input.error ?? null,
       commercial: input.commercial,
     },
@@ -685,9 +785,44 @@ export async function executeCommercialJoin(
     }
   }
 
+  let settlement: CommercialJoinSettlement | undefined;
+  if (serverAmountMinor > 0 && dependencies.settlementOwner) {
+    try {
+      settlement = await dependencies.settlementOwner.prepare({
+        actor: {
+          tenantId: input.tenantId,
+          tenantKey: input.tenantKey,
+          userId: input.userId,
+          sessionId: input.sessionId,
+          gameId: input.gameId,
+          expectedRevision: input.expectedRevision,
+        },
+        subscriptionInstanceId: input.subscriptionInstanceId,
+        operationId: input.operationId,
+        correlationId: input.correlationId,
+        idempotencyKey: input.idempotencyKey,
+        price,
+      });
+    } catch {
+      return commercialFailure('GAME_PAYMENT_REQUIRED');
+    }
+    if (
+      settlement.amountMinor !== serverAmountMinor ||
+      settlement.toPayMinor !== serverAmountMinor ||
+      settlement.toPayMinor <= 0 ||
+      Date.parse(settlement.expiresAt) <= now() ||
+      !isSafeCheckoutUrl(settlement.checkoutUrl)
+    ) {
+      return commercialFailure('GAME_PRICE_CONFIRMATION_REQUIRED');
+    }
+  }
+
   let providerBinding: PaidJoinProviderBinding | undefined;
   let managedJoin: ManagedJoinBinding | undefined;
-  if (dependencies.owner.prepareManaged && serverAmountMinor === 0) {
+  if (settlement) {
+    // v3 settlement is the only owner path for a positive surcharge. It must not fall through
+    // to the legacy card/v1 prepare below.
+  } else if (dependencies.owner.prepareManaged && serverAmountMinor === 0) {
     try {
       const prepared = await dependencies.owner.prepareManaged({
         actor: {
@@ -783,7 +918,40 @@ export async function executeCommercialJoin(
         : {}),
       ...(input.invitationId === undefined ? {} : { invitationId: input.invitationId }),
       reservationTtlSeconds,
-      ...(providerBinding ? { providerBinding } : {}),
+      ...(settlement
+        ? {
+            settlement: {
+              quoteId: settlement.quoteId,
+              toPayMinor: settlement.toPayMinor,
+              checkoutUrl: settlement.checkoutUrl,
+              expiresAt: settlement.expiresAt,
+              requestSha256: settlement.requestSha256,
+            },
+            settlementActor: {
+              tenantKey: input.tenantKey,
+              sessionId: input.sessionId,
+            },
+          }
+        : {}),
+      ...(providerBinding
+        ? {
+            actorContext: {
+              tenantKey: input.tenantKey,
+              sessionId: input.sessionId,
+              providerClientId: providerBinding.providerClientId,
+              providerMappingId: providerBinding.providerMappingId,
+              ...((resolvedProviderClientSubscriptionId ??
+              providerBinding.providerClientSubscriptionId)
+                ? {
+                    providerClientSubscriptionId:
+                      resolvedProviderClientSubscriptionId ??
+                      providerBinding.providerClientSubscriptionId,
+                  }
+                : {}),
+            },
+            providerBinding,
+          }
+        : {}),
       ...(stationMembership ? { stationMembership } : {}),
     });
   } catch {
@@ -874,6 +1042,150 @@ export async function executeCommercialJoin(
           'GAME_RECONCILIATION_REQUIRED',
         ),
         replayed: true,
+      }),
+    };
+  }
+
+  // 3b. Durable dispatch fence. It is mandatory: without a successful CAS against the live
+  // reservation the owner must never be called. A slow API that lost the TTL race fails here
+  // instead of dispatching after the expiry worker already released the seat.
+  let fenced: boolean;
+  try {
+    fenced = await dependencies.repository.markDispatchStarted({
+      tenantId: input.tenantId,
+      actorUserId: input.userId,
+      gameId: input.gameId,
+      operationId: begin.operationId,
+      reservationId: begin.reservationId,
+    });
+  } catch {
+    fenced = false;
+  }
+  if (!fenced) {
+    try {
+      await dependencies.repository.failPaidJoinAttempt({
+        tenantId: input.tenantId,
+        actorUserId: input.userId,
+        operationId: begin.operationId,
+        gameId: input.gameId,
+        code: 'GAME_RESERVATION_EXPIRED',
+        correlationId: input.correlationId,
+      });
+    } catch {
+      // The unfenced attempt remains recoverable; it just must not dispatch.
+    }
+    return commercialFailure('GAME_RESERVATION_EXPIRED');
+  }
+
+  if (settlement && dependencies.settlementOwner) {
+    let settled:
+      | Awaited<ReturnType<CommercialJoinSettlementOwner['execute']>>
+      | { readonly status: 'UNKNOWN' };
+    try {
+      settled = await dependencies.settlementOwner.execute({
+        actor: {
+          tenantId: input.tenantId,
+          tenantKey: input.tenantKey,
+          userId: input.userId,
+          sessionId: input.sessionId,
+          gameId: input.gameId,
+          expectedRevision: input.expectedRevision,
+        },
+        operationId: begin.operationId,
+        correlationId: input.correlationId,
+        idempotencyKey: input.idempotencyKey,
+        subscriptionInstanceId: input.subscriptionInstanceId,
+        reservationId: reservation?.id ?? begin.operationId,
+        settlement,
+      });
+    } catch {
+      settled = { status: 'UNKNOWN' };
+    }
+    if (settled.status === 'REJECTED') {
+      try {
+        await dependencies.repository.failPaidJoinAttempt({
+          tenantId: input.tenantId,
+          actorUserId: input.userId,
+          operationId: begin.operationId,
+          gameId: input.gameId,
+          code: 'GAME_PAYMENT_REQUIRED',
+          correlationId: input.correlationId,
+        });
+      } catch {
+        // The attempt stays recoverable; it must not dispatch again.
+      }
+      return commercialFailure('GAME_PAYMENT_REQUIRED');
+    }
+    if (settled.status === 'PAYMENT_REQUIRED') {
+      const returned = settled.settlement;
+      if (
+        returned.quoteId !== settlement.quoteId ||
+        returned.toPayMinor !== settlement.toPayMinor ||
+        returned.expiresAt !== settlement.expiresAt ||
+        returned.checkoutUrl !== settlement.checkoutUrl
+      ) {
+        return commercialFailure('GAME_RECONCILIATION_REQUIRED');
+      }
+      return {
+        kind: 'accepted',
+        body: operationBody({
+          operationId: begin.operationId,
+          status: 'PROCESSING',
+          gameId: input.gameId,
+          revision: begin.outcome === 'reserved' ? begin.revision : null,
+          createdAt,
+          updatedAt: createdAt,
+          nextAction: { type: 'OPEN_PAYMENT', url: returned.checkoutUrl },
+          commercial: attemptView(
+            'OWNER_PENDING',
+            reservation,
+            { amountMinor: serverAmountMinor, currency: 'RUB', consent: 'SETTLED' },
+            null,
+            null,
+          ),
+          replayed: false,
+        }),
+      };
+    }
+    if (settled.status === 'UNKNOWN') {
+      return {
+        kind: 'accepted',
+        body: operationBody({
+          operationId: begin.operationId,
+          status: 'UNKNOWN',
+          gameId: input.gameId,
+          revision: null,
+          createdAt,
+          updatedAt: createdAt,
+          retryAfterSeconds: retryAfter,
+          commercial: attemptView(
+            'UNKNOWN',
+            reservation,
+            { amountMinor: serverAmountMinor, currency: 'RUB', consent: 'SETTLED' },
+            null,
+            'GAME_RECONCILIATION_REQUIRED',
+          ),
+          replayed: false,
+        }),
+      };
+    }
+    return {
+      kind: 'accepted',
+      body: operationBody({
+        operationId: begin.operationId,
+        status: 'PROCESSING',
+        gameId: input.gameId,
+        revision: begin.outcome === 'reserved' ? begin.revision : null,
+        createdAt,
+        updatedAt: createdAt,
+        commercial: attemptView(
+          'OWNER_PENDING',
+          reservation,
+          { amountMinor: serverAmountMinor, currency: 'RUB', consent: 'SETTLED' },
+          null,
+          null,
+        ),
+        replayed: false,
       }),
     };
   }
@@ -991,6 +1303,13 @@ function unresolvedBoundJoinOperation(
   });
 }
 
+function unresolvedSettlementOperation(
+  attempt: CommercialJoinAttemptView,
+  now: () => number,
+): CommercialJoinResponseBody {
+  return unresolvedBoundJoinOperation(attempt, now);
+}
+
 /**
  * Readback of a commercial operation. Read-only: it never reserves, confirms, releases or fails.
  */
@@ -1003,7 +1322,10 @@ export async function readCommercialJoinOperation(
     readonly operationId: string;
     readonly correlationId: string;
   },
-  dependencies: Pick<CommercialJoinDependencies, 'repository' | 'owner' | 'now'>,
+  dependencies: Pick<
+    CommercialJoinDependencies,
+    'repository' | 'owner' | 'now' | 'settlementOwner'
+  >,
 ): Promise<CommercialJoinResponseBody | null> {
   const now = dependencies.now ?? Date.now;
   const attempt = await dependencies.repository.getPaidJoinAttempt({
@@ -1020,6 +1342,171 @@ export async function readCommercialJoinOperation(
     !attempt.managedReceipt
   )
     return unresolvedBoundJoinOperation(attempt, now);
+  if (attempt.settlement && dependencies.settlementOwner && attempt.state === 'IN_PROGRESS') {
+    let read: Awaited<ReturnType<CommercialJoinSettlementOwner['read']>>;
+    try {
+      read = await dependencies.settlementOwner.read({
+        actor: {
+          tenantId: input.tenantId,
+          tenantKey: input.tenantKey,
+          userId: input.actorUserId,
+          sessionId: input.sessionId,
+          gameId: attempt.gameId,
+          expectedRevision: 0,
+        },
+        operationId: input.operationId,
+        correlationId: input.correlationId,
+        settlement: { ...attempt.settlement, amountMinor: attempt.settlement.toPayMinor },
+      });
+    } catch {
+      read = { status: 'UNKNOWN' };
+    }
+    if (read.status === 'CONFIRMED') {
+      const receipt = read.receipt;
+      const evidenceHash = createHash('sha256')
+        .update(JSON.stringify(Object.entries(receipt).sort(([a], [b]) => a.localeCompare(b))))
+        .digest('hex');
+      if (!dependencies.repository.confirmPayment)
+        return unresolvedSettlementOperation(attempt, now);
+      let confirmed: GameRosterCommandResult;
+      try {
+        confirmed = await dependencies.repository.confirmPayment({
+          tenantId: input.tenantId,
+          actorUserId: input.actorUserId,
+          gameId: attempt.gameId,
+          reservationId: attempt.reservation?.id ?? attempt.commandId,
+          correlationId: input.correlationId,
+          idempotencyKey: `join-reconcile:${input.operationId}`,
+          requestHash: evidenceHash,
+          evidence: {
+            provider: 'VIVA',
+            operationType: 'SUBSCRIPTION_BOOKING',
+            operationId: input.operationId,
+            bookingId: receipt.bookingRef,
+            evidenceHash,
+            verifiedAt: receipt.confirmedAt,
+            verifiedBy: 'LK1_OWNER_V3',
+            amountMinor: receipt.priceCharged.amountMinor,
+            currency: receipt.priceCharged.currency,
+          },
+        });
+      } catch {
+        return unresolvedSettlementOperation(attempt, now);
+      }
+      if (confirmed.outcome === 'applied') {
+        return operationBody({
+          operationId: attempt.commandId,
+          status: 'SUCCEEDED',
+          gameId: attempt.gameId,
+          revision: confirmed.revision,
+          createdAt: confirmed.committedAt,
+          updatedAt: confirmed.committedAt,
+          commercial: attemptView(
+            'OWNER_CONFIRMED',
+            attempt.reservation,
+            null,
+            { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: receipt.confirmedAt },
+            null,
+          ),
+          replayed: true,
+        });
+      }
+      return unresolvedSettlementOperation(attempt, now);
+    }
+    if (read.status === 'PAYMENT_REQUIRED' && read.settlement.checkoutUrl) {
+      // The checkout of one attempt is immutable. A different URL/expiry is not silently replaced
+      // by the snapshot; it stays unresolved for reconciliation.
+      if (
+        read.settlement.checkoutUrl !== attempt.settlement.checkoutUrl ||
+        read.settlement.expiresAt !== attempt.settlement.expiresAt
+      )
+        return unresolvedSettlementOperation(attempt, now);
+      return operationBody({
+        operationId: attempt.commandId,
+        status: 'PROCESSING',
+        gameId: attempt.gameId,
+        revision: null,
+        createdAt: new Date(now()).toISOString(),
+        updatedAt: new Date(now()).toISOString(),
+        nextAction: { type: 'OPEN_PAYMENT', url: read.settlement.checkoutUrl },
+        commercial: attemptView('OWNER_PENDING', attempt.reservation, null, null, null),
+        replayed: true,
+      });
+    }
+    if (read.status === 'CANCELLED') {
+      let localCancel: Awaited<
+        ReturnType<CommercialJoinRepositoryPort['failPaidJoinAttempt']>
+      > | null;
+      try {
+        localCancel = await dependencies.repository.failPaidJoinAttempt({
+          tenantId: input.tenantId,
+          actorUserId: input.actorUserId,
+          operationId: input.operationId,
+          gameId: attempt.gameId,
+          code: 'GAME_JOIN_CANCELLED',
+          correlationId: input.correlationId,
+        });
+      } catch {
+        localCancel = null;
+      }
+      if (!localCancel?.transitioned || localCancel.state !== 'FAILED') {
+        const current = await dependencies.repository
+          .getPaidJoinAttempt({
+            tenantId: input.tenantId,
+            actorUserId: input.actorUserId,
+            operationId: input.operationId,
+          })
+          .catch(() => null);
+        if (current?.state === 'COMPLETED' && current.result) {
+          return operationBody({
+            operationId: current.commandId,
+            status: 'SUCCEEDED',
+            gameId: current.result.gameId,
+            revision: current.result.revision,
+            createdAt: current.result.committedAt,
+            updatedAt: current.result.committedAt,
+            commercial: attemptView(
+              'OWNER_CONFIRMED',
+              current.reservation,
+              null,
+              current.receipt,
+              null,
+            ),
+            replayed: true,
+          });
+        }
+        return unresolvedSettlementOperation(attempt, now);
+      }
+      return operationBody({
+        operationId: attempt.commandId,
+        status: 'FAILED',
+        gameId: attempt.gameId,
+        revision: null,
+        createdAt: new Date(now()).toISOString(),
+        updatedAt: new Date(now()).toISOString(),
+        error: {
+          code: 'GAME_JOIN_CANCELLED',
+          message: FAILURE_MESSAGES.GAME_JOIN_CANCELLED,
+        },
+        commercial: attemptView('FAILED', attempt.reservation, null, null, 'GAME_JOIN_CANCELLED'),
+        replayed: true,
+      });
+    }
+    if (read.status === 'PENDING') {
+      return operationBody({
+        operationId: attempt.commandId,
+        status: 'PROCESSING',
+        gameId: attempt.gameId,
+        revision: null,
+        createdAt: new Date(now()).toISOString(),
+        updatedAt: new Date(now()).toISOString(),
+        commercial: attemptView('OWNER_PENDING', attempt.reservation, null, null, null),
+        replayed: true,
+      });
+    }
+    return unresolvedSettlementOperation(attempt, now);
+  }
+
   const updatedAt = attempt.receipt?.confirmedAt ?? new Date(now()).toISOString();
   const price: CommercialJoinCommercialView['price'] = null;
 
@@ -1119,12 +1606,121 @@ export async function readCommercialJoinOperation(
   });
 }
 
+/** Explicit cancel of a pending v3 settlement. It never cancels a confirmed participation. */
+export async function cancelCommercialJoinOperation(
+  input: {
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly actorUserId: string;
+    readonly sessionId: string;
+    readonly operationId: string;
+    readonly correlationId: string;
+  },
+  dependencies: {
+    readonly repository: Pick<
+      CommercialJoinRepositoryPort,
+      'getPaidJoinAttempt' | 'failPaidJoinAttempt'
+    >;
+    readonly settlementOwner?: CommercialJoinSettlementOwner;
+    readonly now?: () => number;
+  },
+): Promise<CommercialJoinResponseBody | null> {
+  const attempt = await dependencies.repository.getPaidJoinAttempt({
+    tenantId: input.tenantId,
+    actorUserId: input.actorUserId,
+    operationId: input.operationId,
+  });
+  if (!attempt) return null;
+  const observedAt = new Date((dependencies.now ?? Date.now)()).toISOString();
+  if (attempt.state === 'COMPLETED' || attempt.receipt) {
+    return operationBody({
+      operationId: attempt.commandId,
+      status: 'SUCCEEDED',
+      gameId: attempt.gameId,
+      revision: attempt.result?.revision ?? null,
+      createdAt: attempt.result?.committedAt ?? observedAt,
+      updatedAt: attempt.receipt?.confirmedAt ?? observedAt,
+      commercial: attemptView('OWNER_CONFIRMED', attempt.reservation, null, attempt.receipt, null),
+      replayed: true,
+    });
+  }
+  if (!attempt.settlement || !dependencies.settlementOwner) return null;
+  let cancelled: Awaited<ReturnType<CommercialJoinSettlementOwner['cancel']>> | null;
+  try {
+    cancelled = await dependencies.settlementOwner.cancel({
+      actor: {
+        tenantId: input.tenantId,
+        tenantKey: input.tenantKey,
+        userId: input.actorUserId,
+        sessionId: input.sessionId,
+        gameId: attempt.gameId,
+        expectedRevision: 0,
+      },
+      operationId: input.operationId,
+      correlationId: input.correlationId,
+      settlement: { ...attempt.settlement, amountMinor: attempt.settlement.toPayMinor },
+    });
+  } catch {
+    cancelled = null;
+  }
+  if (cancelled?.status === 'CLOSED') {
+    let localClosed = false;
+    try {
+      const local = await dependencies.repository.failPaidJoinAttempt({
+        tenantId: input.tenantId,
+        actorUserId: input.actorUserId,
+        operationId: input.operationId,
+        gameId: attempt.gameId,
+        code: 'GAME_JOIN_CANCELLED',
+        correlationId: input.correlationId,
+      });
+      localClosed = local?.transitioned === true && local.state === 'FAILED';
+    } catch {
+      // The owner is closed but the local write failed. Do not report a terminal cancel; the next
+      // readback retries the local completion and never sends another owner cancel.
+    }
+    if (localClosed) {
+      return operationBody({
+        operationId: attempt.commandId,
+        status: 'FAILED',
+        gameId: attempt.gameId,
+        revision: null,
+        createdAt: observedAt,
+        updatedAt: observedAt,
+        error: {
+          code: 'GAME_JOIN_CANCELLED',
+          message: FAILURE_MESSAGES.GAME_JOIN_CANCELLED,
+        },
+        commercial: attemptView('FAILED', attempt.reservation, null, null, 'GAME_JOIN_CANCELLED'),
+        replayed: true,
+      });
+    }
+  }
+  return operationBody({
+    operationId: attempt.commandId,
+    status: 'PROCESSING',
+    gameId: attempt.gameId,
+    revision: null,
+    createdAt: observedAt,
+    updatedAt: observedAt,
+    retryAfterSeconds: 5,
+    commercial: attemptView(
+      'OWNER_PENDING',
+      attempt.reservation,
+      null,
+      null,
+      cancelled?.status === 'PAID' ? 'GAME_RECONCILIATION_REQUIRED' : 'GAME_PAYMENT_REQUIRED',
+    ),
+    replayed: true,
+  });
+}
+
 /** Explicit command: apply an exact trusted owner receipt, with no owner execute or provider POST. */
 export async function reconcileCommercialJoinOperation(
   input: Parameters<typeof readCommercialJoinOperation>[0],
   dependencies: Pick<
     CommercialJoinDependencies,
-    'repository' | 'owner' | 'now' | 'onReconciliationFailure'
+    'repository' | 'owner' | 'now' | 'onReconciliationFailure' | 'settlementOwner'
   >,
 ): Promise<CommercialJoinResponseBody | null> {
   const attempt = await dependencies.repository.getPaidJoinAttempt({

@@ -8,7 +8,12 @@ import type {
 import type { Logger } from 'pino';
 
 export const GAME_PROCESS_MANAGER_COMMAND_TYPES: readonly ClaimedGameScheduledCommand['commandType'][] =
-  ['game.lifecycle.start.v1', 'game.lifecycle.finish.v1', 'game.waitlist.promote.v1'];
+  [
+    'game.lifecycle.start.v1',
+    'game.lifecycle.finish.v1',
+    'game.waitlist.promote.v1',
+    'game.reservation.expire.v1',
+  ];
 
 export interface GameLifecycleProcessManagerCycleResult {
   readonly claimed: number;
@@ -50,6 +55,33 @@ function promotionRequestHash(
     .digest('hex');
 }
 
+function reservationRequestHash(
+  command: ClaimedGameScheduledCommand,
+  reservationId: string,
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        commandType: command.commandType,
+        commandId: command.id,
+        gameId: command.gameId,
+        reservationId,
+      }),
+    )
+    .digest('hex');
+}
+
+function reservationId(command: ClaimedGameScheduledCommand): string {
+  const value = command.payload.reservationId;
+  if (
+    typeof value !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  ) {
+    throw new Error('GAME_RESERVATION_EXPIRY_PAYLOAD_INVALID');
+  }
+  return value;
+}
+
 function waitlistEntryId(command: ClaimedGameScheduledCommand): string {
   const value = command.payload.waitlistEntryId;
   if (
@@ -69,7 +101,7 @@ export async function runGameLifecycleProcessManagerCycle(input: {
     | 'completeScheduledCommand'
     | 'retryScheduledCommand'
   >;
-  readonly rosterRepository: Pick<GameRosterRepository, 'promoteWaitlist'>;
+  readonly rosterRepository: Pick<GameRosterRepository, 'promoteWaitlist' | 'expireReservation'>;
   readonly tenantId: string;
   readonly workerId: string;
   readonly logger: Pick<Logger, 'info' | 'warn' | 'error'>;
@@ -97,6 +129,65 @@ export async function runGameLifecycleProcessManagerCycle(input: {
     result.claimed += 1;
 
     try {
+      if (command.commandType === 'game.reservation.expire.v1') {
+        const expiringReservationId = reservationId(command);
+        const expired = await input.rosterRepository.expireReservation({
+          tenantId: input.tenantId,
+          gameId: command.gameId,
+          commandId: command.id,
+          idempotencyKey: `scheduled:${command.id}`,
+          requestHash: reservationRequestHash(command, expiringReservationId),
+          correlationId: correlationId(command),
+          reservationId: expiringReservationId,
+        });
+        if (expired.outcome === 'not_due') {
+          const retry = await input.repository.retryScheduledCommand({
+            tenantId: input.tenantId,
+            workerId: input.workerId,
+            commandId: command.id,
+            errorCode: 'GAME_RESERVATION_RECONCILIATION_DUE',
+            availableAt: expired.availableAt,
+          });
+          if (retry === 'attempts_exhausted') result.attemptsExhausted += 1;
+          else result.retryScheduled += 1;
+          input.logger.warn(
+            {
+              tenantId: input.tenantId,
+              commandId: command.id,
+              gameId: command.gameId,
+              reservationId: expiringReservationId,
+              availableAt: expired.availableAt,
+              retry,
+            },
+            'Games reservation expiry deferred for owner reconciliation',
+          );
+          continue;
+        }
+        if (expired.outcome === 'idempotency_conflict') {
+          throw new Error('GAME_RESERVATION_EXPIRY_RESULT_INVALID');
+        }
+        const completed = await input.repository.completeScheduledCommand({
+          tenantId: input.tenantId,
+          workerId: input.workerId,
+          commandId: command.id,
+        });
+        if (!completed) throw new Error('GAME_RESERVATION_EXPIRY_COMPLETION_LOST');
+        if (expired.outcome === 'applied' && !expired.replayed) result.applied += 1;
+        else result.alreadyApplied += 1;
+        input.logger.info(
+          {
+            tenantId: input.tenantId,
+            commandId: command.id,
+            gameId: command.gameId,
+            reservationId: expiringReservationId,
+            outcome: expired.outcome,
+            revision: expired.revision,
+            replayed: expired.replayed,
+          },
+          'Games reservation expiry command completed',
+        );
+        continue;
+      }
       if (command.commandType === 'game.waitlist.promote.v1') {
         const entryId = waitlistEntryId(command);
         const promoted = await input.rosterRepository.promoteWaitlist({

@@ -49,7 +49,9 @@ export type GameRosterCommandErrorCode =
   | 'GAME_PAYMENT_MODE_MISMATCH'
   | 'GAME_PAYMENT_SNAPSHOT_MISSING'
   | 'GAME_RESERVATION_EXPIRED'
-  | 'GAME_RESERVATION_NOT_FOUND';
+  | 'GAME_RESERVATION_NOT_FOUND'
+  | 'GAME_JOIN_NOT_DISPATCHED'
+  | 'GAME_JOIN_CANCELLED';
 
 export type GameRosterCommandResult =
   | {
@@ -113,7 +115,7 @@ export interface ConfirmGamePaymentInput extends GameRosterUserCommandInput {
     readonly clientPhoneE164?: string;
     readonly evidenceHash: string;
     readonly verifiedAt: string;
-    readonly verifiedBy: 'LEGACY_NODE_RED';
+    readonly verifiedBy: 'LEGACY_NODE_RED' | 'LK1_OWNER_V3';
     readonly amountMinor?: number;
     readonly currency?: string;
   };
@@ -155,9 +157,38 @@ export interface PromoteGameWaitlistInput extends ProcessCommandInput {
   readonly waitlistEntryId: string;
 }
 
+export interface PaidJoinReconciliationCandidate {
+  readonly operationId: string;
+  readonly gameId: string;
+  readonly actorUserId: string;
+  readonly reservationId: string;
+  readonly providerBinding?: PaidJoinProviderBinding;
+  readonly managedJoin?: ManagedJoinBinding | null;
+  readonly actorContext?: PaidJoinActorContext;
+  readonly settlement?: PaidJoinSettlementBinding;
+  readonly settlementActor?: PaidJoinSettlementActor;
+  readonly reconciliationAttempts: number;
+}
+
 export interface GameRosterRepository {
   join(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
   beginPaidJoin(input: BeginPaidJoinInput): Promise<BeginPaidJoinResult>;
+  listPaidJoinReconciliationCandidates(input: {
+    readonly tenantId: string;
+    readonly limit: number;
+    readonly maxAttempts: number;
+  }): Promise<readonly PaidJoinReconciliationCandidate[]>;
+  recordPaidJoinReconciliationAttempt(input: {
+    readonly tenantId: string;
+    readonly operationId: string;
+    readonly attempts: number;
+    readonly escalated: boolean;
+  }): Promise<void>;
+  /**
+   * Durable fence written immediately before the API hands the attempt to the external owner.
+   * Its absence is the only proof that an expiry may release the seat without reconciling first.
+   */
+  markPaidJoinDispatched(input: MarkPaidJoinDispatchedInput): Promise<boolean>;
   getPaidJoinAttempt(input: GameRosterOperationInput): Promise<PaidJoinAttemptView | null>;
   failPaidJoinAttempt(input: FailPaidJoinInput): Promise<FailPaidJoinResult>;
   joinWaitlist(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
@@ -231,7 +262,36 @@ export interface PaidJoinProviderBinding {
  */
 export type PaidJoinBindingRefs = CommercialBindingRefs;
 
+/**
+ * Immutable actor/provider context captured when the attempt is opened. The background reconciler
+ * uses it to read the original owner operation after the browser session is gone; it never grants
+ * a new write and never replaces the actor token of the original dispatch.
+ */
+export interface PaidJoinActorContext {
+  readonly tenantKey: string;
+  readonly sessionId: string;
+  readonly providerClientId: string;
+  readonly providerMappingId: string;
+  readonly providerClientSubscriptionId?: string;
+}
+
+export interface PaidJoinSettlementBinding {
+  readonly quoteId: string;
+  readonly toPayMinor: number;
+  readonly checkoutUrl: string;
+  readonly expiresAt: string;
+  readonly requestSha256: string;
+}
+
+export interface PaidJoinSettlementActor {
+  readonly tenantKey: string;
+  readonly sessionId: string;
+}
+
 export interface BeginPaidJoinInput {
+  readonly settlement?: PaidJoinSettlementBinding;
+  readonly settlementActor?: PaidJoinSettlementActor;
+  readonly actorContext?: PaidJoinActorContext;
   readonly stationMembership?: StationMarker;
   readonly tenantId: string;
   readonly actorUserId: string;
@@ -250,6 +310,23 @@ export interface BeginPaidJoinInput {
   /** Optional B2 binding loaded from a binding quote; absent means legacy/unbound behavior. */
   readonly bindingRefs?: PaidJoinBindingRefs;
   readonly managedJoin?: ManagedJoinBinding;
+}
+
+export interface MarkPaidJoinDispatchedInput {
+  readonly tenantId: string;
+  readonly actorUserId: string;
+  readonly gameId: string;
+  readonly operationId: string;
+  /** The reservation this dispatch belongs to; the fence is a CAS, not a blind snapshot update. */
+  readonly reservationId: string;
+}
+
+export interface PaidJoinReconciliationView {
+  /** True when the attempt was handed to the owner and the local TTL alone cannot release it. */
+  readonly required: boolean;
+  readonly attempts: number;
+  readonly lastAttemptAt: string | null;
+  readonly escalated: boolean;
 }
 
 export interface PaidJoinAttemptResult {
@@ -287,6 +364,7 @@ export type BeginPaidJoinResult =
   | { readonly outcome: 'reservation_conflict' };
 
 export interface PaidJoinAttemptView {
+  readonly settlement?: PaidJoinSettlementBinding;
   readonly requestHash?: string;
   readonly managedReceipt?: ManagedJoinReceipt;
   readonly providerBinding?: PaidJoinProviderBinding;
@@ -308,6 +386,8 @@ export interface PaidJoinAttemptView {
     readonly status: 'CONFIRMED';
     readonly confirmedAt: string;
   } | null;
+  /** Present once the attempt passed the local TTL with a dispatched owner call. */
+  readonly reconciliation: PaidJoinReconciliationView | null;
 }
 
 /**
@@ -392,6 +472,12 @@ interface ConfirmableReservationRow extends ReservationRow {
     operation_id: string;
     provider_binding: PaidJoinProviderBinding | null;
     binding_snapshot?: unknown;
+    managedJoin?: unknown;
+    providerBinding?: unknown;
+    settlement?: {
+      readonly toPayMinor?: number;
+      readonly requestSha256?: string;
+    } | null;
   };
 }
 
@@ -430,6 +516,15 @@ interface ExpirableReservationRow extends QueryResultRow {
   readonly user_id: string;
   readonly state: 'ACTIVE' | 'CONFIRMED' | 'EXPIRED' | 'CANCELLED';
   readonly expires_at: Date | string;
+  readonly eligibility_decision_id: string | null;
+}
+
+interface PaidJoinExpiryAttemptRow extends QueryResultRow {
+  readonly operation_id: string;
+  readonly state: 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+  readonly dispatch: unknown;
+  readonly reconciliation: unknown;
+  readonly lifecycle_version: unknown;
 }
 
 interface PromotableWaitlistRow extends QueryResultRow {
@@ -470,6 +565,19 @@ interface PaidJoinCommandRow extends CommandRow {
   readonly aggregate_id: string | null;
 }
 
+interface PaidJoinReconciliationRow extends QueryResultRow {
+  readonly operation_id: string;
+  readonly game_id: string;
+  readonly actor_user_id: string;
+  readonly reservation_id: string;
+  readonly provider_binding: unknown;
+  readonly managed_join: unknown;
+  readonly settlement: unknown;
+  readonly settlement_actor: unknown;
+  readonly actor_context: unknown;
+  readonly reconciliation_attempts: number;
+}
+
 interface PaidJoinReservationRow extends QueryResultRow {
   readonly id: string;
   readonly state: PaidJoinReservationState;
@@ -477,6 +585,8 @@ interface PaidJoinReservationRow extends QueryResultRow {
   readonly expires_at: Date | string;
   readonly provider_binding?: PaidJoinProviderBinding;
   readonly binding_snapshot?: unknown;
+  readonly reconciliation?: unknown;
+  readonly settlement?: unknown;
 }
 
 interface PaidJoinReservationLockRow extends QueryResultRow {
@@ -719,7 +829,8 @@ async function loadCapacity(
        (select count(*)::integer from games.participations
          where tenant_id = $1 and game_id = $2 and state = 'ACTIVE') as active_participant_count,
        (select count(*)::integer from games.seat_reservations
-         where tenant_id = $1 and game_id = $2 and state = 'ACTIVE' and expires_at > now())
+         where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'
+           and (expires_at > now() or payment_state = 'PROCESSING'))
          as active_reservation_count`,
     [tenantId, gameId],
   );
@@ -739,7 +850,8 @@ async function loadRosterFacts(
          where tenant_id = $1 and game_id = $2 and state = 'ACTIVE') as active_participant_count,
        (select count(*)::integer
           from games.seat_reservations
-         where tenant_id = $1 and game_id = $2 and state = 'ACTIVE' and expires_at > now())
+         where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'
+           and (expires_at > now() or payment_state = 'PROCESSING'))
          as active_reservation_count,
        participant.id as participation_id,
        participant.role as participation_role,
@@ -1377,10 +1489,30 @@ function paidJoinBindingRefsFromSnapshot(snapshot: unknown): PaidJoinBindingRefs
   if (typeof snapshot !== 'object' || snapshot === null || Array.isArray(snapshot))
     throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
   const row = snapshot as Record<string, unknown>;
+  const hasCommercialRef =
+    Object.prototype.hasOwnProperty.call(row, 'policyRef') ||
+    Object.prototype.hasOwnProperty.call(row, 'usageRef');
+  if (!hasCommercialRef) {
+    // Local level-eligibility stores a matching decisionId/ALLOWED decision and is not a CUP
+    // commercial ref. An orphan decision or a managed binding without policyRef is corruption.
+    if (Object.prototype.hasOwnProperty.call(row, 'managedJoin'))
+      throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+    if (Object.prototype.hasOwnProperty.call(row, 'decisionId')) {
+      const decision = row.decision;
+      if (
+        typeof decision !== 'object' ||
+        decision === null ||
+        Array.isArray(decision) ||
+        (decision as Record<string, unknown>).decisionId !== row.decisionId ||
+        (decision as Record<string, unknown>).status !== 'ALLOWED'
+      )
+        throw new Error('GAME_PAID_JOIN_BINDING_REFS_INVALID');
+    }
+    return undefined;
+  }
   const keys = ['policyRef', 'usageRef', 'decisionId'].filter((key) =>
     Object.prototype.hasOwnProperty.call(row, key),
   );
-  if (keys.length === 0) return undefined;
   try {
     const refs = parseCommercialBindingRefs(Object.fromEntries(keys.map((key) => [key, row[key]])));
     // The existing payment snapshot stores local level eligibility at decisionId/decision.
@@ -1646,6 +1778,8 @@ async function loadPaidJoinAttempt(
     client,
     `select reservation.id, reservation.state, reservation.payment_state,
             reservation.expires_at, snapshot.snapshot->'providerBinding' as provider_binding,
+            snapshot.snapshot->'reconciliation' as reconciliation,
+            snapshot.snapshot->'settlement' as settlement,
             snapshot.snapshot as binding_snapshot
        from eligibility.payment_snapshots snapshot
        join games.seat_reservations reservation
@@ -1718,6 +1852,23 @@ async function loadPaidJoinAttempt(
       )))
   )
     throw new Error('GAME_PAYMENT_EVIDENCE_CONFLICT');
+  const reconciliationValue = reservationRow?.reconciliation;
+  const reconciliation =
+    reconciliationValue && typeof reconciliationValue === 'object'
+      ? {
+          required: (reconciliationValue as Record<string, unknown>).required === true,
+          attempts:
+            Number.isSafeInteger((reconciliationValue as Record<string, unknown>).attempts) &&
+            Number((reconciliationValue as Record<string, unknown>).attempts) >= 0
+              ? Number((reconciliationValue as Record<string, unknown>).attempts)
+              : 0,
+          lastAttemptAt:
+            typeof (reconciliationValue as Record<string, unknown>).lastAttemptAt === 'string'
+              ? String((reconciliationValue as Record<string, unknown>).lastAttemptAt)
+              : null,
+          escalated: (reconciliationValue as Record<string, unknown>).escalated === true,
+        }
+      : null;
   return {
     requestHash: row.request_hash,
     ...(managedJoin ? { managedJoin } : {}),
@@ -1725,6 +1876,9 @@ async function loadPaidJoinAttempt(
     ...(bindingRefs ? { bindingRefs } : {}),
     ...(reservationRow?.provider_binding
       ? { providerBinding: reservationRow.provider_binding }
+      : {}),
+    ...(reservationRow?.settlement
+      ? { settlement: reservationRow.settlement as PaidJoinSettlementBinding }
       : {}),
     commandId: row.id,
     gameId: row.aggregate_id,
@@ -1740,6 +1894,7 @@ async function loadPaidJoinAttempt(
         }
       : null,
     receipt,
+    reconciliation,
   };
 }
 
@@ -2242,7 +2397,11 @@ export function createGameRosterRepository(
               decisionId: eligibility.decisionId,
               decision: { decisionId: eligibility.decisionId, status: 'ALLOWED' },
               paymentMode: game.payment_mode,
+              paidJoinLifecycleVersion: 1,
               subscriptionInstanceId: input.subscriptionInstanceId,
+              ...(input.settlement ? { settlement: input.settlement } : {}),
+              ...(input.settlementActor ? { settlementActor: input.settlementActor } : {}),
+              ...(input.actorContext ? { actorContext: input.actorContext } : {}),
               ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
               ...(managedJoin ? { managedJoin } : {}),
               ...(stationMembership
@@ -2284,6 +2443,20 @@ export function createGameRosterRepository(
         // failure cannot hand the same invitation to a second paid enrollment.
         await consumePersonalInvitation(client, input.tenantId, eligibility.validatedInvitationId);
         const revision = await bumpRevision(client, input);
+        // The TTL is only a scheduling hint: the expiry worker must still prove that the owner
+        // call never started before it may release this seat.
+        await client.query(
+          `insert into games.scheduled_commands (
+             tenant_id, game_id, command_type, due_at, expected_revision, payload
+           ) values ($1, $2, 'game.reservation.expire.v1', $3, $4, $5::jsonb)`,
+          [
+            input.tenantId,
+            input.gameId,
+            expiresAt,
+            revision,
+            JSON.stringify({ reservationId: reservation.id, operationId: input.operationId }),
+          ],
+        );
         const base = eventBase(input, input.operationId, revision, now);
         await appendEvent(client, {
           ...base,
@@ -2303,6 +2476,179 @@ export function createGameRosterRepository(
           expiresAt,
           revision,
         };
+      });
+    },
+
+    markPaidJoinDispatched(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        // Same lock order as expiry/confirmation: game, then reservation, then the attempt.
+        await client.query(
+          'select id from games.games where tenant_id = $1 and id = $2 for update',
+          [input.tenantId, input.gameId],
+        );
+        // The fence is a CAS against the live attempt. It must fail when the reservation has
+        // expired or the attempt is no longer IN_PROGRESS, otherwise a slow API could dispatch
+        // after the expiry worker already released the seat.
+        const updated = await client.query(
+          `update eligibility.payment_snapshots snapshot
+              set snapshot = jsonb_set(
+                snapshot,
+                '{dispatch}',
+                jsonb_build_object('startedAt', now()::text, 'attempt', 1),
+                true
+              )
+             from games.seat_reservations reservation, games.command_idempotency command
+            where snapshot.tenant_id = $1
+              and snapshot.operation_id = $2
+              and snapshot.player_id = $3
+              and snapshot.activity_type = 'GAME'
+              and snapshot.activity_id = $4
+              and reservation.tenant_id = $1
+              and reservation.id = $5
+              and reservation.state = 'ACTIVE'
+              and reservation.eligibility_decision_id = snapshot.decision_id
+              and reservation.expires_at > now()
+              and command.tenant_id = $1
+              and command.id = snapshot.operation_id
+              and command.actor_user_id = $3
+              and command.state = 'IN_PROGRESS'
+              and not (snapshot ? 'dispatch')
+            returning snapshot.operation_id`,
+          [input.tenantId, input.operationId, input.actorUserId, input.gameId, input.reservationId],
+        );
+        return updated.rowCount === 1;
+      });
+    },
+
+    listPaidJoinReconciliationCandidates(input) {
+      const limit = Math.max(1, Math.min(input.limit, 100));
+      const maxAttempts = Math.max(1, Math.min(input.maxAttempts, 100));
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const rows = await client.query<PaidJoinReconciliationRow>(
+          `select command.id as operation_id, command.aggregate_id as game_id,
+                  snapshot.player_id as actor_user_id,
+                  reservation.id as reservation_id,
+                  snapshot.snapshot->'providerBinding' as provider_binding,
+                  snapshot.snapshot->'managedJoin' as managed_join,
+                  snapshot.snapshot->'settlement' as settlement,
+                  snapshot.snapshot->'settlementActor' as settlement_actor,
+                  snapshot.snapshot->'actorContext' as actor_context,
+                  coalesce((snapshot.snapshot->'reconciliation'->>'attempts')::int, 0)
+                    as reconciliation_attempts
+             from eligibility.payment_snapshots snapshot
+             join games.command_idempotency command
+               on command.tenant_id = snapshot.tenant_id
+              and command.id = snapshot.operation_id
+             join games.seat_reservations reservation
+               on reservation.tenant_id = snapshot.tenant_id
+              and reservation.game_id = snapshot.activity_id
+              and reservation.user_id = snapshot.player_id
+              and reservation.eligibility_decision_id = snapshot.decision_id
+            where snapshot.tenant_id = $1
+              and snapshot.activity_type = 'GAME'
+              and command.command_type = $2
+              and command.state = 'IN_PROGRESS'
+              and reservation.state = 'ACTIVE'
+              and snapshot.snapshot->>'paidJoinLifecycleVersion' = '1'
+              and snapshot.snapshot ? 'dispatch'
+              and coalesce((snapshot.snapshot->'reconciliation'->>'escalated')::boolean, false) = false
+              and coalesce((snapshot.snapshot->'reconciliation'->>'attempts')::int, 0) < $3
+              and (
+                (snapshot.snapshot ? 'providerBinding' and snapshot.snapshot ? 'actorContext')
+                or (snapshot.snapshot ? 'settlement' and snapshot.snapshot ? 'settlementActor')
+              )
+              and reservation.expires_at <= now()
+            order by reservation.expires_at, command.id
+            limit $4`,
+          [input.tenantId, PAID_JOIN_COMMAND_TYPE, maxAttempts, limit],
+        );
+        return rows.rows.flatMap<PaidJoinReconciliationCandidate>((row) => {
+          const settlement = row.settlement as PaidJoinSettlementBinding | null;
+          const settlementActor = row.settlement_actor as Record<string, unknown> | null;
+          if (settlement) {
+            if (
+              typeof settlementActor?.tenantKey !== 'string' ||
+              typeof settlementActor.sessionId !== 'string'
+            )
+              return [];
+            return [
+              {
+                operationId: row.operation_id,
+                gameId: row.game_id,
+                actorUserId: row.actor_user_id,
+                reservationId: row.reservation_id,
+                settlement,
+                settlementActor: {
+                  tenantKey: settlementActor.tenantKey,
+                  sessionId: settlementActor.sessionId,
+                },
+                reconciliationAttempts: row.reconciliation_attempts,
+              },
+            ];
+          }
+          const binding = row.provider_binding as PaidJoinProviderBinding | null;
+          const actor = row.actor_context as Record<string, unknown> | null;
+          if (
+            !binding ||
+            typeof binding.providerClientId !== 'string' ||
+            typeof binding.providerMappingId !== 'string' ||
+            !actor ||
+            typeof actor.tenantKey !== 'string' ||
+            typeof actor.sessionId !== 'string' ||
+            typeof actor.providerClientId !== 'string' ||
+            typeof actor.providerMappingId !== 'string'
+          )
+            return [];
+          let managed: ManagedJoinBinding | null = null;
+          if (row.managed_join) {
+            try {
+              managed = parseManagedJoinBinding(row.managed_join);
+            } catch {
+              return [];
+            }
+          }
+          return [
+            {
+              operationId: row.operation_id,
+              gameId: row.game_id,
+              actorUserId: row.actor_user_id,
+              reservationId: row.reservation_id,
+              providerBinding: binding,
+              managedJoin: managed,
+              actorContext: {
+                tenantKey: actor.tenantKey,
+                sessionId: actor.sessionId,
+                providerClientId: actor.providerClientId,
+                providerMappingId: actor.providerMappingId,
+                ...(typeof actor.providerClientSubscriptionId === 'string'
+                  ? { providerClientSubscriptionId: actor.providerClientSubscriptionId }
+                  : {}),
+              },
+              reconciliationAttempts: row.reconciliation_attempts,
+            },
+          ];
+        });
+      });
+    },
+
+    recordPaidJoinReconciliationAttempt(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query(
+          `update eligibility.payment_snapshots
+              set snapshot = jsonb_set(
+                snapshot,
+                '{reconciliation}',
+                jsonb_build_object(
+                  'required', true,
+                  'attempts', $3::int,
+                  'lastAttemptAt', now()::text,
+                  'escalated', $4::boolean
+                ),
+                true
+              )
+            where tenant_id = $1 and operation_id = $2`,
+          [input.tenantId, input.operationId, input.attempts, input.escalated],
+        );
       });
     },
 
@@ -2437,7 +2783,31 @@ export function createGameRosterRepository(
             [input.tenantId, input.gameId, input.reservationId, input.actorUserId],
           );
           if (!snapshot) throw new Error('GAME_PAYMENT_SNAPSHOT_MISSING');
-          if (!(await managedConfirmationMatches(snapshot.binding_snapshot, input, true))) {
+          const replaySnapshot =
+            typeof snapshot.binding_snapshot === 'object' && snapshot.binding_snapshot !== null
+              ? (snapshot.binding_snapshot as Record<string, unknown>)
+              : {};
+          const replaySettlement =
+            typeof replaySnapshot.settlement === 'object' && replaySnapshot.settlement !== null
+              ? (replaySnapshot.settlement as Record<string, unknown>)
+              : null;
+          const v3Replay =
+            replaySettlement?.toPayMinor === input.evidence.amountMinor &&
+            input.evidence.currency === 'RUB' &&
+            !replaySnapshot.managedJoin &&
+            !replaySnapshot.providerBinding;
+          if (replaySettlement !== null) {
+            if (input.evidence.verifiedBy !== 'LK1_OWNER_V3' || !v3Replay) {
+              return {
+                outcome: 'rejected' as const,
+                code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
+                replayed: true,
+              };
+            }
+          } else if (
+            input.evidence.verifiedBy === 'LK1_OWNER_V3' ||
+            !(await managedConfirmationMatches(snapshot.binding_snapshot, input, true))
+          ) {
             return {
               outcome: 'rejected' as const,
               code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
@@ -2467,6 +2837,8 @@ export function createGameRosterRepository(
                   ) as payment_snapshot_exists,
                   (select jsonb_build_object('operation_id', snapshot.operation_id,
                             'provider_binding', snapshot.snapshot->'providerBinding',
+                            'settlement', snapshot.snapshot->'settlement',
+                            'managedJoin', snapshot.snapshot->'managedJoin',
                             'binding_snapshot', snapshot.snapshot)
                      from eligibility.payment_snapshots snapshot
                     where snapshot.tenant_id=games.seat_reservations.tenant_id
@@ -2507,7 +2879,33 @@ export function createGameRosterRepository(
         // Legacy confirmation evidence has no policy/usage proof. Do not let a callback bypass
         // the orchestrator guard and settle a bound reservation as an ordinary v1 operation.
         // Malformed stored binding throws and rolls back; a valid bound attempt stays unresolved.
-        if (!(await managedConfirmationMatches(paidSnapshot?.binding_snapshot, input, false))) {
+        const v3Confirmation =
+          input.evidence.verifiedBy === 'LK1_OWNER_V3' &&
+          paidSnapshot?.operation_id === input.evidence.operationId &&
+          !paidSnapshot?.managedJoin &&
+          !paidSnapshot?.providerBinding &&
+          paidSnapshot.settlement !== null &&
+          paidSnapshot.settlement !== undefined &&
+          paidSnapshot.settlement.toPayMinor === input.evidence.amountMinor &&
+          paidSnapshot.settlement.requestSha256 !== undefined &&
+          input.evidence.currency === 'RUB';
+        const snapshotIsV3 =
+          paidSnapshot?.settlement !== null && paidSnapshot?.settlement !== undefined;
+        if (snapshotIsV3) {
+          // The stored attempt decides the proof mode. A legacy bridge cannot downgrade a v3
+          // settlement, even if it supplies a plausible legacy receipt.
+          if (input.evidence.verifiedBy !== 'LK1_OWNER_V3' || !v3Confirmation) {
+            return {
+              outcome: 'rejected' as const,
+              code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
+              currentRevision,
+              replayed: false,
+            };
+          }
+        } else if (
+          input.evidence.verifiedBy === 'LK1_OWNER_V3' ||
+          !(await managedConfirmationMatches(paidSnapshot?.binding_snapshot, input, false))
+        ) {
           return {
             outcome: 'rejected' as const,
             code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' as const,
@@ -2574,6 +2972,19 @@ export function createGameRosterRepository(
           if (!actor?.phone_e164 || !/^\+[1-9][0-9]{7,14}$/.test(actor.phone_e164)) {
             // A delayed verified-profile projection is repairable. Roll back so the
             // fixed reconciliation key is not poisoned by a durable rejection.
+            throw new Error('GAME_PAYMENT_ACTOR_PHONE_UNAVAILABLE');
+          }
+          clientPhoneE164 = actor.phone_e164;
+        }
+        if (!clientPhoneE164 && input.evidence.verifiedBy === 'LK1_OWNER_V3') {
+          // v3 has no legacy provider_binding. The phone still comes only from the trusted
+          // server-side profile projection, never from the client or the owner response.
+          const actor = await queryOne<{ phone_e164: string | null }>(
+            client,
+            'select phone_e164 from profile.user_summaries where tenant_id=$1 and user_id=$2 for share',
+            [input.tenantId, input.actorUserId],
+          );
+          if (!actor?.phone_e164 || !/^\+[1-9][0-9]{7,14}$/.test(actor.phone_e164)) {
             throw new Error('GAME_PAYMENT_ACTOR_PHONE_UNAVAILABLE');
           }
           clientPhoneE164 = actor.phone_e164;
@@ -3082,7 +3493,8 @@ export function createGameRosterRepository(
         if (!game) throw new Error('GAME_NOT_FOUND');
         const reservation = await queryOne<ExpirableReservationRow>(
           client,
-          `select id, user_id, state, expires_at::text as expires_at
+          `select id, user_id, state, expires_at::text as expires_at,
+                  eligibility_decision_id
              from games.seat_reservations
             where tenant_id = $1 and game_id = $2 and id = $3
             for update`,
@@ -3104,6 +3516,102 @@ export function createGameRosterRepository(
         const now = timestamp(game.database_now);
         if (Date.parse(expiresAt) > Date.parse(now)) {
           return { outcome: 'not_due' as const, availableAt: expiresAt };
+        }
+        // A local TTL is not proof that no booking or write-off happened. Only an attempt that
+        // never reached the owner may release the seat without an owner read.
+        const attempt = await queryOne<PaidJoinExpiryAttemptRow>(
+          client,
+          `select command.id as operation_id, command.state,
+                  snapshot.snapshot->'dispatch' as dispatch,
+                  snapshot.snapshot->'reconciliation' as reconciliation,
+                  snapshot.snapshot->>'paidJoinLifecycleVersion' as lifecycle_version
+             from eligibility.payment_snapshots snapshot
+             join games.command_idempotency command
+               on command.tenant_id = snapshot.tenant_id
+              and command.id = snapshot.operation_id
+            where snapshot.tenant_id = $1
+              and snapshot.decision_id = $2
+              and snapshot.player_id = $3
+              and snapshot.activity_type = 'GAME'
+              and snapshot.activity_id = $4
+              and command.command_type = $5
+            order by snapshot.created_at desc
+            limit 1
+            for update of command`,
+          [
+            input.tenantId,
+            reservation.eligibility_decision_id,
+            reservation.user_id,
+            input.gameId,
+            PAID_JOIN_COMMAND_TYPE,
+          ],
+        );
+        if (reservation.eligibility_decision_id !== null && !attempt) {
+          // The reservation points at a paid-join decision but its attempt cannot be read. Missing
+          // data is not proof that the owner was never called, so the seat stays reserved and the
+          // expiry command is retried after a bounded delay.
+          return {
+            outcome: 'not_due' as const,
+            availableAt: new Date(Date.parse(now) + 5 * 60_000).toISOString(),
+          };
+        }
+        if (attempt?.state === 'COMPLETED') {
+          const result = {
+            outcome: 'no_op' as const,
+            commandId: input.commandId,
+            gameId: input.gameId,
+            revision: currentRevision,
+            replayed: false,
+          };
+          await storeProcessResult(client, input, commandType, result);
+          return result;
+        }
+        if (attempt?.state === 'IN_PROGRESS') {
+          const dispatched = attempt.dispatch !== null && typeof attempt.dispatch === 'object';
+          // Attempts opened before the fence existed cannot prove that the owner was never
+          // called. They are never released by a local TTL; they escalate for operator review.
+          const fencedLifecycle = attempt.lifecycle_version === '1';
+          if (dispatched || !fencedLifecycle) {
+            const previous = attempt.reconciliation;
+            const priorAttempts =
+              previous && typeof previous === 'object'
+                ? Number((previous as Record<string, unknown>).attempts)
+                : 0;
+            const attempts =
+              Number.isSafeInteger(priorAttempts) && priorAttempts >= 0 ? priorAttempts + 1 : 1;
+            const escalated = attempts >= 20;
+            await client.query(
+              `update eligibility.payment_snapshots
+                  set snapshot = jsonb_set(
+                    snapshot,
+                    '{reconciliation}',
+                    jsonb_build_object(
+                      'required', true,
+                      'attempts', $3::int,
+                      'lastAttemptAt', now()::text,
+                      'escalated', $4::boolean
+                    ),
+                    true
+                  )
+                where tenant_id = $1 and operation_id = $2`,
+              [input.tenantId, attempt.operation_id, attempts, escalated],
+            );
+            const delayMs = escalated ? 60 * 60_000 : Math.min(15 * 60_000, 30_000 * attempts);
+            return {
+              outcome: 'not_due' as const,
+              availableAt: new Date(Date.parse(now) + delayMs).toISOString(),
+            };
+          }
+          const failed = await client.query(
+            `update games.command_idempotency
+                set state = 'FAILED',
+                    error_code = 'GAME_JOIN_NOT_DISPATCHED',
+                    completed_at = now()
+              where tenant_id = $1 and id = $2 and actor_user_id = $3
+                and state = 'IN_PROGRESS'`,
+            [input.tenantId, attempt.operation_id, reservation.user_id],
+          );
+          if (failed.rowCount !== 1) throw new Error('GAME_PAID_JOIN_FAIL_WRITE_LOST');
         }
         const before = await loadCapacity(client, input.tenantId, input.gameId);
         await client.query(

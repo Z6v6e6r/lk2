@@ -856,7 +856,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
       const stalledRedaction = await createExecutable(
         directory,
         'stalled-redaction.sh',
-        'sleep 30',
+        'sleep 10',
       );
       const result = spawnSync(
         diagnosticsRunner,
