@@ -899,15 +899,18 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
       page(vi.fn(), { api, navigate, useSchedule: entry === 'schedule' });
       const user = userEvent.setup();
       if (entry === 'schedule') {
-        await user.click(await screen.findByRole('button', { name: 'Продолжить' }));
+        await user.click(await screen.findByRole('button', { name: 'Селигерская' }));
         await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
         const slots = screen.getByRole('group', { name: 'Свободные слоты' });
         await user.click(within(slots).getByRole('button'));
+        await user.click(screen.getByRole('radio', { name: /Плачу за всех/ }));
         await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+        await user.type(screen.getByLabelText('Название игры для публикации'), 'Тестовая игра');
+        await user.click(screen.getByRole('button', { name: 'B', exact: true }));
       }
       await user.dblClick(
         await screen.findByRole('button', {
-          name: entry === 'schedule' ? 'Создать игру и оплатить весь корт' : 'Оплатить весь корт',
+          name: entry === 'schedule' ? /Записаться за/ : 'Оплатить весь корт',
         }),
       );
       await waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith(paymentUrl));
@@ -919,12 +922,19 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
         visibility: 'PRIVATE',
         priceConsent: { currency: 'RUB', amountMinor: 120000 },
       });
+      if (entry === 'schedule') {
+        expect(payload).toMatchObject({
+          title: 'Тестовая игра',
+          levelRange: { from: 'D', to: 'B' },
+        });
+      }
       expect(
         loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt,
       ).toMatchObject({
         operationId: managedOperationId,
         gameId: managedGameId,
         idempotencyKey: key,
+        payload,
       });
       cleanup();
       window.history.replaceState({}, '', '/games/new?paymentReturn=' + managedOperationId);

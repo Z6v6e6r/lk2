@@ -12,6 +12,7 @@ import {
 } from './GameCreateWizard.js';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
 import { GameCreateSchedulePage } from './GameCreateSchedulePage.js';
+import type { GameCreateScheduleDetails } from './GameCreateScheduleWizard.js';
 import type { AuthGateway, CreateGameRequest } from './auth-gateway.js';
 import {
   browserCreateGameAttemptLockManager,
@@ -337,6 +338,7 @@ function LegacyCreateGamePage({
   async function submit(
     event: React.SyntheticEvent,
     offer?: WholeCourtCheckoutOffer,
+    schedule?: GameCreateScheduleDetails,
   ): Promise<void> {
     event.preventDefault();
     if (busy || submitting.current || leaving.current) return;
@@ -359,7 +361,7 @@ function LegacyCreateGamePage({
       savedWholeCourt ??
       (offer
         ? {
-            title: title.trim() || 'Игра с оплатой корта',
+            title: schedule?.title || title.trim() || 'Игра с оплатой корта',
             kind: 'FRIENDLY',
             visibility: 'PRIVATE',
             stationId: offer.stationId,
@@ -370,7 +372,7 @@ function LegacyCreateGamePage({
             capacity: 4,
             paymentMode: 'ORGANIZER_PAYS',
             waitlistEnabled,
-            levelRange: null,
+            levelRange: schedule?.levelRange ?? null,
             priceConsent: { amountMinor: offer.amountMinor, currency: offer.currency },
           }
         : null);
@@ -805,7 +807,7 @@ function LegacyCreateGamePage({
             gateway.createPaidGame && gateway.advanceWholeCourtCheckout ? wholeCourtOffer : null,
           busy,
           error,
-          start: (event, offer) => void submit(event, offer),
+          start: (event, offer, details) => void submit(event, offer, details),
         }}
       />
     );

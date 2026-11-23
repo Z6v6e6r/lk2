@@ -53,9 +53,9 @@ describe('game creation schedule', () => {
       });
       renderWizard({ listSlots, readQuote });
       const user = userEvent.setup();
-      expect(screen.getByRole('heading', { name: 'Где играем' })).toBeTruthy();
-      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
-      expect(screen.getByRole('heading', { name: 'Корт и время' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Выберите место' })).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+      expect(screen.getByRole('heading', { name: 'Дата и время' })).toBeTruthy();
       expect(listSlots).toHaveBeenCalledTimes(1);
       expect(readQuote).toHaveBeenCalledTimes(0);
       await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
@@ -70,7 +70,7 @@ describe('game creation schedule', () => {
         slotId: slot.id,
       });
       expect(readQuote.mock.calls[0]?.[0].signal).toBeInstanceOf(AbortSignal);
-      await user.click(screen.getByRole('button', { name: 'Назад' }));
+      await user.click(screen.getByRole('button', { name: 'Изменить' }));
       const choices = await screen.findByRole('group', { name: 'Свободные слоты' });
       expect(
         within(choices).getByRole('button', { name: '12:00–13:00' }).getAttribute('aria-pressed'),
@@ -95,11 +95,11 @@ describe('game creation schedule', () => {
         }),
     });
     const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
     await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
-    expect(await screen.findByText('Условия не подтверждены')).toBeTruthy();
+    expect(await screen.findByText('ЛК1 не подтвердил условия')).toBeTruthy();
     expect(screen.queryByText('Не применяется')).toBeNull();
   });
 
@@ -137,14 +137,15 @@ describe('game creation schedule', () => {
         />,
       );
       const user = userEvent.setup();
-      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      await user.click(screen.getByRole('button', { name: 'Селигерская' }));
       await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+      await user.click(screen.getByRole('radio', { name: /Плачу за всех/ }));
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('Оплата выбранного слота сейчас недоступна.')).toBeTruthy();
-      expect(
-        screen.queryByRole('button', { name: 'Создать игру и оплатить весь корт' }),
-      ).toBeNull();
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: /Записаться/ }).disabled).toBe(
+        true,
+      );
       expect(start).not.toHaveBeenCalled();
     },
   );
@@ -162,12 +163,12 @@ describe('game creation schedule', () => {
       .mockResolvedValueOnce(quote);
     renderWizard({ listSlots: () => Promise.resolve([slot]), readQuote });
     const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
     await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     await user.click(await screen.findByRole('button', { name: 'Обновить цену' }));
-    expect(await screen.findByText('Весь корт')).toBeTruthy();
+    expect(await screen.findByText('Разовое участие')).toBeTruthy();
     expect(readQuote.mock.calls.map(([input]) => input.slotId)).toEqual([slot.id, slot.id]);
   });
 });
