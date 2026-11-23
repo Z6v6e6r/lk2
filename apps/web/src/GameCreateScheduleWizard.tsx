@@ -4,6 +4,7 @@ import type {
   GameCreateScheduleSlot,
   WholeCourtCheckoutOffer,
 } from '@phub/api-sdk';
+import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
 import './GameCreateScheduleWizard.css';
 
@@ -94,6 +95,11 @@ function slotTime(slot: GameCreateScheduleSlot) {
   return `${TIME_LABEL.format(new Date(slot.startsAt))}–${TIME_LABEL.format(new Date(slot.endsAt))}`;
 }
 
+function courtDisplay(name: string) {
+  const panoramic = /^Корт №(\d+) для игры 2 на 2 \(панорамик\)$/u.exec(name);
+  return panoramic ? `Корт ${panoramic[1]}` : name;
+}
+
 export function GameCreateScheduleWizard({
   stations,
   source,
@@ -130,7 +136,11 @@ export function GameCreateScheduleWizard({
   const scheduleKey = JSON.stringify([stationId, day, duration, retry]);
   const currentSchedule = slotsRead?.key === scheduleKey ? slotsRead : undefined;
   const slots = currentSchedule && 'value' in currentSchedule ? currentSchedule.value : [];
-  const courts = new Map(slots.map(({ courtKey, courtName }) => [courtKey, courtName]));
+  const courts = new Map(
+    slots
+      .filter((slot) => !preferredStart || slot.startsAt === preferredStart)
+      .map(({ courtKey, courtName }) => [courtKey, courtName]),
+  );
   const selected = slots.find((slot) => slot.id === slotId && slot.courtKey === court);
   const quoteKey = JSON.stringify([scheduleKey, selected?.id, quoteVersion]);
   const quote = quoteRead?.key === quoteKey ? quoteRead : undefined;
@@ -151,7 +161,7 @@ export function GameCreateScheduleWizard({
     currentQuote.currency === offer.currency
       ? { offer, expiresAt: currentQuote.expiresAt }
       : undefined;
-  const days = Array.from({ length: 14 }, (_, offset) => {
+  const days = Array.from({ length: 15 }, (_, offset) => {
     const date = new Date(Date.parse(today + 'T12:00:00+03:00') + offset * 86_400_000);
     const parts = Object.fromEntries(
       DATE_CHIP.formatToParts(date).map((part) => [part.type, part.value]),
@@ -271,9 +281,11 @@ export function GameCreateScheduleWizard({
   const residenceDetail =
     residency?.status === 'APPLIED'
       ? 'Ваша скидка по условиям ЛК1'
-      : residency?.status === 'NOT_APPLICABLE'
-        ? 'ЛК1 не подтвердил действующее Резидентство'
-        : 'ЛК1 не подтвердил условия';
+      : residency?.status === 'ACTIVE_UNQUOTED'
+        ? 'Резидентство действует, стоимость участия уточняется'
+        : residency?.status === 'NOT_APPLICABLE'
+          ? 'На выбранное время Резидентство не применяется'
+          : 'ЛК1 не подтвердил условия';
   const total = payer === 'self' ? whole : share;
   const canPay = Boolean(payer === 'self' && visibility === 'PRIVATE' && checkoutOffer);
   const selectedDate = selected && DATE_FULL.format(new Date(selected.startsAt));
@@ -303,6 +315,11 @@ export function GameCreateScheduleWizard({
             Обновить расписание
           </button>
         </div>
+      ) : null}
+      {currentQuote?.wholeCourtMinor === null ? (
+        <p className="game-schedule-empty" role="status">
+          ЛК1 не вернул цену корта для выбранного времени.
+        </p>
       ) : null}
       {quoteExpired ? (
         <div className="game-schedule-message">
@@ -512,7 +529,7 @@ export function GameCreateScheduleWizard({
             {[...courts].map(([id, name]) => (
               <div key={id} className="game-schedule-pick">
                 <button type="button" aria-pressed={court === id} onClick={() => chooseCourt(id)}>
-                  {name}
+                  {courtDisplay(name)}
                 </button>
                 {court === id ? (
                   <button type="button" aria-label="Сбросить выбранный корт" onClick={resetSlot}>
@@ -592,7 +609,7 @@ export function GameCreateScheduleWizard({
             <strong>Продолжить</strong>
             <span>
               {station && selected
-                ? `${station.title} · ${selected.courtName}`
+                ? `${station.title} · ${courtDisplay(selected.courtName)}`
                 : 'Выберите станцию и корт'}
             </span>
             <span>{chosenTime ? `${chosenTime} · ${duration} мин` : 'Выберите время начала'}</span>
@@ -610,7 +627,8 @@ export function GameCreateScheduleWizard({
               </button>
             </div>
             <span>
-              {selected.courtName} · {selectedDate}
+              <EventLocationIcon /> {courtDisplay(selected.courtName)} · <EventCalendarIcon />{' '}
+              {selectedDate}
             </span>
             <span>
               {chosenTime} · {duration} мин
@@ -624,17 +642,19 @@ export function GameCreateScheduleWizard({
                 {LEVELS[levels[0]]} - {LEVELS[levels[1]]}
               </small>
             </div>
-            <div className="game-schedule-levels" role="group" aria-label="Уровень игры">
-              {LEVELS.map((level, index) => (
-                <button
-                  type="button"
-                  key={level}
-                  aria-pressed={index >= levels[0] && index <= levels[1]}
-                  onClick={() => chooseLevel(index)}
-                >
-                  {level}
-                </button>
-              ))}
+            <div className="game-schedule-level-panel">
+              <div className="game-schedule-levels" role="group" aria-label="Уровень игры">
+                {LEVELS.map((level, index) => (
+                  <button
+                    type="button"
+                    key={level}
+                    aria-pressed={index >= levels[0] && index <= levels[1]}
+                    onClick={() => chooseLevel(index)}
+                  >
+                    {level}
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
           <section className="game-schedule-card game-schedule-stack">
@@ -650,8 +670,8 @@ export function GameCreateScheduleWizard({
                 <span>
                   <strong>Открытая игра</strong>
                   <small>К игре может присоединиться любой игрок подходящего уровня</small>
-                  <em>Быстрее собрать</em>
                 </span>
+                <em>Быстрее собрать</em>
               </label>
               <label className="game-schedule-option">
                 <input
@@ -665,8 +685,8 @@ export function GameCreateScheduleWizard({
                   <small>
                     Присоединиться можно по ссылке или в сообществе, где игра опубликована
                   </small>
-                  <em>Для своих</em>
                 </span>
+                <em>Для своих</em>
               </label>
             </div>
           </section>

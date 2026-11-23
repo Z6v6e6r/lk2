@@ -135,6 +135,33 @@ describe('LK1-owned game creation schedule', () => {
     );
   });
 
+  it.each(['active', 'half-price', 'unproved-discount'] as const)(
+    'accepts only coherent partial quotes (%s)',
+    async (mode) => {
+      const { read, fetchImpl } = setup();
+      const residency =
+        mode === 'unproved-discount'
+          ? { status: 'APPLIED', amountMinor: 70000 }
+          : { status: 'ACTIVE_UNQUOTED' };
+      fetchImpl.mockResolvedValueOnce(
+        Response.json({
+          wholeCourtMinor: null,
+          shareMinor: mode === 'half-price' ? 100000 : null,
+          currency: 'RUB',
+          observedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 25_000).toISOString(),
+          residency,
+        }),
+      );
+      const result = read(actor, { ...query, slotId: 'a'.repeat(64) });
+      if (mode === 'active')
+        await expect(result).resolves.toMatchObject({
+          quote: { wholeCourtMinor: null, shareMinor: null, residency },
+        });
+      else await expect(result).rejects.toThrow('GAME_CREATE_SCHEDULE_UNAVAILABLE');
+    },
+  );
+
   it('allows the fixed local owner only for a local preview', () => {
     expect(gameCreateScheduleOwner('http://127.0.0.1:24811', true)).toBe('http://127.0.0.1:24811');
     expect(gameCreateScheduleOwner('http://127.0.0.1:24811', false)).toBeUndefined();

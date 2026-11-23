@@ -906,7 +906,7 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
         await user.click(screen.getByRole('radio', { name: /Плачу за всех/ }));
         await user.click(screen.getByRole('button', { name: 'Продолжить' }));
         await user.type(screen.getByLabelText('Название игры для публикации'), 'Тестовая игра');
-        await user.click(screen.getByRole('button', { name: 'B', exact: true }));
+        await user.click(screen.getByRole('button', { name: /^B$/ }));
       }
       await user.dblClick(
         await screen.findByRole('button', {

@@ -6774,8 +6774,8 @@ components:
       additionalProperties: false
       required: [wholeCourtMinor, shareMinor, residency, currency, observedAt, expiresAt]
       properties:
-        wholeCourtMinor: { type: integer, minimum: 1 }
-        shareMinor: { type: integer, minimum: 1 }
+        wholeCourtMinor: { type: [integer, 'null'], minimum: 1 }
+        shareMinor: { type: [integer, 'null'], minimum: 1 }
         currency: { type: string, enum: [RUB] }
         observedAt: { type: string, format: date-time }
         expiresAt: { type: string, format: date-time }
@@ -6791,7 +6791,7 @@ components:
               additionalProperties: false
               required: [status]
               properties:
-                status: { type: string, enum: [NOT_APPLICABLE, UNAVAILABLE] }
+                status: { type: string, enum: [ACTIVE_UNQUOTED, NOT_APPLICABLE, UNAVAILABLE] }
     ClientResidencyStatus:
       type: object
       additionalProperties: false

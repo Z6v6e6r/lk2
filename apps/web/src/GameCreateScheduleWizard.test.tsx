@@ -103,7 +103,7 @@ describe('game creation schedule', () => {
     expect(screen.queryByText('Не применяется')).toBeNull();
   });
 
-  it.each(['amount', 'court', 'time'] as const)(
+  it.each(['amount', 'court', 'time', 'price-unavailable'] as const)(
     'does not offer checkout for a quote or slot that differs from the approved offer (%s)',
     async (mismatch) => {
       const start = vi.fn();
@@ -116,9 +116,11 @@ describe('game creation schedule', () => {
             readQuote: () =>
               Promise.resolve({
                 ...quoteTimes(),
-                wholeCourtMinor: 400000,
-                shareMinor: 100000,
-                residency: { status: 'NOT_APPLICABLE' },
+                wholeCourtMinor: mismatch === 'price-unavailable' ? null : 400000,
+                shareMinor: mismatch === 'price-unavailable' ? null : 100000,
+                residency: {
+                  status: mismatch === 'price-unavailable' ? 'ACTIVE_UNQUOTED' : 'NOT_APPLICABLE',
+                },
               }),
           }}
           checkout={{
@@ -143,6 +145,9 @@ describe('game creation schedule', () => {
       await user.click(screen.getByRole('radio', { name: /Плачу за всех/ }));
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('Оплата выбранного слота сейчас недоступна.')).toBeTruthy();
+      if (mismatch === 'price-unavailable') {
+        expect(screen.getByText('ЛК1 не вернул цену корта для выбранного времени.')).toBeTruthy();
+      }
       expect(screen.getByRole<HTMLButtonElement>('button', { name: /Записаться/ }).disabled).toBe(
         true,
       );

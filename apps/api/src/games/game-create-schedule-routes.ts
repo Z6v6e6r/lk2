@@ -37,13 +37,14 @@ const slotsSchema = z
 const minor = z.number().int().positive().max(100_000_000);
 const quoteSchema = z
   .object({
-    wholeCourtMinor: minor,
-    shareMinor: minor,
+    wholeCourtMinor: minor.nullable(),
+    shareMinor: minor.nullable(),
     currency: z.literal('RUB'),
     observedAt: z.iso.datetime(),
     expiresAt: z.iso.datetime(),
     residency: z.discriminatedUnion('status', [
       z.object({ status: z.literal('APPLIED'), amountMinor: minor }).strict(),
+      z.object({ status: z.literal('ACTIVE_UNQUOTED') }).strict(),
       z.object({ status: z.literal('NOT_APPLICABLE') }).strict(),
       z.object({ status: z.literal('UNAVAILABLE') }).strict(),
     ]),
@@ -220,11 +221,13 @@ export function createGameCreateScheduleRead(input: {
       }
       if (query.slotId) {
         const parsed = quoteSchema.safeParse(raw);
+        if (!parsed.success) throw unavailable();
+        const { wholeCourtMinor, shareMinor, residency } = parsed.data;
         if (
-          !parsed.success ||
-          parsed.data.shareMinor !== Math.round(parsed.data.wholeCourtMinor / 4) ||
-          (parsed.data.residency.status === 'APPLIED' &&
-            parsed.data.residency.amountMinor >= parsed.data.shareMinor)
+          wholeCourtMinor === null
+            ? shareMinor !== null || residency.status === 'APPLIED'
+            : shareMinor !== Math.round(wholeCourtMinor / 4) ||
+              (residency.status === 'APPLIED' && residency.amountMinor >= shareMinor)
         )
           throw unavailable();
         const expires = Date.parse(parsed.data.expiresAt);
