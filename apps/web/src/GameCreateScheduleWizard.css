@@ -365,12 +365,11 @@ body:has(.game-schedule-wizard) {
 
 .game-schedule-summary {
   display: grid;
-  gap: 7px;
+  gap: 8px;
 }
 
 .game-schedule-summary > div,
-.game-schedule-section-row,
-.game-schedule-community {
+.game-schedule-section-row {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -387,7 +386,25 @@ body:has(.game-schedule-wizard) {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
+}
+
+.game-schedule-summary svg {
+  width: 16px;
+  height: 16px;
+}
+
+.game-schedule-summary svg:not([fill]),
+.game-schedule-visibility em svg:not([fill]) {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.game-schedule-summary-dot {
+  color: #b5afb9;
 }
 
 .game-schedule-summary strong {
@@ -459,11 +476,12 @@ body:has(.game-schedule-wizard) {
 
 .game-schedule-visibility strong {
   display: block;
-  font: italic 800 17px/1.15 var(--schedule-display);
+  color: var(--schedule-ink);
+  font: italic 800 17px/1.05 var(--schedule-display);
 }
 
 .game-schedule-visibility small {
-  margin-block: 9px;
+  margin-block-start: 9px;
   color: #39334d;
   font-size: 14px;
   font-style: italic;
@@ -472,15 +490,24 @@ body:has(.game-schedule-wizard) {
 
 .game-schedule-visibility em {
   grid-column: 1 / -1;
-  display: grid;
+  display: flex;
   min-height: 36px;
-  place-items: center;
+  align-self: end;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   padding: 4px 6px;
   border-radius: 999px;
   color: var(--schedule-accent);
   background: linear-gradient(180deg, #7353d91f, #7353d912);
   font: italic 800 14px/1 var(--schedule-display);
   text-align: center;
+}
+
+.game-schedule-visibility em svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
 }
 
 .game-schedule-visibility .game-schedule-option:not(:has(input:checked)) em {
@@ -500,13 +527,13 @@ body:has(.game-schedule-wizard) {
     gap: 10px;
   }
   .game-schedule-visibility .game-schedule-option {
-    grid-template-columns: 22px minmax(0, 1fr);
-    gap: 10px;
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 8px;
     padding: 14px 12px 16px;
   }
   .game-schedule-visibility .game-schedule-option input {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
   }
   .game-schedule-visibility small {
     font-size: 13px;
@@ -517,10 +544,76 @@ body:has(.game-schedule-wizard) {
   }
 }
 
-.game-schedule-community > * {
-  padding: 8px;
-  border-radius: 10px;
+.game-schedule-community {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.game-schedule-community > div {
+  position: relative;
+  display: grid;
+  width: 116px;
+  justify-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--schedule-line);
+  border-radius: 16px;
+  color: var(--schedule-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.game-schedule-community > .is-selected {
+  border-color: #d5c8f7;
   background: var(--schedule-pale);
+  color: var(--schedule-ink);
+}
+
+.game-schedule-community img,
+.game-schedule-community-avatar {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  border-radius: 16px;
+  background: var(--schedule-paper);
+}
+
+.game-schedule-community img {
+  padding: 8px;
+  object-fit: contain;
+}
+
+.game-schedule-community-avatar {
+  border-radius: 50%;
+  background: #e2e0e5;
+  font-weight: 800;
+}
+
+.game-schedule-community-check {
+  position: absolute;
+  inset: 8px 8px auto auto;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--schedule-line);
+  border-radius: 5px;
+}
+
+.is-selected > .game-schedule-community-check {
+  display: grid;
+  place-items: center;
+  border-color: var(--schedule-accent);
+  background: var(--schedule-accent);
+}
+
+.is-selected > .game-schedule-community-check::before {
+  width: 7px;
+  height: 4px;
+  border: solid #fff;
+  border-width: 0 0 2px 2px;
+  content: '';
+  transform: translateY(-1px) rotate(-45deg);
 }
 
 .game-schedule-message p {

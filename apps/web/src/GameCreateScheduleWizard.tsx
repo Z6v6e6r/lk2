@@ -5,6 +5,7 @@ import type {
   WholeCourtCheckoutOffer,
 } from '@phub/api-sdk';
 import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
+import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
 import './GameCreateScheduleWizard.css';
 
@@ -627,13 +628,37 @@ export function GameCreateScheduleWizard({
               </button>
             </div>
             <span>
-              <EventLocationIcon /> {courtDisplay(selected.courtName)} · <EventCalendarIcon />{' '}
+              <EventLocationIcon /> {courtDisplay(selected.courtName)}
+              <span className="game-schedule-summary-dot" aria-hidden="true">
+                •
+              </span>
+              <EventCalendarIcon />
               {selectedDate}
             </span>
             <span>
-              {chosenTime} · {duration} мин
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <circle cx="10" cy="10" r="6.9" />
+                <path d="M10 6.6V10L12.55 11.55" />
+              </svg>
+              {chosenTime}
+              <span className="game-schedule-summary-dot" aria-hidden="true">
+                •
+              </span>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <circle cx="10" cy="11" r="5.9" />
+                <path d="M10 8.3V11L12.05 12.35M7.1 3.75H12.9M6 5.2L4.9 4.1M14 5.2L15.1 4.1" />
+              </svg>
+              {duration} мин
             </span>
-            <span>{payer === 'self' ? 'Я оплачиваю весь корт' : 'Каждый платит за себя'}</span>
+            <span>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <circle cx="7.1" cy="7.15" r="2.2" />
+                <path d="M3.9 14.6C4.1 12.6 5.43 11.25 7.1 11.25S10.1 12.6 10.3 14.6" />
+                <circle cx="13.55" cy="8.05" r="1.8" />
+                <path d="M11.55 14.25C11.78 12.82 12.78 11.85 13.97 11.85S16.16 12.82 16.39 14.25" />
+              </svg>
+              {payer === 'self' ? 'Я оплачиваю весь корт' : 'Каждый платит за себя'}
+            </span>
           </section>
           <section className="game-schedule-card game-schedule-stack">
             <div className="game-schedule-section-row">
@@ -671,7 +696,15 @@ export function GameCreateScheduleWizard({
                   <strong>Открытая игра</strong>
                   <small>К игре может присоединиться любой игрок подходящего уровня</small>
                 </span>
-                <em>Быстрее собрать</em>
+                <em>
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path
+                      d="M8.92 1.75L4.7 8.08H7.4L6.63 14.25L10.96 7.92H8.2L8.92 1.75Z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                  Быстрее собрать
+                </em>
               </label>
               <label className="game-schedule-option">
                 <input
@@ -686,7 +719,14 @@ export function GameCreateScheduleWizard({
                     Присоединиться можно по ссылке или в сообществе, где игра опубликована
                   </small>
                 </span>
-                <em>Для своих</em>
+                <em>
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="4.2" y="7.2" width="7.6" height="5.7" rx="1.7" />
+                    <path d="M5.75 7.2V5.95a2.25 2.25 0 0 1 4.5 0V7.2" />
+                    <circle cx="8" cy="10" r="0.8" fill="currentColor" />
+                  </svg>
+                  Для своих
+                </em>
               </label>
             </div>
           </section>
@@ -694,10 +734,20 @@ export function GameCreateScheduleWizard({
             <section className="game-schedule-card game-schedule-stack">
               <h2>Публикация в сообщества</h2>
               <div className="game-schedule-community">
-                <strong>Общий список игр</strong>
-                <span>{station.title}</span>
+                <div className="is-selected">
+                  <span className="game-schedule-community-check" aria-hidden="true" />
+                  <img src={padlHubLogoUrl} alt="" />
+                  <strong>Общий список игр</strong>
+                </div>
+                <div>
+                  <span className="game-schedule-community-check" aria-hidden="true" />
+                  <span className="game-schedule-community-avatar" aria-hidden="true">
+                    {station.title.slice(0, 1).toLocaleUpperCase('ru-RU')}
+                  </span>
+                  <strong>{station.title}</strong>
+                </div>
               </div>
-              <small>Автопубликация в сообщества на QA отключена.</small>
+              <small>Автопубликация в сообщества на тестовом стенде отключена.</small>
             </section>
           ) : null}
           <section className="game-schedule-card game-schedule-stack">
@@ -708,7 +758,7 @@ export function GameCreateScheduleWizard({
                 value={title}
                 maxLength={160}
                 onChange={(event) => setTitle(event.target.value)}
-                placeholder="Название игры"
+                placeholder="Например, вечерний матч на счёт"
               />
             </label>
             <label className="game-schedule-stack">
