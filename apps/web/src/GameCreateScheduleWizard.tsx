@@ -133,6 +133,7 @@ export function GameCreateScheduleWizard({
   const [expiredQuoteKey, setExpiredQuoteKey] = useState<string>();
   const [slotsRead, setSlotsRead] = useState<ReadResult<readonly GameCreateScheduleSlot[]>>();
   const [quoteRead, setQuoteRead] = useState<ReadResult<GameCreateScheduleQuote>>();
+  const scheduleOpen = wizard.step !== 0;
   const station = stations.find((item) => item.id === stationId);
   const scheduleKey = JSON.stringify([stationId, day, duration, retry]);
   const currentSchedule = slotsRead?.key === scheduleKey ? slotsRead : undefined;
@@ -188,7 +189,7 @@ export function GameCreateScheduleWizard({
   }, [source, stationId, day, duration, scheduleKey, currentSchedule, wizard.step]);
 
   useEffect(() => {
-    if (!selected || wizard.step === 0 || quote) return;
+    if (!selected || !scheduleOpen || quote) return;
     const controller = new AbortController();
     void source
       .readQuote({
@@ -208,7 +209,7 @@ export function GameCreateScheduleWizard({
         },
       );
     return () => controller.abort();
-  }, [source, stationId, day, duration, selected, quoteKey, quote, wizard.step]);
+  }, [source, stationId, day, duration, selected, quoteKey, quote, scheduleOpen]);
 
   useEffect(() => {
     if (!quote || !('value' in quote)) return;
@@ -291,6 +292,8 @@ export function GameCreateScheduleWizard({
   const canPay = Boolean(payer === 'self' && visibility === 'PRIVATE' && checkoutOffer);
   const selectedDate = selected && DATE_FULL.format(new Date(selected.startsAt));
   const chosenTime = selected && slotTime(selected);
+  const quoteError = quote && 'error' in quote ? quote.error : undefined;
+  const slotChanged = quoteError === 'GAME_CREATE_SCHEDULE_SLOT_CHANGED';
   const quoteMessage = selected && (
     <>
       {!quote ? (
@@ -298,22 +301,28 @@ export function GameCreateScheduleWizard({
           Загружаем цену и условия…
         </p>
       ) : null}
-      {quote && 'error' in quote ? (
+      {quoteError ? (
         <div className="game-schedule-message">
           <p role="alert">
-            {quote.error === 'GAME_CREATE_SCHEDULE_SLOT_CHANGED'
+            {slotChanged
               ? 'Этот слот больше недоступен.'
-              : 'Не удалось подтвердить цену ЛК1.'}
+              : quoteError === 'GAME_CREATE_SCHEDULE_RATE_LIMITED'
+                ? 'Слишком много запросов цены. Повторите через несколько секунд.'
+                : 'Не удалось подтвердить цену ЛК1.'}
           </p>
           <button
             type="button"
             onClick={() => {
-              resetSlot();
-              setRetry((value) => value + 1);
-              if (wizard.step === 2) wizard.back();
+              if (slotChanged) {
+                resetSlot();
+                setRetry((value) => value + 1);
+                if (wizard.step === 2) wizard.back();
+              } else {
+                setQuoteVersion((value) => value + 1);
+              }
             }}
           >
-            Обновить расписание
+            {slotChanged ? 'Обновить расписание' : 'Обновить цену'}
           </button>
         </div>
       ) : null}

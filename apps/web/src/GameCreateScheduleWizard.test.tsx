@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -101,6 +102,43 @@ describe('game creation schedule', () => {
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     expect(await screen.findByText('ЛК1 не подтвердил условия')).toBeTruthy();
     expect(screen.queryByText('Не применяется')).toBeNull();
+  });
+
+  it('keeps an in-flight quote on Continue and Back, then retries the same slot after a rate limit', async () => {
+    let rejectQuote!: (cause: Error) => void;
+    const pending = new Promise<never>((_, reject) => {
+      rejectQuote = reject;
+    });
+    const listSlots = vi.fn<GameCreateScheduleSource['listSlots']>().mockResolvedValue([slot]);
+    const readQuote = vi
+      .fn<GameCreateScheduleSource['readQuote']>()
+      .mockReturnValueOnce(pending)
+      .mockImplementation(() =>
+        Promise.resolve({
+          ...quoteTimes(),
+          wholeCourtMinor: 400000,
+          shareMinor: 100000,
+          residency: { status: 'NOT_APPLICABLE' },
+        }),
+      );
+    renderWizard({ listSlots, readQuote });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.click(screen.getByRole('button', { name: 'Изменить' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+
+    expect(readQuote).toHaveBeenCalledOnce();
+    expect(readQuote.mock.calls[0]?.[0].signal.aborted).toBe(false);
+    rejectQuote(Object.assign(new Error(), { code: 'GAME_CREATE_SCHEDULE_RATE_LIMITED' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Слишком много запросов цены');
+    expect(screen.getByRole('button', { name: 'Записаться' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Обновить цену' }));
+    expect(await screen.findByText(/^1\s*000\s*₽$/)).toBeVisible();
+    expect(readQuote.mock.calls.map(([input]) => input.slotId)).toEqual([slot.id, slot.id]);
+    expect(listSlots).toHaveBeenCalledOnce();
   });
 
   it.each(['amount', 'court', 'time', 'price-unavailable'] as const)(
