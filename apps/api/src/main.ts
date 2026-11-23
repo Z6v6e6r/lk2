@@ -10,6 +10,10 @@ import {
 } from '@phub/database/quarter-create';
 import { QuarterCreateOwnerClient } from '@phub/subscription-runtime-adapter';
 import { createQuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
+import {
+  createGameCreateScheduleRead,
+  gameCreateScheduleOwner,
+} from './games/game-create-schedule-routes.js';
 import { createTournamentLocalRepository } from '@phub/database';
 import { createParticipationLevelGate } from '@phub/database/participation-level-gate';
 import { createExternalLevelCheck } from './eligibility/external-level-check.js';
@@ -989,6 +993,20 @@ const gameJoinConditionsOwner = createGameJoinConditionsRuntime({
     ? { ownedSubscriptionReader: createLk1OwnedSubscriptionReader(providerAccountAttestation) }
     : {}),
 });
+const gameCreateScheduleUrl =
+  config.GAME_CREATE_SCHEDULE_LK1_URL &&
+  config.VIVA_OAUTH_ENABLED &&
+  (config.VIVA_MODE === 'sandbox' || config.VIVA_MODE === 'production') &&
+  config.VIVA_AUTH_TENANT_KEY === 'iSkq6G'
+    ? gameCreateScheduleOwner(
+        config.GAME_CREATE_SCHEDULE_LK1_URL,
+        config.APP_ENV === 'local' ||
+          (config.APP_ENV === 'staging' && config.GAME_CREATE_SCHEDULE_QA_LOOPBACK),
+      )
+    : undefined;
+const gameCreateScheduleRead = gameCreateScheduleUrl
+  ? createGameCreateScheduleRead({ baseUrl: gameCreateScheduleUrl, pool, auth: authService })
+  : undefined;
 // Paid JOIN reaches the existing owner only when the flag, the join-conditions owner and the
 // existing actor-delegation material are all composed; otherwise the route keeps GAME_PAYMENT_REQUIRED.
 const gameManagedSelfLeave = createManagedSelfLeaveRuntime({
@@ -1198,6 +1216,7 @@ const app = await buildApp({
   phoneSubjectLinkService,
   ...(subscriptionPolicyRegistryClient ? { subscriptionPolicyRegistryClient } : {}),
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
+  ...(gameCreateScheduleRead ? { gameCreateScheduleRead } : {}),
   trainingRegistration,
   tournamentLocal,
   gameManagedSelfLeave,

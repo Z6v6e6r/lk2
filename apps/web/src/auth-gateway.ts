@@ -614,6 +614,8 @@ export interface AuthGateway {
    */
   readonly createPaidGame?: PadlHubApiClient['createPaidGame'];
   readonly getWholeCourtCheckoutOffer?: PadlHubApiClient['getWholeCourtCheckoutOffer'];
+  readonly listGameCreateSlots?: PadlHubApiClient['listGameCreateSlots'];
+  readonly getGameCreateScheduleQuote?: PadlHubApiClient['getGameCreateScheduleQuote'];
   readonly advanceWholeCourtCheckout?: PadlHubApiClient['advanceWholeCourtCheckout'];
   readonly monthlyPurchase?: MonthlyPurchaseGateway;
   readonly quarterCreatePrincipal?: () => string | null;
@@ -2900,6 +2902,12 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
     getWholeCourtCheckoutOffer() {
       return client.getWholeCourtCheckoutOffer();
+    },
+    listGameCreateSlots(input) {
+      return client.listGameCreateSlots(input);
+    },
+    getGameCreateScheduleQuote(input) {
+      return client.getGameCreateScheduleQuote(input);
     },
     advanceWholeCourtCheckout(operationId, key, mode) {
       return client.advanceWholeCourtCheckout(operationId, key, mode);

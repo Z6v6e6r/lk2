@@ -326,6 +326,9 @@ const environmentSchema = z.object({
   // Removal/review condition: replace or extend when the ENFORCE owner transport is approved, and
   // review this flag no later than the next delivery batch.
   GAME_COMMERCIAL_CREATE_ENABLED: booleanFromEnvironment,
+  // Owner: games/LK1 integration. Opt in for read-only QA; review after contract acceptance.
+  GAME_CREATE_SCHEDULE_LK1_URL: z.string().url().optional(),
+  GAME_CREATE_SCHEDULE_QA_LOOPBACK: booleanFromEnvironment,
   GAME_WHOLE_COURT_CHECKOUT_PILOT: z.string().min(2).max(2048).optional(),
   GAME_WHOLE_COURT_CHECKOUT_OWNER_URL: z.string().url().optional(),
   GAME_WHOLE_COURT_CHECKOUT_TIMEOUT_MS: z.coerce

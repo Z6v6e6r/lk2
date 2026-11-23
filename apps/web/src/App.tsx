@@ -128,6 +128,11 @@ const GamesPage = lazy(() =>
 const CreateGamePage = lazy(() =>
   import('./CreateGamePage.js').then((module) => ({ default: module.CreateGamePage })),
 );
+const GameCreateSchedulePage = lazy(() =>
+  import('./GameCreateSchedulePage.js').then((module) => ({
+    default: module.GameCreateSchedulePage,
+  })),
+);
 const GiftCertificatesPage = lazy(() =>
   import('./GiftCertificatesPage.js').then((module) => ({ default: module.GiftCertificatesPage })),
 );
@@ -3380,6 +3385,15 @@ export function App({
       );
     }
     if (protectedRoute.kind === 'game-create') {
+      const query = new URLSearchParams(window.location.search);
+      if (query.get('view') === 'schedule' && !query.has('paymentReturn')) {
+        return (
+          <GameCreateSchedulePage
+            key={`${context.tenant.id}:${context.user.id}`}
+            gateway={gateway}
+          />
+        );
+      }
       if (realAccountPreview) {
         return (
           <main className="app-shell" aria-labelledby="create-game-read-only-title">

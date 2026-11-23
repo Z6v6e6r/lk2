@@ -4384,6 +4384,55 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1result-submissions~1{submissionId}~1dispute
   /{tenantKey}/games/whole-court-offer:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1whole-court-offer
+  /{tenantKey}/games/create-schedule:
+    get:
+      operationId: getGameCreateSchedule
+      summary: Read LK1 availability or an advisory quote for one selected slot
+      parameters:
+        - name: tenantKey
+          in: path
+          required: true
+          schema: { type: string }
+        - name: stationId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: day
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: durationMinutes
+          in: query
+          required: true
+          schema: { type: integer, enum: [60, 90, 120] }
+        - name: slotId
+          in: query
+          description: Opaque selection from the schedule response. Present only for a quote.
+          schema: { type: string, pattern: '^[a-f0-9]{64}$' }
+      responses:
+        '200':
+          description: With slotId, the server checks the current slot and returns its advisory RUB quote. Otherwise it returns the schedule.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [slots]
+                    properties:
+                      slots:
+                        type: array
+                        items: { $ref: '#/components/schemas/GameCreateScheduleSlot' }
+                  - type: object
+                    required: [quote]
+                    properties:
+                      quote: { $ref: '#/components/schemas/GameCreateScheduleQuote' }
+        '400': { description: Invalid schedule query }
+        '401': { description: Active PadlHub and Viva session required }
+        '403': { description: Games access required }
+        '404': { description: Station unavailable }
+        '409': { description: Selected slot changed }
+        '429': { description: Schedule temporarily limited }
+        '503': { description: LK1 schedule or quote unavailable }
   /{tenantKey}/game-operations/{operationId}/whole-court:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1game-operations~1{operationId}~1whole-court
   /{tenantKey}/game-operations/{operationId}/reconcile:
@@ -6705,6 +6754,40 @@ components:
             Server-owned capability: the client hands the provider profile phone back to the
             authenticated profile endpoint only when the server asks for it. Clients never choose
             data sources themselves.
+    GameCreateScheduleSlot:
+      type: object
+      additionalProperties: false
+      required: [id, courtKey, courtName, startsAt, endsAt, amountMinor]
+      properties:
+        id: { type: string, pattern: '^[a-f0-9]{64}$' }
+        courtKey: { type: string, pattern: '^[a-f0-9]{64}$' }
+        courtName: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        amountMinor: { type: [integer, 'null'], minimum: 0 }
+    GameCreateScheduleQuote:
+      type: object
+      additionalProperties: false
+      required: [wholeCourtMinor, shareMinor, residency, currency, observedAt, expiresAt]
+      properties:
+        wholeCourtMinor: { type: integer, minimum: 1 }
+        shareMinor: { type: integer, minimum: 1 }
+        currency: { type: string, enum: [RUB] }
+        observedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        residency:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [status, amountMinor]
+              properties:
+                status: { type: string, enum: [APPLIED] }
+                amountMinor: { type: integer, minimum: 1 }
+            - type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: { type: string, enum: [NOT_APPLICABLE, UNAVAILABLE] }
     ClientResidencyStatus:
       type: object
       additionalProperties: false

@@ -15,6 +15,7 @@ import {
 import { registerStationMessageRoutes } from './communities/station-message-routes.js';
 import type { StationMessageOwner } from './communities/station-message-owner-client.js';
 import { registerQuarterCreateRoutes } from './games/game-quarter-create-routes.js';
+import { registerGameCreateScheduleRoutes } from './games/game-create-schedule-routes.js';
 import type { QuarterCreateRuntime } from './games/game-quarter-create-runtime.js';
 import { registerTournamentLocalRoutes } from './tournaments/tournament-local-routes.js';
 import type { TournamentLocalRuntime } from './tournaments/tournament-local-runtime.js';
@@ -474,6 +475,9 @@ export interface BuildAppOptions {
     'issue'
   >;
   readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
+  readonly gameCreateScheduleRead?: NonNullable<
+    Parameters<typeof registerGameCreateScheduleRoutes>[1]['read']
+  >;
   readonly trainingRegistration?: TrainingRegistrationRuntime;
   readonly tournamentLocal?: TournamentLocalRuntime;
   readonly gameManagedSelfLeave?: ManagedSelfLeaveRuntime;
@@ -1327,6 +1331,10 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.gameQuarterCreate ? { runtime: options.gameQuarterCreate } : {}),
     readHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerGameCreateScheduleRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameCreateScheduleRead ? { read: options.gameCreateScheduleRead } : {}),
+    handlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
   registerGameRoutes(app as unknown as FastifyInstance, {
     ...(options.gameTestCourtRepository

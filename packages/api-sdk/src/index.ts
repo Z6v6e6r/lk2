@@ -114,6 +114,14 @@ export type HomeDashboard = components['schemas']['HomeDashboard'];
 export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
 export type GameJoinConditions = components['schemas']['GameJoinConditions'];
+export type GameCreateScheduleSlot = components['schemas']['GameCreateScheduleSlot'];
+export type GameCreateScheduleQuote = components['schemas']['GameCreateScheduleQuote'];
+export interface GameCreateScheduleSelection {
+  readonly stationId: string;
+  readonly day: string;
+  readonly durationMinutes: 60 | 90 | 120;
+  readonly signal?: AbortSignal;
+}
 export type JoinableSubscriptions = components['schemas']['JoinableSubscriptions'];
 export type GameTestCourtList = components['schemas']['GameTestCourtList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
@@ -1028,6 +1036,35 @@ export class PadlHubApiClient {
   /** One server-owned answer for the verified user's configured residency product. */
   public getClientResidency(): Promise<ClientResidencyStatus> {
     return this.request<ClientResidencyStatus>('/residency');
+  }
+
+  public listGameCreateSlots(
+    input: GameCreateScheduleSelection,
+  ): Promise<{ slots: GameCreateScheduleSlot[] }> {
+    const params = new URLSearchParams({
+      stationId: input.stationId,
+      day: input.day,
+      durationMinutes: String(input.durationMinutes),
+    });
+    return this.request<{ slots: GameCreateScheduleSlot[] }>(
+      `/games/create-schedule?${params}`,
+      input.signal ? { signal: input.signal } : {},
+    );
+  }
+
+  public getGameCreateScheduleQuote(
+    input: GameCreateScheduleSelection & { readonly slotId: string },
+  ): Promise<{ quote: GameCreateScheduleQuote }> {
+    const params = new URLSearchParams({
+      stationId: input.stationId,
+      day: input.day,
+      durationMinutes: String(input.durationMinutes),
+      slotId: input.slotId,
+    });
+    return this.request<{ quote: GameCreateScheduleQuote }>(
+      `/games/create-schedule?${params}`,
+      input.signal ? { signal: input.signal } : {},
+    );
   }
 
   public async syncUserProfilePhoto(input: {

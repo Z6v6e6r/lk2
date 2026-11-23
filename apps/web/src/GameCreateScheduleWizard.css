@@ -1,0 +1,108 @@
+.games-page.game-schedule-wizard {
+  width: min(100%, 920px);
+  max-width: 920px;
+  margin-inline: auto;
+  padding-bottom: 40px;
+}
+
+.game-schedule-layout {
+  display: grid;
+  align-items: start;
+  gap: 20px;
+  padding: 8px 16px 0;
+}
+
+.game-schedule-content,
+.game-schedule-summary {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
+.game-schedule-content > p,
+.game-schedule-message > p {
+  margin: 0;
+}
+
+.game-schedule-choices,
+.game-schedule-days,
+.game-schedule-durations {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.game-schedule-choices,
+.game-schedule-durations {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 128px), 1fr));
+}
+
+.game-schedule-days {
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(66px, 1fr);
+  padding: 3px 3px 8px;
+  overflow-x: auto;
+}
+
+.game-schedule-content button:not(.game-detail-primary) {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--games-line, #ded8e8);
+  border-radius: 12px;
+  background: var(--games-surface, #fff);
+  color: var(--games-ink, #1e1a23);
+  font: inherit;
+}
+
+.game-schedule-content button[aria-pressed='true'] {
+  border-color: var(--games-accent, #704fcd);
+  background: #eee8fc;
+}
+
+.game-schedule-content button:focus-visible {
+  outline: 2px solid var(--games-accent, #704fcd);
+  outline-offset: 2px;
+}
+
+.game-schedule-choices button {
+  display: grid;
+  gap: 4px;
+  text-align: start;
+}
+
+.game-schedule-choices small,
+.game-schedule-summary span {
+  color: var(--games-muted, #615b68);
+}
+
+.game-schedule-summary,
+.game-schedule-prices {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--games-line, #ded8e8);
+  border-radius: 16px;
+  background: var(--games-surface, #fff);
+}
+
+.game-schedule-prices > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 16px;
+  padding: 12px 0;
+}
+
+.game-schedule-prices > div + div {
+  border-top: 1px solid var(--games-line, #ded8e8);
+}
+
+.game-schedule-prices dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+@media (min-width: 760px) {
+  .game-schedule-layout:has(.game-schedule-summary) {
+    grid-template-columns: minmax(0, 1fr) minmax(190px, 260px);
+  }
+}

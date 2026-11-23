@@ -1,0 +1,36 @@
+# Apply only on an isolated local QA stand. The reader is reachable from API loopback.
+services:
+  api:
+    environment:
+      GAME_CREATE_SCHEDULE_LK1_URL: http://127.0.0.1:24811
+      GAME_CREATE_SCHEDULE_QA_LOOPBACK: 'true'
+
+  lk1-schedule:
+    image: ${LK1_SCHEDULE_QA_NODE_IMAGE:?Set the verified Node image from the QA contour}
+    working_dir: /qa-lk1
+    command: ['node', 'scripts/game-create-schedule-qa.mjs']
+    user: '1000:1000'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    network_mode: service:api
+    depends_on:
+      api: { condition: service_started }
+    volumes:
+      - type: bind
+        source: ${LK1_SCHEDULE_QA_SOURCE:?Set the exact LK1 QA worktree}
+        target: /qa-lk1
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:24811/lk/integrations/v1/game-create-schedule').then(r=>process.exit(r.status===401?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
