@@ -92,8 +92,10 @@ never overwritten, so add them to `AUTH_DEV_EXTRA_PHONES_E164` there.
 
 The opt-in schedule screen is `/games/new?view=schedule`. It shows stations from LK2 and
 queries the LK1 owner only after choosing a station, date and duration. LK1 rechecks the
-selected slot before quoting. Quotes expire in at most 30 seconds. The screen sends no
-create, reservation or payment commands.
+selected slot before quoting. Quotes expire in at most 30 seconds. The local real-account
+preview disables commands. In a command-enabled contour the screen exposes the existing
+whole-court checkout only for the same actor, station, bound court, window and amount as
+the server's approved pilot offer. It uses the existing create attempt and payment return.
 
 Use `lk1-create-schedule.qa.yaml` only with a separate local QA project that has the matching LK2
 API/Web build and the exact LK1 schedule worktree. Install the LK1 lockfile dependencies in that

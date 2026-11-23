@@ -2,10 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import type { AuthGateway } from './auth-gateway.js';
 import {
   GameCreateScheduleWizard,
+  type GameCreateScheduleCheckout,
   type GameCreateScheduleSource,
 } from './GameCreateScheduleWizard.js';
 
-export function GameCreateSchedulePage({ gateway }: { readonly gateway: AuthGateway }) {
+export function GameCreateSchedulePage({
+  gateway,
+  checkout,
+}: {
+  readonly gateway: AuthGateway;
+  readonly checkout?: GameCreateScheduleCheckout;
+}) {
   const [locations, setLocations] = useState<
     Awaited<ReturnType<AuthGateway['listLocations']>>['items'] | null
   >(null);
@@ -50,5 +57,11 @@ export function GameCreateSchedulePage({ gateway }: { readonly gateway: AuthGate
       </main>
     );
   }
-  return <GameCreateScheduleWizard stations={locations} source={source} />;
+  return (
+    <GameCreateScheduleWizard
+      stations={locations}
+      source={source}
+      {...(checkout ? { checkout } : {})}
+    />
+  );
 }

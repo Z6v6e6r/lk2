@@ -23,7 +23,10 @@ const token = 'synthetic.actor.bearer.token';
 const day = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 const query = { stationId: station, day, durationMinutes: '60' } as const;
 
-function setup(aliases = [providerStation]) {
+function setup(
+  aliases = [providerStation],
+  resolveCheckoutCourt?: Parameters<typeof createGameCreateScheduleRead>[0]['resolveCheckoutCourt'],
+) {
   const pool = {
     connect: () =>
       Promise.resolve({
@@ -59,6 +62,7 @@ function setup(aliases = [providerStation]) {
     pool,
     auth: { issueVivaAccessToken },
     fetchImpl,
+    ...(resolveCheckoutCourt ? { resolveCheckoutCourt } : {}),
   });
   return { read, fetchImpl, issueVivaAccessToken };
 }
@@ -89,6 +93,30 @@ describe('LK1-owned game creation schedule', () => {
     expect(issueVivaAccessToken).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it.each(['exact', 'room', 'station', 'time', 'missing', 'error'] as const)(
+    'only publishes checkout for the exact approved court and window (%s)',
+    async (mode) => {
+      const courtId = 'd8e81b38-634b-4206-bc65-1dce6578d120';
+      const resolve = vi.fn(() => {
+        if (mode === 'error') return Promise.reject(new Error('binding read failed'));
+        if (mode === 'missing') return Promise.resolve(undefined);
+        return Promise.resolve({
+          courtId,
+          providerStationId: mode === 'station' ? station : providerStation,
+          providerRoomId: mode === 'room' ? station : providerRoom,
+          startsAt: day + (mode === 'time' ? 'T15:30:00.000Z' : 'T15:00:00.000Z'),
+          endsAt: day + 'T16:00:00.000Z',
+        });
+      });
+      const { read } = setup([providerStation], resolve);
+      const result = await read(actor, query);
+      expect(resolve).toHaveBeenCalledWith(actor, station);
+      expect(result.slots).toHaveLength(1);
+      expect(result.slots?.[0]?.checkoutCourtId).toBe(mode === 'exact' ? courtId : undefined);
+      expect(JSON.stringify(result)).not.toContain(providerRoom);
+    },
+  );
 
   it('rejects a discounted quote that equals the regular rate', async () => {
     const { read, fetchImpl } = setup();

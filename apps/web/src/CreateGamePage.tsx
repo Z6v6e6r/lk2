@@ -11,6 +11,7 @@ import {
   GameCreateWizardSection,
 } from './GameCreateWizard.js';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
+import { GameCreateSchedulePage } from './GameCreateSchedulePage.js';
 import type { AuthGateway, CreateGameRequest } from './auth-gateway.js';
 import {
   browserCreateGameAttemptLockManager,
@@ -167,12 +168,14 @@ function LegacyCreateGamePage({
   navigate = (url) => window.location.assign(url),
   attemptStorage,
   attemptLockManager,
+  useSchedule = false,
 }: {
   readonly gateway: AuthGateway;
   readonly principal: CreateGameAttemptPrincipal;
   readonly navigate?: (url: string) => void;
   readonly attemptStorage?: Storage;
   readonly attemptLockManager?: CreateGameAttemptLockManager;
+  readonly useSchedule?: boolean;
 }): React.JSX.Element {
   const tenantId = principal.tenantId;
   const userId = principal.userId;
@@ -230,7 +233,9 @@ function LegacyCreateGamePage({
     Awaited<ReturnType<AuthGateway['listLocations']>>['items']
   >([]);
   const [locationsError, setLocationsError] = useState<string | null>(null);
-  const [title, setTitle] = useState(restoredPayload?.title ?? 'Открытая игра');
+  const [title, setTitle] = useState(
+    restoredPayload?.title ?? (useSchedule ? 'Игра с оплатой корта' : 'Открытая игра'),
+  );
   const [stationId, setStationId] = useState(restoredPayload?.stationId ?? '');
   const [courtId, setCourtId] = useState(restoredPayload?.courtId ?? '');
   const [testCourts, setTestCourts] = useState<
@@ -298,6 +303,10 @@ function LegacyCreateGamePage({
         if (active) setWholeCourtOffer(null);
       },
     );
+    if (useSchedule)
+      return () => {
+        active = false;
+      };
     void gateway.listGameTestCourts?.().then(
       (result) => {
         if (active) setTestCourts(result.items);
@@ -323,7 +332,7 @@ function LegacyCreateGamePage({
     return () => {
       active = false;
     };
-  }, [gateway]);
+  }, [gateway, useSchedule]);
 
   async function submit(
     event: React.SyntheticEvent,
@@ -761,6 +770,44 @@ function LegacyCreateGamePage({
         </section>
         <MainBottomNavigation active="games" gamesDestination="games" />
       </main>
+    );
+  }
+
+  if (useSchedule) {
+    if (activeAttempt?.state === 'PENDING' && (!busy || restoredPending)) {
+      return (
+        <main className="games-page games-page--create">
+          {pageHeader}
+          <section className="game-create-form" aria-label="Незавершённая попытка создания">
+            <p role="status">{notice ?? 'Сохранена исходная попытка создания игры.'}</p>
+            {error ? <p role="alert">{error}</p> : null}
+            {activeAttempt.payload.paymentMode === 'ORGANIZER_PAYS' ? (
+              <button
+                type="button"
+                className="game-detail-primary"
+                disabled={busy}
+                onClick={(event) => void submit(event)}
+              >
+                Продолжить исходную попытку
+              </button>
+            ) : (
+              <a href="/games/new">К сохранённой попытке</a>
+            )}
+          </section>
+        </main>
+      );
+    }
+    return (
+      <GameCreateSchedulePage
+        gateway={gateway}
+        checkout={{
+          offer:
+            gateway.createPaidGame && gateway.advanceWholeCourtCheckout ? wholeCourtOffer : null,
+          busy,
+          error,
+          start: (event, offer) => void submit(event, offer),
+        }}
+      />
     );
   }
 

@@ -3386,7 +3386,8 @@ export function App({
     }
     if (protectedRoute.kind === 'game-create') {
       const query = new URLSearchParams(window.location.search);
-      if (query.get('view') === 'schedule' && !query.has('paymentReturn')) {
+      const scheduleView = query.get('view') === 'schedule' && !query.has('paymentReturn');
+      if (realAccountPreview && scheduleView) {
         return (
           <GameCreateSchedulePage
             key={`${context.tenant.id}:${context.user.id}`}
@@ -3411,6 +3412,16 @@ export function App({
         tenantId: state.session.context.tenant.id,
         userId: state.session.context.user.id,
       };
+      if (scheduleView) {
+        return (
+          <CreateGamePage
+            key={`${createGamePrincipal.tenantId}:${createGamePrincipal.userId}`}
+            gateway={gateway}
+            principal={createGamePrincipal}
+            useSchedule
+          />
+        );
+      }
       if (clientPlatform === 'android')
         return (
           <QuarterCreatePanel

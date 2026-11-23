@@ -1004,9 +1004,6 @@ const gameCreateScheduleUrl =
           (config.APP_ENV === 'staging' && config.GAME_CREATE_SCHEDULE_QA_LOOPBACK),
       )
     : undefined;
-const gameCreateScheduleRead = gameCreateScheduleUrl
-  ? createGameCreateScheduleRead({ baseUrl: gameCreateScheduleUrl, pool, auth: authService })
-  : undefined;
 // Paid JOIN reaches the existing owner only when the flag, the join-conditions owner and the
 // existing actor-delegation material are all composed; otherwise the route keeps GAME_PAYMENT_REQUIRED.
 const gameManagedSelfLeave = createManagedSelfLeaveRuntime({
@@ -1115,6 +1112,20 @@ const gameQuarterCreate = (() => {
     },
   });
 })();
+const wholeCourtLocation = (
+  actor: Parameters<Parameters<typeof createWholeCourtRuntime>[0]['location']>[0],
+  forSchedule = false,
+) =>
+  withTenantTransaction(pool, actor.tenantId, async (client) => {
+    if (forSchedule) await client.query("set local statement_timeout = '2500ms'");
+    const result = await resolveGameCreateLocationBinding(client, actor);
+    return result
+      ? {
+          providerStationId: result.provider_studio_id,
+          providerRoomId: result.provider_room_id,
+        }
+      : undefined;
+  });
 const gameWholeCourt = (() => {
   if (!config.GAME_WHOLE_COURT_CHECKOUT_PILOT) return undefined;
   const url = config.GAME_WHOLE_COURT_CHECKOUT_OWNER_URL;
@@ -1154,16 +1165,7 @@ const gameWholeCourt = (() => {
       const issued = await authService.issueVivaAccessToken(actor);
       return { token: issued.accessToken, expiresAt: issued.expiresAt };
     },
-    location: async (actor) =>
-      withTenantTransaction(pool, actor.tenantId, async (client) => {
-        const result = await resolveGameCreateLocationBinding(client, actor);
-        return result
-          ? {
-              providerStationId: result.provider_studio_id,
-              providerRoomId: result.provider_room_id,
-            }
-          : undefined;
-      }),
+    location: wholeCourtLocation,
     owner: createWholeCourtOwner({
       baseUrl: url,
       allowLoopback: ['local', 'ci'].includes(config.APP_ENV),
@@ -1172,6 +1174,26 @@ const gameWholeCourt = (() => {
     }),
   });
 })();
+const gameCreateScheduleRead = gameCreateScheduleUrl
+  ? createGameCreateScheduleRead({
+      baseUrl: gameCreateScheduleUrl,
+      pool,
+      auth: authService,
+      ...(gameWholeCourt
+        ? {
+            resolveCheckoutCourt: async (actor, stationId) => {
+              const { offer } = gameWholeCourt.offer(actor);
+              if (!offer || offer.stationId !== stationId) return;
+              const location = await wholeCourtLocation(
+                { ...actor, stationId, courtId: offer.courtId },
+                true,
+              );
+              if (location) return { ...offer, ...location };
+            },
+          }
+        : {}),
+    })
+  : undefined;
 const monthlyPurchase = (() => {
   const repository = createMonthlyPurchaseRepository(pool);
   if (!config.MONTHLY_SUBSCRIPTION_PURCHASE_ENABLED)

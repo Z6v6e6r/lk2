@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -105,6 +105,7 @@ function page(
     readonly navigate?: (url: string) => void;
     readonly currentPrincipal?: CreateGameAttemptPrincipal;
     readonly api?: AuthGateway;
+    readonly useSchedule?: boolean;
   } = {},
 ) {
   return render(
@@ -114,6 +115,7 @@ function page(
       attemptStorage={window.localStorage}
       attemptLockManager={locks()}
       navigate={options.navigate ?? vi.fn()}
+      useSchedule={options.useSchedule ?? false}
     />,
   );
 }
@@ -841,65 +843,106 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
     });
   });
 
-  it('opens the whole-court checkout once and confirms the same operation after return', async () => {
-    const startsAt = new Date(Date.now() + 86400000).toISOString();
-    const endsAt = new Date(Date.parse(startsAt) + 3600000).toISOString();
-    const paymentUrl = 'https://pay.vivacrm.ru/fixture';
-    const createPaidGame = vi.fn<NonNullable<AuthGateway['createPaidGame']>>().mockResolvedValue(
-      managedResult('PROCESSING', {
-        nextAction: { type: 'OPEN_PAYMENT', url: paymentUrl, expiresAt: endsAt },
-      }),
-    );
-    const advanceWholeCourtCheckout = vi
-      .fn<NonNullable<AuthGateway['advanceWholeCourtCheckout']>>()
-      .mockResolvedValue(managedResult('SUCCEEDED'));
-    const getGameOperation = vi.fn();
-    const api: AuthGateway = {
-      ...paidApi({ createPaidGame, getGameOperation }),
-      advanceWholeCourtCheckout,
-      getWholeCourtCheckoutOffer: vi.fn().mockResolvedValue({
-        offer: {
-          stationId,
-          courtId: gameId,
-          startsAt,
-          endsAt,
-          currency: 'RUB',
-          amountMinor: 120000,
-        },
-      }),
-    };
-    const navigate = vi.fn();
-    page(vi.fn(), { api, navigate });
-    const user = userEvent.setup();
-    await user.dblClick(await screen.findByRole('button', { name: 'Оплатить весь корт' }));
-    await waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith(paymentUrl));
-    expect(createPaidGame).toHaveBeenCalledOnce();
-    const [payload, key] = createPaidGame.mock.calls[0]!;
-    expect(payload).toMatchObject({
-      paymentMode: 'ORGANIZER_PAYS',
-      courtId: gameId,
-      visibility: 'PRIVATE',
-      priceConsent: { currency: 'RUB', amountMinor: 120000 },
-    });
-    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
-      { operationId: managedOperationId, gameId: managedGameId, idempotencyKey: key },
-    );
-    cleanup();
-    window.history.replaceState({}, '', '/games/new?paymentReturn=' + managedOperationId);
-    page(vi.fn(), { api, navigate });
-    await waitFor(() =>
-      expect(navigate).toHaveBeenLastCalledWith(
-        '/games/' + managedGameId + '?created=1&recovered=1',
-      ),
-    );
-    expect(advanceWholeCourtCheckout).toHaveBeenCalledExactlyOnceWith(
-      managedOperationId,
-      key,
-      'confirm',
-    );
-    expect(createPaidGame).toHaveBeenCalledOnce();
-    expect(getGameOperation).not.toHaveBeenCalled();
-  });
+  it.each(['legacy', 'schedule'] as const)(
+    'opens %s whole-court checkout once and confirms the same operation after return',
+    async (entry) => {
+      const startsAt = new Date(Date.now() + 86400000).toISOString();
+      const endsAt = new Date(Date.parse(startsAt) + 3600000).toISOString();
+      const paymentUrl = 'https://pay.vivacrm.ru/fixture';
+      const createPaidGame = vi.fn<NonNullable<AuthGateway['createPaidGame']>>().mockResolvedValue(
+        managedResult('PROCESSING', {
+          nextAction: { type: 'OPEN_PAYMENT', url: paymentUrl, expiresAt: endsAt },
+        }),
+      );
+      const advanceWholeCourtCheckout = vi
+        .fn<NonNullable<AuthGateway['advanceWholeCourtCheckout']>>()
+        .mockResolvedValue(managedResult('SUCCEEDED'));
+      const getGameOperation = vi.fn();
+      const api: AuthGateway = {
+        ...paidApi({ createPaidGame, getGameOperation }),
+        advanceWholeCourtCheckout,
+        getWholeCourtCheckoutOffer: vi.fn().mockResolvedValue({
+          offer: {
+            stationId,
+            courtId: gameId,
+            startsAt,
+            endsAt,
+            currency: 'RUB',
+            amountMinor: 120000,
+          },
+        }),
+        listGameCreateSlots: vi.fn().mockResolvedValue({
+          slots: [
+            {
+              id: 'a'.repeat(64),
+              courtKey: 'b'.repeat(64),
+              checkoutCourtId: gameId,
+              courtName: 'Корт №1',
+              startsAt,
+              endsAt,
+              amountMinor: null,
+            },
+          ],
+        }),
+        getGameCreateScheduleQuote: vi.fn().mockImplementation(() => ({
+          quote: {
+            wholeCourtMinor: 120000,
+            shareMinor: 30000,
+            currency: 'RUB',
+            residency: { status: 'NOT_APPLICABLE' },
+            observedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 25_000).toISOString(),
+          },
+        })),
+      };
+      const navigate = vi.fn();
+      page(vi.fn(), { api, navigate, useSchedule: entry === 'schedule' });
+      const user = userEvent.setup();
+      if (entry === 'schedule') {
+        await user.click(await screen.findByRole('button', { name: 'Продолжить' }));
+        await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+        const slots = screen.getByRole('group', { name: 'Свободные слоты' });
+        await user.click(within(slots).getByRole('button'));
+        await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      }
+      await user.dblClick(
+        await screen.findByRole('button', {
+          name: entry === 'schedule' ? 'Создать игру и оплатить весь корт' : 'Оплатить весь корт',
+        }),
+      );
+      await waitFor(() => expect(navigate).toHaveBeenCalledExactlyOnceWith(paymentUrl));
+      expect(createPaidGame).toHaveBeenCalledOnce();
+      const [payload, key] = createPaidGame.mock.calls[0]!;
+      expect(payload).toMatchObject({
+        paymentMode: 'ORGANIZER_PAYS',
+        courtId: gameId,
+        visibility: 'PRIVATE',
+        priceConsent: { currency: 'RUB', amountMinor: 120000 },
+      });
+      expect(
+        loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt,
+      ).toMatchObject({
+        operationId: managedOperationId,
+        gameId: managedGameId,
+        idempotencyKey: key,
+      });
+      cleanup();
+      window.history.replaceState({}, '', '/games/new?paymentReturn=' + managedOperationId);
+      page(vi.fn(), { api, navigate });
+      await waitFor(() =>
+        expect(navigate).toHaveBeenLastCalledWith(
+          '/games/' + managedGameId + '?created=1&recovered=1',
+        ),
+      );
+      expect(advanceWholeCourtCheckout).toHaveBeenCalledExactlyOnceWith(
+        managedOperationId,
+        key,
+        'confirm',
+      );
+      expect(createPaidGame).toHaveBeenCalledOnce();
+      expect(getGameOperation).not.toHaveBeenCalled();
+    },
+  );
 
   it('reads the original operation on checkout return and opens its card once in the current tab', async () => {
     const attempt = await prepareCreateGameAttempt(

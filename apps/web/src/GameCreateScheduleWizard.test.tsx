@@ -103,6 +103,52 @@ describe('game creation schedule', () => {
     expect(screen.queryByText('Не применяется')).toBeNull();
   });
 
+  it.each(['amount', 'court', 'time'] as const)(
+    'does not offer checkout for a quote or slot that differs from the approved offer (%s)',
+    async (mismatch) => {
+      const start = vi.fn();
+      render(
+        <GameCreateScheduleWizard
+          stations={stations}
+          today="2026-12-06"
+          source={{
+            listSlots: () => Promise.resolve([{ ...slot, checkoutCourtId: 'court' }]),
+            readQuote: () =>
+              Promise.resolve({
+                ...quoteTimes(),
+                wholeCourtMinor: 400000,
+                shareMinor: 100000,
+                residency: { status: 'NOT_APPLICABLE' },
+              }),
+          }}
+          checkout={{
+            busy: false,
+            error: null,
+            start,
+            offer: {
+              stationId: stations[0]!.id,
+              courtId: mismatch === 'court' ? 'other-court' : 'court',
+              startsAt: mismatch === 'time' ? '2026-12-06T13:00:00+03:00' : slot.startsAt,
+              endsAt: slot.endsAt,
+              amountMinor: mismatch === 'amount' ? 420000 : 400000,
+              currency: 'RUB',
+            },
+          }}
+        />,
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+      await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      expect(await screen.findByText('Оплата выбранного слота сейчас недоступна.')).toBeTruthy();
+      expect(
+        screen.queryByRole('button', { name: 'Создать игру и оплатить весь корт' }),
+      ).toBeNull();
+      expect(start).not.toHaveBeenCalled();
+    },
+  );
+
   it('replaces an expired quote only after a new read of the same slot', async () => {
     const quote = {
       ...quoteTimes(),

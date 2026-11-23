@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { withTenantTransaction } from '../../../../packages/database/src/connection.js';
 import { AuthServiceError, type AuthService } from '../auth/auth-service.js';
 import { sendApiError } from '../http-errors.js';
+import type { WholeCourtPilot } from './game-whole-court-create.js';
 
 const path = '/lk/integrations/v1/game-create-schedule';
 const slotId = z.string().regex(/^[a-f0-9]{64}$/);
@@ -57,6 +58,11 @@ interface Actor {
   readonly correlationId: string;
   readonly signal: AbortSignal;
 }
+
+type CheckoutCourt = Pick<WholeCourtPilot, 'courtId' | 'startsAt' | 'endsAt'> & {
+  readonly providerStationId: string;
+  readonly providerRoomId: string;
+};
 
 class ScheduleReadError extends Error {
   constructor(
@@ -116,6 +122,10 @@ export function createGameCreateScheduleRead(input: {
   readonly pool: Pool;
   readonly auth: Pick<AuthService, 'issueVivaAccessToken'>;
   readonly fetchImpl?: typeof fetch;
+  readonly resolveCheckoutCourt?: (
+    actor: Actor,
+    stationId: string,
+  ) => Promise<CheckoutCourt | undefined>;
 }) {
   const endpoint = new URL(path, input.baseUrl);
   const pending = new Set<string>();
@@ -244,6 +254,9 @@ export function createGameCreateScheduleRead(input: {
           Date.parse(slot.endsAt) - Date.parse(slot.startsAt) ===
             Number(query.durationMinutes) * 60000,
       );
+      const checkout = slots.length
+        ? await input.resolveCheckoutCourt?.(actor, query.stationId).catch(() => undefined)
+        : undefined;
       return {
         slots: slots.map(({ roomId, ...slot }) => ({
           ...slot,
@@ -251,6 +264,13 @@ export function createGameCreateScheduleRead(input: {
             .update(`${actor.tenantId}\0${query.stationId}\0${roomId}`)
             .digest('hex'),
           amountMinor: null,
+          ...(checkout &&
+          checkout.providerStationId === station &&
+          checkout.providerRoomId === roomId &&
+          Date.parse(checkout.startsAt) === Date.parse(slot.startsAt) &&
+          Date.parse(checkout.endsAt) === Date.parse(slot.endsAt)
+            ? { checkoutCourtId: checkout.courtId }
+            : {}),
         })),
       };
     } finally {

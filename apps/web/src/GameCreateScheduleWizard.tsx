@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { GameCreateScheduleQuote, GameCreateScheduleSlot } from '@phub/api-sdk';
+import type {
+  GameCreateScheduleQuote,
+  GameCreateScheduleSlot,
+  WholeCourtCheckoutOffer,
+} from '@phub/api-sdk';
 import { GameCreateWizardHeader, GameCreateWizardNext } from './GameCreateWizard.js';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
 import './GameCreateScheduleWizard.css';
@@ -39,6 +43,16 @@ export interface GameCreateScheduleSource {
   }) => Promise<GameCreateScheduleQuote>;
 }
 
+export interface GameCreateScheduleCheckout {
+  readonly offer: WholeCourtCheckoutOffer | null;
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly start: (
+    event: React.MouseEvent<HTMLButtonElement>,
+    offer: WholeCourtCheckoutOffer,
+  ) => void;
+}
+
 type Station = { readonly id: string; readonly title: string; readonly city?: string | null };
 type ReadResult<T> =
   { readonly key: string; readonly value: T } | { readonly key: string; readonly error: string };
@@ -59,11 +73,13 @@ function slotTime(slot: GameCreateScheduleSlot) {
 export function GameCreateScheduleWizard({
   stations,
   source,
+  checkout,
   gamesHref = '/games',
   today = DAY.format(new Date()),
 }: {
   readonly stations: readonly Station[];
   readonly source: GameCreateScheduleSource;
+  readonly checkout?: GameCreateScheduleCheckout;
   readonly gamesHref?: string;
   readonly today?: string;
 }) {
@@ -87,6 +103,20 @@ export function GameCreateScheduleWizard({
   const quoteKey = JSON.stringify([scheduleKey, selected?.id, quoteVersion]);
   const quote = quoteRead?.key === quoteKey ? quoteRead : undefined;
   const quoteExpired = expiredQuoteKey === quoteKey;
+  const offer = checkout?.offer;
+  const checkoutOffer =
+    offer &&
+    selected?.checkoutCourtId === offer.courtId &&
+    stationId === offer.stationId &&
+    Date.parse(selected.startsAt) === Date.parse(offer.startsAt) &&
+    Date.parse(selected.endsAt) === Date.parse(offer.endsAt) &&
+    quote &&
+    'value' in quote &&
+    !quoteExpired &&
+    quote.value.wholeCourtMinor === offer.amountMinor &&
+    quote.value.currency === offer.currency
+      ? { offer, expiresAt: quote.value.expiresAt }
+      : undefined;
   const days = Array.from({ length: 14 }, (_, offset) => {
     const date = new Date(Date.parse(today + 'T12:00:00+03:00') + offset * 86_400_000);
     return { day: DAY.format(date), label: DATE_LABEL.format(date) };
@@ -163,7 +193,7 @@ export function GameCreateScheduleWizard({
         step={wizard.step}
         label={(['Где играем', 'Корт и время', 'Цена и условия'] as const)[wizard.step]}
         href={gamesHref}
-        busy={false}
+        busy={checkout?.busy ?? false}
         back={wizard.back}
       />
       <div className="game-schedule-layout">
@@ -347,8 +377,30 @@ export function GameCreateScheduleWizard({
                     действует.
                   </p>
                   <p>ЛК1 подтверждает цену и доступность при оформлении.</p>
+                  {checkout && checkoutOffer ? (
+                    <>
+                      <p>Закрытая игра на 4 игроков.</p>
+                      <button
+                        className="game-detail-primary"
+                        type="button"
+                        disabled={checkout.busy}
+                        onClick={(event) => {
+                          if (Date.parse(checkoutOffer.expiresAt) <= Date.now()) {
+                            setExpiredQuoteKey(quoteKey);
+                            return;
+                          }
+                          checkout.start(event, checkoutOffer.offer);
+                        }}
+                      >
+                        {checkout.busy ? 'Открываем оплату…' : 'Создать игру и оплатить весь корт'}
+                      </button>
+                    </>
+                  ) : checkout ? (
+                    <p role="status">Оплата выбранного слота сейчас недоступна.</p>
+                  ) : null}
                 </>
               ) : null}
+              {checkout?.error ? <p role="alert">{checkout.error}</p> : null}
             </>
           ) : null}
         </section>

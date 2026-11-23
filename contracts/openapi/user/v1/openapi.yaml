@@ -6761,6 +6761,10 @@ components:
       properties:
         id: { type: string, pattern: '^[a-f0-9]{64}$' }
         courtKey: { type: string, pattern: '^[a-f0-9]{64}$' }
+        checkoutCourtId:
+          type: string
+          format: uuid
+          description: PadlHub court for the caller's approved checkout offer, when this exact slot matches it.
         courtName: { type: string }
         startsAt: { type: string, format: date-time }
         endsAt: { type: string, format: date-time }
