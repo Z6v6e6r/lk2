@@ -87,8 +87,8 @@ API_WORKER_ANDROID_CHAT_TEST_PATCH = {
     'apps/mobile/src/MobileApp.test.tsx': {'path': 'apps/mobile/src/MobileApp.test.tsx', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '35f557d6da06916e3a411129786e51a76cdd2ae0', 'newOid': '541fe96a4f895044faa123e157d4b1aa6ef38ad2'},
 }
 API_WORKER_REHEARSAL_READINESS_PATCH = {
-    'scripts/rehearse-timeweb-standard-compose.js': {'path': 'scripts/rehearse-timeweb-standard-compose.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '98c63003b8736bc1da48abfa9be5ee1e7bd6b005', 'newOid': 'df0f4dd006a229a55b517043042e7715127678eb'},
-    'scripts/timeweb-standard-compose.test.ts': {'path': 'scripts/timeweb-standard-compose.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ba60973d95649afa3b81ac035e55b043cddc6285', 'newOid': '0e7ac3a12722d6250dd989e6d4dd9aed5b82bfac'},
+    'scripts/rehearse-timeweb-standard-compose.js': {'path': 'scripts/rehearse-timeweb-standard-compose.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '98c63003b8736bc1da48abfa9be5ee1e7bd6b005', 'newOid': '9dd79a4b2be0eab0f3d79fdde8bf0a1fc9167a80'},
+    'scripts/timeweb-standard-compose.test.ts': {'path': 'scripts/timeweb-standard-compose.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ba60973d95649afa3b81ac035e55b043cddc6285', 'newOid': '4a2866c8ce09a004359bfcd01435c80d638bc44f'},
 }
 API_WORKER_NATIVE_BOOKINGS_PATCH = {
     'apps/mobile/android/app/build.gradle': {'path': 'apps/mobile/android/app/build.gradle', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'b5451e4334bc50c083e6b0d45cecf156d7e632e3', 'newOid': '70eb7c9f09bea9bc0aa8c26a67ae31c7595e7f15'},

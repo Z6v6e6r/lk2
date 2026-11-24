@@ -363,7 +363,7 @@ export const API_WORKER_REHEARSAL_READINESS_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: '98c63003b8736bc1da48abfa9be5ee1e7bd6b005',
-    newOid: 'df0f4dd006a229a55b517043042e7715127678eb',
+    newOid: '9dd79a4b2be0eab0f3d79fdde8bf0a1fc9167a80',
   }),
   Object.freeze({
     path: 'scripts/timeweb-standard-compose.test.ts',
@@ -371,7 +371,7 @@ export const API_WORKER_REHEARSAL_READINESS_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: 'ba60973d95649afa3b81ac035e55b043cddc6285',
-    newOid: '0e7ac3a12722d6250dd989e6d4dd9aed5b82bfac',
+    newOid: '4a2866c8ce09a004359bfcd01435c80d638bc44f',
   }),
 ]);
 // Frozen PR380 native-only source delta; app images stay on11954. Never widen a generic path list.

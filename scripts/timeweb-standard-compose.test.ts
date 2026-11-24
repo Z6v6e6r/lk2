@@ -1,19 +1,69 @@
 import { spawnSync } from 'node:child_process';
+import { randomInt } from 'node:crypto';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 it.skipIf(process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')(
   'rehearses actual isolated Compose Web success and forced same-digest rollback',
   () => {
-    const result = spawnSync(process.execPath, ['scripts/rehearse-timeweb-standard-compose.js'], {
+    const started = performance.now();
+    const evidence: Record<string, unknown> = {};
+    const evidenceDirectory = '.ci-artifacts/test-and-coverage';
+    const persistEvidence = () => {
+      mkdirSync(evidenceDirectory, { recursive: true });
+      writeFileSync(
+        join(evidenceDirectory, 'compose-fixture.json'),
+        JSON.stringify(evidence, null, 2) + '\n',
+      );
+    };
+    const directory = mkdtempSync(join(tmpdir(), 'lk2-standard-fixture-'));
+    const project = `lk2-standard-fixture-${process.pid}${randomInt(100000, 1000000)}`;
+    const script = 'scripts/rehearse-timeweb-standard-compose.js';
+    const env = {
+      ...process.env,
+      TIMEWEB_STANDARD_FIXTURE_DIRECTORY: directory,
+      TIMEWEB_STANDARD_FIXTURE_PROJECT: project,
+    };
+    // Do not detach. Node, Docker and Compose stay in the outer supervisor's test PGID.
+    // No cleanup runs here after timeout/worker death: only the surviving supervisor may
+    // confirm that whole PGID is stopped, then consume the strict fixture ownership record.
+    const result = spawnSync(process.execPath, [script], {
+      env,
       encoding: 'utf8',
-      timeout: 180000,
+      timeout: 300000,
+      killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024,
     });
-    expect(result.status, result.stderr).toBe(0);
+    evidence.child = {
+      elapsedMs: Math.round(performance.now() - started),
+      error: result.error?.message ?? null,
+      signal: result.signal,
+      status: result.status,
+      stdout: result.stdout?.slice(-16000),
+      stderr: result.stderr?.slice(-6000),
+      cleanupOwner: process.env.CI_TEST_DIAGNOSTICS_DIR ? 'outer-supervisor' : 'rehearsal',
+    };
+    persistEvidence();
+    const diagnostics = JSON.stringify(evidence.child);
+    console.log(diagnostics);
+    expect(result.error, diagnostics).toBeUndefined();
+    expect(result.signal, diagnostics).toBeNull();
+    expect(result.status, diagnostics).toBe(0);
     expect(result.stdout).toContain('COMPOSE_HTTP_READY_GUARD_PASS');
     expect(result.stdout).toContain('STANDARD_COMPOSE_REHEARSAL_PASS');
     expect(result.stdout).toContain('API_WEB_COMPOSE_REHEARSAL_PASS');
+    expect(result.stdout).toContain('FIXTURE_STAGE cleanup');
+    expect(result.stdout).toContain(
+      process.env.CI_TEST_DIAGNOSTICS_DIR
+        ? 'FIXTURE_CLEANUP_DEFERRED_TO_OUTER_SUPERVISOR'
+        : 'FIXTURE_CLEANUP_PASS containers=0 networks=0',
+    );
   },
-  180000,
+  // Local: 270 s body + 20 s cleanup < 300 s child < 340 s test.
+  // CI cleanup is additionally bounded by the surviving supervisor's 30 s finalization budget.
+  340000,
 );
 
 const readinessProject = 'lk2-standard-fixture-123';
@@ -167,4 +217,54 @@ describe('strict owned HTTP rejection after Compose false success', () => {
       );
     },
   );
+});
+
+describe('owned fixture cleanup admission', () => {
+  it.each([
+    'valid',
+    'project',
+    'container-id',
+    'container-owner',
+    'container-project',
+    'network-id',
+    'network-owner',
+    'network-project',
+    'network-public',
+  ])('refuses any foreign cleanup resource: %s', (mutation) => {
+    const row = unavailableFixture();
+    const network = {
+      Id: 'c'.repeat(64),
+      Internal: true,
+      Labels: { 'fixture.owner': readinessProject, 'com.docker.compose.project': readinessProject },
+    };
+    if (mutation === 'container-id') row.Id = 'bad';
+    if (mutation === 'container-owner') row.Config.Labels['fixture.owner'] = 'foreign';
+    if (mutation === 'container-project')
+      row.Config.Labels['com.docker.compose.project'] = 'foreign';
+    if (mutation === 'network-id') network.Id = 'bad';
+    if (mutation === 'network-owner') network.Labels['fixture.owner'] = 'foreign';
+    if (mutation === 'network-project') network.Labels['com.docker.compose.project'] = 'foreign';
+    if (mutation === 'network-public') network.Internal = false;
+    const project = mutation === 'project' ? 'foreign' : readinessProject;
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import {requireOwnedFixtureResources as proof} from './scripts/rehearse-timeweb-standard-compose.js';try{proof(${JSON.stringify(project)},[${JSON.stringify(row)}],[${JSON.stringify(network)}]);process.stdout.write('OWNED');}catch(error){process.stderr.write(error.message);process.exitCode=1;}`,
+      ],
+      { encoding: 'utf8', timeout: 5000 },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(mutation === 'valid' ? 0 : 1);
+    expect(mutation === 'valid' ? result.stdout : result.stderr).toBe(
+      mutation === 'valid'
+        ? 'OWNED'
+        : mutation === 'project'
+          ? 'Invalid fixture project'
+          : mutation.startsWith('network')
+            ? 'Fixture network ownership lost'
+            : 'Fixture container ownership lost',
+    );
+  });
 });
