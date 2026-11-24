@@ -863,3 +863,15 @@
     font-size: 14px;
   }
 }
+.profile-page--v2 .profile-tournament-gender form {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.profile-page--v2 .profile-tournament-gender select,
+.profile-page--v2 .profile-tournament-gender button {
+  min-height: 44px;
+  max-width: 100%;
+  font: inherit;
+}

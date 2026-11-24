@@ -78,9 +78,11 @@ export class TournamentLocalAttempts {
       (r.operation.status === 'UNKNOWN' &&
         (r.operation.reason !== null || r.operation.generation !== null)) ||
       (r.operation.status === 'REJECTED' &&
-        (!['FULL', 'MEMBERSHIP_EXISTS', 'GENERATION_NOT_CURRENT'].includes(
-          r.operation.reason ?? '',
-        ) ||
+        (!(
+          r.operation.action === 'JOIN'
+            ? ['FULL', 'MEMBERSHIP_EXISTS', 'PLAYER_GENDER_REQUIRED', 'GENDER_NOT_ALLOWED']
+            : ['GENERATION_NOT_CURRENT']
+        ).includes(r.operation.reason ?? '') ||
           r.operation.generation !== null)) ||
       (['REGISTERED', 'LEFT'].includes(r.operation.status) &&
         r.operation.reason !== r.operation.status)

@@ -1806,6 +1806,58 @@ paths:
     $ref: ./profile-provider-read-jobs.yaml#/paths/~1{tenantKey}~1profile~1provider-read-jobs~1{jobId}~1results~1{commandId}
   /{tenantKey}/profile/provider-read-jobs/{jobId}/complete:
     $ref: ./profile-provider-read-jobs.yaml#/paths/~1{tenantKey}~1profile~1provider-read-jobs~1{jobId}~1complete
+  /{tenantKey}/profile/tournament-gender:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [profiles]
+      operationId: getTournamentPlayerGender
+      summary: Read the authenticated user's tournament profile setting
+      responses:
+        '200':
+          description: Current owner setting and revision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TournamentPlayerGenderSettings'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    put:
+      tags: [profiles]
+      operationId: updateTournamentPlayerGender
+      summary: Update the authenticated user's tournament profile setting
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TournamentPlayerGenderUpdate'
+      responses:
+        '200':
+          description: Saved setting and new revision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TournamentPlayerGenderSettings'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/profile/privacy:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -6917,6 +6969,20 @@ components:
           type: [string, 'null']
           format: date-time
           description: Recorded source timestamp, not a verification or ownership proof.
+    TournamentPlayerGenderSettings:
+      type: object
+      additionalProperties: false
+      required: [gender, version]
+      properties:
+        gender: { type: [string, 'null'], enum: [FEMALE, MALE, null] }
+        version: { type: integer, minimum: 0, maximum: 9007199254740991 }
+    TournamentPlayerGenderUpdate:
+      type: object
+      additionalProperties: false
+      required: [gender, expectedVersion]
+      properties:
+        gender: { type: [string, 'null'], enum: [FEMALE, MALE, null] }
+        expectedVersion: { type: integer, minimum: 0, maximum: 9007199254740990 }
     ProfilePrivacySettings:
       type: object
       additionalProperties: false
@@ -7761,6 +7827,7 @@ components:
         ]
       properties:
         phoneSubjectLink: { type: boolean }
+        tournamentProfileGender: { type: boolean }
         communityDirectory: { type: boolean }
         communityReadDetail: { type: boolean }
         communityReadFeed: { type: boolean }

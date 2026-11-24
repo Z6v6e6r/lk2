@@ -1510,6 +1510,28 @@ describe('PadlHubApiClient profile privacy boundary', () => {
     expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBe(firstKey);
   });
 
+  it('does not replay a tournament profile update after the active account changes', async () => {
+    let rejectNetwork!: (error: Error) => void;
+    const fetchImplementation = vi.fn<typeof fetch>(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectNetwork = reject;
+        }),
+    );
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'synthetic-first-session',
+    });
+    const update = client.updateTournamentPlayerGender({ gender: 'FEMALE', expectedVersion: 0 });
+    await vi.waitFor(() => expect(fetchImplementation).toHaveBeenCalledOnce());
+    client.setAccessToken('synthetic-second-session');
+    rejectNetwork(new TypeError('network failure'));
+    await expect(update).rejects.toThrow();
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+    expect(new Headers(fetchImplementation.mock.calls[0]?.[1]?.headers).get('Authorization')).toBe(
+      'Bearer synthetic-first-session',
+    );
+  });
+
   it('uses one idempotency key when a privacy update is retried after a network failure', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     let attempt = 0;

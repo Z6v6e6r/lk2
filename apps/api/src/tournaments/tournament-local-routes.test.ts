@@ -10,6 +10,7 @@ async function fixture(auth = true) {
       execute: vi.fn(async () => await Promise.resolve({ ok: true })),
       retry: vi.fn(async () => await Promise.resolve({ ok: true })),
       read: vi.fn(async () => await Promise.resolve({ commandsEnabled: false, result: null })),
+      playerGender: vi.fn(async () => await Promise.resolve({ gender: 'FEMALE', version: 1 })),
     };
   registerTournamentLocalRoutes(app, {
     runtime: runtime as never,
@@ -18,7 +19,7 @@ async function fixture(auth = true) {
         await Promise.resolve();
         if (auth) {
           r.tenantId = id;
-          r.padlHubClaims = { sub: id, sid: id } as never;
+          r.padlHubClaims = { sub: id, sid: id, permissions: ['profile.read'] } as never;
         }
       },
     ],
@@ -27,6 +28,35 @@ async function fixture(auth = true) {
   return { app, runtime };
 }
 describe('actual tournament route boundaries', () => {
+  it('sets the authenticated profile only and rejects a caller-provided identity', async () => {
+    const f = await fixture();
+    const url = '/user/api/v1/local/profile/tournament-gender';
+    const headers = { 'Idempotency-Key': 'original-profile-key' };
+    const setting = { gender: 'FEMALE', expectedVersion: 0 };
+    try {
+      expect(
+        (
+          await f.app.inject({
+            method: 'PUT',
+            url,
+            headers,
+            payload: { ...setting, userId: 'other' },
+          })
+        ).statusCode,
+      ).toBe(400);
+      expect(f.runtime.playerGender).not.toHaveBeenCalled();
+      const result = await f.app.inject({ method: 'PUT', url, headers, payload: setting });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['cache-control']).toBe('no-store');
+      expect(result.json()).toEqual({ gender: 'FEMALE', version: 1 });
+      expect(f.runtime.playerGender).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: id, tenantKey: 'local', userId: id, sessionId: id }),
+        { input: setting, key: headers['Idempotency-Key'] },
+      );
+    } finally {
+      await f.app.close();
+    }
+  });
   it('auth and exact body reject forged actor/sex/date before runtime', async () => {
     const f = await fixture();
     for (const body of [

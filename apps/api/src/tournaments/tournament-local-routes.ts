@@ -4,6 +4,7 @@ import {
   tournamentUuid,
   tournamentKey,
   parseTournamentLocalInput,
+  parseTournamentPlayerGenderUpdate,
 } from '@phub/domain';
 import { sendApiError } from '../http-errors.js';
 import type { TournamentLocalRuntime } from './tournament-local-runtime.js';
@@ -14,6 +15,53 @@ export function registerTournamentLocalRoutes(
     handlers: readonly ((request: FastifyRequest, reply: FastifyReply) => Promise<void> | void)[];
   },
 ) {
+  for (const method of ['GET', 'PUT'] as const)
+    app.route({
+      method,
+      url: '/user/api/v1/:tenantKey/profile/tournament-gender',
+      preHandler: [...options.handlers],
+      handler: async (request, reply) => {
+        reply.header('Cache-Control', 'no-store').header('Referrer-Policy', 'no-referrer');
+        try {
+          const claims = request.padlHubClaims;
+          const key = request.headers['idempotency-key'];
+          if (!claims || !request.tenantId) throw new TournamentLocalError('UNAUTHORIZED', 401);
+          if (!claims.permissions.includes('profile.read'))
+            throw new TournamentLocalError('TOURNAMENT_LOCAL_PROFILE_FORBIDDEN', 403);
+          if (
+            Object.keys(request.query as object).length ||
+            (method === 'GET' && request.body !== undefined) ||
+            (method === 'PUT' && !tournamentKey(key))
+          )
+            throw new TournamentLocalError('TOURNAMENT_LOCAL_PROFILE_INVALID', 400);
+          if (!options.runtime)
+            throw new TournamentLocalError('TOURNAMENT_LOCAL_PROFILE_UNAVAILABLE');
+          const { tenantKey } = request.params as { tenantKey: string };
+          const actor = {
+            tenantId: request.tenantId,
+            tenantKey,
+            userId: claims.sub,
+            sessionId: claims.sid,
+            correlationId: request.id,
+          };
+          const command =
+            method === 'PUT' && tournamentKey(key)
+              ? { input: parseTournamentPlayerGenderUpdate(request.body), key }
+              : undefined;
+          return await options.runtime.playerGender(actor, command);
+        } catch (error) {
+          return sendApiError(
+            request,
+            reply,
+            error instanceof TournamentLocalError ? error.status : 503,
+            error instanceof TournamentLocalError
+              ? error.code
+              : 'TOURNAMENT_LOCAL_PROFILE_UNAVAILABLE',
+            'Не удалось подтвердить настройки участия в турнирах.',
+          );
+        }
+      },
+    });
   for (const kind of ['command', 'read', 'retry'] as const)
     app.route({
       method: kind === 'read' ? 'GET' : 'POST',

@@ -99,4 +99,22 @@ describe('CUP local tournament exact wire', () => {
       ),
     ).toThrow();
   });
+  it.each(['PLAYER_GENDER_REQUIRED', 'GENDER_NOT_ALLOWED'])(
+    'accepts terminal JOIN refusal %s only for the original operation',
+    (reason) => {
+      const receipt = tournamentReceipt();
+      const rejected = {
+        ...receipt,
+        operation: { ...receipt.operation, outcome: 'REJECTED', reason, generation: null },
+      };
+      expect(parseTournamentReceipt(rejected, command, id).operation.reason).toBe(reason);
+      expect(() =>
+        parseTournamentReceipt(
+          { ...rejected, operation: { ...rejected.operation, action: 'LEAVE' } },
+          { ...command, action: 'LEAVE', originalJoinOperationId: id },
+          id,
+        ),
+      ).toThrow();
+    },
+  );
 });
