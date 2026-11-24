@@ -11,7 +11,7 @@ function scenario(body: string) {
       '-e',
       `
     import assert from 'node:assert/strict';
-    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade} from './scripts/timeweb-api-web-upgrade.js';
+    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade,validateScheduleRuntimeBridge,buildApiWebInstalledDescriptor} from './scripts/timeweb-api-web-upgrade.js';
     ${body}
   `,
     ],
@@ -218,7 +218,7 @@ describe('explicit API/Web upgrade boundary', () => {
       const application='fa6253a5e87bacd36502d077162b3e1fa11f8935';
       const path='deploy/timeweb/runtime-environment.contract.json';
       const config={path,status:'M',oldMode:'100644',newMode:'100644',oldType:'blob',newType:'blob',
-        oldOid:git('rev-parse',previousSha+':'+path),newOid:git('hash-object',path)};
+        oldOid:git('rev-parse',previousSha+':'+path),newOid:git('rev-parse','e771e8c7a:'+path)};
       const entries=[...parseRuntimeDelta(git('diff','--raw','--no-abbrev','--no-renames','-z',previousSha,application))
         .map(v=>({...v,oldType:v.oldMode==='000000'?null:'blob',newType:'blob'})),config];
       const identity={previousSha,candidateSha:git('rev-parse','HEAD'),candidateTree:git('rev-parse','HEAD^{tree}')};
@@ -229,6 +229,37 @@ describe('explicit API/Web upgrade boundary', () => {
       assert.throws(()=>validateRuntimeUpgrade(identity,entries,[...tail,{status:'M',path:'apps/api/src/main.ts'}]),/whole_court_runtime_bridge/);
       assert.throws(()=>validateRuntimeUpgrade(identity,entries.map(v=>v.path===path?{...v,newOid:v.oldOid}:v),tail),/whole_court_runtime_bridge/);
       assert.throws(()=>validateRuntimeUpgrade(identity,[...entries,{path:'packages/database/migrations/0123.sql'}],tail),/runtime_definition_changed/);
+    `);
+  });
+  it('admits only the pinned #695 application and controller file set', () => {
+    scenario(String.raw`
+      const {execFileSync}=await import('node:child_process');
+      const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim();
+      const previousSha='0a4d640965e921e6d06eeb22de6cc6dcae07f0b1';
+      const applicationSha='55f38b09d828f81e905f4c3b8709e29dbbba8bac';
+      const applicationTree=git('rev-parse',applicationSha+'^{tree}');
+      const identity={previousSha,applicationSha,applicationTree};
+      const definition='deploy/timeweb/runtime-environment.contract.json';
+      const regular={status:'M',oldMode:'100644',newMode:'100644',oldType:'blob',newType:'blob'};
+      const entries=[...parseRuntimeDelta(git('diff','--raw','--no-abbrev','--no-renames','-z',previousSha,applicationSha))
+        .filter(row=>row.path!==definition)
+        .map(row=>({...row,oldType:row.oldMode==='000000'?null:'blob',newType:'blob'})),
+        {...regular,path:definition,oldOid:git('rev-parse',previousSha+':'+definition),newOid:git('hash-object',definition)}];
+      const tail=[definition,'scripts/timeweb-api-web-upgrade.js','scripts/timeweb-api-web-upgrade.test.ts',
+        'scripts/timeweb-api-web-upgrade.d.ts','scripts/timeweb-commercial-runtime-contract.js',
+        'scripts/provision-timeweb-beta-runtime-secrets.js','scripts/provision-timeweb-beta-runtime-secrets.d.ts',
+        'scripts/provision-timeweb-beta-runtime-secrets.test.ts','docs/runbooks/timeweb-standard-delivery.md']
+        .map(path=>({...regular,path}));
+      validateScheduleRuntimeBridge(identity,entries,tail);
+      assert.throws(()=>validateRuntimeUpgrade(identity,entries),/callback_runtime_bridge/);
+      assert.throws(()=>validateScheduleRuntimeBridge({...identity,previousSha:applicationSha},entries,tail),/schedule_runtime_bridge/);
+      assert.throws(()=>validateScheduleRuntimeBridge({...identity,applicationTree:'f'.repeat(40)},entries,tail),/schedule_runtime_bridge/);
+      assert.throws(()=>validateScheduleRuntimeBridge(identity,entries,tail.slice(1)),/schedule_runtime_bridge/);
+      for(const change of [{path:'apps/api/src/main.ts'},{status:'A'},{status:'T'},{newMode:'100755'},{newType:'tree'}]){
+        assert.throws(()=>validateScheduleRuntimeBridge(identity,entries,[{...tail[0],...change},...tail.slice(1)]),/schedule_runtime_bridge/);
+      }
+      assert.throws(()=>validateScheduleRuntimeBridge(identity,entries.map(row=>row.path===definition?{...row,newOid:row.oldOid}:row),tail),/schedule_runtime_bridge/);
+      assert.throws(()=>validateScheduleRuntimeBridge(identity,[...entries,{...regular,path:'packages/database/migrations/0123.sql'}],tail),/runtime_definition_changed/);
     `);
   });
   it('derives independent previous overlay bytes and detects changed command inputs', () => {
@@ -529,6 +560,42 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
     scenario(
       `for(const schema of ['PHUB_TIMEWEB_API_WEB_RECEIPT_V1','PHUB_TIMEWEB_API_WEB_RECEIPT_V2'])assert.throws(()=>validateUpgradeReceipt({schema,status:'SECRET_SWAP_INTENT',planSha256:'a'.repeat(64),observedAt:new Date().toISOString()},'a'.repeat(64)));`,
     );
+  });
+  it('runs the same forward and recovery ordering in API/Web schedule mode', () => {
+    scenario(
+      `const failure='activate:web';${fixture}ops.secretMode='schedule-read';await assert.rejects(()=>runApiWebTransition(ops));assert(calls.indexOf('installSecrets')<calls.indexOf('activate:api'));assert(calls.indexOf('restoreSecrets')<calls.indexOf('restore:api'));assert(!calls.some(v=>v.includes('worker')||v.includes('migrator')));assert.equal(calls.at(-1),'journal:ROLLED_BACK');ops.secretMode='unknown';await assert.rejects(()=>runApiWebTransition(ops),/invalid_secret_mode/);`,
+    );
+  });
+  it('binds the schedule schemas to production and records the candidate set', () => {
+    scenario(`
+      const op=${JSON.stringify(operation)};
+      const predecessor='0a4d640965e921e6d06eeb22de6cc6dcae07f0b1';
+      const previousId=predecessor+'-123-1';
+      op.schema='PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_OPERATION_V1';
+      op.profile='production';
+      op.controllerSha=op.candidateSha;
+      op.expectedApi.releaseId=previousId;
+      op.expectedWeb.releaseId=previousId;
+      op.expectedCurrentSecretSetReleaseId=previousId;
+      op.candidateSecretHashes=Object.fromEntries(['api.env','worker.env','realtime.env','migrator.env','.release-identity.json'].map(k=>[k,'a'.repeat(64)]));
+      op.confirmation='DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_0A4D640965E9_0A4D640965E9_SCHEDULE_READ';
+      validateApiWebOperation(op);
+      for(const change of [v=>v.profile='beta',v=>v.controllerSha='e'.repeat(40),v=>v.expectedWeb.releaseId='b'.repeat(40)+'-12-1',v=>v.candidateSecretHashes.extra='a'.repeat(64),v=>v.confirmation=v.confirmation.replace('_SCHEDULE_READ','')]){
+        const invalid=structuredClone(op);change(invalid);assert.throws(()=>validateApiWebOperation(invalid));
+      }
+      const {createHash}=await import('node:crypto');
+      const candidateId=op.candidateSha+'-456-1';
+      const plan={schema:'PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_PLAN_V1',controllerSha:op.controllerSha,secretSetReleaseId:previousId,
+        previous:{api:op.expectedApi,web:op.expectedWeb},candidate:{api:op.expectedApi,web:op.expectedWeb},candidateSecrets:{releaseId:candidateId},unchangedServiceImages:{}};
+      const planBytes=Buffer.from(JSON.stringify(plan));
+      const planSha256=createHash('sha256').update(planBytes).digest('hex');
+      const receipt={schema:'PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_RECEIPT_V1',status:'SECRET_SWAP_INTENT',planSha256,observedAt:new Date().toISOString()};
+      validateUpgradeReceipt(receipt,planSha256,op,plan,planBytes);
+      assert.throws(()=>validateUpgradeReceipt({...receipt,schema:'PHUB_TIMEWEB_API_WEB_RECEIPT_V1'},planSha256,op,plan,planBytes));
+      const descriptor=buildApiWebInstalledDescriptor({PHUB_RELEASE_ID:previousId},plan,candidateId,'/test/receipt');
+      assert(descriptor.toString().includes('PHUB_RUNTIME_SECRET_SET_RELEASE_ID='+candidateId));
+      assert(descriptor.toString().includes('PHUB_COMPONENT_ROLLOUT_KIND=API_WEB_SCHEDULE_READ'));
+    `);
   });
 });
 

@@ -14,6 +14,11 @@ export function validateUpgradeBackup(
   profile?: string,
   cutover?: Record<string, unknown>,
 ): Record<string, unknown>;
+export function validateScheduleRuntimeBridge(
+  identity: { previousSha: string; applicationSha: string; applicationTree: string },
+  entries: Array<Record<string, string | null>>,
+  tail: Array<Record<string, string | null>>,
+): void;
 export function attestCanonicalBaseline(baseline: unknown): {
   path: string;
   bytes: Buffer;

@@ -80,6 +80,11 @@ export function parseTimewebDelegationKeyring(value, fail) {
 }
 
 export function validateTimewebCommercialRuntime(api, fail) {
+  if (
+    api.GAME_CREATE_SCHEDULE_LK1_URL !== undefined &&
+    api.GAME_CREATE_SCHEDULE_LK1_URL !== 'https://padlhub.su/'
+  )
+    fail('game_create_schedule_owner_invalid');
   const mode = api.SUBSCRIPTION_RUNTIME_WARN_MODE ?? 'OFF';
   if (!['OFF', 'WARN'].includes(mode)) fail('subscription_runtime_mode');
   if (

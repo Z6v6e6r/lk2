@@ -806,6 +806,53 @@ export function validateTimewebFcmSecretDelta(
   if (JSON.stringify(before) !== JSON.stringify(after)) fail('swap_identity_drift');
 }
 
+const SCHEDULE_ENV_LINE = 'GAME_CREATE_SCHEDULE_LK1_URL=https://padlhub.su/\n';
+
+export function validateTimewebScheduleRunningEnvironment(api, scheduleActive) {
+  const owner = api.GAME_CREATE_SCHEDULE_LK1_URL;
+  if (
+    owner !== (scheduleActive ? 'https://padlhub.su/' : undefined) ||
+    api.GAME_CREATE_SCHEDULE_QA_LOOPBACK !== undefined ||
+    api.GAME_COMMERCIAL_CREATE_ENABLED === 'true' ||
+    ['PILOT', 'OWNER_URL', 'TIMEOUT_MS'].some(
+      (suffix) => api[`GAME_WHOLE_COURT_CHECKOUT_${suffix}`] !== undefined,
+    )
+  )
+    fail('schedule_secret_policy');
+}
+
+export function validateTimewebScheduleSecretDelta(
+  previousDir,
+  candidateDir,
+  expectedUid = 0,
+  expectedGid = 0,
+) {
+  const dirs = [previousDir, candidateDir];
+  const describe = (dir) => describeTimewebRuntimeSecretSet(dir, expectedUid, expectedGid);
+  const [previous, candidate] = dirs.map(describe);
+  if (previous.releaseId === candidate.releaseId) fail('schedule_secret_identity');
+  for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
+    const [oldBytes, newBytes] = dirs.map((dir) =>
+      readRegularFile(join(dir, name), expectedUid, 0o600, 'swap_file_security'),
+    );
+    if (service === 'api') {
+      validateTimewebScheduleRunningEnvironment(parseTimewebSecretEnvironment(oldBytes), false);
+      validateTimewebScheduleRunningEnvironment(parseTimewebSecretEnvironment(newBytes), true);
+      if (
+        oldBytes.at(-1) !== 10 ||
+        !newBytes.equals(Buffer.concat([oldBytes, Buffer.from(SCHEDULE_ENV_LINE)]))
+      )
+        fail('schedule_secret_delta');
+    } else if (!oldBytes.equals(newBytes)) fail('schedule_secret_delta');
+  }
+  const [oldAfter, newAfter] = dirs.map(describe);
+  if (
+    JSON.stringify(oldAfter) !== JSON.stringify(previous) ||
+    JSON.stringify(newAfter) !== JSON.stringify(candidate)
+  )
+    fail('schedule_secret_drift');
+}
+
 // This validator prepares dormant material only. It never rotates a key, enables a
 // feature, edits a file, or provisions the corresponding LK1 verifier.
 export function validateTimewebDormantJoinSecretDelta(

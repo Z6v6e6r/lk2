@@ -1956,3 +1956,36 @@ against the matching LK1 target, the installed signing boundary and the provider
 quote. The canonical application upgrade preserves the existing secret set.
 Keep both sides of the original checkout available until its transaction is
 resolved. A release rollback cannot reverse a provider booking or payment.
+
+### LK1 schedule and booking wizard (#695)
+
+The `--critical-api-web` schedule-read profile updates API and Web in that order.
+It accepts only the installed `0a4d640965e9` predecessor, the reviewed #695
+application tree and the exact controller files named by the bridge. It checks
+the original and candidate blobs of the two OpenAPI files and the runtime
+environment contract. Publish the final main revision and enroll that same SHA.
+Worker and Realtime keep their existing identities. The migrator stays off.
+
+Before activation, verify the LK1 schedule reader from Timeweb. Without a bearer
+the exact route must return 401. With a session-bound user bearer it must return
+real schedule data. Use synthetic test fixtures for rehearsal and collect
+redacted evidence for production smoke. A missing Residency quote does not
+prevent schedule use.
+
+Use the normal verified production backup and monitoring receipts. Prepare a
+candidate runtime set using the existing provisioner in the candidate directory
+with only `GAME_CREATE_SCHEDULE_LK1_URL=https://padlhub.su/` appended to `api.env`
+and the new release identity. Worker, Realtime and Migrator environment bytes
+must match the installed set. The controller rejects the QA loopback setting
+and active paid-create flags.
+
+Prepare the usual V1 API/Web inputs using
+`PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_OPERATION_V1`, `profile=production`,
+`expectedCurrentSecretSetReleaseId`, all five `candidateSecretHashes`, and the
+`_SCHEDULE_READ` confirmation suffix. The operation binds the candidate set and
+the controller records the previous and candidate files in the plan. The
+existing atomic swap runs before API activation. On failure it restores the
+previous runtime set before restoring the previous API. The shared and
+provisioner locks remain held until terminal reconciliation attests the
+matching release and runtime set. Verify live slots, tournaments and the
+absence of the payment pilot after activation, without creating a booking.
