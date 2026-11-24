@@ -128,6 +128,11 @@ const GamesPage = lazy(() =>
 const CreateGamePage = lazy(() =>
   import('./CreateGamePage.js').then((module) => ({ default: module.CreateGamePage })),
 );
+const GameCreateSchedulePage = lazy(() =>
+  import('./GameCreateSchedulePage.js').then((module) => ({
+    default: module.GameCreateSchedulePage,
+  })),
+);
 const GiftCertificatesPage = lazy(() =>
   import('./GiftCertificatesPage.js').then((module) => ({ default: module.GiftCertificatesPage })),
 );
@@ -3382,21 +3387,28 @@ export function App({
     if (protectedRoute.kind === 'game-create') {
       if (realAccountPreview) {
         return (
-          <main className="app-shell" aria-labelledby="create-game-read-only-title">
-            <section className="fh-section-state">
-              <h1 id="create-game-read-only-title">Создание игр недоступно</h1>
-              <p>В режиме реального аккаунта доступно только чтение.</p>
-              <a className="secondary-button" href="/games">
-                К играм
-              </a>
-            </section>
-          </main>
+          <GameCreateSchedulePage
+            key={`${context.tenant.id}:${context.user.id}`}
+            gateway={gateway}
+          />
         );
       }
+      const query = new URLSearchParams(window.location.search);
+      const scheduleView = query.get('view') === 'schedule' && !query.has('paymentReturn');
       const createGamePrincipal = {
         tenantId: state.session.context.tenant.id,
         userId: state.session.context.user.id,
       };
+      if (scheduleView) {
+        return (
+          <CreateGamePage
+            key={`${createGamePrincipal.tenantId}:${createGamePrincipal.userId}`}
+            gateway={gateway}
+            principal={createGamePrincipal}
+            useSchedule
+          />
+        );
+      }
       if (clientPlatform === 'android')
         return (
           <QuarterCreatePanel
@@ -3472,8 +3484,7 @@ export function App({
         typeof window === 'undefined'
           ? null
           : new URLSearchParams(window.location.search).get('event');
-      if (clientPlatform === 'android' && !tournamentId)
-        return <TournamentDirectoryPage gateway={gateway} />;
+      if (!tournamentId) return <TournamentDirectoryPage gateway={gateway} />;
       return (
         <TournamentDetailPage
           key={`${context.tenant.id}:${context.user.id}`}

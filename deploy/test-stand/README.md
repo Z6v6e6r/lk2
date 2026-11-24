@@ -87,3 +87,33 @@ opens only after the Worker finishes the game and joining closes 30 minutes befo
 minutes). It needs four synthetic phones; a fifth enables the non-participant check. Phones
 `+79990000004` and `+79990000005` were added to `stand.env.example`; an existing host `stand.env` is
 never overwritten, so add them to `AUTH_DEV_EXTRA_PHONES_E164` there.
+
+## Read-only LK1 schedule rehearsal
+
+The opt-in schedule screen is `/games/new?view=schedule`. It shows stations from LK2 and
+queries the LK1 owner only after choosing a station, date and duration. LK1 rechecks the
+selected slot before quoting. Quotes expire in at most 30 seconds. The local real-account
+preview disables commands. In a command-enabled contour the screen exposes the existing
+whole-court checkout only for the same actor, station, bound court, window and amount as
+the server's approved pilot offer. It uses the existing create attempt and payment return.
+
+Use `lk1-create-schedule.qa.yaml` only with a separate local QA project that has the matching LK2
+API/Web build and the exact LK1 schedule worktree. Install the LK1 lockfile dependencies in that
+worktree before starting it. Pin `LK1_SCHEDULE_QA_NODE_IMAGE` to the QA Node digest and set
+`LK1_SCHEDULE_QA_SOURCE` to the verified worktree path. The sidecar shares the API network
+namespace and binds only API loopback. It has no published port or separate credentials. Validate
+the complete compose model with `docker compose config --quiet` for the selected project.
+
+In a staging-mode local project the overlay enables the explicit QA loopback setting. The API
+requires `VIVA_OAUTH_ENABLED=true`, a supported Viva mode (`sandbox` or `production`) and the
+`iSkq6G` provider binding. The stock mock `stand.env` keeps the API reader disabled. Use an
+approved dedicated real-account read contour for live data; keep booking and payment disabled.
+
+The authenticated check needs a signed-in Viva user with games access and a QA tenant with the
+matching published station aliases and Viva binding. Existing synthetic authentication may only
+prove the denial path. Access tokens stay server-side. The standard OAuth delegation may refresh
+and record credentials as part of session handling. QA checks must stop before reservation.
+The sidecar health check establishes the local HTTP and authentication gate. Check the exact
+station, two dates, an available slot, the whole-court amount and residency status separately
+with the approved QA account. Use the corresponding real-account or approved provider contour
+when recording that evidence.

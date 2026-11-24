@@ -814,19 +814,38 @@ describe('PadlHub web authentication', () => {
     expect(screen.queryByRole('textbox', { name: 'Номер телефона' })).not.toBeInTheDocument();
   });
 
-  it('does not render the create game command in the real account preview', async () => {
-    window.history.replaceState({}, '', '/games/new');
+  it('opens the read-only schedule from the usual game creation entry in the real account preview', async () => {
+    window.history.replaceState({}, '', '/games/new?new=1');
     vi.stubEnv('DEV', true);
     vi.stubEnv('VITE_LK2_REAL_ACCOUNT', '1');
-    render(
-      <App
-        gateway={createGateway({ restoreSession: vi.fn().mockResolvedValue(session) })}
-        tenantKey="padlhub"
-      />,
-    );
+    const stationId = 'a8df730b-6a67-41a5-8772-48bca84f73bc';
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listLocations: vi.fn().mockResolvedValue({
+        items: [
+          {
+            id: stationId,
+            title: 'Селигерская',
+            city: 'Москва',
+            courtCount: 3,
+            coverImageUrl: null,
+            route: `/locations/${stationId}`,
+          },
+        ],
+      }),
+      listGameCreateSlots: vi.fn().mockResolvedValue({ slots: [] }),
+      getGameCreateScheduleQuote: vi.fn(),
+      createGame: vi.fn(),
+    });
+    render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Создание игр недоступно' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'К играм' })).toHaveAttribute('href', '/games');
+    expect(await screen.findByRole('heading', { name: 'Выберите место' })).toBeVisible();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Селигерская' }));
+    expect(await screen.findByRole('heading', { name: 'Дата и время' })).toBeVisible();
+    expect(gateway.listGameCreateSlots).toHaveBeenCalledWith(
+      expect.objectContaining({ stationId }),
+    );
+    expect(gateway.createGame).not.toHaveBeenCalled();
   });
 
   it('disables profile save commands in the real account preview', async () => {
@@ -3905,6 +3924,45 @@ it('native game detail exposes only reviewed participation controls', async () =
   expect(screen.queryByRole('button', { name: /Вступить|Отменить игру/ })).not.toBeInTheDocument();
   expect(gateway.joinGame).not.toHaveBeenCalled();
 });
+it('opens the dated tournament directory on Web without an event in the URL', async () => {
+  window.history.replaceState({}, '', '/tournaments');
+  const tournament = {
+    id: '11111111-1111-4111-8111-111111111111',
+    title: 'Тестовый турнир',
+    format: 'Мексикано',
+    startsAt: '2035-04-02T12:00:00Z',
+    endsAt: '2035-04-02T14:00:00Z',
+    venue: 'Тестовый корт',
+    trainerName: null,
+    levelRange: null,
+    organizer: null,
+    capacity: { total: 8, registered: 0, open: 8, waitlist: 0 },
+    status: 'REGISTRATION' as const,
+    route: '/tournaments',
+  };
+  const listPublicTournamentSummaries = vi
+    .fn<NonNullable<AuthGateway['listPublicTournamentSummaries']>>()
+    .mockResolvedValue({ items: [tournament] });
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    listPublicTournamentSummaries,
+    getPublicTournamentSummary: vi.fn(),
+    commandTournament: vi.fn(),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="web" />);
+
+  expect(await screen.findByRole('heading', { name: 'Турниры' })).toBeVisible();
+  expect(await screen.findByRole('link', { name: tournament.title })).toHaveAttribute(
+    'href',
+    `/tournaments?event=${tournament.id}`,
+  );
+  expect(listPublicTournamentSummaries).toHaveBeenCalledWith(
+    expect.objectContaining({ availability: 'INCLUDE_FULL' }),
+  );
+  expect(gateway.getPublicTournamentSummary).not.toHaveBeenCalled();
+  expect(gateway.commandTournament).not.toHaveBeenCalled();
+});
+
 describe('Android concrete tournament navigation and custody', () => {
   it('reachable dated directory → detail → UNKNOWN → reload → original retry → LEAVE', async () => {
     const id = '11111111-1111-4111-8111-111111111111',
