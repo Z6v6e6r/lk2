@@ -577,10 +577,11 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
       op.expectedApi.releaseId=previousId;
       op.expectedWeb.releaseId=previousId;
       op.expectedCurrentSecretSetReleaseId=previousId;
+      op.expiresAt='2030-01-01T00:00:00.000Z';
       op.candidateSecretHashes=Object.fromEntries(['api.env','worker.env','realtime.env','migrator.env','.release-identity.json'].map(k=>[k,'a'.repeat(64)]));
       op.confirmation='DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_0A4D640965E9_0A4D640965E9_SCHEDULE_READ';
       validateApiWebOperation(op);
-      for(const change of [v=>v.profile='beta',v=>v.controllerSha='e'.repeat(40),v=>v.expectedWeb.releaseId='b'.repeat(40)+'-12-1',v=>v.candidateSecretHashes.extra='a'.repeat(64),v=>v.confirmation=v.confirmation.replace('_SCHEDULE_READ','')]){
+      for(const change of [v=>v.profile='beta',v=>v.controllerSha='e'.repeat(40),v=>v.expectedWeb.releaseId='b'.repeat(40)+'-12-1',v=>v.candidateSecretHashes.extra='a'.repeat(64),v=>delete v.expiresAt,v=>v.expiresAt='2030-02-30T00:00:00.000Z',v=>v.confirmation=v.confirmation.replace('_SCHEDULE_READ','')]){
         const invalid=structuredClone(op);change(invalid);assert.throws(()=>validateApiWebOperation(invalid));
       }
       const {createHash}=await import('node:crypto');

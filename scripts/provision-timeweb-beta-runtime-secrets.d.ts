@@ -67,6 +67,7 @@ export function validateTimewebDormantJoinSecretDelta(
 export function validateTimewebScheduleRunningEnvironment(
   api: TimewebRuntimeEnvironment,
   scheduleActive: boolean,
+  expected?: TimewebRuntimeEnvironment,
 ): void;
 export function validateTimewebScheduleSecretDelta(
   previousDir: string,

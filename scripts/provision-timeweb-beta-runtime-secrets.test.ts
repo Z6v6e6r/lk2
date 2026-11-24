@@ -965,6 +965,15 @@ describe('LK1 schedule runtime set', () => {
     expect(() => validateTimewebScheduleRunningEnvironment({}, true)).toThrow(
       'schedule_secret_policy',
     );
+    const sealed = { GAME_CREATE_SCHEDULE_LK1_URL: owner, GAMES_COMMANDS_ENABLED: 'false' };
+    expect(() => validateTimewebScheduleRunningEnvironment(sealed, true, sealed)).not.toThrow();
+    expect(() =>
+      validateTimewebScheduleRunningEnvironment(
+        { ...sealed, GAMES_COMMANDS_ENABLED: 'true' },
+        true,
+        sealed,
+      ),
+    ).toThrow('schedule_running_environment');
   });
 });
 

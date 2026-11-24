@@ -1972,17 +1972,30 @@ real schedule data. Use synthetic test fixtures for rehearsal and collect
 redacted evidence for production smoke. A missing Residency quote does not
 prevent schedule use.
 
-Use the normal verified production backup and monitoring receipts. Prepare a
-candidate runtime set using the existing provisioner in the candidate directory
+Use the verified production backup and monitoring receipts for the current
+predecessor. Confirm that the backup producer admits this predecessor before
+preparing a rollout request.
+
+Prepare a candidate runtime set
 with only `GAME_CREATE_SCHEDULE_LK1_URL=https://padlhub.su/` appended to `api.env`
 and the new release identity. Worker, Realtime and Migrator environment bytes
 must match the installed set. The controller rejects the QA loopback setting
-and active paid-create flags.
+and active paid-create flags. Use the exported
+`provisionTimewebBetaRuntimeSecrets` function from the clean candidate checkout
+under `/opt/phub/timeweb-beta/releases/<candidate-release-id>/source`. Pass the
+approved `sourceDir`, candidate `releaseId`, exact `expectedSourceSha` and
+`expectedSourceTree`, the canonical host/tenant, `expectedCurrentReleaseId: null`,
+`targetDir: /etc/phub/timeweb-beta-candidates/<candidate-release-id>/timeweb-beta`
+and `backupRoot: /etc/phub/timeweb-beta-candidates/<candidate-release-id>/backups`.
+The provisioner CLI always targets the live directory. Use the exported function
+with both isolated paths for this preparation.
 
 Prepare the usual V1 API/Web inputs using
 `PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_OPERATION_V1`, `profile=production`,
 `expectedCurrentSecretSetReleaseId`, all five `candidateSecretHashes`, and the
-`_SCHEDULE_READ` confirmation suffix. The operation binds the candidate set and
+`_SCHEDULE_READ` confirmation suffix. Set `expiresAt` in UTC with 20–60 minutes
+remaining at entry and allow time for the complete observation window. The
+operation binds the candidate set and
 the controller records the previous and candidate files in the plan. The
 existing atomic swap runs before API activation. On failure it restores the
 previous runtime set before restoring the previous API. The shared and

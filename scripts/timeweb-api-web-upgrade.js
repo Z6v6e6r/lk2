@@ -179,6 +179,11 @@ const SCHEDULE_RECEIPT = 'PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_RECEIPT_V1';
 const SCHEDULE_INSTALLED_KIND = 'API_WEB_SCHEDULE_READ';
 const SCHEDULE_PHASES = ['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'BASELINE_INTENT'];
 const isScheduleOperation = (value) => value?.schema === SCHEDULE_OPERATION;
+function validateScheduleExpiry(value, minimumMs = 0) {
+  const remaining = Date.parse(value) - Date.now();
+  if (!Number.isFinite(remaining) || remaining <= minimumMs || remaining > 3_600_000)
+    fail('schedule_operation_expired');
+}
 const CONTROLLER_FILES = new Set([
   'scripts/run-timeweb-standard-delivery.js',
   'scripts/timeweb-critical-web.js',
@@ -375,11 +380,15 @@ export function validateApiWebOperation(value) {
   if (isProductionCutover(value)) return validateProductionCutover(value);
   if (isJoinOperation(value)) return validateJoinOperation(value);
   if (isScheduleOperation(value)) {
-    const { expectedCurrentSecretSetReleaseId, candidateSecretHashes, ...base } = value;
+    const { expectedCurrentSecretSetReleaseId, candidateSecretHashes, expiresAt, ...base } = value;
     if (
       value.profile !== 'production' ||
       value.controllerSha !== value.candidateSha ||
       !ID.test(expectedCurrentSecretSetReleaseId ?? '') ||
+      typeof expiresAt !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(expiresAt) ||
+      !Number.isFinite(Date.parse(expiresAt)) ||
+      new Date(expiresAt).toISOString() !== expiresAt ||
       [value.expectedApi, value.expectedWeb].some(
         (previous) => previous?.releaseId?.slice(0, 40) !== WHOLE_COURT_PREDECESSOR,
       ) ||
@@ -3179,6 +3188,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const excludedTargets = () => excluded(targets);
   if (mode === 'deploy' && cutover) validateProductionCutover(op, true);
   const profile = join ? 'production' : (op.profile ?? 'beta');
+  if (mode === 'deploy' && schedule) validateScheduleExpiry(op.expiresAt, 20 * 60_000);
   if (mode === 'deploy' && join) validateJoinOperation(op, true);
   if (mode === 'deploy' && isDirectOperation(op)) validateDirectApiWebOperation(op, true);
   if (
@@ -3815,20 +3825,27 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   };
   const attestRunningEnv = () => {
     if (!swapsSecrets) return;
-    const rows = JSON.parse(docker(['inspect', inspect('api').id]));
-    const entries = rows[0].Config.Env.map((v) => [
-      v.slice(0, v.indexOf('=')),
-      v.slice(v.indexOf('=') + 1),
-    ]);
-    if (new Set(entries.map(([k]) => k)).size !== entries.length) fail('running_env_duplicates');
-    const running = Object.fromEntries(entries);
-    if (join)
-      validateJoinRunningEnvironment(
-        running,
-        parseTimewebSecretEnvironment(read(`${RUNTIME}/api.env`)),
+    const api = inspect('api');
+    const rows = JSON.parse(docker(['inspect', api.id]));
+    const parseDockerEnv = (values) => {
+      const entries = values.map((v) => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)]);
+      if (new Set(entries.map(([key]) => key)).size !== entries.length)
+        fail('running_env_duplicates');
+      return Object.fromEntries(entries);
+    };
+    const running = parseDockerEnv(rows[0].Config.Env);
+    const file = parseTimewebSecretEnvironment(read(`${RUNTIME}/api.env`));
+    if (join) validateJoinRunningEnvironment(running, file);
+    if (schedule) {
+      const defaults = JSON.parse(
+        docker(['image', 'inspect', '--format={{json .Config.Env}}', api.image]),
       );
-    if (schedule)
-      validateTimewebScheduleRunningEnvironment(running, expectedSecrets === plan.candidateSecrets);
+      validateTimewebScheduleRunningEnvironment(
+        running,
+        expectedSecrets === plan.candidateSecrets,
+        { ...parseDockerEnv(defaults ?? []), ...file },
+      );
+    }
   };
   let installedBaselineSha256;
   const journal = async (status) =>
@@ -3931,6 +3948,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
                 op.verifierPublicKeySha256,
               );
             } else {
+              validateScheduleExpiry(op.expiresAt, 16 * 60_000);
               validateTimewebScheduleSecretDelta(RUNTIME, candidateDir);
             }
             transitionPreparedTimewebRuntimeSecrets({
@@ -3988,6 +4006,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         if (!equal(inspect(service), plan.previous[service])) fail('abort_baseline_changed');
     },
     installBaseline: async () => {
+      if (schedule) validateScheduleExpiry(op.expiresAt);
       if (swapsSecrets) {
         attest();
         attestJoinBackup();
@@ -4037,6 +4056,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     },
     activate: async (s) => {
       if (join) validateJoinOperation(op, true);
+      if (schedule) validateScheduleExpiry(op.expiresAt);
       if (cutover) validateProductionCutover(op, true);
       if (isDirectOperation(op)) validateDirectApiWebOperation(op, true);
       attest();
@@ -4053,6 +4073,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         fail('worker_changed_during_activation');
     },
     observe: async () => {
+      if (schedule) validateScheduleExpiry(op.expiresAt, 900_000);
       if (isDirectOperation(op)) {
         await callbackProbe();
         const direct = await observeDirectApiWeb({
