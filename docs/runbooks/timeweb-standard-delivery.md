@@ -1956,3 +1956,108 @@ against the matching LK1 target, the installed signing boundary and the provider
 quote. The canonical application upgrade preserves the existing secret set.
 Keep both sides of the original checkout available until its transaction is
 resolved. A release rollback cannot reverse a provider booking or payment.
+
+### LK1 schedule and booking wizard (#695)
+
+The `--critical-api-web` schedule-read profile updates API and Web in that order.
+It accepts only the installed `0a4d640965e9` predecessor, the reviewed #695
+application tree and the exact controller files named by the bridge. It checks
+the original and candidate blobs of the two OpenAPI files and the runtime
+environment contract. Publish the final main revision and enroll that same SHA.
+Worker and Realtime keep their existing identities. The migrator stays off.
+
+Before activation, verify the LK1 schedule reader from Timeweb. The exact
+route must return 401 without a signature, even when a bearer is present.
+LK1 needs the public fields matching the existing Timeweb RS256 actor signer.
+Verify the key fingerprint, issuer, audience and key ID. Keep private signing
+material on LK2. The schedule scope binds the actor, session, bearer and full
+query. After API activation, confirm an authenticated browser session receives
+real schedule slots. A missing Residency quote does not prevent schedule use.
+
+Install the reviewed backup helper with its normal source and installation
+proof. Use `PHUB_TIMEWEB_BACKUP_SCHEDULE_0A4_DISK_V1` on Timeweb when the
+bounded disk profile fits. It requires 42,681,237,504 free bytes on the
+filesystem shared by the Timeweb delivery root and its backups directory,
+at least 4 GiB of available memory, and a database of at most 24 GiB.
+This schedule profile allocates a 28 GiB restore image and keeps the existing
+6.5 GiB dump cap and 5.25 GiB filesystem reserve.
+Confirm actual placement and capacity before executing.
+Bind the exact current API and PostgreSQL identities, database target, 122-row
+ledger hash, controller source, candidate publication run and expiry. In this
+profile the predecessor attestation hash is the exact container-boundary
+hash. The confirmation is
+`BACKUP_RESTORE_SCHEDULE_DISK_<CANDIDATE_FIRST_12_UPPER>_KEEP_API_0A4D640965E9`.
+The bounded engine uses a serial read-only dump, an encrypted temporary restore
+volume, an isolated PostgreSQL container and matching account and ledger
+witnesses. It publishes the V2 receipt only after cleanup and writes into
+the candidate `-api-web` directory. After an interruption use
+`--reconcile-disk` against the retained request. It never repeats the dump.
+
+Select `PHUB_TIMEWEB_BACKUP_SCHEDULE_0A4_API_WEB_V1` explicitly only if the
+tmpfs profile's measured memory and disk requirements are both met.
+Its confirmation omits `DISK_` and its recovery uses
+`--reconcile-cutover-tmpfs`. No profile automatically falls back to another.
+
+If the owner explicitly waives a repeat restore for this schedule rollout,
+reuse the canonical fresh-dump producer with the exact installed `0a4d640965e9`
+baseline. Build the request from the retained installed backup template with
+`build-timeweb-canonical-backup-request.py --schedule-owner-approved-at <UTC>`.
+The producer binds the authorization, prior verified restore legacy ledger,
+database identity and exact new release. It takes a new snapshot, reads the dump
+table of contents with PostgreSQL 16, and retains the prior full restore proof.
+Its receipt records `freshDumpRestored: false`. The producer requires the 6.5 GiB
+dump budget and 5.25 GiB filesystem reserve before it starts. Use the canonical
+fresh-dump reconciliation after interruption, with the exact retained request.
+
+The API/Web request includes `backupOperationSha256`. The controller checks
+the retained request, the dump and fresh receipt, helper custody and the
+terminal cleanup record against that hash.
+
+Prepare a candidate runtime set
+with only `GAME_CREATE_SCHEDULE_LK1_URL=https://padlhub.su/` appended to `api.env`
+and the new release identity. Worker, Realtime and Migrator environment bytes
+must match the installed set. The controller rejects the QA loopback setting
+and active paid-create flags. Use the exported
+`provisionTimewebBetaRuntimeSecrets` function from the clean candidate checkout
+under `/opt/phub/timeweb-beta/releases/<candidate-release-id>/source`. Pass the
+approved `sourceDir`, candidate `releaseId`, exact `expectedSourceSha` and
+`expectedSourceTree`, the canonical host/tenant, `expectedCurrentReleaseId: null`,
+`targetDir: /etc/phub/timeweb-beta-candidates/<candidate-release-id>/timeweb-beta`
+and `backupRoot: /etc/phub/timeweb-beta-candidates/<candidate-release-id>/backups`.
+The provisioner CLI always targets the live directory. Use the exported function
+with both isolated paths for this preparation.
+
+Prepare the usual V1 API/Web inputs using
+`PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_OPERATION_V1`, `profile=production`,
+`expectedCurrentSecretSetReleaseId`, all five `candidateSecretHashes`, and the
+`_SCHEDULE_READ` confirmation suffix. Set `expiresAt` in UTC with 20–60 minutes
+remaining at entry and allow time for the complete observation window. The
+operation binds the candidate set and
+the controller records the previous and candidate files in the plan. The
+existing atomic swap runs before API activation. On failure it restores the
+previous runtime set before restoring the previous API. The shared and
+provisioner locks remain held until terminal reconciliation attests the
+matching release and runtime set. Verify live slots, tournaments and the
+absence of the payment pilot after activation, without creating a booking.
+
+For the owner-authorized #695 rollout from the pinned `0a4d640965e9` predecessor,
+use `_SCHEDULE_READ_WITHOUT_PROVIDER_MONITORING` and include an
+`ownerProviderMonitoringWaiver` in the root-owned operation. Its closed schema is
+`PHUB_TIMEWEB_SCHEDULE_PROVIDER_MONITORING_WAIVER_V1` with authority
+`ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1`, `messageSha256`, `reference`,
+`receivedAt` and `scopeSha256`. Bind the original owner message digest and
+`codex-user-message-sha256:<messageSha256>` reference. Compute `scopeSha256`
+using `scheduleMonitoringScopeSha256` over the exact operation. This binds the
+decision to the target, candidate and controller, publication, manifest,
+predecessor, runtime set, backup and expiry. The decision expires with the
+operation, within 24 hours of receipt. Other releases keep their own policies.
+
+The controller skips Timeweb provider readbacks and the alert drill in this
+mode. It still requires 61 private and public API/Web probe rounds over at
+least 900 seconds, p95 latency below 1500 ms for API and 1000 ms for Web, and
+the existing runtime, backup, unchanged-component and rollback checks. The
+receipt binds the waiver digest and records `NOT_CHECKED_OWNER_SKIPPED` for
+provider monitoring and `NOT_REQUIRED_OWNER_WAIVED` for the alert test.
+Successful reconciliation verifies the retained direct observations, waiver
+and installed runtime evidence. Standard schedule operations retain the
+required Timeweb evidence and the `_SCHEDULE_READ` suffix.

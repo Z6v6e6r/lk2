@@ -21,6 +21,8 @@ import {
   describeTimewebRuntimeSecretSet,
   validateTimewebFcmSecretDelta,
   validateTimewebDormantJoinSecretDelta,
+  validateTimewebScheduleRunningEnvironment,
+  validateTimewebScheduleSecretDelta,
   transitionPreparedTimewebRuntimeSecrets,
   parseTimewebSecretEnvironment,
   provisionTimewebBetaRuntimeSecrets,
@@ -879,6 +881,115 @@ describe('commercial JOIN API environment contract', () => {
     expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
       'unknown_key',
     );
+  });
+});
+
+describe('LK1 schedule runtime set', () => {
+  const owner = 'https://padlhub.su/';
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const signing = {
+    SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({ 'test-kid': privateKey }),
+    SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'test-kid',
+    SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'test-lk2',
+    SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'test-lk1',
+  };
+  it('admits only the canonical API owner', () => {
+    const env = safeRuntimeEnvironments();
+    env.api!.GAME_CREATE_SCHEDULE_LK1_URL = owner;
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
+      'subscription_runtime_boundary_incomplete',
+    );
+    Object.assign(env.api!, signing);
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).not.toThrow();
+    for (const value of [
+      'https://padlhub.su',
+      'https://padlhub.su/path',
+      'https://padlhub.su/?x=1',
+      'https://user@padlhub.su/',
+      'http://127.0.0.1:24811/',
+    ]) {
+      env.api!.GAME_CREATE_SCHEDULE_LK1_URL = value;
+      expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
+        'game_create_schedule_owner_invalid',
+      );
+    }
+    env.api!.GAME_CREATE_SCHEDULE_LK1_URL = owner;
+    env.worker!.GAME_CREATE_SCHEDULE_LK1_URL = owner;
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
+      'unknown_key',
+    );
+    delete env.worker!.GAME_CREATE_SCHEDULE_LK1_URL;
+    env.api!.GAME_CREATE_SCHEDULE_QA_LOOPBACK = 'true';
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
+      'unknown_key',
+    );
+  });
+
+  it('binds the one API append and refuses extra flags or changes to excluded services', () => {
+    const f = fixture();
+    const candidate = join(f.root, 'schedule-candidate');
+    const before = safeRuntimeEnvironments();
+    Object.assign(before.api!, signing);
+    const nextId = `${'9'.repeat(40)}-777-1`;
+    for (const [path, id] of [
+      [f.targetDir, releaseId],
+      [candidate, nextId],
+    ] as const) {
+      mkdirSync(path, { mode: 0o700, recursive: true });
+      for (const [service, values] of Object.entries(before))
+        writeFileSync(join(path, service + '.env'), encodeEnvironment(values), { mode: 0o600 });
+      writeFileSync(
+        join(path, '.release-identity.json'),
+        JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId: id }) + '\n',
+        { mode: 0o600 },
+      );
+    }
+    const apiPath = join(candidate, 'api.env');
+    const previous = readFileSync(apiPath, 'utf8');
+    const expected = previous + `GAME_CREATE_SCHEDULE_LK1_URL=${owner}\n`;
+    const validate = () => validateTimewebScheduleSecretDelta(f.targetDir, candidate, uid, gid);
+    writeFileSync(apiPath, expected);
+    expect(validate).not.toThrow();
+    for (const changed of [
+      expected + 'GAME_CREATE_SCHEDULE_QA_LOOPBACK=true\n',
+      expected + 'GAME_WHOLE_COURT_CHECKOUT_PILOT=synthetic\n',
+      expected + 'UNEXPECTED_TEST_VALUE=1\n',
+      expected.replace(owner, 'https://elsewhere.example.test/'),
+      expected.replace('APP_ENV=staging', 'APP_ENV=development'),
+    ]) {
+      writeFileSync(apiPath, changed);
+      expect(validate).toThrow();
+    }
+    writeFileSync(apiPath, expected);
+    for (const service of ['worker', 'realtime', 'migrator']) {
+      const path = join(candidate, service + '.env');
+      const original = readFileSync(path);
+      writeFileSync(path, Buffer.concat([original, Buffer.from('UNEXPECTED_TEST_VALUE=1\n')]));
+      expect(validate).toThrow('schedule_secret_delta');
+      writeFileSync(path, original);
+    }
+    expect(() =>
+      validateTimewebScheduleRunningEnvironment(
+        { GAME_CREATE_SCHEDULE_LK1_URL: owner, GAME_COMMERCIAL_CREATE_ENABLED: 'true' },
+        true,
+      ),
+    ).toThrow('schedule_secret_policy');
+    expect(() => validateTimewebScheduleRunningEnvironment({}, true)).toThrow(
+      'schedule_secret_policy',
+    );
+    const sealed = { GAME_CREATE_SCHEDULE_LK1_URL: owner, GAMES_COMMANDS_ENABLED: 'false' };
+    expect(() => validateTimewebScheduleRunningEnvironment(sealed, true, sealed)).not.toThrow();
+    expect(() =>
+      validateTimewebScheduleRunningEnvironment(
+        { ...sealed, GAMES_COMMANDS_ENABLED: 'true' },
+        true,
+        sealed,
+      ),
+    ).toThrow('schedule_running_environment');
   });
 });
 

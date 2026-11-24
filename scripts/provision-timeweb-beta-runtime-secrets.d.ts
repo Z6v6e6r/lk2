@@ -64,6 +64,17 @@ export function validateTimewebDormantJoinSecretDelta(
   expectedUid?: number,
   expectedGid?: number,
 ): void;
+export function validateTimewebScheduleRunningEnvironment(
+  api: TimewebRuntimeEnvironment,
+  scheduleActive: boolean,
+  expected?: TimewebRuntimeEnvironment,
+): void;
+export function validateTimewebScheduleSecretDelta(
+  previousDir: string,
+  candidateDir: string,
+  expectedUid?: number,
+  expectedGid?: number,
+): void;
 export function transitionPreparedTimewebRuntimeSecrets(options: {
   direction: 'install' | 'restore';
   targetDir: string;
