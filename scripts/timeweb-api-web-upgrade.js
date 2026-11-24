@@ -3518,7 +3518,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         ? createOwnerDirectedBinding(op, hash(opBytes))
         : isWaivedRosterCutover(op)
           ? null
-          : validateMonitoring(transaction, profile, { fresh: cutover })
+          : validateMonitoring(transaction, profile, { fresh: cutover || schedule })
       : null;
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
@@ -4131,7 +4131,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         validateOwnerDirectedBinding(op, plan.monitoring, hash(opBytes));
       else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
       else {
-        const finalMonitoring = validateMonitoring(transaction, profile);
+        const finalMonitoring = validateMonitoring(transaction, profile, { fresh: schedule });
         durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
         durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
       }

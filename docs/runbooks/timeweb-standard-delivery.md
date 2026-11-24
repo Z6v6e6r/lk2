@@ -1973,8 +1973,10 @@ redacted evidence for production smoke. A missing Residency quote does not
 prevent schedule use.
 
 Use the verified production backup and monitoring receipts for the current
-predecessor. Confirm that the backup producer admits this predecessor before
-preparing a rollout request.
+predecessor. The existing V1 backup producer admits the earlier `0d6078be`
+baseline, and the canonical fresh-dump producer uses a different receipt type.
+The schedule release remains blocked until an approved producer and this
+controller can verify the same fresh backup and restore proof for `0a4d640965e9`.
 
 Prepare a candidate runtime set
 with only `GAME_CREATE_SCHEDULE_LK1_URL=https://padlhub.su/` appended to `api.env`
