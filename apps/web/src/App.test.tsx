@@ -814,19 +814,38 @@ describe('PadlHub web authentication', () => {
     expect(screen.queryByRole('textbox', { name: 'Номер телефона' })).not.toBeInTheDocument();
   });
 
-  it('does not render the create game command in the real account preview', async () => {
-    window.history.replaceState({}, '', '/games/new');
+  it('opens the read-only schedule from the usual game creation entry in the real account preview', async () => {
+    window.history.replaceState({}, '', '/games/new?new=1');
     vi.stubEnv('DEV', true);
     vi.stubEnv('VITE_LK2_REAL_ACCOUNT', '1');
-    render(
-      <App
-        gateway={createGateway({ restoreSession: vi.fn().mockResolvedValue(session) })}
-        tenantKey="padlhub"
-      />,
-    );
+    const stationId = 'a8df730b-6a67-41a5-8772-48bca84f73bc';
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listLocations: vi.fn().mockResolvedValue({
+        items: [
+          {
+            id: stationId,
+            title: 'Селигерская',
+            city: 'Москва',
+            courtCount: 3,
+            coverImageUrl: null,
+            route: `/locations/${stationId}`,
+          },
+        ],
+      }),
+      listGameCreateSlots: vi.fn().mockResolvedValue({ slots: [] }),
+      getGameCreateScheduleQuote: vi.fn(),
+      createGame: vi.fn(),
+    });
+    render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Создание игр недоступно' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'К играм' })).toHaveAttribute('href', '/games');
+    expect(await screen.findByRole('heading', { name: 'Выберите место' })).toBeVisible();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Селигерская' }));
+    expect(await screen.findByRole('heading', { name: 'Дата и время' })).toBeVisible();
+    expect(gateway.listGameCreateSlots).toHaveBeenCalledWith(
+      expect.objectContaining({ stationId }),
+    );
+    expect(gateway.createGame).not.toHaveBeenCalled();
   });
 
   it('disables profile save commands in the real account preview', async () => {

@@ -3385,9 +3385,7 @@ export function App({
       );
     }
     if (protectedRoute.kind === 'game-create') {
-      const query = new URLSearchParams(window.location.search);
-      const scheduleView = query.get('view') === 'schedule' && !query.has('paymentReturn');
-      if (realAccountPreview && scheduleView) {
+      if (realAccountPreview) {
         return (
           <GameCreateSchedulePage
             key={`${context.tenant.id}:${context.user.id}`}
@@ -3395,19 +3393,8 @@ export function App({
           />
         );
       }
-      if (realAccountPreview) {
-        return (
-          <main className="app-shell" aria-labelledby="create-game-read-only-title">
-            <section className="fh-section-state">
-              <h1 id="create-game-read-only-title">Создание игр недоступно</h1>
-              <p>В режиме реального аккаунта доступно только чтение.</p>
-              <a className="secondary-button" href="/games">
-                К играм
-              </a>
-            </section>
-          </main>
-        );
-      }
+      const query = new URLSearchParams(window.location.search);
+      const scheduleView = query.get('view') === 'schedule' && !query.has('paymentReturn');
       const createGamePrincipal = {
         tenantId: state.session.context.tenant.id,
         userId: state.session.context.user.id,
