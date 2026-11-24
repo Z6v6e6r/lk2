@@ -1831,6 +1831,33 @@ class CanonicalFreshDumpScenario(FreshDumpScenario):
 
 
 class CanonicalFreshDumpTests(unittest.TestCase):
+    def test_schedule_waiver_is_bound_to_the_installed_api_and_current_owner_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture=CanonicalFreshDumpScenario(directory)
+            op=copy.deepcopy(fixture.op)
+            original=copy.deepcopy(op)
+            b=op['canonicalBaseline']
+            b.update(installedReleaseId=m.SCHEDULE_BASELINE,sourceSha=m.SCHEDULE_BASELINE[:40],publicationRunId='45011215364')
+            for service,row in b['containers'].items():
+                if service in ('api','web'):row['releaseId']=m.SCHEDULE_BASELINE
+                if service!='realtime':row['revision']=m.SCHEDULE_BASELINE[:40]
+            b['containers']['api'].update(image='ghcr.io/z6v6e6r/phub-api@'+m.SCHEDULE_API_DIGEST,imageId=m.SCHEDULE_API_DIGEST)
+            op.update(expectedApi=b['containers']['api'],predecessorAttestationSha256=m.canonical_baseline_hash(b),
+                      predecessorRuntimeSha256=m.legacy_runtime_hash(b))
+            op['confirmation']=m.schedule_fresh_confirmation(op)
+            h=m.digest(m.SCHEDULE_RESTORE_OWNER_MESSAGE.encode())
+            op['ownerRestoreDecision'].update(messageSha256=h,reference='codex-user-message-sha256:'+h)
+            op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(op)
+            now=m.utc(fixture.clockAt)
+            with patch.object(m,'installed_release_id',return_value=m.SCHEDULE_BASELINE):
+                self.assertEqual(m.validate_operation(op,now,'2'*64),op)
+                for field,value in [('messageSha256',original['ownerRestoreDecision']['messageSha256']),
+                                    ('reference',original['ownerRestoreDecision']['reference']),
+                                    ('scopeSha256','0'*64)]:
+                    bad=copy.deepcopy(op);bad['ownerRestoreDecision'][field]=value
+                    with self.subTest(field=field),self.assertRaisesRegex(m.Stop,'FRESH_OWNER'):
+                        m.validate_operation(bad,now,'2'*64)
+
     def test_closed_operation_and_legacy_mutual_rejection(self):
         with tempfile.TemporaryDirectory() as directory:
             s=CanonicalFreshDumpScenario(directory);now=m.utc(s.clockAt)

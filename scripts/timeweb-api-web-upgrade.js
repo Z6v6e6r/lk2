@@ -1413,19 +1413,30 @@ function validateScheduleBackupProof(directory, releaseId, op, api) {
   const bytes = read(operationPath);
   const backup = parseStrictJson(bytes);
   const disk = backup.schema === SCHEDULE_DISK_BACKUP_SCHEMA;
+  const fresh = backup.schema === CANONICAL_FRESH_OPERATION;
   const receiptPath = `${directory}/database-backup-receipt.json`;
   const receiptBytes = read(receiptPath);
   const receipt = parseStrictJson(receiptBytes);
-  const proof = disk
-    ? { path: receiptPath, sha256: hash(receiptBytes) }
-    : validateBackupProof(directory, api, 'production');
-  const terminalPath = `${directory}/SUCCESS_CLEANUP_VERIFIED.json`;
+  const proof =
+    disk || fresh
+      ? { path: receiptPath, sha256: hash(receiptBytes) }
+      : validateBackupProof(directory, api, 'production');
+  const phase = fresh ? 'FRESH_DUMP_INTEGRITY_VERIFIED' : 'SUCCESS_CLEANUP_VERIFIED';
+  const terminalPath = `${directory}/${phase}.json`;
   const terminalBytes = read(terminalPath);
   const terminal = parseStrictJson(terminalBytes);
   const postgres = inspect('postgres', 'phub-timeweb-beta-dependencies');
   exact(terminal, ['phase', 'operationSha256', 'observedAt', 'receiptSha256']);
   if (
-    (!disk && backup.schema !== SCHEDULE_BACKUP_SCHEMA) ||
+    (!disk && !fresh && backup.schema !== SCHEDULE_BACKUP_SCHEMA) ||
+    (fresh &&
+      (backup.confirmation !==
+        `FRESH_DUMP_SCHEDULE_${op.candidateSha.slice(0, 12).toUpperCase()}_KEEP_API_0A4D640965E9` ||
+        receipt.schema !== CANONICAL_FRESH_RECEIPT ||
+        receipt.restoreAdmissionPolicy !== CANONICAL_PRIOR_RESTORE_POLICY ||
+        receipt.freshDumpRestored !== false ||
+        receipt.freshDumpIntegrityStatus !== 'PG16_TOC_PARSE_VERIFIED' ||
+        Date.parse(op.expiresAt) > Date.parse(backup.expiresAt))) ||
     backup.releaseId !== releaseId ||
     backup.publicationRunId !== op.publicationRunId ||
     backup.controllerSha !== op.controllerSha ||
@@ -1443,7 +1454,7 @@ function validateScheduleBackupProof(directory, releaseId, op, api) {
     Date.parse(receipt.completedAt) > Date.now() ||
     Date.now() - Date.parse(receipt.completedAt) > 3600000 ||
     receipt.sourceLedgerSha256 !== SCHEDULE_LEDGER ||
-    terminal.phase !== 'SUCCESS_CLEANUP_VERIFIED' ||
+    terminal.phase !== phase ||
     terminal.operationSha256 !== op.backupOperationSha256 ||
     terminal.receiptSha256 !== proof.sha256 ||
     !Number.isFinite(Date.parse(terminal.observedAt)) ||
@@ -1459,12 +1470,13 @@ m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 raw=sys.stdin.buffer.read();op=m.strict(raw);m.validate_operation(op,time.time(),sys.argv[2],allow_expired=True)
 m.tool_custody(op)
 if op['schema']==m.SCHEDULE_DISK_SCHEMA: m.validate_cutover_disk_terminal(op,raw)
+if m.is_schedule_fresh(op): m.validate_fresh_terminal(op,raw)
 sys.stdout.write('SCHEDULE_BACKUP_CUSTODY_VERIFIED')`;
   if (
     command('/usr/bin/python3', ['-I', '-S', '-B', '-c', attest, helper, helperSha], {
       input: bytes,
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: disk ? 180000 : 30000,
+      timeout: disk || fresh ? 180000 : 30000,
     }) !== 'SCHEDULE_BACKUP_CUSTODY_VERIFIED' ||
     !equal(dumpIdentity, scheduleDumpIdentity(dumpPath)) ||
     hash(read(receiptPath)) !== proof.sha256 ||
@@ -1943,6 +1955,7 @@ const SCHEDULE_CONTROLLER_FILES = new Set([
   'apps/api/src/games/game-create-schedule-routes.test.ts',
   'apps/api/src/subscriptions/subscription-runtime-actor-delegation-issuer.ts',
   'scripts/control-timeweb-database-backup.py',
+  'scripts/build-timeweb-canonical-backup-request.py',
   'scripts/test-timeweb-database-backup.py',
 ]);
 const regularModification = (entry) =>
@@ -3845,7 +3858,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       plan.backup.path !== `${transaction}/database-backup-receipt.json` ||
       plan.backup.operationPath !== `${transaction}/backup-operation.json` ||
       plan.backup.dumpPath !== `${transaction}/database.pgcustom` ||
-      plan.backup.terminalPath !== `${transaction}/SUCCESS_CLEANUP_VERIFIED.json` ||
+      !['SUCCESS_CLEANUP_VERIFIED', 'FRESH_DUMP_INTEGRITY_VERIFIED'].some(
+        (phase) => plan.backup.terminalPath === `${transaction}/${phase}.json`,
+      ) ||
       plan.backup.operationSha256 !== op.backupOperationSha256 ||
       ![plan.backup.sha256, plan.backup.dumpSha256, plan.backup.terminalSha256].every((v) =>
         HASH.test(v ?? ''),

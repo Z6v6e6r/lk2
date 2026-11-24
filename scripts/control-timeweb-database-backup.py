@@ -192,6 +192,17 @@ def fresh_receipt_schema(op):
 def fresh_policy(op):
     return CANONICAL_FRESH_POLICY if is_canonical_fresh(op) else FRESH_POLICY
 RESTORE_OWNER_MESSAGE = 'Пропусти повторное пробное восстановление базы — оно уже прошло. Исправь блокер Docker Hub и продолжай выкладку, сохранив данные, учётки, настройки и передачу результатов в ЛК1.\n'
+SCHEDULE_RESTORE_OWNER_MESSAGE = 'продожай без резервного восстановления'
+
+
+def schedule_fresh_confirmation(op):
+    return 'FRESH_DUMP_SCHEDULE_'+op['candidateSha'][:12].upper()+'_KEEP_API_0A4D640965E9'
+
+
+def is_schedule_fresh(op):
+    return is_canonical_fresh(op) and op.get('confirmation')==schedule_fresh_confirmation(op)
+
+
 CUTOVER_DISK_SCHEMA = 'PHUB_TIMEWEB_BACKUP_ATTESTED_BETA122_DISK_V2'
 CUTOVER_DISK_PLAN = 'PHUB_TIMEWEB_CUTOVER_DISK_RESTORE_PLAN_V1'
 CUTOVER_DISK_RECEIPT = 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V2'
@@ -2348,6 +2359,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if schema in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):
         confirmation='FRESH_DUMP_PRIOR_RESTORE_BETA122_'+value['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS'
         if schema==CANONICAL_FRESH_SCHEMA:confirmation='FRESH_DUMP_CANONICAL_PRIOR_RESTORE_BETA122_'+value['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS'
+        if is_schedule_fresh(value):confirmation=schedule_fresh_confirmation(value)
         validate_fresh_owner(value)
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
@@ -3511,8 +3523,28 @@ def validate_v6_prior_restore(op):
     need(ref.get('schema')==CANONICAL_HISTORY_SCHEMA
          and ref.get('historicalReadSetSha256')==op['historicalReadSetSha256'],'V6_HISTORY_REFERENCE')
     files=ref.get('files');need(isinstance(files,list) and files,'V6_HISTORY_FILES')
+    if is_schedule_fresh(op):
+        previous_raw=read_secure(directory/'backup-operation.json')
+        previous=strict(previous_raw)
+        receipt_raw=read_secure(directory/'database-backup-receipt.json')
+        receipt=strict(receipt_raw)
+        original=ref.get('originalFullRestore')
+        need(digest(previous_raw)==b['backupOperationSha256'] and digest(receipt_raw)==b['backupReceiptSha256']
+             and previous.get('schema')==CANONICAL_FRESH_SCHEMA and previous.get('releaseId')==SCHEDULE_BASELINE
+             and previous.get('historicalReadSetSha256')==op['historicalReadSetSha256']
+             and digest(encoded(files))==op['historicalReadSetSha256']
+             and receipt.get('schema')==CANONICAL_FRESH_RECEIPT and receipt.get('priorReferenceSha256')==digest(raw)
+             and receipt.get('operationSha256')==digest(previous_raw)
+             and isinstance(original,dict)
+             and all(original.get(key)==value for key,value in op['priorRestore'].items())
+             and original.get('databaseTarget')==op['expectedDatabaseTarget']
+             and original.get('ledgerSha256')==op['expectedLedgerSha256']
+             and original.get('postgresImage')==PG_IMAGE, 'SCHEDULE_PRIOR_RESTORE')
     for item in files:
         exact(item,['path','sha256','identity'])
+        if is_schedule_fresh(op):
+            relative=Path(item['path'])
+            need(not relative.is_absolute() and '..' not in relative.parts,'SCHEDULE_PRIOR_PATH')
         needle=ROOT/item['path']
         need(v6_file_sha256(needle)==item['sha256'],'V6_HISTORY_FILE')
     need(encoded(ref)==raw,'V6_HISTORY_CANONICAL')
@@ -3795,14 +3827,26 @@ def canonical_live_admission(op):
 def validate_fresh_owner(op):
     need(HASH.fullmatch(op['predecessorRuntimeSha256'] or ''),'FRESH_PREDECESSOR_RUNTIME')
     r=op['ownerRestoreDecision']
+    schedule=is_schedule_fresh(op)
+    if schedule:
+        api=op['expectedApi']
+        need(api['releaseId']==SCHEDULE_BASELINE and api['revision']==SCHEDULE_BASELINE[:40]
+             and api['image']=='ghcr.io/z6v6e6r/phub-api@'+SCHEDULE_API_DIGEST
+             and api['imageId']==SCHEDULE_API_DIGEST
+             and op['canonicalBaseline']['installedReleaseId']==SCHEDULE_BASELINE
+             and op['expectedLedgerSha256']==SCHEDULE_LEDGER_SHA256
+             and op['expectedDatabaseTarget']==LOCATION_PHOTO_DATABASE_TARGET,'SCHEDULE_FRESH_BASELINE')
+    message_hash=digest((SCHEDULE_RESTORE_OWNER_MESSAGE if schedule else RESTORE_OWNER_MESSAGE).encode())
+    reference_ok=(r.get('reference')=='codex-user-message-sha256:'+message_hash if schedule else
+                  re.fullmatch(r'codex-thread:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/message:(?:msg_)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}',r['reference'] or ''))
     exact(r,['schema','authority','scope','status','messageSha256','scopeSha256','reference','receivedAt'])
     need(r['schema']=='PHUB_TIMEWEB_OWNER_PROCEDURE_DECISION_V1'
          and r['authority']=='ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1'
          and r['scope']=='REPEAT_PHYSICAL_RESTORE_ONLY'
          and r['status']=='NOT_REPEATED_PRIOR_FULL_RESTORE_VERIFIED'
-         and r['messageSha256']==digest(RESTORE_OWNER_MESSAGE.encode())
+         and r['messageSha256']==message_hash
          and r['scopeSha256']==fresh_owner_scope(op)
-         and re.fullmatch(r'codex-thread:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/message:(?:msg_)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}',r['reference'] or '')
+         and reference_ok
          and utc(r['receivedAt'])<utc(op['expiresAt']), 'FRESH_OWNER')
     ref=op['priorRestore']
     exact(ref,['releaseId','operationSha256','receiptSha256','terminalSha256','dumpSha256','witnessSha256','toolFileSha256','abortOperationSha256','abortMarkerSha256','legacyReleaseEnvSha256','legacyAttestationSha256'])

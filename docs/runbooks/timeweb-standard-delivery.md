@@ -1997,6 +1997,18 @@ Select `PHUB_TIMEWEB_BACKUP_SCHEDULE_0A4_API_WEB_V1` explicitly only if the
 tmpfs profile's measured memory and disk requirements are both met.
 Its confirmation omits `DISK_` and its recovery uses
 `--reconcile-cutover-tmpfs`. No profile automatically falls back to another.
+
+If the owner explicitly waives a repeat restore for this schedule rollout,
+reuse the canonical fresh-dump producer with the exact installed `0a4d640965e9`
+baseline. Build the request from the retained installed backup template with
+`build-timeweb-canonical-backup-request.py --schedule-owner-approved-at <UTC>`.
+The producer binds the authorization, prior verified restore legacy ledger,
+database identity and exact new release. It takes a new snapshot, reads the dump
+table of contents with PostgreSQL 16, and retains the prior full restore proof.
+Its receipt records `freshDumpRestored: false`. The producer requires the 6.5 GiB
+dump budget and 5.25 GiB filesystem reserve before it starts. Use the canonical
+fresh-dump reconciliation after interruption, with the exact retained request.
+
 The API/Web request includes `backupOperationSha256`. The controller checks
 the retained request, the dump and fresh receipt, helper custody and the
 terminal cleanup record against that hash.

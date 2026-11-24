@@ -32,6 +32,7 @@ def main():
     parser.add_argument('--template', required=True)
     parser.add_argument('--tool-dir', required=True)
     parser.add_argument('--expires-in-minutes', type=int, default=55)
+    parser.add_argument('--schedule-owner-approved-at')
     parser.add_argument('--output', required=True)
     args = parser.parse_args()
 
@@ -84,11 +85,25 @@ def main():
         }
     )
     op['ownerRestoreDecision'] = dict(op['ownerRestoreDecision'], scopeSha256='0' * 64)
+    if args.schedule_owner_approved_at:
+        if baseline['installedReleaseId'] != module.SCHEDULE_BASELINE:
+            parser.error('the schedule waiver applies only to the installed 0a4 release')
+        if module.utc(args.schedule_owner_approved_at) > now.timestamp():
+            parser.error('owner approval time cannot be in the future')
+        message_hash = _sha(module.SCHEDULE_RESTORE_OWNER_MESSAGE.encode())
+        op['confirmation'] = module.schedule_fresh_confirmation(op)
+        op['ownerRestoreDecision'].update(
+            messageSha256=message_hash,
+            reference='codex-user-message-sha256:' + message_hash,
+            receivedAt=args.schedule_owner_approved_at,
+        )
     op['predecessorAttestationSha256'] = module.canonical_baseline_hash(baseline)
     op['predecessorRuntimeSha256'] = module.legacy_runtime_hash(baseline)
     op['ownerRestoreDecision']['scopeSha256'] = module.fresh_owner_scope(op)
 
     raw = module.encoded(op)
+    if args.schedule_owner_approved_at:
+        module.validate_operation(op, now.timestamp(), op['toolFileSha256'])
     out = pathlib.Path(args.output)
     out.write_bytes(raw)
     os.chmod(out, 0o600)

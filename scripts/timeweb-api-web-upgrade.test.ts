@@ -251,7 +251,8 @@ describe('explicit API/Web upgrade boundary', () => {
         'scripts/provision-timeweb-beta-runtime-secrets.test.ts','docs/runbooks/timeweb-standard-delivery.md',
         'apps/api/src/main.ts','apps/api/src/games/game-create-schedule-routes.ts',
         'apps/api/src/games/game-create-schedule-routes.test.ts','apps/api/src/subscriptions/subscription-runtime-actor-delegation-issuer.ts',
-        'scripts/control-timeweb-database-backup.py','scripts/test-timeweb-database-backup.py']
+        'scripts/control-timeweb-database-backup.py','scripts/build-timeweb-canonical-backup-request.py',
+        'scripts/test-timeweb-database-backup.py']
         .map(path=>({...regular,path}));
       validateScheduleRuntimeBridge(identity,entries,tail);
       assert.throws(()=>validateRuntimeUpgrade(identity,entries),/callback_runtime_bridge/);
