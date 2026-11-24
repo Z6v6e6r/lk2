@@ -235,18 +235,21 @@ for (const validator of ['closed', 'tail'] as const) {
     )('rejects altered phone prerequisite %s', (_index, rows) => {
       expect(() => validate([...r1Entries, ...rows])).toThrow();
     });
-    it('admits only listed regular markdown evidence, not executable or foreign docs', () => {
-      const base = r1Entries.filter((row) => !row.path.startsWith('docs/release/'));
-      const report = r1Entries.find((row) => row.path === 'docs/release/R1-READINESS.md')!;
+    const base = r1Entries.filter((row) => !row.path.startsWith('docs/release/'));
+    const report = r1Entries.find((row) => row.path === 'docs/release/R1-READINESS.md')!;
+    it('admits listed regular markdown evidence', () => {
       expect(() => validate([...base, report])).not.toThrow();
-      for (const mutation of [
-        { newMode: '100755' },
-        { newMode: '120000' },
-        { status: 'D' },
-        { path: 'docs/release/R1-READINESS.js' },
-        { path: 'docs/release/UNRELATED.md' },
-      ])
-        expect(() => validate([...base, { ...report, ...mutation }])).toThrow();
+    });
+    it.each([
+      { newMode: '100755' },
+      { newMode: '120000' },
+      { status: 'D' },
+      { path: 'docs/release/R1-READINESS.js' },
+      { path: 'docs/release/UNRELATED.md' },
+    ])('rejects altered markdown evidence: %j', (mutation) => {
+      expect(() => validate([...base, { ...report, ...mutation }])).toThrow(
+        validator === 'tail' ? 'R1_TAIL_SOURCE_DELTA' : 'R1_DELTA',
+      );
     });
   });
 }
