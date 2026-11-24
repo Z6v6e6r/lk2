@@ -137,8 +137,11 @@ transport is not enabled by this ADR.
 The first-party web client routes the authenticated user's self-profile according to the
 server-issued plan. `PADLHUB_API` returns the PadlHub projection; `DIRECT_VIVA` performs the fixed
 browser read and keeps its normalized, provider-free result in memory only. The direct result is
-never merged with a different profile source or used to fill or refresh a Home projection. One
-narrow media exception applies when that exact response includes an HTTPS photo URL on the
+never merged with a different profile source or used to fill or refresh a Home projection. The web
+self-profile and Home avatar display PADEL level separately from the account profile. It comes from
+the confirmed CUP projection via the authenticated PadlHub `/profile/level` read. Pending or invalid
+projections leave the level empty, including when the direct provider response has a legacy level.
+One narrow media exception applies when that exact response includes an HTTPS photo URL on the
 server-issued media-host allowlist: the browser
 may fetch bounded image bytes using no cookies or authorization header and send only those bytes to
 the authenticated, idempotent PadlHub photo command using a short-lived one-time media grant bound

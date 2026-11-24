@@ -49,6 +49,7 @@ interface ProfilePageProps {
   readonly friendsAvailable?: boolean;
   readonly subscriptionRenewalAvailable?: boolean;
   readonly profile: PlayerProfileView;
+  readonly padelLevel?: PlayerProfileView['profile']['level'] | null;
   readonly logoutBusy: boolean;
   readonly notificationUnreadCount?: number;
   readonly privacySettings?: ProfilePrivacySettings | null;
@@ -2098,6 +2099,7 @@ export function ProfilePage({
   friendsAvailable = true,
   subscriptionRenewalAvailable = true,
   profile: view,
+  padelLevel,
   logoutBusy,
   notificationUnreadCount = 0,
   privacySettings,
@@ -2172,21 +2174,16 @@ export function ProfilePage({
   const balance = privateAccount
     ? formatBalance(privateAccount.balanceMinor, privateAccount.currency, 'currency')
     : null;
-  // A locally served profile may omit the level until a stored assessment
-  // exists; render an explicit placeholder instead of claiming level D.
-  const hasLevel = !isIndependentSport && profile.level !== undefined;
-  const rating = hasLevel ? profile.level?.value : undefined;
-  const levelKey = !hasLevel
-    ? 'A'
-    : profile.level && levelBackgrounds[profile.level.label]
-      ? profile.level.label
-      : 'A';
+  const level = padelLevel === undefined ? profile.level : padelLevel;
+  const hasLevel = !isIndependentSport && level != null;
+  const rating = hasLevel ? level.value : undefined;
+  const levelKey = hasLevel && levelBackgrounds[level.label] ? level.label : 'A';
   const displayLevel = isIndependentSport
     ? '?'
-    : profile.level
-      ? profile.level.assessmentRequired
+    : level
+      ? level.assessmentRequired
         ? '?'
-        : profile.level.label
+        : level.label
       : UNKNOWN_VALUE_PLACEHOLDER;
   const background =
     activeSport === 'TENNIS'
@@ -2323,7 +2320,7 @@ export function ProfilePage({
               alt={profile.displayName}
               fallbackSeed={profile.userId}
               level={displayLevel}
-              progress={levelProgress(rating, profile.level?.assessmentRequired ?? true)}
+              progress={levelProgress(rating, level?.assessmentRequired ?? true)}
               size={isSelf ? 144 : 112}
               src={profile.avatarUrl ?? null}
             />

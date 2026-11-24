@@ -12,7 +12,7 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ApiClientError } from '@phub/api-sdk';
+import { ApiClientError, type PlayerLevelState } from '@phub/api-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const realtimeMocks = vi.hoisted(() => ({
@@ -61,6 +61,33 @@ const session: AuthenticatedSession = {
     permissions: ['profile.read'],
   },
 };
+
+const cupProjectedLevel: PlayerLevelState = {
+  sportCode: 'PADEL',
+  scaleVersion: 1,
+  levels: [],
+  projectionStatus: 'PROJECTED',
+  currentLevel: {
+    playerId: session.context.user.id,
+    sportCode: 'PADEL',
+    levelId: 'synthetic-level',
+    source: 'MANUAL',
+    numericValue: 4.70001,
+    code: 'B+',
+    title: 'B+',
+    rank: 5,
+    scaleVersion: 1,
+    updatedAt: '2026-11-25T00:00:00.000Z',
+  },
+};
+
+function pendingPlayerLevel() {
+  let resolve!: (value: PlayerLevelState) => void;
+  const promise = new Promise<PlayerLevelState>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
 
 const homeDashboard: HomeDashboard = {
   snapshot: {
@@ -1393,6 +1420,110 @@ describe('PadlHub web authentication', () => {
     },
   );
 
+  it('renders only the separate CUP level in the web self-profile and keeps the account balance', async () => {
+    window.history.replaceState({}, '', '/profile');
+    const pending = pendingPlayerLevel();
+    const getOwnPlayerLevel = vi.fn(() => pending.promise);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getOwnPlayerLevel,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
+    expect(screen.getByText('540 ₽')).toBeVisible();
+    expect(screen.queryByRole('img', { name: /Анна Петрова, уровень C\+/ })).toBeNull();
+    expect(getOwnPlayerLevel).toHaveBeenCalledWith('PADEL');
+
+    pending.resolve(cupProjectedLevel);
+    expect(await screen.findByRole('img', { name: /Анна Петрова, уровень B\+/ })).toBeVisible();
+  });
+
+  it('uses the CUP level on the web Home avatar without changing the profile balance', async () => {
+    window.history.replaceState({}, '', '/');
+    const getOwnPlayerLevel = vi.fn().mockResolvedValue(cupProjectedLevel);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getOwnPlayerLevel,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('img', { name: /Анна Петрова, уровень B\+/ })).toBeVisible();
+    expect(screen.queryByRole('img', { name: /Анна Петрова, уровень C\+/ })).toBeNull();
+    expect(screen.getByText('540 ₽')).toBeVisible();
+    expect(getOwnPlayerLevel).toHaveBeenCalledWith('PADEL');
+  });
+
+  it('discards a delayed CUP response when a different session opens the profile', async () => {
+    window.history.replaceState({}, '', '/profile');
+    const pending = pendingPlayerLevel();
+    const originalGateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getOwnPlayerLevel: vi.fn(() => pending.promise),
+    });
+    const { rerender } = render(<App gateway={originalGateway} tenantKey="padlhub" />);
+    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
+
+    const nextUser = {
+      ...session.context.user,
+      id: '6a81e965-c508-4321-812c-4be323606a70',
+      displayName: 'Другой игрок',
+    };
+    const nextGateway = createGateway({
+      restoreSession: vi
+        .fn()
+        .mockResolvedValue({ context: { ...session.context, user: nextUser } }),
+      getPlayerProfile: vi.fn().mockResolvedValue({
+        ...userProfile,
+        profile: { ...userProfile.profile, userId: nextUser.id, displayName: nextUser.displayName },
+      }),
+      getOwnPlayerLevel: vi.fn().mockResolvedValue({
+        ...cupProjectedLevel,
+        projectionStatus: 'PENDING',
+        currentLevel: null,
+      }),
+    });
+    rerender(<App gateway={nextGateway} tenantKey="padlhub" />);
+    expect(await screen.findByRole('heading', { name: 'Другой игрок' })).toBeVisible();
+    await act(async () => {
+      pending.resolve(cupProjectedLevel);
+      await pending.promise;
+    });
+    expect(screen.getByRole('img', { name: 'Другой игрок, уровень —, прогресс 0%' })).toBeVisible();
+    expect(screen.queryByRole('img', { name: /уровень B\+/ })).toBeNull();
+  });
+
+  it.each(['pending', 'unavailable'])(
+    'keeps the web self-profile level empty when CUP is %s',
+    async (outcome) => {
+      window.history.replaceState({}, '', '/profile');
+      const getOwnPlayerLevel =
+        outcome === 'pending'
+          ? vi.fn().mockResolvedValue({
+              sportCode: 'PADEL',
+              scaleVersion: 1,
+              levels: [],
+              projectionStatus: 'PENDING',
+              currentLevel: null,
+            })
+          : vi.fn().mockRejectedValue(new Error('PROFILE_LEVEL_UNAVAILABLE'));
+      const gateway = createGateway({
+        restoreSession: vi.fn().mockResolvedValue(session),
+        getOwnPlayerLevel,
+      });
+
+      render(<App gateway={gateway} tenantKey="padlhub" />);
+
+      expect(
+        await screen.findByRole('img', { name: 'Анна Петрова, уровень —, прогресс 0%' }),
+      ).toBeVisible();
+      expect(getOwnPlayerLevel).toHaveBeenCalledWith('PADEL');
+      expect(screen.getByText('540 ₽')).toBeVisible();
+    },
+  );
+
   it('loads the profile route with profile details and active subscriptions', async () => {
     window.history.replaceState({}, '', '/profile');
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
@@ -1590,6 +1721,7 @@ describe('PadlHub web authentication', () => {
     const gateway = createGateway({
       restoreSession: vi.fn().mockResolvedValue(session),
       getPlayerProfile: vi.fn().mockResolvedValue(otherProfile),
+      getOwnPlayerLevel: vi.fn(),
     });
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
@@ -1602,6 +1734,7 @@ describe('PadlHub web authentication', () => {
     expect(screen.queryByRole('button', { name: 'Выйти из аккаунта' })).not.toBeInTheDocument();
     expect(gateway.getPlayerProfile).toHaveBeenCalledWith(targetUserId);
     expect(gateway.getProfilePrivacy).not.toHaveBeenCalled();
+    expect(gateway.getOwnPlayerLevel).not.toHaveBeenCalled();
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
     expect(gateway.getProfileFriendship).toHaveBeenCalledWith(targetUserId);
   });
