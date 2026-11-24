@@ -11,7 +11,7 @@ function scenario(body: string) {
       '-e',
       `
     import assert from 'node:assert/strict';
-    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade,validateScheduleRuntimeBridge,buildApiWebInstalledDescriptor} from './scripts/timeweb-api-web-upgrade.js';
+    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade,validateScheduleRuntimeBridge,buildApiWebInstalledDescriptor,scheduleMonitoringScopeSha256,validateScheduleDirectObservation} from './scripts/timeweb-api-web-upgrade.js';
     ${body}
   `,
     ],
@@ -565,11 +565,14 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
       `for(const schema of ['PHUB_TIMEWEB_API_WEB_RECEIPT_V1','PHUB_TIMEWEB_API_WEB_RECEIPT_V2'])assert.throws(()=>validateUpgradeReceipt({schema,status:'SECRET_SWAP_INTENT',planSha256:'a'.repeat(64),observedAt:new Date().toISOString()},'a'.repeat(64)));`,
     );
   });
-  it('runs the same forward and recovery ordering in API/Web schedule mode', () => {
-    scenario(
-      `const failure='activate:web';${fixture}ops.secretMode='schedule-read';await assert.rejects(()=>runApiWebTransition(ops));assert(calls.indexOf('installSecrets')<calls.indexOf('activate:api'));assert(calls.indexOf('restoreSecrets')<calls.indexOf('restore:api'));assert(!calls.some(v=>v.includes('worker')||v.includes('migrator')));assert.equal(calls.at(-1),'journal:ROLLED_BACK');ops.secretMode='unknown';await assert.rejects(()=>runApiWebTransition(ops),/invalid_secret_mode/);`,
-    );
-  });
+  it.each(['activate:web', 'observe'])(
+    'preserves rollback ordering on API/Web schedule failure at %s',
+    (failure) => {
+      scenario(
+        `const failure=${JSON.stringify(failure)};${fixture}ops.secretMode='schedule-read';await assert.rejects(()=>runApiWebTransition(ops));assert(calls.indexOf('installSecrets')<calls.indexOf('activate:api'));assert(calls.indexOf('restoreSecrets')<calls.indexOf('restore:api'));assert(!calls.some(v=>v.includes('worker')||v.includes('migrator')));assert.equal(calls.at(-1),'journal:ROLLED_BACK');ops.secretMode='unknown';await assert.rejects(()=>runApiWebTransition(ops),/invalid_secret_mode/);`,
+      );
+    },
+  );
   it('binds the schedule schemas to production and records the candidate set', () => {
     scenario(`
       const op=${JSON.stringify(operation)};
@@ -601,6 +604,38 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
       const descriptor=buildApiWebInstalledDescriptor({PHUB_RELEASE_ID:previousId},plan,candidateId,'/test/receipt');
       assert(descriptor.toString().includes('PHUB_RUNTIME_SECRET_SET_RELEASE_ID='+candidateId));
       assert(descriptor.toString().includes('PHUB_COMPONENT_ROLLOUT_KIND=API_WEB_SCHEDULE_READ'));
+
+      const originalOp=structuredClone(op);
+      const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+      const receivedAt='2029-12-31T23:00:00.000Z';
+      const messageSha256='cd676c7ab14c553671966ee0feede57c53c833b3075140ac1407e8adb108334e';
+      op.confirmation+='_WITHOUT_PROVIDER_MONITORING';
+      op.ownerProviderMonitoringWaiver={schema:'PHUB_TIMEWEB_SCHEDULE_PROVIDER_MONITORING_WAIVER_V1',authority:'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',messageSha256,reference:'codex-user-message-sha256:'+messageSha256,receivedAt,scopeSha256:scheduleMonitoringScopeSha256(op)};
+      validateApiWebOperation(op);
+      for(const change of [v=>delete v.ownerProviderMonitoringWaiver,v=>v.ownerProviderMonitoringWaiver=null,v=>v.ownerProviderMonitoringWaiver.messageSha256='e'.repeat(64),v=>v.ownerProviderMonitoringWaiver.extra=true,v=>v.ownerProviderMonitoringWaiver.receivedAt=v.expiresAt,v=>v.confirmation=originalOp.confirmation,v=>v.publicationRunId='457',v=>v.candidateTree='e'.repeat(40),v=>v.backupOperationSha256='e'.repeat(64),v=>v.schema='PHUB_TIMEWEB_API_WEB_OPERATION_V1']){
+        const invalid=structuredClone(op);change(invalid);assert.throws(()=>validateApiWebOperation(invalid));
+      }
+
+      const waivedPlan={...plan,operationSha256:digest(op),ownerProviderMonitoringWaiverSha256:digest(op.ownerProviderMonitoringWaiver),createdAt:'2029-12-31T23:30:00.000Z'};
+      const waivedPlanBytes=Buffer.from(JSON.stringify(waivedPlan));
+      const waivedPlanHash=digest(waivedPlan);
+      const startedAt='2029-12-31T23:40:00.000Z';
+      const completedAt='2029-12-31T23:55:00.000Z';
+      const samples=()=>({privateMs:Array(61).fill(50),publicMs:Array(61).fill(100),timestamps:Array.from({length:61},(_,i)=>new Date(Date.parse(startedAt)+15000*i).toISOString()),p95PrivateMs:50,p95PublicMs:100});
+      const observed={schema:'PHUB_TIMEWEB_SCHEDULE_DIRECT_OBSERVATION_V1',operationSha256:waivedPlan.operationSha256,planSha256:waivedPlanHash,candidateSha:op.candidateSha,startedAt,completedAt,elapsedSeconds:900,samples:{api:samples(),web:samples()},serverErrors:0};
+      validateScheduleDirectObservation(observed,op,waivedPlan,waivedPlanHash);
+      for(const change of [v=>v.elapsedSeconds=899,v=>v.serverErrors=1,v=>v.candidateSha='f'.repeat(40),v=>v.samples.web.timestamps.pop(),v=>{v.samples.web.publicMs.fill(1000);v.samples.web.p95PublicMs=1000;},v=>v.completedAt='2030-01-01T00:00:01.000Z']){
+        const invalid=structuredClone(observed);change(invalid);assert.throws(()=>validateScheduleDirectObservation(invalid,op,waivedPlan,waivedPlanHash));
+      }
+
+      const waivedReceipt={...receipt,status:'SUCCESS',observedAt:completedAt,planSha256:waivedPlanHash,installedBaselineSha256:'c'.repeat(64),observationSha256:digest(observed),monitoringPolicy:'SCHEDULE_OWNER_DIRECT_API_WEB_V1',providerMonitoringStatus:'NOT_CHECKED_OWNER_SKIPPED',alertTestStatus:'NOT_REQUIRED_OWNER_WAIVED',ownerProviderMonitoringWaiverSha256:waivedPlan.ownerProviderMonitoringWaiverSha256};
+      validateUpgradeReceipt(waivedReceipt,waivedPlanHash,op,waivedPlan,waivedPlanBytes);
+      validateUpgradeReceipt({...waivedReceipt,status:'RECONCILED',reconciledStatus:'SUCCESS'},waivedPlanHash,op,waivedPlan,waivedPlanBytes);
+      assert.throws(()=>validateUpgradeReceipt(waivedReceipt,waivedPlanHash,originalOp,waivedPlan,waivedPlanBytes));
+      assert.throws(()=>validateUpgradeReceipt({...receipt,planSha256:waivedPlanHash},waivedPlanHash,op,waivedPlan,waivedPlanBytes));
+      for(const change of [v=>v.providerMonitoringStatus='PASS',v=>v.ownerProviderMonitoringWaiverSha256='a'.repeat(64),v=>v.alertReadbackSha256='a'.repeat(64),v=>delete v.observationSha256]){
+        const invalid=structuredClone(waivedReceipt);change(invalid);assert.throws(()=>validateUpgradeReceipt(invalid,waivedPlanHash,op,waivedPlan,waivedPlanBytes));
+      }
     `);
   });
 });

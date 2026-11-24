@@ -2039,3 +2039,25 @@ previous runtime set before restoring the previous API. The shared and
 provisioner locks remain held until terminal reconciliation attests the
 matching release and runtime set. Verify live slots, tournaments and the
 absence of the payment pilot after activation, without creating a booking.
+
+For the owner-authorized #695 rollout from the pinned `0a4d640965e9` predecessor,
+use `_SCHEDULE_READ_WITHOUT_PROVIDER_MONITORING` and include an
+`ownerProviderMonitoringWaiver` in the root-owned operation. Its closed schema is
+`PHUB_TIMEWEB_SCHEDULE_PROVIDER_MONITORING_WAIVER_V1` with authority
+`ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1`, `messageSha256`, `reference`,
+`receivedAt` and `scopeSha256`. Bind the original owner message digest and
+`codex-user-message-sha256:<messageSha256>` reference. Compute `scopeSha256`
+using `scheduleMonitoringScopeSha256` over the exact operation. This binds the
+decision to the target, candidate and controller, publication, manifest,
+predecessor, runtime set, backup and expiry. The decision expires with the
+operation, within 24 hours of receipt. Other releases keep their own policies.
+
+The controller skips Timeweb provider readbacks and the alert drill in this
+mode. It still requires 61 private and public API/Web probe rounds over at
+least 900 seconds, p95 latency below 1500 ms for API and 1000 ms for Web, and
+the existing runtime, backup, unchanged-component and rollback checks. The
+receipt binds the waiver digest and records `NOT_CHECKED_OWNER_SKIPPED` for
+provider monitoring and `NOT_REQUIRED_OWNER_WAIVED` for the alert test.
+Successful reconciliation verifies the retained direct observations, waiver
+and installed runtime evidence. Standard schedule operations retain the
+required Timeweb evidence and the `_SCHEDULE_READ` suffix.

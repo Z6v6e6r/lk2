@@ -183,6 +183,40 @@ const SCHEDULE_RECEIPT = 'PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_RECEIPT_V1';
 const SCHEDULE_INSTALLED_KIND = 'API_WEB_SCHEDULE_READ';
 const SCHEDULE_PHASES = ['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'BASELINE_INTENT'];
 const isScheduleOperation = (value) => value?.schema === SCHEDULE_OPERATION;
+const SCHEDULE_MONITORING_POLICY = 'SCHEDULE_OWNER_DIRECT_API_WEB_V1';
+const SCHEDULE_MONITORING_MESSAGE =
+  'cd676c7ab14c553671966ee0feede57c53c833b3075140ac1407e8adb108334e';
+const SCHEDULE_DIRECT_OBSERVATION = 'PHUB_TIMEWEB_SCHEDULE_DIRECT_OBSERVATION_V1';
+const SCHEDULE_MONITORING_STATUS = {
+  monitoringPolicy: SCHEDULE_MONITORING_POLICY,
+  providerMonitoringStatus: PROVIDER_SKIPPED,
+  alertTestStatus: 'NOT_REQUIRED_OWNER_WAIVED',
+};
+export function scheduleMonitoringScopeSha256({ ownerProviderMonitoringWaiver, ...operation }) {
+  return hash(JSON.stringify({ serverId: 8886471, projectId: 262717, ...operation }));
+}
+function validateScheduleMonitoringWaiver(op) {
+  const waiver = op.ownerProviderMonitoringWaiver;
+  exact(waiver, ['schema', 'authority', 'messageSha256', 'reference', 'receivedAt', 'scopeSha256']);
+  if (
+    waiver.schema !== 'PHUB_TIMEWEB_SCHEDULE_PROVIDER_MONITORING_WAIVER_V1' ||
+    waiver.authority !== 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1' ||
+    waiver.messageSha256 !== SCHEDULE_MONITORING_MESSAGE ||
+    waiver.reference !== `codex-user-message-sha256:${waiver.messageSha256}` ||
+    waiver.scopeSha256 !== scheduleMonitoringScopeSha256(op) ||
+    !Number.isFinite(Date.parse(waiver.receivedAt)) ||
+    new Date(waiver.receivedAt).toISOString() !== waiver.receivedAt ||
+    Date.parse(waiver.receivedAt) >= Date.parse(op.expiresAt) ||
+    Date.parse(op.expiresAt) - Date.parse(waiver.receivedAt) > 86_400_000
+  )
+    fail('schedule_monitoring_waiver');
+}
+function scheduleMonitoringReceipt(op) {
+  return {
+    ...SCHEDULE_MONITORING_STATUS,
+    ownerProviderMonitoringWaiverSha256: hash(JSON.stringify(op.ownerProviderMonitoringWaiver)),
+  };
+}
 function validateScheduleExpiry(value, minimumMs = 0) {
   const remaining = Date.parse(value) - Date.now();
   if (!Number.isFinite(remaining) || remaining <= minimumMs || remaining > 3_600_000)
@@ -388,9 +422,14 @@ export function validateApiWebOperation(value) {
       expectedCurrentSecretSetReleaseId,
       candidateSecretHashes,
       backupOperationSha256,
+      ownerProviderMonitoringWaiver,
       expiresAt,
       ...base
     } = value;
+    const suffix =
+      ownerProviderMonitoringWaiver === undefined
+        ? '_SCHEDULE_READ'
+        : '_SCHEDULE_READ_WITHOUT_PROVIDER_MONITORING';
     if (
       value.profile !== 'production' ||
       value.controllerSha !== value.candidateSha ||
@@ -404,7 +443,7 @@ export function validateApiWebOperation(value) {
         (previous) => previous?.releaseId !== SCHEDULE_PREDECESSOR_RELEASE,
       ) ||
       typeof base.confirmation !== 'string' ||
-      !base.confirmation.endsWith('_SCHEDULE_READ')
+      !base.confirmation.endsWith(suffix)
     )
       fail('schedule_operation');
     exact(candidateSecretHashes, SECRET_NAMES);
@@ -413,8 +452,9 @@ export function validateApiWebOperation(value) {
     validateApiWebOperation({
       ...base,
       schema: 'PHUB_TIMEWEB_API_WEB_OPERATION_V1',
-      confirmation: base.confirmation.slice(0, -'_SCHEDULE_READ'.length),
+      confirmation: base.confirmation.slice(0, -suffix.length),
     });
+    if (ownerProviderMonitoringWaiver !== undefined) validateScheduleMonitoringWaiver(value);
     return value;
   }
   if (value?.schema === 'PHUB_TIMEWEB_API_WEB_OPERATION_V2')
@@ -2086,6 +2126,7 @@ export function validateUpgradeReceipt(
   const keys = ['schema', 'status', 'planSha256', 'observedAt'];
   const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
   const schedule = receipt.schema === SCHEDULE_RECEIPT;
+  const scheduleWaived = schedule && Object.hasOwn(receipt, 'ownerProviderMonitoringWaiverSha256');
   const cutover = [
     CUTOVER_RECEIPT,
     ROSTER_CUTOVER_RECEIPT,
@@ -2105,6 +2146,8 @@ export function validateUpgradeReceipt(
   ].includes(receipt.schema);
   if (cutover) keys.push(baselineField);
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
+  if (scheduleWaived)
+    keys.push(...Object.keys(SCHEDULE_MONITORING_STATUS), 'ownerProviderMonitoringWaiverSha256');
   if (
     receipt.status === 'SUCCESS' ||
     (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
@@ -2131,7 +2174,9 @@ export function validateUpgradeReceipt(
             ]
           : direct
             ? ['ownerObservationSha256', 'evidencePolicySha256']
-            : ['providerReadbackSha256', 'alertReadbackSha256']),
+            : scheduleWaived
+              ? []
+              : ['providerReadbackSha256', 'alertReadbackSha256']),
     );
   if (receipt.status === 'RECONCILED') keys.push('reconciledStatus');
   exact(receipt, keys);
@@ -2193,6 +2238,11 @@ export function validateUpgradeReceipt(
     (direct &&
       (receipt.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
         receipt.providerEvidenceStatus !== 'NOT_COLLECTED_EXPLICIT_OVERRIDE')) ||
+    (scheduleWaived &&
+      (!HASH.test(receipt.ownerProviderMonitoringWaiverSha256 ?? '') ||
+        Object.entries(SCHEDULE_MONITORING_STATUS).some(
+          ([key, value]) => receipt[key] !== value,
+        ))) ||
     (keys.includes('installedBaselineSha256') &&
       [
         'installedBaselineSha256',
@@ -2207,7 +2257,9 @@ export function validateUpgradeReceipt(
               ]
             : direct
               ? ['ownerObservationSha256', 'evidencePolicySha256']
-              : ['providerReadbackSha256', 'alertReadbackSha256']),
+              : scheduleWaived
+                ? []
+                : ['providerReadbackSha256', 'alertReadbackSha256']),
       ].some((key) => !HASH.test(receipt[key] ?? '')))
   )
     fail('invalid_receipt');
@@ -2217,6 +2269,7 @@ export function validateUpgradeReceipt(
       !plan ||
       isDirectOperation(op) !== direct ||
       isScheduleOperation(op) !== schedule ||
+      (schedule && scheduleWaived !== Object.hasOwn(op, 'ownerProviderMonitoringWaiver')) ||
       isProductionCutover(op) !== cutover ||
       (cutover && receipt.schema !== cutoverReceiptSchema(op)) ||
       isRosterCutover(op) !== roster ||
@@ -2239,6 +2292,17 @@ export function validateUpgradeReceipt(
           receipt[baselineField] !== plan[baselineField]))
     )
       fail('receipt_context');
+    if (scheduleWaived) {
+      validateScheduleMonitoringWaiver(op);
+      const expected = scheduleMonitoringReceipt(op);
+      if (
+        plan.ownerProviderMonitoringWaiverSha256 !== expected.ownerProviderMonitoringWaiverSha256 ||
+        !Number.isFinite(Date.parse(plan.createdAt)) ||
+        Date.parse(plan.createdAt) < Date.parse(op.ownerProviderMonitoringWaiver.receivedAt) ||
+        Object.entries(expected).some(([key, value]) => receipt[key] !== value)
+      )
+        fail('receipt_schedule_monitoring_waiver');
+    }
     if (ownerDirected) {
       validateOwnerDirectedBinding(op, plan.monitoring, plan.operationSha256);
       if (
@@ -2269,6 +2333,21 @@ export function validateUpgradeReceipt(
       fail('receipt_policy_context');
   }
   return receipt;
+}
+export function validateScheduleDirectObservation(value, op, plan, planSha256) {
+  if (
+    !isScheduleOperation(op) ||
+    !op.ownerProviderMonitoringWaiver ||
+    value?.schema !== SCHEDULE_DIRECT_OBSERVATION
+  )
+    fail('schedule_observation_identity');
+  validateJoinObservation(
+    { ...value, schema: 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1' },
+    op,
+    plan,
+    planSha256,
+  );
+  return value;
 }
 export function validateDirectObservation(value, completedAt = undefined) {
   exact(value, [
@@ -3096,6 +3175,13 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
             !equal(describeTimewebRuntimeSecretSet(RUNTIME), plan.candidateSecrets))
         )
           fail('installed_schedule_lineage');
+        if (operation.ownerProviderMonitoringWaiver)
+          validateScheduleDirectObservation(
+            parseStrictJson(read(`${transaction}/observation.json`)),
+            operation,
+            plan,
+            hash(planBytes),
+          );
       }
       if (
         [
@@ -3168,9 +3254,9 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
         )
           fail('installed_legacy_attestation_drift');
       }
-      for (const [file, key] of [WAIVER_RECEIPT, OWNER_RECEIPT, CANONICAL_RECEIPT].includes(
-        receipt.schema,
-      )
+      for (const [file, key] of (receipt.schema === SCHEDULE_RECEIPT &&
+        receipt.ownerProviderMonitoringWaiverSha256) ||
+      [WAIVER_RECEIPT, OWNER_RECEIPT, CANONICAL_RECEIPT].includes(receipt.schema)
         ? [['observation.json', 'observationSha256']]
         : direct
           ? [
@@ -3276,6 +3362,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   );
   const join = isJoinOperation(op);
   const schedule = isScheduleOperation(op);
+  const scheduleWaiver =
+    schedule && op.ownerProviderMonitoringWaiver ? scheduleMonitoringReceipt(op) : null;
   const swapsSecrets = join || schedule;
   const cutover = isProductionCutover(op);
   const roster = isRosterCutover(op);
@@ -3304,6 +3392,12 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   if (mode === 'deploy' && cutover) validateProductionCutover(op, true);
   const profile = join ? 'production' : (op.profile ?? 'beta');
   if (mode === 'deploy' && schedule) validateScheduleExpiry(op.expiresAt, 20 * 60_000);
+  if (
+    mode === 'deploy' &&
+    scheduleWaiver &&
+    Date.parse(op.ownerProviderMonitoringWaiver.receivedAt) > Date.now()
+  )
+    fail('schedule_monitoring_waiver_time');
   if (mode === 'deploy' && join) validateJoinOperation(op, true);
   if (mode === 'deploy' && isDirectOperation(op)) validateDirectApiWebOperation(op, true);
   if (
@@ -3630,13 +3724,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         ? validateScheduleBackupProof(transaction, id, op, api)
         : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
     let ownerBytes;
-    const monitoring = !direct
-      ? isOwnerDirectedCutover(op)
-        ? createOwnerDirectedBinding(op, hash(opBytes))
-        : isWaivedRosterCutover(op)
-          ? null
-          : validateMonitoring(transaction, profile, { fresh: cutover || schedule })
-      : null;
+    const monitoring =
+      !direct && !scheduleWaiver
+        ? isOwnerDirectedCutover(op)
+          ? createOwnerDirectedBinding(op, hash(opBytes))
+          : isWaivedRosterCutover(op)
+            ? null
+            : validateMonitoring(transaction, profile, { fresh: cutover || schedule })
+        : null;
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
     }
@@ -3697,6 +3792,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
             notificationBundleSha256: op.notificationBundleSha256,
           }
         : {}),
+      ...(scheduleWaiver
+        ? {
+            ownerProviderMonitoringWaiverSha256: scheduleWaiver.ownerProviderMonitoringWaiverSha256,
+          }
+        : {}),
       ...(direct
         ? {
             evidencePolicy: op.evidencePolicy,
@@ -3743,7 +3843,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     durable(`${transaction}/backup.complete`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
@@ -3775,6 +3875,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     ...(cutover ? [cutoverBaselineField(op), 'monitoring'] : []),
     ...(swapsSecrets ? ['baselinePath', 'previousSecrets', 'candidateSecrets'] : []),
     ...(join ? ['verifierPublicKeySha256', 'notificationBundleSha256'] : []),
+    ...(scheduleWaiver ? ['ownerProviderMonitoringWaiverSha256'] : []),
     ...(isDirectOperation(op)
       ? ['evidencePolicy', 'evidencePolicySha256', 'ownerObservationSha256']
       : []),
@@ -4015,6 +4116,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
               providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE',
             }
           : {}),
+        ...scheduleWaiver,
         ...(status === 'SUCCESS'
           ? {
               installedBaselineSha256,
@@ -4028,12 +4130,16 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
                         ownerObservationSha256: plan.ownerObservationSha256,
                         evidencePolicySha256: plan.evidencePolicySha256,
                       }
-                    : {
-                        providerReadbackSha256: hash(
-                          read(`${transaction}/timeweb-monitor-readback.json`),
-                        ),
-                        alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)),
-                      }),
+                    : scheduleWaiver
+                      ? {}
+                      : {
+                          providerReadbackSha256: hash(
+                            read(`${transaction}/timeweb-monitor-readback.json`),
+                          ),
+                          alertReadbackSha256: hash(
+                            read(`${transaction}/alert-test-readback.json`),
+                          ),
+                        }),
             }
           : {}),
         observedAt: new Date().toISOString(),
@@ -4255,6 +4361,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         return;
       }
       const startedAt = new Date().toISOString();
+      const detailedObservation = join || scheduleWaiver;
       const samples = {
         api: { privateMs: [], publicMs: [], timestamps: [] },
         web: { privateMs: [], publicMs: [], timestamps: [] },
@@ -4267,7 +4374,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           const privateMs = await probe(s),
             publicMs = s === 'worker' ? null : await probe(s, true);
           times[s].push(privateMs);
-          if (join) {
+          if (detailedObservation) {
             samples[s].privateMs.push(privateMs);
             samples[s].publicMs.push(publicMs);
             samples[s].timestamps.push(new Date().toISOString());
@@ -4275,8 +4382,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         }
         if (join) validateJoinOperation(op, true);
         attest();
-        attestJoinRunningEnv();
-        if (!isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
+        attestRunningEnv();
+        if (scheduleWaiver) {
+          validateScheduleExpiry(op.expiresAt);
+        } else if (!isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
           validateMonitoring(transaction, profile);
         if (round < 60) await delay(15000);
       }
@@ -4289,7 +4398,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       if (isOwnerDirectedCutover(op))
         validateOwnerDirectedBinding(op, plan.monitoring, hash(opBytes));
       else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
-      else {
+      else if (!scheduleWaiver) {
         const finalMonitoring = validateMonitoring(transaction, profile, { fresh: schedule });
         durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
         durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
@@ -4301,10 +4410,12 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           ['p95PublicMs', 'publicMs'],
         ])
           samples[service][key] = [...samples[service][source]].sort((a, b) => a - b)[57];
-      const observation = join
-        ? validateJoinObservation(
+      const observation = detailedObservation
+        ? (join ? validateJoinObservation : validateScheduleDirectObservation)(
             {
-              schema: 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1',
+              schema: join
+                ? 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1'
+                : SCHEDULE_DIRECT_OBSERVATION,
               operationSha256: plan.operationSha256,
               planSha256,
               candidateSha: op.candidateSha,
@@ -4404,6 +4515,13 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
               plan,
               planSha256,
             );
+          if (scheduleWaiver)
+            validateScheduleDirectObservation(
+              parseStrictJson(read(`${transaction}/observation.json`)),
+              op,
+              plan,
+              planSha256,
+            );
           if (
             !read(`${directory}/installed-components.env`).equals(expectedDescriptor) ||
             hash(expectedDescriptor) !== receipt.installedBaselineSha256
@@ -4411,8 +4529,12 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
             fail('installed_baseline_drift');
           for (const [file, key] of [
             ['observation.json', 'observationSha256'],
-            ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-            ['alert-test-readback.json', 'alertReadbackSha256'],
+            ...(scheduleWaiver
+              ? []
+              : [
+                  ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+                  ['alert-test-readback.json', 'alertReadbackSha256'],
+                ]),
           ])
             if (hash(read(`${transaction}/${file}`)) !== receipt[key])
               fail('installed_evidence_drift');
