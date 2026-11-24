@@ -3484,8 +3484,7 @@ export function App({
         typeof window === 'undefined'
           ? null
           : new URLSearchParams(window.location.search).get('event');
-      if (clientPlatform === 'android' && !tournamentId)
-        return <TournamentDirectoryPage gateway={gateway} />;
+      if (!tournamentId) return <TournamentDirectoryPage gateway={gateway} />;
       return (
         <TournamentDetailPage
           key={`${context.tenant.id}:${context.user.id}`}

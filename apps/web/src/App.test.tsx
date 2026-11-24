@@ -3924,6 +3924,45 @@ it('native game detail exposes only reviewed participation controls', async () =
   expect(screen.queryByRole('button', { name: /Вступить|Отменить игру/ })).not.toBeInTheDocument();
   expect(gateway.joinGame).not.toHaveBeenCalled();
 });
+it('opens the dated tournament directory on Web without an event in the URL', async () => {
+  window.history.replaceState({}, '', '/tournaments');
+  const tournament = {
+    id: '11111111-1111-4111-8111-111111111111',
+    title: 'Тестовый турнир',
+    format: 'Мексикано',
+    startsAt: '2035-04-02T12:00:00Z',
+    endsAt: '2035-04-02T14:00:00Z',
+    venue: 'Тестовый корт',
+    trainerName: null,
+    levelRange: null,
+    organizer: null,
+    capacity: { total: 8, registered: 0, open: 8, waitlist: 0 },
+    status: 'REGISTRATION' as const,
+    route: '/tournaments',
+  };
+  const listPublicTournamentSummaries = vi
+    .fn<NonNullable<AuthGateway['listPublicTournamentSummaries']>>()
+    .mockResolvedValue({ items: [tournament] });
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    listPublicTournamentSummaries,
+    getPublicTournamentSummary: vi.fn(),
+    commandTournament: vi.fn(),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="web" />);
+
+  expect(await screen.findByRole('heading', { name: 'Турниры' })).toBeVisible();
+  expect(await screen.findByRole('link', { name: tournament.title })).toHaveAttribute(
+    'href',
+    `/tournaments?event=${tournament.id}`,
+  );
+  expect(listPublicTournamentSummaries).toHaveBeenCalledWith(
+    expect.objectContaining({ availability: 'INCLUDE_FULL' }),
+  );
+  expect(gateway.getPublicTournamentSummary).not.toHaveBeenCalled();
+  expect(gateway.commandTournament).not.toHaveBeenCalled();
+});
+
 describe('Android concrete tournament navigation and custody', () => {
   it('reachable dated directory → detail → UNKNOWN → reload → original retry → LEAVE', async () => {
     const id = '11111111-1111-4111-8111-111111111111',
