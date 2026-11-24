@@ -220,6 +220,7 @@ export interface UserContext {
   readonly permissions: readonly string[];
   readonly runtimeCapabilities?: {
     readonly phoneSubjectLink: boolean;
+    readonly tournamentProfileGender?: boolean;
     readonly communityDirectory: boolean;
     readonly communityReadDetail: boolean;
     readonly communityReadFeed: boolean;
@@ -530,6 +531,8 @@ export interface AuthGateway {
   readonly getUserProfile: (userId: string) => Promise<UserProfile>;
   readonly getPlayerProfile: (userId: string) => Promise<PlayerProfileView>;
   readonly getProfilePrivacy: () => Promise<ProfilePrivacySettings>;
+  readonly getTournamentPlayerGender?: PadlHubApiClient['getTournamentPlayerGender'];
+  readonly updateTournamentPlayerGender?: PadlHubApiClient['updateTournamentPlayerGender'];
   readonly updateProfilePrivacy: (
     input: ProfilePrivacyUpdateRequest,
   ) => Promise<ProfilePrivacySettings>;
@@ -944,6 +947,9 @@ function normalizeContext(payload: ApiUserContext, tenantKey: string): UserConte
     permissions: payload.permissions,
     runtimeCapabilities: {
       phoneSubjectLink: payload.runtimeCapabilities?.phoneSubjectLink === true,
+      ...(payload.runtimeCapabilities?.tournamentProfileGender === true
+        ? { tournamentProfileGender: true }
+        : {}),
       communityDirectory: payload.runtimeCapabilities?.communityDirectory !== false,
       communityReadDetail: payload.runtimeCapabilities?.communityReadDetail === true,
       communityReadFeed: payload.runtimeCapabilities?.communityReadFeed === true,
@@ -2511,6 +2517,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
       return profilePrivacyPromise;
     },
+    ...(nativeClient
+      ? {}
+      : {
+          getTournamentPlayerGender: () => client.getTournamentPlayerGender(),
+          updateTournamentPlayerGender: (
+            input: Parameters<PadlHubApiClient['updateTournamentPlayerGender']>[0],
+          ) => client.updateTournamentPlayerGender(input),
+        }),
 
     async updateProfilePrivacy(input) {
       const original = nativeClient

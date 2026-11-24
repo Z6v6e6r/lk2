@@ -19,6 +19,10 @@ import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import { ProfilePackIcon } from './ProfilePackIcon.js';
 import { ProfileSportIcon } from './ProfileSportIcon.js';
+import {
+  TournamentGenderSettings,
+  type TournamentGenderActions,
+} from './TournamentGenderSettings.js';
 import './ProfilePageV2.css';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 import { QR_QUIET_ZONE_MODULES, qrCodePath, tryCreateQrCode } from './qr-code.js';
@@ -52,6 +56,7 @@ interface ProfilePageProps {
   readonly logoutBusy: boolean;
   readonly notificationUnreadCount?: number;
   readonly privacySettings?: ProfilePrivacySettings | null;
+  readonly tournamentGender?: TournamentGenderActions & { ownerKey: string };
   readonly privacyBusy?: boolean;
   readonly privacyError?: string | null;
   readonly privacyNotice?: string | null;
@@ -2101,6 +2106,7 @@ export function ProfilePage({
   logoutBusy,
   notificationUnreadCount = 0,
   privacySettings,
+  tournamentGender,
   privacyBusy = false,
   privacyError,
   privacyNotice,
@@ -2687,19 +2693,28 @@ export function ProfilePage({
               </header>
 
               {activeSettings === 'preferences' ? (
-                <BookingPreferencesSettings
-                  key={bookingPreferences?.version ?? 'loading'}
-                  {...(bookingPreferences !== undefined ? { settings: bookingPreferences } : {})}
-                  stations={stationChoices}
-                  busy={bookingPreferencesBusy}
-                  {...(bookingPreferencesError !== undefined
-                    ? { error: bookingPreferencesError }
-                    : {})}
-                  {...(bookingPreferencesNotice !== undefined
-                    ? { notice: bookingPreferencesNotice }
-                    : {})}
-                  {...(onSaveBookingPreferences ? { onSave: onSaveBookingPreferences } : {})}
-                />
+                <>
+                  {tournamentGender ? (
+                    <TournamentGenderSettings
+                      key={tournamentGender.ownerKey}
+                      load={tournamentGender.load}
+                      save={tournamentGender.save}
+                    />
+                  ) : null}
+                  <BookingPreferencesSettings
+                    key={bookingPreferences?.version ?? 'loading'}
+                    {...(bookingPreferences !== undefined ? { settings: bookingPreferences } : {})}
+                    stations={stationChoices}
+                    busy={bookingPreferencesBusy}
+                    {...(bookingPreferencesError !== undefined
+                      ? { error: bookingPreferencesError }
+                      : {})}
+                    {...(bookingPreferencesNotice !== undefined
+                      ? { notice: bookingPreferencesNotice }
+                      : {})}
+                    {...(onSaveBookingPreferences ? { onSave: onSaveBookingPreferences } : {})}
+                  />
+                </>
               ) : activeSettings === 'visibility' ? (
                 <PrivacySettings
                   key={privacySettings?.version ?? 'loading'}

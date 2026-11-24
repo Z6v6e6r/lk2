@@ -990,6 +990,7 @@ export async function buildApp(options: BuildAppOptions) {
   const userRuntimeCapabilities = {
     phoneSubjectLink:
       options.config.AUTH_PHONE_SUBJECT_LINK_ENABLED && Boolean(options.phoneSubjectLinkService),
+    ...(options.tournamentLocal?.profileGenderEnabled ? { tournamentProfileGender: true } : {}),
     communityDirectory: Boolean(options.communityDirectory),
     communityReadDetail:
       options.config.COMMUNITY_LEGACY_READ_DETAIL_ENABLED &&

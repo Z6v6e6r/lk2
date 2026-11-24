@@ -5,8 +5,10 @@ import {
   parseTournamentReceipt,
   type TournamentOwnerCommand,
   type TournamentOwnerReceipt,
+  type TournamentPlayerGenderSettings,
+  type TournamentPlayerGenderUpdate,
 } from '@phub/domain';
-type Phase = 'identity' | 'prepare' | 'command' | 'read';
+type Phase = 'identity' | 'prepare' | 'command' | 'read' | 'profile-read' | 'profile-write';
 type Metric = {
   phase: Phase;
   outcome: 'success' | 'refused' | 'unavailable' | 'circuit_open';
@@ -41,6 +43,39 @@ export class TournamentLocalOwnerClient {
     )
       throw new TournamentLocalError();
     this.origin = u.origin;
+  }
+  playerGender(
+    token: string,
+    correlationId: string,
+    command?: { input: TournamentPlayerGenderUpdate; key: string },
+  ): Promise<TournamentPlayerGenderSettings> {
+    return this.boundary(command ? 'profile-write' : 'profile-read', async () => {
+      const path = '/api/internal/tournaments/local-operations/profile/gender';
+      const value = await this.post(
+        command ? path : path + '/read',
+        token,
+        command?.input,
+        command?.key,
+        correlationId,
+      ).catch((error: unknown) => {
+        if (error instanceof TournamentLocalError && error.status === 404)
+          throw new TournamentLocalError('TOURNAMENT_LOCAL_PROFILE_UNAVAILABLE');
+        throw error;
+      });
+      if (
+        !tournamentObject(value, 'gender,version') ||
+        typeof value.version !== 'number' ||
+        !Number.isSafeInteger(value.version) ||
+        value.version < 0 ||
+        (value.gender !== 'FEMALE' && value.gender !== 'MALE' && value.gender !== null) ||
+        (value.version === 0 && value.gender !== null) ||
+        (command &&
+          (value.gender !== command.input.gender ||
+            value.version !== command.input.expectedVersion + 1))
+      )
+        throw new TournamentLocalError('TOURNAMENT_LOCAL_PROFILE_UNAVAILABLE');
+      return { gender: value.gender, version: value.version };
+    });
   }
   private metric(metric: Metric) {
     try {

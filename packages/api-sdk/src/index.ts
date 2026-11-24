@@ -195,6 +195,9 @@ export type ProfileContacts = components['schemas']['ProfileContacts'];
 export type ProfileContact = components['schemas']['ProfileContact'];
 export type ProfileContactProvenance = components['schemas']['ProfileContactProvenance'];
 export type ProfilePrivacySettings = components['schemas']['ProfilePrivacySettings'];
+export type TournamentPlayerGenderSettings =
+  components['schemas']['TournamentPlayerGenderSettings'];
+export type TournamentPlayerGenderUpdate = components['schemas']['TournamentPlayerGenderUpdate'];
 export type ProfilePrivacyUpdateRequest = components['schemas']['ProfilePrivacyUpdateRequest'];
 export type ProfileFriendship = components['schemas']['ProfileFriendship'];
 export type ProfileFriendSummary = components['schemas']['ProfileFriendSummary'];
@@ -1128,6 +1131,21 @@ export class PadlHubApiClient {
 
   public getProfilePrivacySettings(): Promise<ProfilePrivacySettings> {
     return this.request<ProfilePrivacySettings>('/profile/privacy');
+  }
+
+  public getTournamentPlayerGender(): Promise<TournamentPlayerGenderSettings> {
+    return this.request<TournamentPlayerGenderSettings>('/profile/tournament-gender');
+  }
+
+  public updateTournamentPlayerGender(
+    input: TournamentPlayerGenderUpdate,
+  ): Promise<TournamentPlayerGenderSettings> {
+    return this.request<TournamentPlayerGenderSettings>('/profile/tournament-gender', {
+      method: 'PUT',
+      idempotencyKey: createCorrelationId(),
+      retryOnUnauthorized: false,
+      body: jsonRequestBody(input),
+    });
   }
 
   public listProfileFriends(limit = 8): Promise<ProfileFriendPage> {

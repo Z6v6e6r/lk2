@@ -3062,6 +3062,20 @@ export function App({
               }
             : {})}
           {...(!realAccountPreview ? { onSavePrivacy: handleSaveProfilePrivacy } : {})}
+          {...(!realAccountPreview &&
+          context.runtimeCapabilities?.tournamentProfileGender &&
+          context.permissions.includes('profile.read') &&
+          context.permissions.includes('games.play') &&
+          gateway.getTournamentPlayerGender &&
+          gateway.updateTournamentPlayerGender
+            ? {
+                tournamentGender: {
+                  ownerKey: context.user.id,
+                  load: gateway.getTournamentPlayerGender,
+                  save: gateway.updateTournamentPlayerGender,
+                },
+              }
+            : {})}
           {...(!realAccountPreview
             ? { onSaveBookingPreferences: handleSaveBookingPreferences }
             : {})}

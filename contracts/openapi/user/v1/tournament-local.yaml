@@ -147,7 +147,17 @@ components:
             reason:
               {
                 type: [string, 'null'],
-                enum: [REGISTERED, LEFT, FULL, MEMBERSHIP_EXISTS, GENERATION_NOT_CURRENT, null],
+                enum:
+                  [
+                    REGISTERED,
+                    LEFT,
+                    FULL,
+                    MEMBERSHIP_EXISTS,
+                    GENERATION_NOT_CURRENT,
+                    PLAYER_GENDER_REQUIRED,
+                    GENDER_NOT_ALLOWED,
+                    null,
+                  ],
               }
             generation: { type: [string, 'null'], format: uuid }
         registration:

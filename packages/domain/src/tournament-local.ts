@@ -48,7 +48,14 @@ export interface TournamentOwnerReceipt {
     operationId: string;
     action: 'JOIN' | 'LEAVE';
     outcome: 'REGISTERED' | 'LEFT' | 'REJECTED';
-    reason: 'REGISTERED' | 'LEFT' | 'FULL' | 'MEMBERSHIP_EXISTS' | 'GENERATION_NOT_CURRENT';
+    reason:
+      | 'REGISTERED'
+      | 'LEFT'
+      | 'FULL'
+      | 'MEMBERSHIP_EXISTS'
+      | 'GENERATION_NOT_CURRENT'
+      | 'PLAYER_GENDER_REQUIRED'
+      | 'GENDER_NOT_ALLOWED';
     generation: string | null;
     committedAt: string;
   };
@@ -68,6 +75,28 @@ export interface TournamentLocalResult {
     asOf: string | null;
   };
   retryAfterSeconds: number | null;
+}
+export interface TournamentPlayerGenderSettings {
+  gender: 'FEMALE' | 'MALE' | null;
+  version: number;
+}
+
+export interface TournamentPlayerGenderUpdate {
+  gender: TournamentPlayerGenderSettings['gender'];
+  expectedVersion: number;
+}
+
+export function parseTournamentPlayerGenderUpdate(value: unknown): TournamentPlayerGenderUpdate {
+  if (
+    !tournamentObject(value, 'expectedVersion,gender') ||
+    typeof value.expectedVersion !== 'number' ||
+    !Number.isSafeInteger(value.expectedVersion) ||
+    value.expectedVersion < 0 ||
+    value.expectedVersion >= Number.MAX_SAFE_INTEGER ||
+    (value.gender !== 'FEMALE' && value.gender !== 'MALE' && value.gender !== null)
+  )
+    throw new TournamentLocalError('TOURNAMENT_LOCAL_PROFILE_INVALID', 400);
+  return { expectedVersion: value.expectedVersion, gender: value.gender };
 }
 export function parseTournamentLocalInput(v: unknown): TournamentLocalInput {
   if (!v || typeof v !== 'object')
@@ -179,7 +208,9 @@ export function parseTournamentReceipt(
     if (
       o.generation !== null ||
       !(
-        command.action === 'JOIN' ? ['FULL', 'MEMBERSHIP_EXISTS'] : ['GENERATION_NOT_CURRENT']
+        command.action === 'JOIN'
+          ? ['FULL', 'MEMBERSHIP_EXISTS', 'PLAYER_GENDER_REQUIRED', 'GENDER_NOT_ALLOWED']
+          : ['GENERATION_NOT_CURRENT']
       ).includes(o.reason as string)
     )
       return bad();

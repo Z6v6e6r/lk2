@@ -232,7 +232,11 @@ export function TournamentRegistrationPanel({
             ? 'мест нет'
             : result.operation.reason === 'MEMBERSHIP_EXISTS'
               ? 'существующая запись не принадлежит этой операции'
-              : 'исходная регистрация уже изменилась'}
+              : result.operation.reason === 'PLAYER_GENDER_REQUIRED'
+                ? 'укажите пол в настройках профиля и попробуйте снова'
+                : result.operation.reason === 'GENDER_NOT_ALLOWED'
+                  ? 'турнир открыт для другой категории участников'
+                  : 'исходная регистрация уже изменилась'}
           .
         </p>
       ) : null}

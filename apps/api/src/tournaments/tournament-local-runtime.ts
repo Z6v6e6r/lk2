@@ -5,6 +5,7 @@ import {
   parseTournamentReceipt,
   type TournamentLocalInput,
   type TournamentLocalResult,
+  type TournamentPlayerGenderUpdate,
 } from '@phub/domain';
 import {
   sameTournamentIdentity,
@@ -18,7 +19,8 @@ import type { ExternalLevelCheck } from '../eligibility/external-level-check.js'
 export function createTournamentLocalRuntime(options: {
   enabled: boolean;
   repository: TournamentLocalRepository;
-  client?: Pick<TournamentLocalOwnerClient, 'identity' | 'prepare' | 'command' | 'read'>;
+  client?: Pick<TournamentLocalOwnerClient, 'identity' | 'prepare' | 'command' | 'read'> &
+    Partial<Pick<TournamentLocalOwnerClient, 'playerGender'>>;
   token?: (actor: TournamentActor) => Promise<string>;
   date?: (id: string) => Promise<string>;
   /** Server-side level policy, evaluated after the fresh date read and before any CUP write. */
@@ -105,6 +107,16 @@ export function createTournamentLocalRuntime(options: {
     }
   }
   return {
+    profileGenderEnabled: options.enabled && Boolean(options.client?.playerGender),
+    async playerGender(
+      a: TournamentActor,
+      command?: { input: TournamentPlayerGenderUpdate; key: string },
+    ) {
+      if (!options.client?.playerGender)
+        throw new TournamentLocalError('TOURNAMENT_LOCAL_PROFILE_UNAVAILABLE');
+      const { token } = await identity(a);
+      return options.client.playerGender(token, a.correlationId, command);
+    },
     async execute(a: TournamentActor, id: string, key: string, raw: TournamentLocalInput) {
       if (!options.enabled) throw new TournamentLocalError('TOURNAMENT_LOCAL_DISABLED');
       if (!(await repo.ready())) throw new TournamentLocalError();

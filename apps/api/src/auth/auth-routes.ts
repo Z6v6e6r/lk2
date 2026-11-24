@@ -176,6 +176,7 @@ function handleAuthError(
 
 export interface UserRuntimeCapabilities {
   readonly phoneSubjectLink: boolean;
+  readonly tournamentProfileGender?: boolean;
   readonly communityDirectory: boolean;
   readonly communityReadDetail: boolean;
   readonly communityReadFeed: boolean;
