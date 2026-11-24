@@ -86,7 +86,7 @@ describe('LK1-owned game creation schedule', () => {
     });
     const url = new URL(
       'https://padlhub.su/lk/integrations/v1/game-create-schedule?' +
-        new URLSearchParams({ ...query, stationId: providerStation }),
+        new URLSearchParams({ ...query, stationId: providerStation }).toString(),
     );
     const signed = await signer.issueGameCreateSchedule({
       ...actor,
