@@ -110,11 +110,6 @@ async function readBoundedResponseBody(response: Response, maxBytes: number): Pr
   }
 }
 
-const profileCustomFieldSchema = z.object({
-  id: z.string().uuid(),
-  value: z.array(z.string()),
-});
-
 const vivaProfileSchema = z.object({
   id: z.string().uuid(),
   firstName: z.string().nullish(),
@@ -123,7 +118,6 @@ const vivaProfileSchema = z.object({
   phone: z.string().nullish(),
   photo: z.string().max(2_048).nullish(),
   deposit: z.number().int(),
-  customFields: z.array(profileCustomFieldSchema),
 });
 
 export function vivaProfilePhotoSourceUrl(input: unknown): string | undefined {
@@ -273,34 +267,6 @@ const normalizedUpcomingBookingsSchema = z
   })
   .strict();
 
-const PROFILE_LEVEL_FIELD_IDS = [
-  'eabfe27b-3f72-4496-9185-1a2ec6e6465e',
-  '9018d922-6427-41a6-9ac0-4a2c0440eb8a',
-  'f9790818-25fd-4b73-a781-79c02720727d',
-] as const;
-
-function profileLevelLabel(value: number): string {
-  if (value < 2) return 'D';
-  if (value < 3) return 'D+';
-  if (value < 3.5) return 'C';
-  if (value < 4) return 'C+';
-  if (value < 4.7) return 'B';
-  if (value < 5.5) return 'B+';
-  return 'A';
-}
-
-function normalizeProfileLevel(fields: z.infer<typeof profileCustomFieldSchema>[]) {
-  for (const fieldId of PROFILE_LEVEL_FIELD_IDS) {
-    const raw = fields.find((field) => field.id === fieldId)?.value[0];
-    if (!raw) continue;
-    const value = Number(raw.replace(',', '.'));
-    if (Number.isFinite(value) && value >= 0 && value <= 10) {
-      return { label: profileLevelLabel(value), value, assessmentRequired: false };
-    }
-  }
-  return { label: 'D', value: 0, assessmentRequired: true };
-}
-
 /** Normalizes the canonical PadlHub response before it reaches the profile UI. */
 export function normalizePadlHubUserProfile(input: unknown): UserProfile {
   return normalizedProfileSchema.parse(input) as UserProfile;
@@ -335,7 +301,6 @@ export function normalizeVivaUserProfile(input: unknown, padlHubUserId: string):
     ...(phoneDigits.length >= 4 ? { phoneLast4: phoneDigits.slice(-4) } : {}),
     balanceMinor: profile.deposit,
     currency: 'RUB',
-    level: normalizeProfileLevel(profile.customFields),
   }) as UserProfile;
 }
 
