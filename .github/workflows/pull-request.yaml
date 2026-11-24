@@ -244,10 +244,11 @@ jobs:
           CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK: CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1
         run: npm run db:migrate
       - name: Unit and integration tests
-        timeout-minutes: 15
+        timeout-minutes: 25
         env:
-          # Run 43739391426 completed its suites at 741s; keep 70s for bounded finalization.
-          CI_TEST_WATCHDOG_SECONDS: '800'
+          # Run 45378736609 reached the 800 s watchdog. Keep the 30 s shutdown grace
+          # and the 30 s finalization budget inside the Actions step timeout.
+          CI_TEST_WATCHDOG_SECONDS: '1380'
           # A change that stays inside product areas skips scripts/paused-release-tooling-tests.txt.
           CI_TEST_SKIP_PAUSED_RELEASE_TOOLING: ${{ needs.ci-plan.outputs.release_tooling_tests == 'false' && '1' || '0' }}
         run: scripts/run-ci-tests-with-diagnostics.sh
