@@ -174,6 +174,10 @@ const SECRET_NAMES = [
   '.release-identity.json',
 ];
 const SCHEDULE_OPERATION = 'PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_OPERATION_V1';
+const SCHEDULE_BACKUP_SCHEMA = 'PHUB_TIMEWEB_BACKUP_SCHEDULE_0A4_API_WEB_V1';
+const SCHEDULE_DISK_BACKUP_SCHEMA = 'PHUB_TIMEWEB_BACKUP_SCHEDULE_0A4_DISK_V1';
+const SCHEDULE_PREDECESSOR_RELEASE = '0a4d640965e921e6d06eeb22de6cc6dcae07f0b1-45011215364-1';
+const SCHEDULE_LEDGER = '4dab86cb18f7e3db7a0598cd657eaebc86f07d5af497dc0eea2e33900b6526c1';
 const SCHEDULE_PLAN = 'PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_PLAN_V1';
 const SCHEDULE_RECEIPT = 'PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_RECEIPT_V1';
 const SCHEDULE_INSTALLED_KIND = 'API_WEB_SCHEDULE_READ';
@@ -380,17 +384,24 @@ export function validateApiWebOperation(value) {
   if (isProductionCutover(value)) return validateProductionCutover(value);
   if (isJoinOperation(value)) return validateJoinOperation(value);
   if (isScheduleOperation(value)) {
-    const { expectedCurrentSecretSetReleaseId, candidateSecretHashes, expiresAt, ...base } = value;
+    const {
+      expectedCurrentSecretSetReleaseId,
+      candidateSecretHashes,
+      backupOperationSha256,
+      expiresAt,
+      ...base
+    } = value;
     if (
       value.profile !== 'production' ||
       value.controllerSha !== value.candidateSha ||
       !ID.test(expectedCurrentSecretSetReleaseId ?? '') ||
+      !HASH.test(backupOperationSha256 ?? '') ||
       typeof expiresAt !== 'string' ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(expiresAt) ||
       !Number.isFinite(Date.parse(expiresAt)) ||
       new Date(expiresAt).toISOString() !== expiresAt ||
       [value.expectedApi, value.expectedWeb].some(
-        (previous) => previous?.releaseId?.slice(0, 40) !== WHOLE_COURT_PREDECESSOR,
+        (previous) => previous?.releaseId !== SCHEDULE_PREDECESSOR_RELEASE,
       ) ||
       typeof base.confirmation !== 'string' ||
       !base.confirmation.endsWith('_SCHEDULE_READ')
@@ -1387,6 +1398,91 @@ sys.stdout.write('CUTOVER_BACKUP_CUSTODY_VERIFIED')`;
   return { path, sha256: hash(bytes) };
 }
 
+function scheduleDumpIdentity(path) {
+  const info = secure(path, 0o600);
+  if (!info.isFile() || info.size <= 0 || info.nlink !== 1) fail('schedule_backup_dump');
+  return Object.fromEntries(
+    ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].map((key) => [key, info[key]]),
+  );
+}
+
+function validateScheduleBackupProof(directory, releaseId, op, api) {
+  const dumpPath = `${directory}/database.pgcustom`;
+  const dumpIdentity = scheduleDumpIdentity(dumpPath);
+  const operationPath = `${directory}/backup-operation.json`;
+  const bytes = read(operationPath);
+  const backup = parseStrictJson(bytes);
+  const disk = backup.schema === SCHEDULE_DISK_BACKUP_SCHEMA;
+  const receiptPath = `${directory}/database-backup-receipt.json`;
+  const receiptBytes = read(receiptPath);
+  const receipt = parseStrictJson(receiptBytes);
+  const proof = disk
+    ? { path: receiptPath, sha256: hash(receiptBytes) }
+    : validateBackupProof(directory, api, 'production');
+  const terminalPath = `${directory}/SUCCESS_CLEANUP_VERIFIED.json`;
+  const terminalBytes = read(terminalPath);
+  const terminal = parseStrictJson(terminalBytes);
+  const postgres = inspect('postgres', 'phub-timeweb-beta-dependencies');
+  exact(terminal, ['phase', 'operationSha256', 'observedAt', 'receiptSha256']);
+  if (
+    (!disk && backup.schema !== SCHEDULE_BACKUP_SCHEMA) ||
+    backup.releaseId !== releaseId ||
+    backup.publicationRunId !== op.publicationRunId ||
+    backup.controllerSha !== op.controllerSha ||
+    backup.controllerTree !== op.candidateTree ||
+    backup.toolCommit !== op.controllerSha ||
+    backup.controllerConfigSha256 !== hash(read(CONFIG)) ||
+    Object.entries(api).some(([key, value]) => backup.expectedApi?.[key] !== value) ||
+    Object.entries(postgres).some(([key, value]) => backup.expectedPostgres?.[key] !== value) ||
+    hash(bytes) !== op.backupOperationSha256 ||
+    (disk && receipt.schema !== 'PHUB_TIMEWEB_CUTOVER_BACKUP_RESTORE_V2') ||
+    receipt.baselineReleaseId !== api.releaseId ||
+    receipt.backupFile !== dumpPath ||
+    proof.sha256 !== hash(receiptBytes) ||
+    !Number.isFinite(Date.parse(receipt.completedAt)) ||
+    Date.parse(receipt.completedAt) > Date.now() ||
+    Date.now() - Date.parse(receipt.completedAt) > 3600000 ||
+    receipt.sourceLedgerSha256 !== SCHEDULE_LEDGER ||
+    terminal.phase !== 'SUCCESS_CLEANUP_VERIFIED' ||
+    terminal.operationSha256 !== op.backupOperationSha256 ||
+    terminal.receiptSha256 !== proof.sha256 ||
+    !Number.isFinite(Date.parse(terminal.observedAt)) ||
+    Date.parse(terminal.observedAt) < Date.parse(receipt.completedAt) ||
+    Date.parse(terminal.observedAt) > Date.now()
+  )
+    fail('schedule_backup_binding');
+  const helper = `${SOURCE}/scripts/control-timeweb-database-backup.py`;
+  const helperSha = hash(read(helper, 0o644));
+  const attest = `import importlib.util,sys,time
+spec=importlib.util.spec_from_file_location('backup',sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+raw=sys.stdin.buffer.read();op=m.strict(raw);m.validate_operation(op,time.time(),sys.argv[2],allow_expired=True)
+m.tool_custody(op)
+if op['schema']==m.SCHEDULE_DISK_SCHEMA: m.validate_cutover_disk_terminal(op,raw)
+sys.stdout.write('SCHEDULE_BACKUP_CUSTODY_VERIFIED')`;
+  if (
+    command('/usr/bin/python3', ['-I', '-S', '-B', '-c', attest, helper, helperSha], {
+      input: bytes,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: disk ? 180000 : 30000,
+    }) !== 'SCHEDULE_BACKUP_CUSTODY_VERIFIED' ||
+    !equal(dumpIdentity, scheduleDumpIdentity(dumpPath)) ||
+    hash(read(receiptPath)) !== proof.sha256 ||
+    hash(read(terminalPath)) !== hash(terminalBytes)
+  )
+    fail('schedule_backup_custody');
+  return {
+    ...proof,
+    operationPath,
+    operationSha256: op.backupOperationSha256,
+    dumpPath,
+    dumpSha256: receipt.backupSha256,
+    dumpIdentity,
+    terminalPath,
+    terminalSha256: hash(terminalBytes),
+  };
+}
+
 function validateFreshDumpProof(directory, previous, cutover, bytes, receipt) {
   exact(receipt, [
     'schema',
@@ -1842,6 +1938,12 @@ const SCHEDULE_CONTROLLER_FILES = new Set([
   'scripts/provision-timeweb-beta-runtime-secrets.js',
   'scripts/provision-timeweb-beta-runtime-secrets.d.ts',
   'scripts/timeweb-api-web-upgrade.d.ts',
+  'apps/api/src/main.ts',
+  'apps/api/src/games/game-create-schedule-routes.ts',
+  'apps/api/src/games/game-create-schedule-routes.test.ts',
+  'apps/api/src/subscriptions/subscription-runtime-actor-delegation-issuer.ts',
+  'scripts/control-timeweb-database-backup.py',
+  'scripts/test-timeweb-database-backup.py',
 ]);
 const regularModification = (entry) =>
   entry.status === 'M' &&
@@ -3511,7 +3613,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     }
     const backup = join
       ? readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']))
-      : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
+      : schedule
+        ? validateScheduleBackupProof(transaction, id, op, api)
+        : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
     let ownerBytes;
     const monitoring = !direct
       ? isOwnerDirectedCutover(op)
@@ -3725,6 +3829,30 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       !equal(plan.candidateSecrets.files, op.candidateSecretHashes))
   )
     fail('schedule_plan_identity');
+  if (schedule) {
+    exact(plan.backup, [
+      'path',
+      'sha256',
+      'operationPath',
+      'operationSha256',
+      'dumpPath',
+      'dumpSha256',
+      'dumpIdentity',
+      'terminalPath',
+      'terminalSha256',
+    ]);
+    if (
+      plan.backup.path !== `${transaction}/database-backup-receipt.json` ||
+      plan.backup.operationPath !== `${transaction}/backup-operation.json` ||
+      plan.backup.dumpPath !== `${transaction}/database.pgcustom` ||
+      plan.backup.terminalPath !== `${transaction}/SUCCESS_CLEANUP_VERIFIED.json` ||
+      plan.backup.operationSha256 !== op.backupOperationSha256 ||
+      ![plan.backup.sha256, plan.backup.dumpSha256, plan.backup.terminalSha256].every((v) =>
+        HASH.test(v ?? ''),
+      )
+    )
+      fail('schedule_backup_plan_identity');
+  }
   if (
     join &&
     (plan.baselinePath !== baseline ||
@@ -3774,6 +3902,16 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const active = {};
   let stoppedWorkerId = null;
   const attest = (recovering = false) => {
+    if (schedule && !recovering) {
+      const { backup } = plan;
+      if (
+        hash(read(backup.path)) !== backup.sha256 ||
+        hash(read(backup.operationPath)) !== backup.operationSha256 ||
+        hash(read(backup.terminalPath)) !== backup.terminalSha256 ||
+        !equal(scheduleDumpIdentity(backup.dumpPath), backup.dumpIdentity)
+      )
+        fail('schedule_backup_drift');
+    }
     if (roster && !recovering && stoppedWorkerId && !active.worker) {
       const stopped = JSON.parse(docker(['inspect', stoppedWorkerId]))[0];
       if (
@@ -4057,6 +4195,12 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     activate: async (s) => {
       if (join) validateJoinOperation(op, true);
       if (schedule) validateScheduleExpiry(op.expiresAt);
+      if (
+        schedule &&
+        s === 'api' &&
+        hashBackupFile(plan.backup.dumpPath) !== plan.backup.dumpSha256
+      )
+        fail('schedule_backup_drift');
       if (cutover) validateProductionCutover(op, true);
       if (isDirectOperation(op)) validateDirectApiWebOperation(op, true);
       attest();

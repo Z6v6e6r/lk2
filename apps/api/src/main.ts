@@ -1174,11 +1174,31 @@ const gameWholeCourt = (() => {
     }),
   });
 })();
+const scheduleIssuer = (() => {
+  if (gameCreateScheduleUrl !== 'https://padlhub.su') return;
+  const rawKeys = config.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS;
+  const keyId = config.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID;
+  const issuer = config.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER;
+  const audience = config.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE;
+  if (!rawKeys || !keyId || !issuer || !audience)
+    throw new Error('GAME_CREATE_SCHEDULE_SIGNER_CONFIGURATION_INCOMPLETE');
+  const privateKeyPem = (JSON.parse(rawKeys) as Record<string, unknown>)[keyId];
+  if (typeof privateKeyPem !== 'string')
+    throw new Error('GAME_CREATE_SCHEDULE_SIGNER_CONFIGURATION_INCOMPLETE');
+  return new SubscriptionRuntimeActorDelegationIssuer({
+    keyId,
+    issuer,
+    audience,
+    privateKeyPem,
+    ttlSeconds: config.SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS,
+  });
+})();
 const gameCreateScheduleRead = gameCreateScheduleUrl
   ? createGameCreateScheduleRead({
       baseUrl: gameCreateScheduleUrl,
       pool,
       auth: authService,
+      ...(scheduleIssuer ? { issuer: scheduleIssuer } : {}),
       ...(gameWholeCourt
         ? {
             resolveCheckoutCourt: async (actor, stationId) => {

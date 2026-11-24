@@ -80,10 +80,8 @@ export function parseTimewebDelegationKeyring(value, fail) {
 }
 
 export function validateTimewebCommercialRuntime(api, fail) {
-  if (
-    api.GAME_CREATE_SCHEDULE_LK1_URL !== undefined &&
-    api.GAME_CREATE_SCHEDULE_LK1_URL !== 'https://padlhub.su/'
-  )
+  const schedule = api.GAME_CREATE_SCHEDULE_LK1_URL !== undefined;
+  if (schedule && api.GAME_CREATE_SCHEDULE_LK1_URL !== 'https://padlhub.su/')
     fail('game_create_schedule_owner_invalid');
   const mode = api.SUBSCRIPTION_RUNTIME_WARN_MODE ?? 'OFF';
   if (!['OFF', 'WARN'].includes(mode)) fail('subscription_runtime_mode');
@@ -197,7 +195,7 @@ export function validateTimewebCommercialRuntime(api, fail) {
     )
       fail('commercial_create_owner_unavailable');
   }
-  if (mode === 'WARN' || monthly || quarterCreate || wholeCourt) {
+  if (mode === 'WARN' || monthly || quarterCreate || wholeCourt || schedule) {
     const required = [
       'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
       'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',

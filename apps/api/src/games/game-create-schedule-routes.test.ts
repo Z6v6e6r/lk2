@@ -1,7 +1,10 @@
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import type { Pool } from 'pg';
 import Fastify from 'fastify';
+import { jwtVerify } from 'jose';
 import { describe, expect, it, vi } from 'vitest';
 import { AuthServiceError } from '../auth/auth-service.js';
+import { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
 import {
   createGameCreateScheduleRead,
   gameCreateScheduleOwner,
@@ -26,6 +29,7 @@ const query = { stationId: station, day, durationMinutes: '60' } as const;
 function setup(
   aliases = [providerStation],
   resolveCheckoutCourt?: Parameters<typeof createGameCreateScheduleRead>[0]['resolveCheckoutCourt'],
+  signing = true,
 ) {
   const pool = {
     connect: () =>
@@ -61,6 +65,9 @@ function setup(
     baseUrl: 'https://padlhub.su',
     pool,
     auth: { issueVivaAccessToken },
+    ...(signing
+      ? { issuer: { issueGameCreateSchedule: vi.fn().mockResolvedValue('test-delegation') } }
+      : {}),
     fetchImpl,
     ...(resolveCheckoutCourt ? { resolveCheckoutCourt } : {}),
   });
@@ -68,6 +75,47 @@ function setup(
 }
 
 describe('LK1-owned game creation schedule', () => {
+  it('signs the outgoing query and binds it to the Viva actor token', async () => {
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const signer = new SubscriptionRuntimeActorDelegationIssuer({
+      issuer: 'test-lk2',
+      audience: 'test-lk1',
+      keyId: 'test-kid',
+      privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+      ttlSeconds: 30,
+    });
+    const url = new URL(
+      'https://padlhub.su/lk/integrations/v1/game-create-schedule?' +
+        new URLSearchParams({ ...query, stationId: providerStation }),
+    );
+    const signed = await signer.issueGameCreateSchedule({
+      ...actor,
+      userId: station,
+      sessionId: providerRoom,
+      url,
+      actorToken: { token, expiresAt: new Date(Date.now() + 120_000).toISOString() },
+    });
+    const { payload, protectedHeader } = await jwtVerify(signed, publicKey, {
+      issuer: 'test-lk2',
+      audience: 'test-lk1',
+      algorithms: ['RS256'],
+    });
+    expect(protectedHeader).toMatchObject({
+      kid: 'test-kid',
+      typ: 'phub-game-create-schedule+jwt',
+    });
+    expect(payload).toMatchObject({
+      scope: 'game-create.schedule.read',
+      method: 'GET',
+      path: url.pathname,
+      sub: station,
+      sid: providerRoom,
+      tenant_id: actor.tenantId,
+      correlation_id: actor.correlationId,
+      query_sha256: createHash('sha256').update(url.search.slice(1)).digest('hex'),
+      actor_token_sha256: createHash('sha256').update(token).digest('hex'),
+    });
+  });
   it('uses the verified actor and station mapping and drops the external room identifier', async () => {
     const { read, fetchImpl, issueVivaAccessToken } = setup();
     const result = await read(actor, query);
@@ -80,11 +128,19 @@ describe('LK1-owned game creation schedule', () => {
     expect(request?.headers).toEqual({
       Authorization: 'Bearer ' + token,
       'X-Correlation-ID': actor.correlationId,
+      'X-Subscription-Actor-Delegation': 'test-delegation',
     });
     expect(request?.redirect).toEqual('error');
     expect(result.slots?.[0]?.courtKey).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(result)).not.toContain(providerRoom);
     expect(JSON.stringify(result)).not.toContain(token);
+  });
+
+  it('refuses a production owner without a signing key before reading actor credentials', async () => {
+    const { read, fetchImpl, issueVivaAccessToken } = setup([providerStation], undefined, false);
+    await expect(read(actor, query)).rejects.toThrow('GAME_CREATE_SCHEDULE_UNAVAILABLE');
+    expect(issueVivaAccessToken).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('stops before any actor token or external read when station aliases disagree', async () => {

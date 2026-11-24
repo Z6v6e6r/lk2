@@ -1966,17 +1966,40 @@ the original and candidate blobs of the two OpenAPI files and the runtime
 environment contract. Publish the final main revision and enroll that same SHA.
 Worker and Realtime keep their existing identities. The migrator stays off.
 
-Before activation, verify the LK1 schedule reader from Timeweb. Without a bearer
-the exact route must return 401. With a session-bound user bearer it must return
-real schedule data. Use synthetic test fixtures for rehearsal and collect
-redacted evidence for production smoke. A missing Residency quote does not
-prevent schedule use.
+Before activation, verify the LK1 schedule reader from Timeweb. The exact
+route must return 401 without a signature, even when a bearer is present.
+LK1 needs the public fields matching the existing Timeweb RS256 actor signer.
+Verify the key fingerprint, issuer, audience and key ID. Keep private signing
+material on LK2. The schedule scope binds the actor, session, bearer and full
+query. After API activation, confirm an authenticated browser session receives
+real schedule slots. A missing Residency quote does not prevent schedule use.
 
-Use the verified production backup and monitoring receipts for the current
-predecessor. The existing V1 backup producer admits the earlier `0d6078be`
-baseline, and the canonical fresh-dump producer uses a different receipt type.
-The schedule release remains blocked until an approved producer and this
-controller can verify the same fresh backup and restore proof for `0a4d640965e9`.
+Install the reviewed backup helper with its normal source and installation
+proof. Use `PHUB_TIMEWEB_BACKUP_SCHEDULE_0A4_DISK_V1` on Timeweb when the
+bounded disk profile fits. It requires 42,681,237,504 free bytes on the
+filesystem shared by the Timeweb delivery root and its backups directory,
+at least 4 GiB of available memory, and a database of at most 24 GiB.
+This schedule profile allocates a 28 GiB restore image and keeps the existing
+6.5 GiB dump cap and 5.25 GiB filesystem reserve.
+Confirm actual placement and capacity before executing.
+Bind the exact current API and PostgreSQL identities, database target, 122-row
+ledger hash, controller source, candidate publication run and expiry. In this
+profile the predecessor attestation hash is the exact container-boundary
+hash. The confirmation is
+`BACKUP_RESTORE_SCHEDULE_DISK_<CANDIDATE_FIRST_12_UPPER>_KEEP_API_0A4D640965E9`.
+The bounded engine uses a serial read-only dump, an encrypted temporary restore
+volume, an isolated PostgreSQL container and matching account and ledger
+witnesses. It publishes the V2 receipt only after cleanup and writes into
+the candidate `-api-web` directory. After an interruption use
+`--reconcile-disk` against the retained request. It never repeats the dump.
+
+Select `PHUB_TIMEWEB_BACKUP_SCHEDULE_0A4_API_WEB_V1` explicitly only if the
+tmpfs profile's measured memory and disk requirements are both met.
+Its confirmation omits `DISK_` and its recovery uses
+`--reconcile-cutover-tmpfs`. No profile automatically falls back to another.
+The API/Web request includes `backupOperationSha256`. The controller checks
+the retained request, the dump and fresh receipt, helper custody and the
+terminal cleanup record against that hash.
 
 Prepare a candidate runtime set
 with only `GAME_CREATE_SCHEDULE_LK1_URL=https://padlhub.su/` appended to `api.env`

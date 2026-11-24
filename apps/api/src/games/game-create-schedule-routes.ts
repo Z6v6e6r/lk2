@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { withTenantTransaction } from '../../../../packages/database/src/connection.js';
 import { AuthServiceError, type AuthService } from '../auth/auth-service.js';
 import { sendApiError } from '../http-errors.js';
+import type { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
 import type { WholeCourtPilot } from './game-whole-court-create.js';
 
 const path = '/lk/integrations/v1/game-create-schedule';
@@ -122,6 +123,7 @@ export function createGameCreateScheduleRead(input: {
   readonly baseUrl: string;
   readonly pool: Pool;
   readonly auth: Pick<AuthService, 'issueVivaAccessToken'>;
+  readonly issuer?: Pick<SubscriptionRuntimeActorDelegationIssuer, 'issueGameCreateSchedule'>;
   readonly fetchImpl?: typeof fetch;
   readonly resolveCheckoutCourt?: (
     actor: Actor,
@@ -134,6 +136,7 @@ export function createGameCreateScheduleRead(input: {
   let failures = 0;
   let blockedUntil = 0;
   return async (actor: Actor, query: z.infer<typeof querySchema>) => {
+    if (endpoint.protocol === 'https:' && !input.issuer) throw unavailable();
     const key = `${actor.tenantId}:${actor.userId}`;
     if (Date.now() < blockedUntil || pending.has(key))
       throw new ScheduleReadError(429, 'GAME_CREATE_SCHEDULE_RATE_LIMITED');
@@ -194,6 +197,11 @@ export function createGameCreateScheduleRead(input: {
       }).toString();
       let raw: unknown;
       try {
+        const delegation = await input.issuer?.issueGameCreateSchedule({
+          ...actor,
+          url,
+          actorToken: { token: accessToken, expiresAt },
+        });
         raw = await readJson(
           await (input.fetchImpl ?? fetch)(url, {
             method: 'GET',
@@ -203,6 +211,7 @@ export function createGameCreateScheduleRead(input: {
             headers: {
               Authorization: `Bearer ${accessToken}`,
               'X-Correlation-ID': actor.correlationId,
+              ...(delegation ? { 'X-Subscription-Actor-Delegation': delegation } : {}),
             },
           }),
         );

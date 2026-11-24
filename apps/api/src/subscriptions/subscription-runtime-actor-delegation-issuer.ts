@@ -168,6 +168,60 @@ export class SubscriptionRuntimeActorDelegationIssuer {
     }
   }
 
+  async issueGameCreateSchedule(input: {
+    tenantKey: string;
+    tenantId: string;
+    userId: string;
+    sessionId: string;
+    correlationId: string;
+    url: URL;
+    actorToken: { token: string; expiresAt: string };
+  }): Promise<string> {
+    const now = Math.floor(Date.now() / 1000);
+    const tokenExpiry = Date.parse(input.actorToken.expiresAt);
+    if (
+      input.tenantKey !== 'local-padel' ||
+      ![input.tenantId, input.userId, input.sessionId].every(qcUuid) ||
+      !correlationPattern.test(input.correlationId) ||
+      input.url.origin !== 'https://padlhub.su' ||
+      input.url.pathname !== '/lk/integrations/v1/game-create-schedule' ||
+      !/^[A-Za-z\d._~-]{20,12000}$/.test(input.actorToken.token) ||
+      !Number.isFinite(tokenExpiry) ||
+      tokenExpiry <= Date.now() + 17_000
+    )
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    return new SignJWT({
+      contract_version: 1,
+      caller: 'lk2-api',
+      provider: 'VIVA',
+      scope: 'game-create.schedule.read',
+      method: 'GET',
+      path: input.url.pathname,
+      query_sha256: createHash('sha256').update(input.url.search.slice(1)).digest('hex'),
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      correlation_id: input.correlationId,
+      actor_token_sha256: createHash('sha256').update(input.actorToken.token).digest('hex'),
+      actor_token_expires_at: Math.floor(tokenExpiry / 1000),
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-game-create-schedule+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(Math.min(now + this.options.ttlSeconds, Math.floor(tokenExpiry / 1000)))
+      .setJti(randomUUID())
+      .sign(await importPKCS8(this.options.privateKeyPem, 'RS256'));
+  }
+
   async issueMonthlyPurchase(input: {
     tenantKey: string;
     tenantId: string;

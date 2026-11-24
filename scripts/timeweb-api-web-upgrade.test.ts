@@ -248,14 +248,17 @@ describe('explicit API/Web upgrade boundary', () => {
       const tail=[definition,'scripts/timeweb-api-web-upgrade.js','scripts/timeweb-api-web-upgrade.test.ts',
         'scripts/timeweb-api-web-upgrade.d.ts','scripts/timeweb-commercial-runtime-contract.js',
         'scripts/provision-timeweb-beta-runtime-secrets.js','scripts/provision-timeweb-beta-runtime-secrets.d.ts',
-        'scripts/provision-timeweb-beta-runtime-secrets.test.ts','docs/runbooks/timeweb-standard-delivery.md']
+        'scripts/provision-timeweb-beta-runtime-secrets.test.ts','docs/runbooks/timeweb-standard-delivery.md',
+        'apps/api/src/main.ts','apps/api/src/games/game-create-schedule-routes.ts',
+        'apps/api/src/games/game-create-schedule-routes.test.ts','apps/api/src/subscriptions/subscription-runtime-actor-delegation-issuer.ts',
+        'scripts/control-timeweb-database-backup.py','scripts/test-timeweb-database-backup.py']
         .map(path=>({...regular,path}));
       validateScheduleRuntimeBridge(identity,entries,tail);
       assert.throws(()=>validateRuntimeUpgrade(identity,entries),/callback_runtime_bridge/);
       assert.throws(()=>validateScheduleRuntimeBridge({...identity,previousSha:applicationSha},entries,tail),/schedule_runtime_bridge/);
       assert.throws(()=>validateScheduleRuntimeBridge({...identity,applicationTree:'f'.repeat(40)},entries,tail),/schedule_runtime_bridge/);
       assert.throws(()=>validateScheduleRuntimeBridge(identity,entries,tail.slice(1)),/schedule_runtime_bridge/);
-      for(const change of [{path:'apps/api/src/main.ts'},{status:'A'},{status:'T'},{newMode:'100755'},{newType:'tree'}]){
+      for(const change of [{path:'apps/api/src/app.ts'},{status:'A'},{status:'T'},{newMode:'100755'},{newType:'tree'}]){
         assert.throws(()=>validateScheduleRuntimeBridge(identity,entries,[{...tail[0],...change},...tail.slice(1)]),/schedule_runtime_bridge/);
       }
       assert.throws(()=>validateScheduleRuntimeBridge(identity,entries.map(row=>row.path===definition?{...row,newOid:row.oldOid}:row),tail),/schedule_runtime_bridge/);
@@ -570,13 +573,14 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
     scenario(`
       const op=${JSON.stringify(operation)};
       const predecessor='0a4d640965e921e6d06eeb22de6cc6dcae07f0b1';
-      const previousId=predecessor+'-123-1';
+      const previousId=predecessor+'-45011215364-1';
       op.schema='PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_OPERATION_V1';
       op.profile='production';
       op.controllerSha=op.candidateSha;
       op.expectedApi.releaseId=previousId;
       op.expectedWeb.releaseId=previousId;
       op.expectedCurrentSecretSetReleaseId=previousId;
+      op.backupOperationSha256='b'.repeat(64);
       op.expiresAt='2030-01-01T00:00:00.000Z';
       op.candidateSecretHashes=Object.fromEntries(['api.env','worker.env','realtime.env','migrator.env','.release-identity.json'].map(k=>[k,'a'.repeat(64)]));
       op.confirmation='DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_0A4D640965E9_0A4D640965E9_SCHEDULE_READ';

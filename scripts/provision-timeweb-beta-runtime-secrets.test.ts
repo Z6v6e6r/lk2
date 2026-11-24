@@ -886,9 +886,24 @@ describe('commercial JOIN API environment contract', () => {
 
 describe('LK1 schedule runtime set', () => {
   const owner = 'https://padlhub.su/';
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const signing = {
+    SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({ 'test-kid': privateKey }),
+    SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'test-kid',
+    SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'test-lk2',
+    SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'test-lk1',
+  };
   it('admits only the canonical API owner', () => {
     const env = safeRuntimeEnvironments();
     env.api!.GAME_CREATE_SCHEDULE_LK1_URL = owner;
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
+      'subscription_runtime_boundary_incomplete',
+    );
+    Object.assign(env.api!, signing);
     expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).not.toThrow();
     for (const value of [
       'https://padlhub.su',
@@ -918,6 +933,7 @@ describe('LK1 schedule runtime set', () => {
     const f = fixture();
     const candidate = join(f.root, 'schedule-candidate');
     const before = safeRuntimeEnvironments();
+    Object.assign(before.api!, signing);
     const nextId = `${'9'.repeat(40)}-777-1`;
     for (const [path, id] of [
       [f.targetDir, releaseId],

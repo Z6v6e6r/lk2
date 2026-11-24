@@ -944,6 +944,7 @@ class Scenario:
                 kwargs['stdin'].read()
                 return b''
             if 'pg_isready' in args:return b''
+            if args[-2:]==['/bin/cat','/proc/1/comm']:return b'postgres\n'
             if '--command='+m.LEDGER_SQL in args:
                 return m.encoded([['0001_changed.sql','f'*64]]) if self.fault=='restore-ledger-mismatch' else m.encoded(self.ledger)
         raise AssertionError('unmocked docker command: '+repr(args))
@@ -1050,6 +1051,110 @@ def cutover_backup_operation():
 
 
 CUTOVER_LEDGER=[[f'{n:04d}_synthetic.sql','c'*64] for n in range(1,123)]
+
+def schedule_backup_operation():
+    op=copy.deepcopy(OP)
+    op.update(schema=m.SCHEDULE_BACKUP_SCHEMA,profile='production',toolCommit=OP['controllerSha'],
+              publicationRunId='500000001',releaseId=OP['controllerSha']+'-500000001-1',
+              expectedLedgerSha256=m.SCHEDULE_LEDGER_SHA256,
+              expectedDatabaseTarget=copy.deepcopy(m.LOCATION_PHOTO_DATABASE_TARGET),
+              confirmation='BACKUP_RESTORE_SCHEDULE_'+'3'*12+'_KEEP_API_0A4D640965E9')
+    op['expectedApi'].update(image='ghcr.io/z6v6e6r/phub-api@'+m.SCHEDULE_API_DIGEST,
+                             imageId=m.SCHEDULE_API_DIGEST,releaseId=m.SCHEDULE_BASELINE,
+                             revision=m.SCHEDULE_BASELINE[:40])
+    op['expectedPostgres']['id']='b'*64
+    return op
+
+
+class ScheduleBackupTests(unittest.TestCase):
+    def test_engine_without_mount_inventory_requires_namespace_size_and_mode(self):
+        container,operation='a'*64,'b'*64
+        size=512*1024**2
+        row=restore_row(container,operation,size,'running')
+        row['Mounts']=[]
+        mounts=(
+            b'1 0 0:1 / /tmp rw,nosuid,nodev,noexec - tmpfs tmpfs rw,size=16384k\n'
+            b'2 0 0:2 / /run/postgresql rw,nosuid,nodev,noexec - tmpfs tmpfs rw,size=16384k\n'
+            b'3 0 0:3 / /var/lib/postgresql/data rw,nosuid,nodev,noexec - tmpfs tmpfs rw,size=524288k\n'
+        )
+        with patch.object(m,'docker',side_effect=[m.encoded(row),mounts,b'1777\n1777\n1777\n']):
+            m.inspect_restore(container,operation,size,'running',schedule=True)
+        with patch.object(m,'docker',side_effect=[m.encoded(row),mounts.replace(b'524288k',b'32768k')]):
+            with self.assertRaisesRegex(m.Stop,'RESTORE_MOUNTINFO'):
+                m.inspect_restore(container,operation,size,'running',schedule=True)
+        with patch.object(m,'docker',side_effect=[m.encoded(row),mounts,b'1777\n0777\n1777\n']):
+            with self.assertRaisesRegex(m.Stop,'RESTORE_MOUNT_MODES'):
+                m.inspect_restore(container,operation,size,'running',schedule=True)
+        with patch.object(m,'docker',return_value=m.encoded(row)):
+            with self.assertRaisesRegex(m.Stop,'RESTORE_CUSTODY'):
+                m.inspect_restore(container,operation,size,'running')
+
+    def fixture(self,directory,fault=None):
+        op=schedule_backup_operation()
+        op['expectedLedgerSha256']=m.digest(m.encoded(CUTOVER_LEDGER))
+        scenario=Scenario(directory,fault=fault,operation=op,ledger=CUTOVER_LEDGER)
+        with patch.object(m,'SCHEDULE_LEDGER_SHA256',op['expectedLedgerSha256']):
+            m.validate_operation(scenario.op,NOW,'2'*64)
+        path=scenario.root/'backups'/(op['releaseId']+'-api-web')
+        return scenario,path
+
+    def test_exact_profile_and_candidate_path(self):
+        op=schedule_backup_operation()
+        self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+        self.assertEqual(m.operation_mode(op),('api-web',op['releaseId']))
+        self.assertEqual(m.backup_baseline(op),m.SCHEDULE_BASELINE)
+        for change in [lambda v:v.update(profile='beta'),lambda v:v.update(publicationRunId='1'),
+                       lambda v:v.update(expectedLedgerSha256='f'*64),
+                       lambda v:v['expectedApi'].update(releaseId=m.BASELINE),
+                       lambda v:v['expectedApi'].update(image=API['image']),
+                       lambda v:v['expectedApi'].update(revision='a'*40),
+                       lambda v:v.update(expiresAt='2026-10-10T15:20:00.000Z')]:
+            bad=copy.deepcopy(op);change(bad)
+            with self.subTest(bad=bad),self.assertRaises(m.Stop):
+                m.validate_operation(bad,NOW,'2'*64)
+
+    def test_completed_restore_binds_the_operation_and_proves_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix='phub-schedule-backup-') as directory:
+            scenario,tx=self.fixture(directory)
+            result=scenario.invoke()
+            receipt=(tx/'database-backup-receipt.json').read_bytes()
+            terminal=m.strict((tx/'SUCCESS_CLEANUP_VERIFIED.json').read_bytes())
+            self.assertEqual(m.strict(receipt)['baselineReleaseId'],m.SCHEDULE_BASELINE)
+            self.assertEqual(terminal['receiptSha256'],m.digest(receipt))
+            self.assertEqual(terminal['operationSha256'],m.digest(m.encoded(scenario.op)))
+            self.assertTrue((tx/'retired-lock').is_dir())
+            self.assertFalse((scenario.root/'standard/active').exists())
+            self.assertFalse(result['authorizesDeploy'])
+
+    def test_failed_restore_cannot_create_terminal_proof(self):
+        with tempfile.TemporaryDirectory(prefix='phub-schedule-backup-') as directory:
+            scenario,tx=self.fixture(directory,'restore-ledger-mismatch')
+            with self.assertRaisesRegex(m.Stop,'LEDGER_MISMATCH'):scenario.invoke()
+            self.assertFalse((tx/'SUCCESS_CLEANUP_VERIFIED.json').exists())
+            self.assertTrue((scenario.root/'standard/active').is_dir())
+
+    def test_reconciliation_does_not_repeat_a_dump_or_release_a_foreign_lock(self):
+        for fault in ('DUMP','RESTORE','RESTORE_STOP'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory(prefix='phub-schedule-recovery-') as directory:
+                scenario,tx=self.fixture(directory,fault)
+                with self.assertRaisesRegex(m.Stop,'^'+fault+'$'):scenario.invoke()
+                lock=scenario.root/'standard/active'/'backup-restore.json'
+                original=lock.read_bytes()
+                lock.write_bytes(b'{}')
+                with self.assertRaises(m.Stop):scenario.invoke(reconcile=True)
+                self.assertTrue(lock.exists())
+                lock.write_bytes(original)
+                scenario.fault='dump-still-active'
+                with self.assertRaisesRegex(m.Stop,'CUTOVER_DUMP_STILL_ACTIVE'):scenario.invoke(reconcile=True)
+                self.assertTrue(lock.exists())
+                scenario.fault=None
+                before=len(scenario.calls)
+                result=scenario.invoke(reconcile=True)
+                self.assertEqual(result['status'],'CUTOVER_BACKUP_RECONCILED')
+                self.assertFalse(result['replayAllowed'])
+                self.assertFalse((tx/'SUCCESS_CLEANUP_VERIFIED.json').exists())
+                dump=m.cutover_dump_shell(m.digest(m.encoded(scenario.op)))
+                self.assertFalse(any(dump in call for call in scenario.calls[before:]))
 
 
 class ProductionCutoverBackupTests(unittest.TestCase):
@@ -1544,13 +1649,24 @@ class DiskScenario(Scenario):
 
 
 class CutoverDiskScenario(DiskScenario):
-    def __init__(self,directory,fault=None):
-        op=cutover_backup_operation()
-        op.update(schema=m.CUTOVER_DISK_SCHEMA,confirmation='BACKUP_RESTORE_BOUNDED_DISK_BETA122_'+op['candidateSha'][:12].upper()+'_FROM_LK2_BETA_759083E37B40')
+    def __init__(self,directory,fault=None,schedule=False):
+        if schedule:
+            op=schedule_backup_operation()
+            op.update(schema=m.SCHEDULE_DISK_SCHEMA,
+                      confirmation='BACKUP_RESTORE_SCHEDULE_DISK_'+op['controllerSha'][:12].upper()+'_KEEP_API_0A4D640965E9',
+                      expectedLedgerSha256=m.digest(m.encoded(CUTOVER_LEDGER)))
+        else:
+            op=cutover_backup_operation()
+            op.update(schema=m.CUTOVER_DISK_SCHEMA,confirmation='BACKUP_RESTORE_BOUNDED_DISK_BETA122_'+op['candidateSha'][:12].upper()+'_FROM_LK2_BETA_759083E37B40')
         Scenario.__init__(self,directory,None,op,CUTOVER_LEDGER)
+        if schedule:
+            self.op['predecessorAttestationSha256']=self.op['expectedBoundarySha256']
+            self.request.write_bytes(m.encoded(self.op))
+            with patch.object(m,'SCHEDULE_LEDGER_SHA256',self.op['expectedLedgerSha256']):
+                m.validate_operation(self.op,NOW,'2'*64)
         self.fault=fault;self.loop=None;self.mapper=None;self.mounted=False;self.stopped=False
         with patch.object(m,'ROOT',self.root):
-            self.plan=m.disk_plan(self.op,m.encoded(self.op),m.cutover_disk_sizing(1024,10**12,50*1024**3))
+            self.plan=m.disk_plan(self.op,m.encoded(self.op),m.cutover_disk_sizing(1024,10**12,50*1024**3,schedule=schedule))
         self.secret=b'!'*64
 
     def docker(self,args,code='DOCKER_READ',**kwargs):
@@ -2211,6 +2327,43 @@ class CutoverDiskTests(unittest.TestCase):
             m.validate_cutover_disk_terminal(s.op,m.encoded(s.op))
             terminal=canonical/'SUCCESS_CLEANUP_VERIFIED.json';value=json.loads(terminal.read_bytes());value['observedAt']='2026-10-01T00:00:00.000Z';terminal.write_bytes(m.encoded(value))
             with self.assertRaisesRegex(m.Stop,'CUTOVER_TERMINAL_DRIFT'):m.validate_cutover_disk_terminal(s.op,m.encoded(s.op))
+
+    def test_schedule_disk_backup_binds_current_api_and_successful_restore(self):
+        with tempfile.TemporaryDirectory(prefix='phub-schedule-disk-') as root:
+            scenario=CutoverDiskScenario(root,schedule=True)
+            result=scenario.invoke()
+            canonical=Path(scenario.plan['canonical'])
+            receipt=m.strict((canonical/'database-backup-receipt.json').read_bytes())
+            self.assertEqual(receipt['schema'],m.CUTOVER_DISK_RECEIPT)
+            self.assertEqual(receipt['baselineReleaseId'],m.SCHEDULE_BASELINE)
+            self.assertEqual(receipt['operationSha256'],m.digest(m.encoded(scenario.op)))
+            self.assertEqual(receipt['sourceAccountsSha256'],receipt['restoredAccountsSha256'])
+            self.assertFalse(result['authorizesDeploy'])
+            self.assertFalse(scenario.created or scenario.loop or scenario.mapper or scenario.mounted)
+            with patch.object(m,'ROOT',scenario.root),patch.object(m,'read_secure',side_effect=scenario.read),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()):
+                m.validate_cutover_disk_terminal(scenario.op,m.encoded(scenario.op))
+
+    def test_schedule_disk_capacity_accepts_current_database_with_full_reserve(self):
+        memory=7_117_508_608
+        database=22_916_520_983
+        required=m.SCHEDULE_DISK_IMAGE_BYTES+m.CUTOVER_DUMP_LIMIT+m.DISK_HEADROOM+m.CUTOVER_CONTROL_BYTES
+        self.assertEqual(required,42_681_237_504)
+        with self.assertRaisesRegex(m.Stop,'CUTOVER_DISK_CAPACITY'):
+            m.cutover_disk_sizing(database,memory,17_716_527_104,schedule=True)
+        self.assertEqual(m.cutover_disk_sizing(database,memory,required,schedule=True)['imageBytes'],28*1024**3)
+        with self.assertRaisesRegex(m.Stop,'CUTOVER_DATABASE_SIZE'):
+            m.cutover_disk_sizing(database,memory,required)
+
+    def test_schedule_disk_failure_reconciles_without_second_dump(self):
+        with tempfile.TemporaryDirectory(prefix='phub-schedule-disk-') as root:
+            scenario=CutoverDiskScenario(root,'before:RESTORE',schedule=True)
+            with self.assertRaises(m.Stop):scenario.invoke()
+            mark=len(scenario.calls)
+            scenario.fault=None
+            result=scenario.invoke(True)
+            self.assertFalse(result['replayAllowed'])
+            self.assertFalse(Path(scenario.plan['canonical']).exists())
+            self.assertFalse(any('pg_dump' in ' '.join(call) or 'pg_restore' in call for call in scenario.calls[mark:]))
 
     def test_failure_reconciles_without_dump_or_restore_replay(self):
         for fault in ['before:DUMP','after:DUMP','before:RESTORE','after:RESTORE','after:PHASE_PUBLISH_READY','after:PHASE_STORAGE_CLEANUP_VERIFIED','after:PHASE_PUBLISH_INTENT','after:PHASE_PUBLISHED','after:PHASE_UNLOCK_INTENT']:
