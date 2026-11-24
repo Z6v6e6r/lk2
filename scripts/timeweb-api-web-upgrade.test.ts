@@ -255,6 +255,12 @@ describe('explicit API/Web upgrade boundary', () => {
         'scripts/test-timeweb-database-backup.py']
         .map(path=>({...regular,path}));
       validateScheduleRuntimeBridge(identity,entries,tail);
+      const fixture='scripts/timeweb-closed-application-source.test.ts';
+      const ciFix={...regular,path:fixture,oldOid:'51b39d77653eccd8ea7a35e964f299046aaf82c7',newOid:'bba0007c041117a0bd67943661ff32f5e9bdfd95'};
+      validateScheduleRuntimeBridge(identity,[...entries,ciFix],[...tail,ciFix]);
+      for(const change of [{oldOid:'f'.repeat(40)},{newOid:'f'.repeat(40)},{newMode:'100755'},{path:'scripts/foreign.test.ts'}]){
+        assert.throws(()=>validateScheduleRuntimeBridge(identity,entries,[...tail,{...ciFix,...change}]),/schedule_runtime_bridge/);
+      }
       assert.throws(()=>validateRuntimeUpgrade(identity,entries),/callback_runtime_bridge/);
       assert.throws(()=>validateScheduleRuntimeBridge({...identity,previousSha:applicationSha},entries,tail),/schedule_runtime_bridge/);
       assert.throws(()=>validateScheduleRuntimeBridge({...identity,applicationTree:'f'.repeat(40)},entries,tail),/schedule_runtime_bridge/);

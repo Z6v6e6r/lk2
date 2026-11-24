@@ -1998,6 +1998,11 @@ const SCHEDULE_CONTROLLER_FILES = new Set([
   'scripts/build-timeweb-canonical-backup-request.py',
   'scripts/test-timeweb-database-backup.py',
 ]);
+const SCHEDULE_CI_FIX = {
+  path: 'scripts/timeweb-closed-application-source.test.ts',
+  oldOid: '51b39d77653eccd8ea7a35e964f299046aaf82c7',
+  newOid: 'bba0007c041117a0bd67943661ff32f5e9bdfd95',
+};
 const regularModification = (entry) =>
   entry.status === 'M' &&
   entry.oldMode === '100644' &&
@@ -2011,10 +2016,16 @@ export function validateScheduleRuntimeBridge(identity, entries, tail) {
     identity.applicationSha !== SCHEDULE_APPLICATION ||
     identity.applicationTree !== SCHEDULE_APPLICATION_TREE ||
     !Array.isArray(tail) ||
-    tail.length !== SCHEDULE_CONTROLLER_FILES.size ||
+    tail.length !==
+      SCHEDULE_CONTROLLER_FILES.size +
+        Number(tail.some((entry) => entry.path === SCHEDULE_CI_FIX.path)) ||
     new Set(tail.map(({ path }) => path)).size !== tail.length ||
     tail.some(
-      (entry) => !SCHEDULE_CONTROLLER_FILES.has(entry.path) || !regularModification(entry),
+      (entry) =>
+        !regularModification(entry) ||
+        (entry.path === SCHEDULE_CI_FIX.path
+          ? entry.oldOid !== SCHEDULE_CI_FIX.oldOid || entry.newOid !== SCHEDULE_CI_FIX.newOid
+          : !SCHEDULE_CONTROLLER_FILES.has(entry.path)),
     ) ||
     new Set(entries.map(({ path }) => path)).size !== entries.length
   )
