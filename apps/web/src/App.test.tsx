@@ -1487,7 +1487,10 @@ describe('PadlHub web authentication', () => {
     });
     rerender(<App gateway={nextGateway} tenantKey="padlhub" />);
     expect(await screen.findByRole('heading', { name: 'Другой игрок' })).toBeVisible();
-    await act(async () => pending.resolve(cupProjectedLevel));
+    await act(async () => {
+      pending.resolve(cupProjectedLevel);
+      await pending.promise;
+    });
     expect(screen.getByRole('img', { name: 'Другой игрок, уровень —, прогресс 0%' })).toBeVisible();
     expect(screen.queryByRole('img', { name: /уровень B\+/ })).toBeNull();
   });
