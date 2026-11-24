@@ -888,7 +888,7 @@ describe('LK1 schedule runtime set', () => {
   const owner = 'https://padlhub.su/';
   it('admits only the canonical API owner', () => {
     const env = safeRuntimeEnvironments();
-    env.api.GAME_CREATE_SCHEDULE_LK1_URL = owner;
+    env.api!.GAME_CREATE_SCHEDULE_LK1_URL = owner;
     expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).not.toThrow();
     for (const value of [
       'https://padlhub.su',
@@ -897,18 +897,18 @@ describe('LK1 schedule runtime set', () => {
       'https://user@padlhub.su/',
       'http://127.0.0.1:24811/',
     ]) {
-      env.api.GAME_CREATE_SCHEDULE_LK1_URL = value;
+      env.api!.GAME_CREATE_SCHEDULE_LK1_URL = value;
       expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
         'game_create_schedule_owner_invalid',
       );
     }
-    env.api.GAME_CREATE_SCHEDULE_LK1_URL = owner;
-    env.worker.GAME_CREATE_SCHEDULE_LK1_URL = owner;
+    env.api!.GAME_CREATE_SCHEDULE_LK1_URL = owner;
+    env.worker!.GAME_CREATE_SCHEDULE_LK1_URL = owner;
     expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
       'unknown_key',
     );
-    delete env.worker.GAME_CREATE_SCHEDULE_LK1_URL;
-    env.api.GAME_CREATE_SCHEDULE_QA_LOOPBACK = 'true';
+    delete env.worker!.GAME_CREATE_SCHEDULE_LK1_URL;
+    env.api!.GAME_CREATE_SCHEDULE_QA_LOOPBACK = 'true';
     expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
       'unknown_key',
     );
