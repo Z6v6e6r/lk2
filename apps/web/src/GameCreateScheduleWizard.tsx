@@ -7,6 +7,7 @@ import type {
 import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
+import { TrainingPeopleIcon } from './TrainingPeopleIcon.js';
 import './GameCreateScheduleWizard.css';
 
 const TIME_ZONE = 'Europe/Moscow';
@@ -94,11 +95,6 @@ const price = (amount: number | null) =>
 
 function slotTime(slot: GameCreateScheduleSlot) {
   return `${TIME_LABEL.format(new Date(slot.startsAt))}–${TIME_LABEL.format(new Date(slot.endsAt))}`;
-}
-
-function courtDisplay(name: string) {
-  const panoramic = /^Корт №(\d+) для игры 2 на 2 \(панорамик\)$/u.exec(name);
-  return panoramic ? `Корт ${panoramic[1]}` : name;
 }
 
 export function GameCreateScheduleWizard({
@@ -265,9 +261,10 @@ export function GameCreateScheduleWizard({
   }
 
   const headerTitle = ['Выберите место', 'Дата и время', 'Создание игры'][wizard.step];
+  const query = search.trim().toLocaleLowerCase('ru-RU');
   const visibleStations = stations.filter((item) =>
     [item.title, item.city, item.address].some((value) =>
-      value?.toLocaleLowerCase('ru-RU').includes(search.trim().toLocaleLowerCase('ru-RU')),
+      value?.toLocaleLowerCase('ru-RU').includes(query),
     ),
   );
   const cities = [...new Set(visibleStations.map((item) => item.city ?? 'Другие города'))];
@@ -403,7 +400,7 @@ export function GameCreateScheduleWizard({
               ) : null}
             </div>
           ) : null}
-          <h2>Станции по городам</h2>
+          <h2>{query ? 'Результаты поиска' : 'Станции по городам'}</h2>
           {cities.map((city) => (
             <div className="game-schedule-station-list" key={city}>
               <h3>{city}</h3>
@@ -420,7 +417,6 @@ export function GameCreateScheduleWizard({
                       <strong>{item.title}</strong>
                       {item.address ? <small>{item.address}</small> : null}
                     </span>
-                    <span aria-hidden="true">›</span>
                   </button>
                 ))}
             </div>
@@ -539,7 +535,7 @@ export function GameCreateScheduleWizard({
             {[...courts].map(([id, name]) => (
               <div key={id} className="game-schedule-pick">
                 <button type="button" aria-pressed={court === id} onClick={() => chooseCourt(id)}>
-                  {courtDisplay(name)}
+                  {name}
                 </button>
                 {court === id ? (
                   <button type="button" aria-label="Сбросить выбранный корт" onClick={resetSlot}>
@@ -555,58 +551,60 @@ export function GameCreateScheduleWizard({
             ) : null}
           </div>
           {selected ? (
-            <fieldset className="game-schedule-payers">
-              <legend>Кто оплачивает игру?</legend>
-              <label className="game-schedule-option">
-                <input
-                  type="radio"
-                  name="game-schedule-payer"
-                  checked={payer === 'split'}
-                  onChange={() => choosePayer('split')}
-                />
-                <span>
-                  <strong>Плачу за себя</strong>
-                  <small>1 из 4 игроков · все варианты личной оплаты</small>
-                </span>
-                <span className="game-schedule-quarter">
-                  <span>
-                    <span>
-                      <b>¼ стоимости корта</b>
-                      <small>Без применения льгот</small>
+            <div className="game-schedule-card game-schedule-payer-card">
+              <fieldset className="game-schedule-payers">
+                <legend>Кто оплачивает корт?</legend>
+                <label className="game-schedule-option">
+                  <input
+                    type="radio"
+                    name="game-schedule-payer"
+                    checked={payer === 'split'}
+                    onChange={() => choosePayer('split')}
+                  />
+                  <span className="game-schedule-payer-copy">
+                    <strong>Каждый платит за себя</strong>
+                    <small>
+                      Вы оплачиваете только своё участие. Остальные игроки оплачивают свою часть.
+                    </small>
+                    <span className="game-schedule-payer-tag">
+                      <TrainingPeopleIcon />
+                      <span>3 игрока смогут присоединиться</span>
                     </span>
+                  </span>
+                  <span className="game-schedule-payer-price">
                     <strong>{price(share)}</strong>
+                    {residency?.status === 'APPLIED' ? (
+                      <small>
+                        Резидентство <span>{residencePrice}</span>
+                      </small>
+                    ) : !quote ? (
+                      <small>Проверяем цену и условия…</small>
+                    ) : null}
                   </span>
-                  <span>
-                    <span>
-                      <b>По подписке</b>
-                      <small>ЛК1 не подтвердил расчёт по подписке</small>
+                </label>
+                <label className="game-schedule-option">
+                  <input
+                    type="radio"
+                    name="game-schedule-payer"
+                    checked={payer === 'self'}
+                    onChange={() => choosePayer('self')}
+                  />
+                  <span className="game-schedule-payer-copy">
+                    <strong>Я оплачиваю весь корт</strong>
+                    <small>
+                      Вы оплачиваете весь корт сами. Доступность игры выбирается на следующем шаге.
+                    </small>
+                    <span className="game-schedule-payer-tag">
+                      <TrainingPeopleIcon />
+                      Соберу игроков сам
                     </span>
-                    <strong>Нужен расчёт</strong>
                   </span>
-                  <span>
-                    <span>
-                      <b>С Резидентством</b>
-                      <small>{residenceDetail}</small>
-                    </span>
-                    <strong>{residencePrice}</strong>
+                  <span className="game-schedule-payer-price">
+                    <strong>{price(whole)}</strong>
                   </span>
-                </span>
-              </label>
-              <label className="game-schedule-option">
-                <input
-                  type="radio"
-                  name="game-schedule-payer"
-                  checked={payer === 'self'}
-                  onChange={() => choosePayer('self')}
-                />
-                <span>
-                  <strong>Плачу за всех</strong>
-                  <small>Полная оплата за 4 игроков</small>
-                  <small>Скидки, подписка и абонементы не применяются</small>
-                </span>
-                <strong>{price(whole)}</strong>
-              </label>
-            </fieldset>
+                </label>
+              </fieldset>
+            </div>
           ) : null}
           {quoteMessage}
           <button
@@ -619,7 +617,7 @@ export function GameCreateScheduleWizard({
             <strong>Продолжить</strong>
             <span>
               {station && selected
-                ? `${station.title} · ${courtDisplay(selected.courtName)}`
+                ? `${station.title} · ${selected.courtName}`
                 : 'Выберите станцию и корт'}
             </span>
             <span>{chosenTime ? `${chosenTime} · ${duration} мин` : 'Выберите время начала'}</span>
@@ -637,7 +635,7 @@ export function GameCreateScheduleWizard({
               </button>
             </div>
             <span>
-              <EventLocationIcon /> {courtDisplay(selected.courtName)}
+              <EventLocationIcon /> {selected.courtName}
               <span className="game-schedule-summary-dot" aria-hidden="true">
                 •
               </span>

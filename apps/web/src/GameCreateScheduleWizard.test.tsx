@@ -9,10 +9,11 @@ import {
 } from './GameCreateScheduleWizard.js';
 
 const stations = [{ id: 'station', title: 'Селигерская' }];
+const courtName = 'Корт №1 для игры 2 на 2 (панорамик)';
 const slot = {
   id: 'a'.repeat(64),
   courtKey: 'b'.repeat(64),
-  courtName: 'Корт №1',
+  courtName,
   startsAt: '2026-12-06T12:00:00+03:00',
   endsAt: '2026-12-06T13:00:00+03:00',
   amountMinor: null,
@@ -59,8 +60,11 @@ describe('game creation schedule', () => {
       expect(screen.getByRole('heading', { name: 'Дата и время' })).toBeTruthy();
       expect(listSlots).toHaveBeenCalledTimes(1);
       expect(readQuote).toHaveBeenCalledTimes(0);
-      await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+      await user.click(await screen.findByRole('button', { name: courtName }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+      const payers = within(screen.getByRole('group', { name: 'Кто оплачивает корт?' }));
+      expect(payers.getByRole('radio', { name: /Каждый платит за себя/ })).toBeChecked();
+      expect(await payers.findByText(/700\s*₽/)).toBeTruthy();
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('С Резидентством')).toBeTruthy();
       expect(screen.getByText(/700\s*₽/)).toBeTruthy();
@@ -97,7 +101,7 @@ describe('game creation schedule', () => {
     });
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
-    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(await screen.findByRole('button', { name: courtName }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     expect(await screen.findByText('ЛК1 не подтвердил условия')).toBeTruthy();
@@ -124,7 +128,7 @@ describe('game creation schedule', () => {
     renderWizard({ listSlots, readQuote });
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
-    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(await screen.findByRole('button', { name: courtName }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     await user.click(screen.getByRole('button', { name: 'Изменить' }));
@@ -178,9 +182,9 @@ describe('game creation schedule', () => {
       );
       const user = userEvent.setup();
       await user.click(screen.getByRole('button', { name: 'Селигерская' }));
-      await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+      await user.click(await screen.findByRole('button', { name: courtName }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
-      await user.click(screen.getByRole('radio', { name: /Плачу за всех/ }));
+      await user.click(screen.getByRole('radio', { name: /Я оплачиваю весь корт/ }));
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('Оплата выбранного слота сейчас недоступна.')).toBeTruthy();
       if (mismatch === 'price-unavailable') {
@@ -207,7 +211,7 @@ describe('game creation schedule', () => {
     renderWizard({ listSlots: () => Promise.resolve([slot]), readQuote });
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
-    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(await screen.findByRole('button', { name: courtName }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     await user.click(await screen.findByRole('button', { name: 'Обновить цену' }));
