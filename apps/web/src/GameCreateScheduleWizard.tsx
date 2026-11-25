@@ -6,6 +6,7 @@ import type {
 } from '@phub/api-sdk';
 import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import backIconUrl from './assets/game-schedule-back.svg';
+import stationChevronUrl from './assets/game-schedule-station-chevron.svg';
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import { locationCourtLabel } from './location-court-label.js';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
@@ -456,6 +457,9 @@ export function GameCreateScheduleWizard({
                           </span>
                         ) : null}
                       </span>
+                      {!openingSoon ? (
+                        <img src={stationChevronUrl} width={16} height={28} alt="" />
+                      ) : null}
                     </button>
                   );
                 })}

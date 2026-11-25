@@ -159,6 +159,10 @@ body:has(.game-schedule-wizard) {
   overflow-wrap: anywhere;
 }
 
+.game-schedule-station-list .game-schedule-link > img {
+  flex: none;
+}
+
 .game-schedule-wizard .game-schedule-station-list .game-schedule-link:disabled {
   border-color: #dfe2e8;
   background: #eef0f4;
