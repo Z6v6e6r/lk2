@@ -141,6 +141,14 @@ body:has(.game-schedule-wizard) {
   color: var(--schedule-muted);
 }
 
+.game-schedule-station-list .game-schedule-link small {
+  font:
+    500 12px/1.48 'Inter Display',
+    Inter,
+    sans-serif;
+  letter-spacing: 0.02em;
+}
+
 .game-schedule-durations,
 .game-schedule-times,
 .game-schedule-courts,
