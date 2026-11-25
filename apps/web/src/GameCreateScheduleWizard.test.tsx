@@ -67,6 +67,45 @@ describe('game creation schedule', () => {
     expect(listSlots).not.toHaveBeenCalled();
   });
 
+  it('collapses the catalogue and cities independently and reveals search matches', async () => {
+    const source = {
+      listSlots: vi.fn<GameCreateScheduleSource['listSlots']>(),
+      readQuote: vi.fn<GameCreateScheduleSource['readQuote']>(),
+    };
+    render(
+      <GameCreateScheduleWizard
+        source={source}
+        stations={[
+          { id: 'moscow', title: 'Селигерская', city: 'Москва' },
+          { id: 'sirius', title: 'Сочи', city: 'Сириус' },
+        ]}
+      />,
+    );
+    const user = userEvent.setup();
+    const catalogue = screen.getByRole('button', { name: 'Станции по городам' });
+    const moscow = screen.getByRole('button', { name: 'Москва' });
+    await user.click(moscow);
+    expect(moscow).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Селигерская' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Сочи' })).toBeVisible();
+
+    await user.click(catalogue);
+    expect(catalogue).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Сириус' })).not.toBeInTheDocument();
+    await user.click(catalogue);
+    expect(moscow).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('button', { name: 'Сочи' })).toBeVisible();
+
+    await user.click(catalogue);
+    await user.type(screen.getByRole('searchbox', { name: 'Найти станцию' }), 'Сели');
+    expect(screen.getByRole('button', { name: 'Результаты поиска' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: 'Селигерская' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Сочи' })).not.toBeInTheDocument();
+  });
+
   it.each([true, false])(
     'keeps the same flow and preserves a choice on Back (mobile media query %s)',
     async (matches) => {

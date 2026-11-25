@@ -133,9 +133,12 @@ export function GameCreateScheduleWizard({
 }) {
   const wizard = useGameCreateWizard();
   const stationDetailsPrefix = useId();
+  const stationListId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const [stationId, setStation] = useState(stations[0]?.id ?? '');
   const [search, setSearch] = useState('');
+  const [showStations, setShowStations] = useState(true);
+  const [collapsedCities, setCollapsedCities] = useState<ReadonlySet<string>>(() => new Set());
   const [showLocations, setShowLocations] = useState(false);
   const [preferredStart, setPreferredStart] = useState('');
   const [payer, setPayer] = useState<'split' | 'self'>('split');
@@ -249,6 +252,15 @@ export function GameCreateScheduleWizard({
   function resetSlot() {
     setCourt('');
     clearTime();
+  }
+
+  function toggleCity(city: string) {
+    setCollapsedCities((current) => {
+      const next = new Set(current);
+      if (next.has(city)) next.delete(city);
+      else next.add(city);
+      return next;
+    });
   }
 
   function chooseStation(id: string) {
@@ -397,7 +409,14 @@ export function GameCreateScheduleWizard({
             aria-label="Найти станцию"
             placeholder="Найти станцию"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSearch(value);
+              if (value.trim()) {
+                setShowStations(true);
+                setCollapsedCities((current) => (current.size ? new Set() : current));
+              }
+            }}
           />
           <button
             type="button"
@@ -429,56 +448,88 @@ export function GameCreateScheduleWizard({
             </div>
           ) : null}
           <h2 className="game-schedule-station-heading">
-            {query ? 'Результаты поиска' : 'Станции по городам'}
+            <button
+              type="button"
+              className="game-schedule-disclosure"
+              aria-controls={stationListId}
+              aria-expanded={showStations}
+              onClick={() => setShowStations((open) => !open)}
+            >
+              <span>{query ? 'Результаты поиска' : 'Станции по городам'}</span>
+              <img src={stationChevronUrl} width={16} height={28} alt="" />
+            </button>
           </h2>
-          {cities.map((city) => (
-            <div className="game-schedule-station-list" key={city}>
-              <h3>{city}</h3>
-              {visibleStations
-                .filter((item) => (item.city ?? 'Другие города') === city)
-                .map((item) => {
-                  const openingSoon = item.isActive === false;
-                  const details = openingSoon ? 'Скоро открытие' : stationCourtSummary(item);
-                  const detailsId =
-                    item.address || details ? `${stationDetailsPrefix}-${item.id}` : undefined;
-                  return (
+          <div id={stationListId} className="game-schedule-station-panel" hidden={!showStations}>
+            {cities.map((city, index) => {
+              const cityPanelId = `${stationListId}-city-${index}`;
+              const cityOpen = !collapsedCities.has(city);
+              return (
+                <div className="game-schedule-station-list" key={city}>
+                  <h3>
                     <button
                       type="button"
-                      key={item.id}
-                      className="game-schedule-card game-schedule-link game-schedule-station-card"
-                      aria-label={item.title}
-                      aria-describedby={detailsId}
-                      disabled={openingSoon}
-                      onClick={() => chooseStation(item.id)}
+                      className="game-schedule-disclosure"
+                      aria-controls={cityPanelId}
+                      aria-expanded={cityOpen}
+                      onClick={() => toggleCity(city)}
                     >
-                      <span>
-                        <strong>{item.title}</strong>
-                        {detailsId ? (
-                          <span className="game-schedule-station-details" id={detailsId}>
-                            {item.address ? <small>{item.address}</small> : null}
-                            {details ? (
-                              <small
-                                className={openingSoon ? undefined : 'game-schedule-court-count'}
-                              >
-                                {details}
-                              </small>
-                            ) : null}
-                          </span>
-                        ) : null}
-                      </span>
-                      {!openingSoon ? (
-                        <img src={stationChevronUrl} width={16} height={28} alt="" />
-                      ) : null}
+                      <span>{city}</span>
+                      <img src={stationChevronUrl} width={16} height={28} alt="" />
                     </button>
-                  );
-                })}
-            </div>
-          ))}
-          {!visibleStations.length ? (
-            <p className="game-schedule-empty" role="status">
-              Станции не найдены.
-            </p>
-          ) : null}
+                  </h3>
+                  <div id={cityPanelId} className="game-schedule-station-panel" hidden={!cityOpen}>
+                    {visibleStations
+                      .filter((item) => (item.city ?? 'Другие города') === city)
+                      .map((item) => {
+                        const openingSoon = item.isActive === false;
+                        const details = openingSoon ? 'Скоро открытие' : stationCourtSummary(item);
+                        const detailsId =
+                          item.address || details
+                            ? `${stationDetailsPrefix}-${item.id}`
+                            : undefined;
+                        return (
+                          <button
+                            type="button"
+                            key={item.id}
+                            className="game-schedule-card game-schedule-link game-schedule-station-card"
+                            aria-label={item.title}
+                            aria-describedby={detailsId}
+                            disabled={openingSoon}
+                            onClick={() => chooseStation(item.id)}
+                          >
+                            <span>
+                              <strong>{item.title}</strong>
+                              {detailsId ? (
+                                <span className="game-schedule-station-details" id={detailsId}>
+                                  {item.address ? <small>{item.address}</small> : null}
+                                  {details ? (
+                                    <small
+                                      className={
+                                        openingSoon ? undefined : 'game-schedule-court-count'
+                                      }
+                                    >
+                                      {details}
+                                    </small>
+                                  ) : null}
+                                </span>
+                              ) : null}
+                            </span>
+                            {!openingSoon ? (
+                              <img src={stationChevronUrl} width={16} height={28} alt="" />
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+              );
+            })}
+            {!visibleStations.length ? (
+              <p className="game-schedule-empty" role="status">
+                Станции не найдены.
+              </p>
+            ) : null}
+          </div>
         </section>
       ) : null}
 

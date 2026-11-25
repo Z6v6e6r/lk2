@@ -108,7 +108,8 @@ body:has(.game-schedule-wizard) {
 }
 
 .game-schedule-stack,
-.game-schedule-station-list {
+.game-schedule-station-list,
+.game-schedule-station-panel:not([hidden]) {
   display: grid;
   min-width: 0;
   gap: 12px;
@@ -130,6 +131,28 @@ body:has(.game-schedule-wizard) {
   letter-spacing: 0.12em;
   text-align: start;
   text-transform: uppercase;
+}
+
+.game-schedule-wizard .game-schedule-disclosure {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px 0 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: start;
+  text-transform: inherit;
+}
+
+.game-schedule-disclosure > img {
+  flex: none;
+}
+
+.game-schedule-disclosure[aria-expanded='true'] > img {
+  transform: rotate(90deg);
 }
 
 .game-schedule-wizard .game-schedule-card,
