@@ -14,6 +14,21 @@ export const STATION_WAIVER_SHA256 =
 export const STATION_ALERT_WAIVER_SHA256 =
   'd04114a3a512ac2a5c950fce6f7e78bb1760cb652b7e90675d858d35797efa02';
 export const STATION_ALERT_STATUS = 'NOT_REQUIRED_OWNER_WAIVED';
+export const STATION_PROVIDER_STATUS = 'NOT_COLLECTED_EXPLICIT_OVERRIDE';
+export const STATION_PROVIDER_WAIVER_SHA256 =
+  '2bd24bf42a97dee5a15104cabd19e04e2e596c07e344646a3779a59465c2a852';
+export const STATION_DIRECT_RELEASE = Object.freeze({
+  candidateSha: 'b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61',
+  candidateTree: '835129f4e655457395fc0bd0bb68bbfeea53cd39',
+  sourceCiRunId: '45604315153',
+  publicationRunId: '45606826648',
+  artifactId: '15019410371',
+  artifactDigest: 'sha256:f07ee11684e51664f49bc1269484aa711f58baedb7af7c97242802bfe45e2602',
+  manifestSha256: 'd5b795b9565bf2d2124a01d8a471737e037fcc6da5c84e877e2ebc5adc03478b',
+});
+
+const stationControllerBranch = 'codex/timeweb-station-direct-observation';
+const positiveNumber = (value) => typeof value === 'string' && /^[1-9][0-9]*$/u.test(value);
 const ownerSchema = 'PHUB_TIMEWEB_STATION_OWNER_DECISION_V2';
 const ownerAuthority = 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1';
 const timewebTarget = Object.freeze({ serverId: 8886471, projectId: 262717 });
@@ -82,6 +97,9 @@ const sameFields = (actual, expected) =>
   );
 
 export const isStationRollout = (value) => value?.schema === STATION_OPERATION;
+export const isStationDirectOperation = (value) =>
+  isStationRollout(value) &&
+  value.ownerDecision?.providerMonitoringWaiverMessageSha256 === STATION_PROVIDER_WAIVER_SHA256;
 
 export function stationScopeHash(value) {
   // Fixed field order, independent of the JSON transport or order of nested object keys.
@@ -110,16 +128,51 @@ export function stationScopeHash(value) {
       value.ownerDecision.releaseAuthorizationSha256,
       value.ownerDecision.receivedAt,
       value.ownerDecision.acceptedSnapshotAgeSeconds,
+      ...(isStationDirectOperation(value)
+        ? [
+            STATION_PROVIDER_WAIVER_SHA256,
+            STATION_PROVIDER_STATUS,
+            value.controllerSourceCiRunId,
+            value.controllerPullRequestNumber,
+            value.controllerPrCiRunId,
+          ]
+        : []),
     ]),
   );
 }
 
 export function validateStationOperation(value, validateBase) {
-  const { expiresAt, expectedWorker, ownerDecision, ...base } = value;
+  const {
+    expiresAt,
+    expectedWorker,
+    ownerDecision,
+    controllerSourceCiRunId,
+    controllerPullRequestNumber,
+    controllerPrCiRunId,
+    ...base
+  } = value;
   const expiry = Date.parse(expiresAt);
+  const direct = isStationDirectOperation(value);
+  if (direct) {
+    if (
+      Object.entries(STATION_DIRECT_RELEASE).some(([key, expected]) => base[key] !== expected) ||
+      base.controllerSha === base.candidateSha ||
+      ![controllerSourceCiRunId, controllerPullRequestNumber, controllerPrCiRunId].every(
+        positiveNumber,
+      ) ||
+      new Set([controllerSourceCiRunId, controllerPrCiRunId, base.sourceCiRunId]).size !== 3
+    )
+      stop('direct_release');
+  } else if (
+    ['controllerSourceCiRunId', 'controllerPullRequestNumber', 'controllerPrCiRunId'].some(
+      (field) => Object.hasOwn(value, field),
+    ) ||
+    base.controllerSha !== base.candidateSha
+  ) {
+    stop('operation');
+  }
   if (
     base.profile !== 'production' ||
-    base.controllerSha !== base.candidateSha ||
     !sameFields(base.expectedApi, STATION_PREVIOUS.api) ||
     !sameFields(base.expectedWeb, STATION_PREVIOUS.web) ||
     !sameFields(expectedWorker, STATION_PREVIOUS.worker) ||
@@ -156,6 +209,7 @@ export function validateStationOperation(value, validateBase) {
       waiverMessageSha256: STATION_WAIVER_SHA256,
       waiverReference: `codex-user-message-sha256:${STATION_WAIVER_SHA256}`,
       alertWaiverMessageSha256: STATION_ALERT_WAIVER_SHA256,
+      ...(direct ? { providerMonitoringWaiverMessageSha256: STATION_PROVIDER_WAIVER_SHA256 } : {}),
       releaseAuthorizationSha256: ownerDecision.releaseAuthorizationSha256,
       receivedAt: ownerDecision.receivedAt,
       acceptedSnapshotAgeSeconds: ownerDecision.acceptedSnapshotAgeSeconds,
@@ -216,6 +270,84 @@ export function validateStationSourceTail(entries) {
   }
 }
 
+const directControllerFiles = new Set([
+  'docs/runbooks/timeweb-standard-delivery.md',
+  'scripts/timeweb-api-web-upgrade.js',
+  'scripts/timeweb-station-rollout.js',
+  'scripts/timeweb-station-rollout.d.ts',
+  'scripts/timeweb-station-rollout.test.ts',
+]);
+
+export function validateStationDirectControllerTail(entries) {
+  if (
+    entries.length !== directControllerFiles.size ||
+    new Set(entries.map(({ path }) => path)).size !== directControllerFiles.size ||
+    entries.some(
+      ({ path, status, oldMode, newMode, oldType, newType }) =>
+        !directControllerFiles.has(path) ||
+        status !== 'M' ||
+        oldMode !== '100644' ||
+        newMode !== '100644' ||
+        oldType !== 'blob' ||
+        newType !== 'blob',
+    )
+  )
+    stop('direct_controller_tail');
+}
+
+export function validateStationDirectControllerReview(
+  op,
+  { pullRequest, prRun, prJobs, parents, headTree, controllerTree },
+) {
+  const repo = 'Z6v6e6r/lk2';
+  if (
+    String(pullRequest.number) !== op.controllerPullRequestNumber ||
+    pullRequest.state !== 'closed' ||
+    pullRequest.merged !== true ||
+    pullRequest.merge_commit_sha !== op.controllerSha ||
+    pullRequest.base?.sha !== op.candidateSha ||
+    pullRequest.base?.ref !== 'main' ||
+    pullRequest.base?.repo?.full_name !== repo ||
+    pullRequest.head?.repo?.full_name !== repo ||
+    pullRequest.head?.ref !== stationControllerBranch ||
+    parents.length !== 2 ||
+    parents[0] !== op.candidateSha ||
+    parents[1] !== pullRequest.head?.sha ||
+    headTree !== controllerTree ||
+    String(prRun.id) !== op.controllerPrCiRunId ||
+    prRun.event !== 'pull_request' ||
+    prRun.path !== '.github/workflows/pull-request.yaml' ||
+    prRun.repository?.full_name !== repo ||
+    prRun.head_repository?.full_name !== repo ||
+    prRun.head_sha !== parents[1] ||
+    prRun.head_branch !== stationControllerBranch ||
+    prRun.run_attempt !== 1 ||
+    prRun.status !== 'completed' ||
+    prRun.conclusion !== 'success' ||
+    !Array.isArray(prJobs.jobs) ||
+    prJobs.total_count !== prJobs.jobs.length ||
+    ![
+      'ci-plan',
+      'quality',
+      'quality-full',
+      'source-quality',
+      'deployment-contract',
+      'dependency-security',
+      'secret-scan',
+      'docker-build',
+      'pr-gate',
+    ].every((name) => {
+      const matches = prJobs.jobs.filter((job) => job.name === name);
+      return (
+        matches.length === 1 &&
+        matches[0].status === 'completed' &&
+        matches[0].conclusion === 'success'
+      );
+    })
+  )
+    stop('direct_controller_review');
+}
+
 export function validateStationBackupMetadata(receiptBytes, tocBytes, cupBytes, cupRequestBytes) {
   if (
     sha256(receiptBytes) !== STATION_BACKUP.receiptSha256 ||
@@ -253,14 +385,17 @@ export function validateStationDatabaseReadback(value) {
 }
 
 export function validateStationRetainedAdmission(admission, op) {
+  const direct = isStationDirectOperation(op);
   if (
     !sameFields(admission, {
       ...STATION_BACKUP,
       ownerScopeSha256: op.ownerDecision.scopeSha256,
-      providerSha256: admission?.providerSha256,
+      ...(direct
+        ? { providerMonitoringStatus: STATION_PROVIDER_STATUS }
+        : { providerSha256: admission?.providerSha256 }),
       alertTestStatus: STATION_ALERT_STATUS,
     }) ||
-    !hex.test(admission.providerSha256 ?? '')
+    (!direct && !hex.test(admission.providerSha256 ?? ''))
   )
     stop('retained_admission');
 }
@@ -284,8 +419,18 @@ export function validateStationRuntimeEnvironment(running, imageDefaults, render
   if (!sameFields(parse(running), expected)) stop('runtime_environment');
 }
 
-export function validateStationObservation(value, validateRoster, receiptAt) {
+export function stationObservationIdentity(op, plan, planSha256) {
+  if (!isStationDirectOperation(op)) return undefined;
+  return { operationSha256: plan.operationSha256, planSha256, candidateSha: op.candidateSha };
+}
+export function validateStationObservation(value, validateRoster, receiptAt, identity) {
   const { publicLatencyMs, ...roster } = value;
+  if (identity)
+    for (const [key, expected] of Object.entries(identity)) {
+      if (!Object.hasOwn(roster, key) || roster[key] !== expected)
+        stop('direct_observation_identity');
+      delete roster[key];
+    }
   validateRoster(roster, receiptAt);
   if (!publicLatencyMs || Object.keys(publicLatencyMs).length !== 2) stop('public_latency');
   for (const [service, limit] of [

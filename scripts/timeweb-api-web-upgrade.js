@@ -149,15 +149,20 @@ import {
   STATION_PLAN,
   STATION_RECEIPT,
   STATION_ALERT_STATUS,
+  STATION_PROVIDER_STATUS,
   STATION_KIND,
   STATION_POSTGRES,
   STATION_SNAPSHOT,
   STATION_BACKUP,
   STATION_CUP_RECEIPT,
   isStationRollout,
+  isStationDirectOperation,
   validateStationOperation,
   validateStationWindow,
   validateStationSourceTail,
+  validateStationDirectControllerTail,
+  validateStationDirectControllerReview,
+  stationObservationIdentity,
   validateStationBackupMetadata,
   validateStationDatabaseReadback,
   validateStationRetainedAdmission,
@@ -1455,6 +1460,41 @@ export async function observeDirectApiWeb({
   validateDirectObservation(evidence, evidence.completedAt);
   return evidence;
 }
+export async function observeStationRollout({
+  inspectService,
+  probeService,
+  attest,
+  identity,
+  now = () => Date.now(),
+  sleep = delay,
+}) {
+  const started = now();
+  const latencyMs = { api: [], worker: [], web: [] };
+  const publicLatencyMs = { api: [], web: [] };
+  for (let round = 0; round <= 60; round++) {
+    for (const service of ['api', 'worker', 'web']) {
+      inspectService(service);
+      latencyMs[service].push(await probeService(service, false));
+      if (service !== 'worker') publicLatencyMs[service].push(await probeService(service, true));
+    }
+    await attest();
+    if (round < 60) await sleep(15000);
+  }
+  const completed = now();
+  const observation = {
+    ...identity,
+    windowSeconds: 900,
+    samplesPerService: 61,
+    latencyMs,
+    publicLatencyMs,
+    serverErrors: 0,
+    startedAt: new Date(started).toISOString(),
+    completedAt: new Date(completed).toISOString(),
+    elapsedSeconds: (completed - started) / 1000,
+  };
+  validateStationObservation(observation, validateRosterCutoverObservation, undefined, identity);
+  return observation;
+}
 async function callbackProbe() {
   const response = await fetch('https://lk2.padlhub.su/android/oauth/yandex', {
     redirect: 'manual',
@@ -2549,6 +2589,7 @@ export function validateUpgradeReceipt(
   const schedule = receipt.schema === SCHEDULE_RECEIPT;
   const appOnly = receipt.schema === APP_ONLY_RECEIPT;
   const station = receipt.schema === STATION_RECEIPT;
+  const stationDirect = station && Object.hasOwn(receipt, 'providerMonitoringStatus');
   const scheduleWaived = schedule && Object.hasOwn(receipt, 'ownerProviderMonitoringWaiverSha256');
   const cutover = [
     CUTOVER_RECEIPT,
@@ -2569,6 +2610,7 @@ export function validateUpgradeReceipt(
   ].includes(receipt.schema);
   if (cutover) keys.push(baselineField);
   if (station) keys.push('databaseAdmissionSha256', 'alertTestStatus');
+  if (stationDirect) keys.push('providerMonitoringStatus');
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
   if (scheduleWaived)
     keys.push(...Object.keys(SCHEDULE_MONITORING_STATUS), 'ownerProviderMonitoringWaiverSha256');
@@ -2598,7 +2640,7 @@ export function validateUpgradeReceipt(
             ]
           : direct
             ? ['ownerObservationSha256', 'evidencePolicySha256']
-            : scheduleWaived
+            : scheduleWaived || stationDirect
               ? []
               : ['providerReadbackSha256', ...(!station ? ['alertReadbackSha256'] : [])]),
     );
@@ -2623,6 +2665,7 @@ export function validateUpgradeReceipt(
     (station &&
       (!HASH.test(receipt.databaseAdmissionSha256 ?? '') ||
         receipt.alertTestStatus !== STATION_ALERT_STATUS)) ||
+    (stationDirect && receipt.providerMonitoringStatus !== STATION_PROVIDER_STATUS) ||
     !Number.isFinite(Date.parse(receipt.observedAt)) ||
     ![
       'PREPARING',
@@ -2687,7 +2730,7 @@ export function validateUpgradeReceipt(
               ]
             : direct
               ? ['ownerObservationSha256', 'evidencePolicySha256']
-              : scheduleWaived
+              : scheduleWaived || stationDirect
                 ? []
                 : ['providerReadbackSha256', ...(!station ? ['alertReadbackSha256'] : [])]),
       ].some((key) => !HASH.test(receipt[key] ?? '')))
@@ -2701,6 +2744,7 @@ export function validateUpgradeReceipt(
       isScheduleOperation(op) !== schedule ||
       isAppOnlyOperation(op) !== appOnly ||
       isStationRollout(op) !== station ||
+      isStationDirectOperation(op) !== stationDirect ||
       (station &&
         receipt.databaseAdmissionSha256 !== hash(JSON.stringify(plan.databaseAdmission))) ||
       (appOnly && plan.backup?.operationSha256 !== op.backupOperationSha256) ||
@@ -3652,6 +3696,7 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           parseStrictJson(read(`${transaction}/observation.json`)),
           validateRosterCutoverObservation,
           receipt.observedAt,
+          stationObservationIdentity(op, plan, receipt.planSha256),
         );
         attestStationAuthorization(transaction, op);
         attestStationArchive(null, true);
@@ -3752,7 +3797,9 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
       }
       for (const [file, key] of (receipt.schema === SCHEDULE_RECEIPT &&
         receipt.ownerProviderMonitoringWaiverSha256) ||
-      [WAIVER_RECEIPT, OWNER_RECEIPT, CANONICAL_RECEIPT].includes(receipt.schema)
+      [WAIVER_RECEIPT, OWNER_RECEIPT, CANONICAL_RECEIPT].includes(receipt.schema) ||
+      (receipt.schema === STATION_RECEIPT &&
+        receipt.providerMonitoringStatus === STATION_PROVIDER_STATUS)
         ? [['observation.json', 'observationSha256']]
         : direct
           ? [
@@ -3885,6 +3932,10 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
   const swapsSecrets = join || schedule;
   const cutover = isProductionCutover(op);
   const station = isStationRollout(op);
+  const stationDirect = isStationDirectOperation(op);
+  const stationProviderDecision = stationDirect
+    ? { providerMonitoringStatus: STATION_PROVIDER_STATUS }
+    : {};
   const roster = isRosterCutover(op) || station;
   const admissionMarker = station ? 'admission.complete' : 'backup.complete';
   const consumed = `${ROOT}/standard/station-702-admission-consumed.json`;
@@ -3973,6 +4024,8 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     if (git(['rev-parse', `${STATION_APPLICATION}^{tree}`]) !== STATION_TREE)
       fail('station_rollout_application');
     validateStationSourceTail(runtimeDelta(STATION_APPLICATION, op.candidateSha));
+    if (stationDirect)
+      validateStationDirectControllerTail(runtimeDelta(op.candidateSha, op.controllerSha));
   }
   if (join && op.candidateSha !== op.controllerSha) {
     validateJoinRuntimeTail(
@@ -3993,7 +4046,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       })),
     );
   }
-  if (!join && op.candidateSha !== op.controllerSha) {
+  if (!join && !stationDirect && op.candidateSha !== op.controllerSha) {
     const entries = delta(op.candidateSha, op.controllerSha);
     if (entries.every((v) => CONTROLLER_FILES.has(v.path))) validateControllerDelta(entries);
     else {
@@ -4177,6 +4230,25 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       fail('unreconciled_transaction');
     if (station) attestStationAuthorization(transaction, op);
     await verifyCi(op.sourceCiRunId, op.candidateSha);
+    if (stationDirect) {
+      await verifyCi(op.controllerSourceCiRunId, op.controllerSha);
+      const parents = git(['show', '-s', '--format=%P', op.controllerSha]).split(' ');
+      if (parents.length !== 2 || parents[0] !== op.candidateSha)
+        fail('station_rollout_direct_controller_review');
+      const [pullRequest, prRun, prJobs] = await Promise.all([
+        githubPublic(`pulls/${op.controllerPullRequestNumber}`),
+        githubPublic(`actions/runs/${op.controllerPrCiRunId}`),
+        githubPublic(`actions/runs/${op.controllerPrCiRunId}/attempts/1/jobs?per_page=100`),
+      ]);
+      validateStationDirectControllerReview(op, {
+        pullRequest,
+        prRun,
+        prJobs,
+        parents,
+        headTree: git(['rev-parse', `${parents[1]}^{tree}`]),
+        controllerTree: git(['rev-parse', `${op.controllerSha}^{tree}`]),
+      });
+    }
     if (isLegacyProductionCutover(op)) {
       await verifyLegacyAuthority(op);
       validateLegacyRuntime(
@@ -4296,7 +4368,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
     let ownerBytes;
     const monitoring =
-      !direct && !scheduleWaiver
+      !direct && !scheduleWaiver && !stationDirect
         ? isOwnerDirectedCutover(op)
           ? createOwnerDirectedBinding(op, hash(opBytes))
           : isWaivedRosterCutover(op)
@@ -4345,7 +4417,9 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
             databaseAdmission: {
               ...STATION_BACKUP,
               ownerScopeSha256: op.ownerDecision.scopeSha256,
-              providerSha256: monitoring.providerSha256,
+              ...(stationDirect
+                ? stationProviderDecision
+                : { providerSha256: monitoring.providerSha256 }),
               alertTestStatus: STATION_ALERT_STATUS,
             },
           }
@@ -4431,7 +4505,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     durable(`${transaction}/${admissionMarker}`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)), alertTestStatus: STATION_ALERT_STATUS } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)), alertTestStatus: STATION_ALERT_STATUS, ...stationProviderDecision } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
@@ -4592,7 +4666,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     assertOwned();
     if (mode === 'deploy') {
       validateStationWindow(op, Date.now(), minimumMs);
-      validateMonitoring(transaction, profile, { station: true });
+      if (!stationDirect) validateMonitoring(transaction, profile, { station: true });
     }
     stationArchive = attestStationArchive(stationArchive, full);
     if (database) attestStationDatabase();
@@ -4717,6 +4791,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           ? {
               databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)),
               alertTestStatus: STATION_ALERT_STATUS,
+              ...stationProviderDecision,
             }
           : {}),
         ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}),
@@ -4740,7 +4815,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
                         ownerObservationSha256: plan.ownerObservationSha256,
                         evidencePolicySha256: plan.evidencePolicySha256,
                       }
-                    : scheduleWaiver
+                    : scheduleWaiver || stationDirect
                       ? {}
                       : {
                           providerReadbackSha256: hash(
@@ -4982,7 +5057,26 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         fail('worker_changed_during_activation');
     },
     observe: async () => {
-      if (station) validateStationWindow(op, Date.now(), 17 * 60_000);
+      if (station) {
+        validateStationWindow(op, Date.now(), 17 * 60_000);
+        const observation = await observeStationRollout({
+          inspectService: (service) => {
+            if (!equal(inspect(service), active[service])) fail('candidate_restarted');
+          },
+          probeService: probe,
+          identity: stationObservationIdentity(op, plan, planSha256),
+          attest: () => {
+            attest();
+            attestRunningEnv();
+          },
+        });
+        if (!stationDirect) {
+          const finalMonitoring = validateMonitoring(transaction, profile, { station: true });
+          durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
+        }
+        durable(`${transaction}/observation.json`, `${JSON.stringify(observation)}\n`, true);
+        return;
+      }
       if (schedule || appOnly) validateScheduleExpiry(op.expiresAt, 900_000);
       if (isDirectOperation(op)) {
         await callbackProbe();
@@ -5012,7 +5106,6 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         web: { privateMs: [], publicMs: [], timestamps: [] },
       };
       const times = { api: [], web: [] };
-      const publicLatencyMs = station ? { api: [], web: [] } : null;
       if (roster) times.worker = [];
       for (let round = 0; round <= 60; round++) {
         for (const s of targets) {
@@ -5020,7 +5113,6 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           const privateMs = await probe(s),
             publicMs = s === 'worker' ? null : await probe(s, true);
           times[s].push(privateMs);
-          if (publicLatencyMs && s !== 'worker') publicLatencyMs[s].push(publicMs);
           if (detailedObservation) {
             samples[s].privateMs.push(privateMs);
             samples[s].publicMs.push(publicMs);
@@ -5032,7 +5124,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         attestRunningEnv();
         if (scheduleWaiver) {
           validateScheduleExpiry(op.expiresAt);
-        } else if (!station && !isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
+        } else if (!isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
           validateMonitoring(transaction, profile, { fresh: appOnly });
         if (round < 60) await delay(15000);
       }
@@ -5048,11 +5140,9 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       else if (!scheduleWaiver) {
         const finalMonitoring = validateMonitoring(transaction, profile, {
           fresh: schedule || appOnly,
-          station,
         });
         durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
-        if (!station)
-          durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
+        durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
       }
       const completedAt = new Date().toISOString();
       for (const service of ['api', 'web'])
@@ -5086,7 +5176,6 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
             latencyMs: times,
             serverErrors: 0,
             completedAt,
-            ...(station ? { publicLatencyMs } : {}),
             ...(roster
               ? {
                   startedAt,
@@ -5094,8 +5183,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
                 }
               : {}),
           };
-      if (station) validateStationObservation(observation, validateRosterCutoverObservation);
-      else if (roster) validateRosterCutoverObservation(observation);
+      if (roster) validateRosterCutoverObservation(observation);
       durable(`${transaction}/observation.json`, `${JSON.stringify(observation)}\n`, true);
     },
     restore: async (s) => {
@@ -5210,11 +5298,14 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
                 parseStrictJson(read(`${transaction}/observation.json`)),
                 validateRosterCutoverObservation,
                 receipt.observedAt,
+                stationObservationIdentity(op, plan, planSha256),
               );
             }
             for (const [file, key] of [
               ['observation.json', 'observationSha256'],
-              ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+              ...(!stationDirect
+                ? [['timeweb-monitor-readback.json', 'providerReadbackSha256']]
+                : []),
               ...(!station ? [['alert-test-readback.json', 'alertReadbackSha256']] : []),
             ])
               if (hash(read(`${transaction}/${file}`)) !== receipt[key])

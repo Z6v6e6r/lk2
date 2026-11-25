@@ -5,6 +5,9 @@ import {
   STATION_ALERT_WAIVER_SHA256,
   STATION_BACKUP,
   STATION_OPERATION,
+  STATION_DIRECT_RELEASE,
+  STATION_PROVIDER_STATUS,
+  STATION_PROVIDER_WAIVER_SHA256,
   STATION_PREVIOUS,
   STATION_WAIVER_SHA256,
   stationScopeHash,
@@ -13,6 +16,7 @@ import {
   validateStationRetainedAdmission,
   validateStationRuntimeEnvironment,
   validateStationSourceTail,
+  validateStationDirectControllerTail,
   validateStationWindow,
 } from './timeweb-station-rollout.js';
 
@@ -52,6 +56,26 @@ function operation() {
   return op;
 }
 
+function directOperation() {
+  const base = operation();
+  const op = {
+    ...base,
+    ...STATION_DIRECT_RELEASE,
+    controllerSha: 'f'.repeat(40),
+    controllerSourceCiRunId: '9876',
+    controllerPullRequestNumber: '707',
+    controllerPrCiRunId: '9875',
+    confirmation:
+      'DEPLOY_API_WEB_B81A2EC93F38_FROM_43D4BD64E5AE_43D4BD64E5AE_ONE_OFF_STATION_MANUAL_DUMP',
+    ownerDecision: {
+      ...base.ownerDecision,
+      providerMonitoringWaiverMessageSha256: STATION_PROVIDER_WAIVER_SHA256,
+    },
+  };
+  op.ownerDecision.scopeSha256 = stationScopeHash(op);
+  return op;
+}
+
 function run(body: string) {
   const result = spawnSync(
     process.execPath,
@@ -63,9 +87,10 @@ function run(body: string) {
     import { createHash } from 'node:crypto';
     import { readFileSync } from 'node:fs';
     import { validateApiWebOperation, validateUpgradeReceipt, buildApiWebInstalledDescriptor,
-      runApiWebTransition, apiWebComposeArgs, validateInstalledCutoverKind, validateStationMonitoring, validateUpgradeMonitoring } from './scripts/timeweb-api-web-upgrade.js';
-    import { STATION_BACKUP, STATION_KIND, STATION_PLAN, STATION_RECEIPT, STATION_ALERT_STATUS, validateStationObservation } from './scripts/timeweb-station-rollout.js';
+      runApiWebTransition, observeStationRollout, apiWebComposeArgs, validateInstalledCutoverKind, validateStationMonitoring, validateUpgradeMonitoring } from './scripts/timeweb-api-web-upgrade.js';
+    import { STATION_BACKUP, STATION_KIND, STATION_PLAN, STATION_RECEIPT, STATION_ALERT_STATUS, validateStationObservation, validateStationDirectControllerReview, stationScopeHash } from './scripts/timeweb-station-rollout.js';
     const op = ${JSON.stringify(operation())};
+    const directOp = ${JSON.stringify(directOperation())};
     ${body}
   `,
     ],
@@ -87,6 +112,102 @@ describe('Timeweb station one-off rollout', () => {
       assert.throws(() => validateApiWebOperation({...op, ownerDecision:{...op.ownerDecision, alertWaiverMessageSha256:'f'.repeat(64)}}), /owner_scope/);
       assert.throws(() => validateApiWebOperation({...op, schema:'PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V1'}), /invalid_keys/);
       assert.throws(() => validateApiWebOperation({...op, ownerDecision:{...op.ownerDecision, acceptedSnapshotAgeSeconds:1800}}), /operation/);
+    `);
+  });
+
+  it('limits the direct observation exception to the exact published release and a different controller', () => {
+    run(`
+      assert.equal(validateApiWebOperation(directOp), directOp);
+      assert.throws(() => validateApiWebOperation({...directOp, controllerSha: directOp.candidateSha}), /direct_release/);
+      assert.throws(() => validateApiWebOperation({...directOp, artifactId:'8'}), /direct_release/);
+      assert.throws(() => validateApiWebOperation({...directOp, controllerSourceCiRunId:directOp.sourceCiRunId}), /direct_release/);
+      assert.throws(() => validateApiWebOperation({...directOp, controllerSourceCiRunId:'33'}), /owner_scope/);
+      const unsigned = {...directOp, ownerDecision:{...directOp.ownerDecision, providerMonitoringWaiverMessageSha256:'0'.repeat(64)}};
+      unsigned.ownerDecision.scopeSha256 = stationScopeHash(unsigned);
+      assert.throws(() => validateApiWebOperation(unsigned), /operation/);
+    `);
+  });
+
+  it('accepts only the intended regular controller file changes', () => {
+    const entries = [
+      'docs/runbooks/timeweb-standard-delivery.md',
+      'scripts/timeweb-api-web-upgrade.js',
+      'scripts/timeweb-station-rollout.js',
+      'scripts/timeweb-station-rollout.d.ts',
+      'scripts/timeweb-station-rollout.test.ts',
+    ].map((path) => ({
+      path,
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldType: 'blob',
+      newType: 'blob',
+    }));
+    expect(() => validateStationDirectControllerTail(entries)).not.toThrow();
+    expect(() => validateStationDirectControllerTail(entries.slice(1))).toThrow(
+      'direct_controller_tail',
+    );
+    expect(() =>
+      validateStationDirectControllerTail([
+        { ...entries[0], path: 'apps/api/src/app.ts' },
+        ...entries.slice(1),
+      ]),
+    ).toThrow('direct_controller_tail');
+    expect(() =>
+      validateStationDirectControllerTail([
+        { ...entries[0], newMode: '120000' },
+        ...entries.slice(1),
+      ]),
+    ).toThrow('direct_controller_tail');
+  });
+
+  it('requires the exact reviewed two-parent controller merge and first-attempt PR checks', () => {
+    run(`
+      const full_name='Z6v6e6r/lk2', repo={full_name};
+      const branch='codex/timeweb-station-direct-observation', reviewHead='1'.repeat(40), tree='2'.repeat(40);
+      const pullRequest={
+        number:Number(directOp.controllerPullRequestNumber), state:'closed', merged:true,
+        base:{sha:directOp.candidateSha,ref:'main',repo},
+        head:{sha:reviewHead,ref:branch,repo}, merge_commit_sha:directOp.controllerSha,
+      };
+      const prRun={id:Number(directOp.controllerPrCiRunId),status:'completed',conclusion:'success',
+        path:'.github/workflows/pull-request.yaml',event:'pull_request',run_attempt:1,
+        head_sha:reviewHead,head_branch:branch,repository:repo,head_repository:repo};
+      const jobs=['pr-gate','quality-full','source-quality','deployment-contract','ci-plan','quality','dependency-security','secret-scan','docker-build']
+        .map(name=>({name,status:'completed',conclusion:'success'}));
+      const evidence={pullRequest,prRun,prJobs:{jobs,total_count:jobs.length},
+        parents:[directOp.candidateSha,reviewHead],headTree:tree,controllerTree:tree};
+      validateStationDirectControllerReview(directOp,evidence);
+      assert.throws(()=>validateStationDirectControllerReview(directOp,{...evidence,controllerTree:'3'.repeat(40)}),/direct_controller_review/);
+      assert.throws(()=>validateStationDirectControllerReview(directOp,{...evidence,parents:[reviewHead,directOp.candidateSha]}),/direct_controller_review/);
+      assert.throws(()=>validateStationDirectControllerReview(directOp,{...evidence,prRun:{...prRun,run_attempt:2}}),/direct_controller_review/);
+      jobs[1].conclusion='failure';
+      assert.throws(()=>validateStationDirectControllerReview(directOp,evidence),/direct_controller_review/);
+    `);
+  });
+
+  it('records direct observation without attributing provider evidence', () => {
+    run(`
+      const status = '${STATION_PROVIDER_STATUS}';
+      const sha = (value) => createHash('sha256').update(value).digest('hex');
+      const plan = { schema: STATION_PLAN, controllerSha: directOp.controllerSha,
+        databaseAdmission: {...STATION_BACKUP,
+          ownerScopeSha256: directOp.ownerDecision.scopeSha256, alertTestStatus: STATION_ALERT_STATUS,
+          providerMonitoringStatus: status }};
+      const planBytes = Buffer.from(JSON.stringify(plan));
+      const planHash = sha(planBytes);
+      const common = { schema:STATION_RECEIPT, planSha256:planHash, observedAt:'2026-11-25T10:00:00Z',
+        alertTestStatus:STATION_ALERT_STATUS, providerMonitoringStatus:status,
+        databaseAdmissionSha256:sha(JSON.stringify(plan.databaseAdmission)) };
+      const success = { ...common, status:'SUCCESS', installedBaselineSha256:'f'.repeat(64),
+        observationSha256:'e'.repeat(64) };
+      const outcomes = [success, {...success,status:'RECONCILED',reconciledStatus:'SUCCESS'},
+        {...common,status:'ROLLED_BACK'}, {...common,status:'RECONCILED',reconciledStatus:'ROLLED_BACK'}];
+      for(const receipt of outcomes) assert.equal(validateUpgradeReceipt(receipt, planHash, directOp, plan, planBytes), receipt);
+      assert.throws(() => validateUpgradeReceipt({...success,providerReadbackSha256:'b'.repeat(64)}, planHash, directOp, plan, planBytes), /invalid_keys/);
+      assert.throws(() => validateUpgradeReceipt({...success,providerMonitoringStatus:'PASS'}, planHash, directOp, plan, planBytes), /invalid_receipt/);
+      const {providerMonitoringStatus,...noWaiver}=success;
+      assert.throws(() => validateUpgradeReceipt({...noWaiver,providerReadbackSha256:'b'.repeat(64)}, planHash, directOp, plan, planBytes), /receipt_context/);
     `);
   });
 
@@ -271,6 +392,36 @@ describe('Timeweb station one-off rollout', () => {
       assert.throws(() => validateStationObservation({elapsedSeconds:900}, privateChecks), /public_latency/);
       steady.publicLatencyMs.web.fill(1200);
       assert.throws(() => validateStationObservation(steady, privateChecks), /public_latency/);
+    `);
+  });
+
+  it('observes all three services for 61 rounds without provider or alert inputs', () => {
+    run(`
+      let instant=Date.parse('2026-11-25T10:00:00Z');
+      let attestations=0;
+      const checks={api:0,web:0,worker:0};
+      const probes=[];
+      const identity={operationSha256:'f'.repeat(64),planSha256:'e'.repeat(64),candidateSha:directOp.candidateSha};
+      const dependencies={
+        identity,
+        inspectService:service=>checks[service]++,
+        probeService:async(service,publicProbe)=>{probes.push([service,publicProbe]);return 10;},
+        attest:async()=>{attestations++;},
+        now:()=>instant,
+        sleep:async(ms)=>{assert.equal(ms,15000);instant+=ms;},
+      };
+      const observed=await observeStationRollout(dependencies);
+      assert.equal(observed.elapsedSeconds,900);
+      assert.equal(observed.operationSha256,identity.operationSha256);
+      assert.equal(observed.planSha256,identity.planSha256);
+      assert.equal(observed.candidateSha,identity.candidateSha);
+      assert.throws(()=>validateStationObservation(observed,()=>{},undefined,{...identity,planSha256:'d'.repeat(64)}),/direct_observation_identity/);
+      assert.deepEqual(checks,{api:61,web:61,worker:61});
+      assert.equal(attestations,61);
+      assert.equal(probes.length,305);
+      assert.ok(!probes.some(([service,isPublic])=>service==='worker'&&isPublic));
+      await assert.rejects(observeStationRollout({...dependencies,
+        probeService:async()=>{throw new Error('direct_health_failure');}}), /direct_health_failure/);
     `);
   });
 

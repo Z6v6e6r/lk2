@@ -2217,3 +2217,32 @@ Web, API and Worker from the pinned previous images. If interrupted, use
 `--critical-api-web-recover`; use `--critical-api-web-reconcile` for a terminal
 receipt. Keep the lease until reconciliation, and keep the durable one-use
 reservation thereafter. A failed rollback keeps the lock and its evidence.
+
+### Direct observation for published `b81a2ec93f38`
+
+The owner authorized this exact publication to use direct observation after
+activation. Use the original canonical artifact `15019410371` from publication
+run `45606826648` and candidate main CI `45604315153`. The enrolled controller
+must be a reviewed descendant of this publication source with the exact
+controller, tests and runbook file scope. Set `controllerSourceCiRunId` to the
+controller's own successful first-attempt main CI and `controllerSha` to its
+commit. Supply the merged PR number as `controllerPullRequestNumber` and the
+successful first-attempt PR-head check as `controllerPrCiRunId`. The controller
+verifies the exact PR branch, both merge parents and matching PR-head and merge
+trees before starting. Candidate, artifact, manifest and image digests come from
+the original publication.
+
+Set `ownerDecision.providerMonitoringWaiverMessageSha256` to the enrolled
+`STATION_PROVIDER_WAIVER_SHA256`, the SHA-256 of the exact UTF-8 owner request
+with no appended newline. Compute the operation scope with `stationScopeHash`.
+The one-use reservation, dump and expiry above still apply. The release approval
+binds the published artifact, enrolled controller and maximum age of the named
+dump at expiry. This exception cannot apply to another candidate or publication.
+
+The plan and receipt record
+`providerMonitoringStatus: NOT_COLLECTED_EXPLICIT_OVERRIDE`. Direct checks
+sample public and private API and Web and private Worker 61 times over at least
+900 seconds. A failed check rolls back Web, API and Worker. The terminal receipt
+binds the direct observation by checksum. The observation records its exact
+operation, plan and candidate, which are verified during reconciliation. After a successful reconciliation, open the game wizard and verify
+read-only available slots for Seliger through LK1.
