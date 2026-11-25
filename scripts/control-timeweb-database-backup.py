@@ -179,17 +179,39 @@ CANONICAL_FRESH_POLICY = 'EXACT_CANONICAL_PRIOR_FULL_RESTORE_OWNER_WAIVER_V1'
 CANONICAL_PRIOR_SOURCE = '4b8dbaa12c1ec3fea478a5e661465955e4b0c7c0'
 CANONICAL_PRIOR_RELEASE = CANONICAL_PRIOR_SOURCE+'-43751306581-1'
 CANONICAL_HISTORY_SCHEMA = 'RETAINED_V4_ROLLOUT_BOUNDED_HISTORICAL_FRESH_TERMINAL_V1'
+APP_ONLY_FRESH_SCHEMA = 'PHUB_TIMEWEB_APP_ONLY_FRESH_BACKUP_V1'
+APP_ONLY_FRESH_PLAN = 'PHUB_TIMEWEB_APP_ONLY_FRESH_PLAN_V1'
+APP_ONLY_FRESH_RECEIPT = 'PHUB_TIMEWEB_APP_ONLY_FRESH_DUMP_V1'
+APP_ONLY_RESTORE_SCHEMA = 'PHUB_TIMEWEB_APP_ONLY_RESTORE_CHECKPOINT_V1'
+APP_ONLY_RESTORE_RECEIPT = 'PHUB_TIMEWEB_APP_ONLY_RESTORE_CHECKPOINT_RECEIPT_V1'
+APP_ONLY_POLICY = 'APP_ONLY_WITH_VERIFIED_PRIOR_RESTORE_V1'
+APP_ONLY_CHECKPOINT_MAX_AGE = 30 * 86400
+APP_ONLY_CHECKPOINT_MAX_WINDOW = 2 * 3600
+
+
+def is_app_only_fresh(op):
+    return op.get('schema') == APP_ONLY_FRESH_SCHEMA
+
+
+def is_app_only_checkpoint(op):
+    return op.get('schema') == APP_ONLY_RESTORE_SCHEMA
+
+
+def is_app_only_backup(op):
+    return is_app_only_fresh(op) or is_app_only_checkpoint(op)
 
 def is_canonical_fresh(op):
     return op.get('schema') == CANONICAL_FRESH_SCHEMA
 
 def is_fresh_operation(op):
-    return op.get('schema') in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA)
+    return is_app_only_fresh(op) or op.get('schema') in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA)
 
 def fresh_receipt_schema(op):
+    if is_app_only_fresh(op): return APP_ONLY_FRESH_RECEIPT
     return CANONICAL_FRESH_RECEIPT if is_canonical_fresh(op) else FRESH_RECEIPT
 
 def fresh_policy(op):
+    if is_app_only_fresh(op): return APP_ONLY_POLICY
     return CANONICAL_FRESH_POLICY if is_canonical_fresh(op) else FRESH_POLICY
 RESTORE_OWNER_MESSAGE = 'Пропусти повторное пробное восстановление базы — оно уже прошло. Исправь блокер Docker Hub и продолжай выкладку, сохранив данные, учётки, настройки и передачу результатов в ЛК1.\n'
 SCHEDULE_RESTORE_OWNER_MESSAGE = 'продожай без резервного восстановления'
@@ -327,7 +349,7 @@ def is_web8158_operation(op):
 
 
 def backup_baseline(op):
-    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or is_owner_acl_backup(op) or op.get('schema') in (SCHEDULE_BACKUP_SCHEMA,SCHEDULE_DISK_SCHEMA,CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA) else BASELINE
+    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or is_owner_acl_backup(op) or is_app_only_backup(op) or op.get('schema') in (SCHEDULE_BACKUP_SCHEMA,SCHEDULE_DISK_SCHEMA,CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA) else BASELINE
 
 NS_DAEMON_MEMORY = 2 * 1024 ** 3
 DISK_MEMORY = 2 * 1024 ** 3
@@ -343,15 +365,15 @@ DISK_TOOLS = {'loop': '/usr/sbin/losetup', 'crypt': '/usr/sbin/cryptsetup',
 
 
 def is_bounded_cutover_disk(op):
-    return op.get('schema') in (CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA)
+    return is_app_only_checkpoint(op) or op.get('schema') in (CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA)
 
 
 def is_disk_operation(op):
-    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA,CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA) or is_closed_application_backup(op)
+    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA,CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA) or is_closed_application_backup(op) or is_app_only_checkpoint(op)
 
 
 def disk_ledger_sha(op):
-    if op.get('schema') in (CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):return op['expectedLedgerSha256']
+    if is_app_only_backup(op) or op.get('schema') in (CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):return op['expectedLedgerSha256']
     if is_closed_application_backup(op):return CLOSED_APPLICATION_BACKUPS[op['schema']]['ledger']
     if op['schema'] in (JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA):return JOIN_POST105_LEDGER
     return API_WORKER_PRE_LEDGER_SHA256 if op['schema'] in (DISK_PRE_SCHEMA, NS_PRE_SCHEMA) else API_WORKER_LEDGER_SHA256
@@ -2067,7 +2089,9 @@ def now_iso():
 
 
 def operation_mode(value):
-    if value.get('schema') in (SCHEDULE_BACKUP_SCHEMA,SCHEDULE_DISK_SCHEMA,CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):
+    if is_app_only_checkpoint(value):
+        return 'app-restore', value['releaseId']
+    if is_app_only_fresh(value) or value.get('schema') in (SCHEDULE_BACKUP_SCHEMA,SCHEDULE_DISK_SCHEMA,CUTOVER_BACKUP_SCHEMA,CUTOVER_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):
         return 'api-web', value['releaseId']
     if is_closed_application_backup(value):return closed_application_backup_mode(value), value['releaseId']
     if value['schema'] == JOIN_POST105_SCHEMA:
@@ -2143,7 +2167,28 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         need(schema != 'PHUB_TIMEWEB_BACKUP_OPERATION_V1', 'CONTROLLER_PROMOTION_SCHEMA')
         common += ['controllerPromotion']
     if schema in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):common += ['priorRestore','ownerRestoreDecision','predecessorRuntimeSha256']
-    if schema == CANONICAL_FRESH_SCHEMA:
+    if is_app_only_backup(value):
+        exact(value, common + ['profile','candidateSha','publicationRunId','releaseId','expectedWeb',
+                              'expectedLedgerSha256','expectedDatabaseTarget','predecessorAttestationSha256',
+                              'expectedSchemaSha256','expectedSecuritySha256']
+              + (['priorRestore'] if is_app_only_fresh(value) else []))
+        mode, release_id = operation_mode(value)
+        need(profile == 'production' and 'controllerPromotion' not in value
+             and value['candidateSha'] == value['controllerSha'] == value['toolCommit']
+             and re.fullmatch(r'[1-9][0-9]*',value['publicationRunId'] or '')
+             and release_id == value['candidateSha']+'-'+value['publicationRunId']+'-1'
+             and value['expectedDatabaseTarget'] == LOCATION_PHOTO_DATABASE_TARGET
+             and value['predecessorAttestationSha256'] == value['expectedBoundarySha256']
+             and all(HASH.fullmatch(value[k] or '') for k in
+                     ('expectedLedgerSha256','expectedSchemaSha256','expectedSecuritySha256')),
+             'APP_ONLY_OPERATION')
+        if is_app_only_fresh(value):
+            ref = value['priorRestore']
+            exact(ref,['releaseId','operationSha256','receiptSha256','terminalSha256'])
+            need(RELEASE.fullmatch(ref['releaseId'] or '')
+                 and all(HASH.fullmatch(ref[k] or '') for k in ('operationSha256','receiptSha256','terminalSha256')),
+                 'APP_ONLY_CHECKPOINT_ID')
+    elif schema == CANONICAL_FRESH_SCHEMA:
         exact(value,common+['profile','candidateSha','publicationRunId','releaseId','expectedLedgerSha256','expectedDatabaseTarget','predecessorAttestationSha256','canonicalBaseline','historicalReadSetSha256'])
         mode,release_id='api-web',value['releaseId']
         need(profile=='production' and 'controllerPromotion' not in value
@@ -2270,14 +2315,25 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     match = RELEASE.fullmatch(release_id or '')
     need(match and (mode == 'api-worker' or match[1] == value['controllerSha']), 'RELEASE')
     fields = ['id', 'image', 'imageId', 'releaseId', 'revision', 'restarts', 'startedAt']
-    for key in ['expectedApi', 'expectedPostgres']:
+    for key in ['expectedApi', 'expectedPostgres'] + (['expectedWeb'] if is_app_only_backup(value) else []):
         exact(value[key], fields)
         row = value[key]
         need(HASH.fullmatch(row['id'] or '') and re.fullmatch(r'sha256:[a-f0-9]{64}', row['imageId'] or '')
              and type(row['restarts']) is int and (row['restarts'] == 0 or profile == 'beta')
              and isinstance(row['startedAt'], str), 'BASELINE')
     api, pg = value['expectedApi'], value['expectedPostgres']
-    if schema == CANONICAL_FRESH_SCHEMA:
+    if is_app_only_backup(value):
+        for name, row in [('api',api),('web',value['expectedWeb'])]:
+            need(RELEASE.fullmatch(row['releaseId'] or '')
+                 and row['revision'] == row['releaseId'][:40]
+                 and re.fullmatch(r'ghcr\.io/z6v6e6r/phub-'+name+r'@sha256:[a-f0-9]{64}',row['image'] or '')
+                 and row['imageId'] == row['image'].split('@')[1], 'APP_ONLY_BASELINE')
+        need(pg['image'] == PG_IMAGE and pg['imageId'] == PG_IMAGE.split('@')[1]
+             and pg['releaseId'] is None and pg['revision'] is None, 'POSTGRES_BASELINE')
+        for row in [api, value['expectedWeb'], pg]:
+            need(re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,9}Z',row['startedAt']), 'BASELINE_TIME')
+            utc(row['startedAt'][:23]+'Z')
+    elif schema == CANONICAL_FRESH_SCHEMA:
         need(api==value['canonicalBaseline']['containers']['api'],'CANONICAL_API_BASELINE')
         need(pg['image']==PG_IMAGE and pg['imageId']==PG_IMAGE.split('@')[1]
              and pg['releaseId'] is None and pg['revision'] is None,'POSTGRES_BASELINE')
@@ -2329,7 +2385,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         need(same_api_worker_identity(api, API_BASELINE, profile), 'API_BASELINE')
         need(pg == PG_BASELINE, 'POSTGRES_BASELINE')
     expires = utc(value['expiresAt'])
-    need(allow_expired or 1200 <= expires - now <= 3600, 'EXPIRY')
+    max_window = APP_ONLY_CHECKPOINT_MAX_WINDOW if is_app_only_checkpoint(value) else 3600
+    need(allow_expired or 1200 <= expires - now <= max_window, 'EXPIRY')
     confirmation = ('BACKUP_RESTORE_' + match[1][:12].upper() + '_KEEP_API_0D6078BE7A50'
                     if mode == 'web' else
                     'BACKUP_RESTORE_API_WORKER_8158AC445C9F_KEEP_API_0D6078BE7A50')
@@ -2361,6 +2418,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         if schema==CANONICAL_FRESH_SCHEMA:confirmation='FRESH_DUMP_CANONICAL_PRIOR_RESTORE_BETA122_'+value['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS'
         if is_schedule_fresh(value):confirmation=schedule_fresh_confirmation(value)
         validate_fresh_owner(value)
+    if is_app_only_backup(value):
+        confirmation = app_only_backup_confirmation(value)
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
 
@@ -3325,11 +3384,12 @@ def cutover_disk_reserve():
 
 
 @contextmanager
-def cutover_source_snapshot(op, operation_sha):
+def cutover_source_snapshot(op, operation_sha, derive_catalog=False, capture_accounts=True):
     import selectors
     cutover_disk_source_stopped(op,operation_sha)
     names=cutover_disk_source_names(operation_sha)
     options='-c default_transaction_read_only=on -c statement_timeout=30000 -c lock_timeout=3000 -c idle_in_transaction_session_timeout=1400000'
+    if is_app_only_backup(op):options+=' -c search_path=pg_catalog'
     shell='export PGOPTIONS='+shlex.quote(options)+' PGAPPNAME='+names[1]+';exec /usr/bin/timeout -s TERM -k 10 1500 psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" -qAt --set=ON_ERROR_STOP=1'
     parent=os.getpid()
     process=subprocess.Popen(['/usr/bin/docker','exec','-i',op['expectedPostgres']['id'],'/bin/sh','-eu','-c',shell],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,env=ENV,bufsize=0,
@@ -3356,12 +3416,21 @@ def cutover_source_snapshot(op, operation_sha):
         target=strict(query(CUTOVER_TARGET_SQL+';'))
         need(target=={**op['expectedDatabaseTarget'],'inRecovery':False},'CUTOVER_DATABASE_TARGET')
         ledger=ledger_bytes(query(LEDGER_SQL+';'))
-        need(len(strict(ledger))==122 and digest(ledger)==op['expectedLedgerSha256'],'CUTOVER_LEDGER')
-        accounts=digest(encoded(strict(query(CUTOVER_ACCOUNTS_SQL+';'))))
+        need((is_app_only_backup(op) or len(strict(ledger))==122)
+             and digest(ledger)==op['expectedLedgerSha256'],'CUTOVER_LEDGER')
+        accounts=digest(encoded(strict(query(CUTOVER_ACCOUNTS_SQL+';')))) if capture_accounts else None
         witness={'schema':'PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1','operationSha256':operation_sha,
                  'sourcePostgres':op['expectedPostgres'],'capturedAt':captured_at,'snapshotIdSha256':digest(token.encode()),
                  'databaseTarget':op['expectedDatabaseTarget'],'ledgerSha256':digest(ledger),'accountsSha256':accounts}
-        yield {'token':token,'ledger':ledger,'accountsSha256':accounts,'witness':witness}
+        catalog = None
+        if is_app_only_backup(op):
+            schema_sha = app_only_schema_sha(op['expectedPostgres']['id'], snapshot=token, application=names[1])
+            catalog, security_sha = app_only_security_state(query)
+            need(derive_catalog or (schema_sha == op['expectedSchemaSha256'] and security_sha == op['expectedSecuritySha256']),
+                 'APP_ONLY_SNAPSHOT_CATALOG_DRIFT')
+            witness.update(schemaSha256=schema_sha, securitySha256=security_sha,
+                           securityCatalogSha256=digest(encoded(catalog)))
+        yield {'token':token,'ledger':ledger,'accountsSha256':accounts,'witness':witness,'securityCatalog':catalog}
     finally:
         completed=sys.exc_info()[0] is None
         try:
@@ -3379,10 +3448,11 @@ def cutover_source_snapshot(op, operation_sha):
             cutover_disk_source_stopped(op,operation_sha)
 
 
-def cutover_snapshot_dump_shell(operation_sha, token):
+def cutover_snapshot_dump_shell(operation_sha, token, *, preserve_acl=False):
     need(re.fullmatch(r'[0-9A-F]{8}-[0-9A-F]{8}-[1-9][0-9]*',token or '') is not None,'CUTOVER_SNAPSHOT_TOKEN')
     name=cutover_disk_source_names(operation_sha)[0]
     dump=SOURCE_DUMP.removeprefix(READ_ONLY).removeprefix('exec ').replace(' --serializable-deferrable','')
+    if preserve_acl:dump=dump.replace(' --no-owner --no-acl','')
     return READ_ONLY+'export PGAPPNAME='+name+';exec /usr/bin/timeout -s TERM -k 10 1200 '+dump+' --compress=zstd:level=3 --snapshot='+shlex.quote(token)
 
 
@@ -3429,8 +3499,10 @@ def cutover_allocate(fd, size):
 
 def validate_cutover_disk_receipt(op, receipt, plan, directory):
     fields=['schema','baselineReleaseId','completedAt','backupFile','backupSha256','restoreVerified','restoreImage','restoredLedgerSha256','sourceLedgerSha256','operationSha256','predecessorAttestationSha256','databaseTarget','sourceAccountsSha256','restoredAccountsSha256','snapshotWitnessSha256','dumpBytes','dumpLimitBytes','dumpCompression']
+    app_checkpoint = is_app_only_checkpoint(op)
+    if app_checkpoint: fields += ['sourceSchemaSha256','restoredSchemaSha256','sourceSecuritySha256','restoredSecurityCatalogSha256']
     exact(receipt,fields)
-    need(receipt['schema']==CUTOVER_DISK_RECEIPT and receipt['baselineReleaseId']==op['expectedApi']['releaseId']
+    need(receipt['schema']==(APP_ONLY_RESTORE_RECEIPT if app_checkpoint else CUTOVER_DISK_RECEIPT) and receipt['baselineReleaseId']==op['expectedApi']['releaseId']
          and receipt['operationSha256']==digest(read_secure(Path(plan['work'])/'backup-operation.json'))
          and receipt['predecessorAttestationSha256']==op['predecessorAttestationSha256']
          and receipt['databaseTarget']==op['expectedDatabaseTarget'] and receipt['restoreVerified'] is True
@@ -3442,7 +3514,14 @@ def validate_cutover_disk_receipt(op, receipt, plan, directory):
     witness=read_secure(Path(directory)/'snapshot-witness.json')
     need(witness==read_secure(Path(plan['work'])/'snapshot-witness.json'),'CUTOVER_SNAPSHOT_WITNESS')
     w=strict(witness)
-    exact(w,['schema','operationSha256','sourcePostgres','capturedAt','snapshotIdSha256','databaseTarget','ledgerSha256','accountsSha256'])
+    exact(w,['schema','operationSha256','sourcePostgres','capturedAt','snapshotIdSha256','databaseTarget','ledgerSha256','accountsSha256']
+          + (['schemaSha256','securitySha256','securityCatalogSha256'] if app_checkpoint else []))
+    if app_checkpoint:
+        need(w['schemaSha256']==receipt['sourceSchemaSha256']==receipt['restoredSchemaSha256']==op['expectedSchemaSha256']
+             and w['securitySha256']==receipt['sourceSecuritySha256']==op['expectedSecuritySha256']
+             and HASH.fullmatch(w['securityCatalogSha256'] or '')
+             and w['securityCatalogSha256']==receipt['restoredSecurityCatalogSha256'],
+             'APP_ONLY_CHECKPOINT_CATALOG')
     need(w['schema']=='PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1' and HASH.fullmatch(w['snapshotIdSha256'] or '')
          and w['operationSha256']==plan['operationSha256'] and w['sourcePostgres']==op['expectedPostgres']
          and utc(w['capturedAt'])<=utc(receipt['completedAt']),'CUTOVER_SNAPSHOT_WITNESS')
@@ -3459,14 +3538,24 @@ def validate_cutover_disk_terminal(op, raw):
     need(read_secure(work/'backup-operation.json')==raw,'CUTOVER_CAPSULE_DRIFT')
     plan=strict(read_secure(work/'disk-plan.json'))
     need(plan==disk_plan(op,raw,cutover_disk_sizing(plan['databaseBytes'],2**50,2**50,
-                                                  schedule=op['schema']==SCHEDULE_DISK_SCHEMA)),'CUTOVER_PLAN_DRIFT')
+                                                  schedule=op['schema']==SCHEDULE_DISK_SCHEMA or is_app_only_checkpoint(op))),'CUTOVER_PLAN_DRIFT')
     journal=DiskJournal(work,plan['operationSha256'])
     need(all(journal.find(phase) is not None for phase in ['RESTORE_VERIFIED','STORAGE_CLEANUP_VERIFIED','PUBLISHED','RECONCILED']),'CUTOVER_CLEANUP_UNPROVEN')
     canonical=Path(plan['canonical'])
     need(sorted(p.name for p in canonical.iterdir())==sorted(['database.pgcustom','database-backup-receipt.json','backup-operation.json','snapshot-witness.json','SUCCESS_CLEANUP_VERIFIED.json']),'CUTOVER_PUBLICATION_INVENTORY')
     need(read_secure(canonical/'backup-operation.json')==raw,'CUTOVER_CAPSULE_DRIFT')
     receipt=read_secure(canonical/'database-backup-receipt.json')
-    validate_cutover_disk_receipt(op,strict(receipt),plan,canonical)
+    parsed_receipt=strict(receipt)
+    validate_cutover_disk_receipt(op,parsed_receipt,plan,canonical)
+    if is_app_only_checkpoint(op):
+        restored=journal.find('RESTORE_VERIFIED')
+        need(journal.find('UNLOCK_INTENT') is not None
+             and restored.get('dumpSha256')==parsed_receipt['backupSha256']
+             and restored.get('ledgerSha256')==parsed_receipt['restoredLedgerSha256']
+             and journal.find('APP_ONLY_CATALOG_RESTORE_VERIFIED')=={
+                 'schemaSha256':parsed_receipt['restoredSchemaSha256'],
+                 'restoredSecurityCatalogSha256':parsed_receipt['restoredSecurityCatalogSha256']},
+             'APP_ONLY_CHECKPOINT_TERMINAL')
     need(journal.find('PUBLISH_READY')=={'dumpSha256':strict(receipt)['backupSha256'],'receiptSha256':digest(receipt)}
          and journal.find('PUBLISHED')=={'receiptSha256':digest(receipt)}
          and journal.find('SNAPSHOT_WITNESS')=={'sha256':strict(receipt)['snapshotWitnessSha256']},'CUTOVER_JOURNAL_BINDING')
@@ -3576,6 +3665,22 @@ def derive_installed_mode(path):
 def plan_mode(path):
     file=Path(__file__);file_sha=digest(read_secure(file,0o755))
     raw=read_secure(Path(path));op=validate_operation(strict(raw),time.time(),file_sha,allow_expired=True)
+    if is_app_only_backup(op):
+        need(time.time()<utc(op['expiresAt']), 'EXPIRED_OPERATION')
+        _, tree=app_only_source_checkout(op['controllerSha'])
+        need(tree==op['controllerTree'], 'APP_ONLY_CONTROLLER')
+        tool_custody(op)
+        attest_app_only_database(op)
+        if is_app_only_fresh(op):
+            attest_app_only_source(op)
+            validate_app_only_checkpoint(op)
+            need(disk_free()>=CUTOVER_DUMP_LIMIT+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
+        else:
+            size=int(source_query(SOURCE_SIZE,op['expectedPostgres']['id']))
+            cutover_disk_sizing(size,disk_memory_available(),disk_free(),schedule=True)
+        print(json.dumps({'status':'PLAN_OK','candidateSha':op['candidateSha'],
+                          'backupOperationSha256':digest(raw),'mode':op['schema']}))
+        return
     need(is_canonical_fresh(op),'PLAN_SCHEMA')
     tool_custody(op);validate_canonical_backup_baseline(op)
     validate_prior_restore(op)
@@ -3934,14 +4039,259 @@ def validate_prior_restore(op):
             'predecessorRuntimeSha256':op['predecessorRuntimeSha256']}
 
 
+def app_only_backup_confirmation(op):
+    action = 'FRESH_DUMP' if is_app_only_fresh(op) else 'VERIFY_RESTORE'
+    api = op['expectedApi']['releaseId'][:12].upper()
+    web = op['expectedWeb']['releaseId'][:12].upper()
+    return action + '_APP_ONLY_' + op['candidateSha'][:12].upper() + '_FROM_' + api + '_' + web
+
+
+def app_only_schema_fingerprint(raw):
+    need(0 < len(raw) <= 16 * 1024**2, 'APP_ONLY_SCHEMA_SIZE')
+    # PG16 may emit a random psql protection key around the dump. Normalize
+    # just that generated pair, preserving any similar text in SQL bodies.
+    lines = raw.split(b'\n')
+    header = b'-- PostgreSQL database dump'
+    footer = b'-- PostgreSQL database dump complete'
+    need(lines[:3] == [b'--', header, b'--'] and lines.count(footer) == 1,
+         'APP_ONLY_SCHEMA_DUMP')
+    tail = lines.index(footer)
+    need(tail > 3 and all(line == b'' or line == b'--'
+                          or line.startswith(b'\\unrestrict ') for line in lines[tail+1:]),
+         'APP_ONLY_SCHEMA_DUMP')
+    first = next((i for i in range(3, tail) if lines[i]), tail)
+    last = next((i for i in range(len(lines)-1, tail, -1)
+                 if lines[i] not in (b'', b'--')), tail)
+    key = re.fullmatch(rb'\\restrict ([A-Za-z0-9]+)', lines[first])
+    need((last == tail and key is None) or (key is not None and last > tail
+         and lines[last] == b'\\unrestrict ' + key[1]
+         and all(line in (b'', b'--') for line in lines[tail+1:last])),
+         'APP_ONLY_SCHEMA_DUMP')
+    if key:
+        del lines[last]
+        del lines[first]
+    # Recreating plpgsql under its original owner in the isolated cluster may
+    # make pg_dump emit this built-in explicitly. Its schema, version, owner
+    # and language privileges are compared in the independent security catalog.
+    builtin = [b'--', b'-- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: -',
+               b'--', b'', b'CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;', b'', b'']
+    for i, line in enumerate(lines):
+        entry = re.match(rb'-- Name: .*; Type: ([A-Z ]+); Schema: ', line)
+        if entry and entry[1] not in (b'SCHEMA', b'EXTENSION'):
+            break
+        if lines[i:i+len(builtin)] == builtin:
+            del lines[i:i+len(builtin)]
+            break
+    return digest(b'\n'.join(lines))
+
+
+def app_only_schema_sha(container, *, snapshot=None, application=None, restored=False):
+    flags = '--schema-only --no-owner --no-acl --no-comments'
+    environment = READ_ONLY
+    if snapshot is not None:
+        need(re.fullmatch(r'[0-9A-F]{8}-[0-9A-F]{8}-[1-9][0-9]*', snapshot)
+             and re.fullmatch(r'phub_cutover_snapshot_[0-9a-f]{32}', application or ''),
+             'APP_ONLY_SNAPSHOT')
+        flags += ' --snapshot=' + snapshot
+        environment += 'export PGAPPNAME=' + application + '; '
+    database = ('--username=phub_restore --dbname=phub_restore' if restored
+                else '--username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}"')
+    shell = environment + 'exec /usr/bin/timeout -s TERM -k 5 50 pg_dump --no-password ' + database + ' ' + flags
+    return app_only_schema_fingerprint(
+        docker(['exec',container,'/bin/sh','-eu','-c',shell], 'APP_ONLY_SCHEMA_DUMP', timeout=60))
+
+
+APP_ONLY_ROLES_SQL = """
+select jsonb_build_object(
+ 'attributes', (select jsonb_agg(jsonb_build_array(rolname,rolsuper,rolinherit,rolcreaterole,
+                    rolcreatedb,rolcanlogin,rolreplication,rolconnlimit,rolvaliduntil,rolbypassrls,rolconfig)
+                                order by rolname collate "C") from pg_catalog.pg_roles),
+ 'memberships', (select jsonb_agg(jsonb_build_array(pg_get_userbyid(roleid),pg_get_userbyid(member),
+                    pg_get_userbyid(grantor),admin_option,inherit_option,set_option)
+                          order by pg_get_userbyid(roleid) collate "C",pg_get_userbyid(member) collate "C",
+                                   pg_get_userbyid(grantor) collate "C") from pg_catalog.pg_auth_members),
+ 'settings', (select jsonb_agg(jsonb_build_array(case when setdatabase=0 then 'all' else current_database() end,
+                 pg_get_userbyid(setrole),setconfig) order by setdatabase, pg_get_userbyid(setrole) collate "C")
+              from pg_catalog.pg_db_role_setting
+              where setdatabase=0 or setdatabase=(select oid from pg_catalog.pg_database where datname=current_database()))
+)::text;
+"""
+
+
+def app_only_security_state(query):
+    catalog = validate_notification_security(strict(query(notification_security_sql())))
+    return catalog, digest(encoded({'catalog':catalog,'roles':strict(query(APP_ONLY_ROLES_SQL))}))
+
+
+def app_only_restore_sql(container, sql, code):
+    docker(['exec','-i',container,'psql','-X','--username=phub_restore','--dbname=phub_restore',
+            '-q','--set=ON_ERROR_STOP=1'], code, input_data=sql.encode(), stdout=subprocess.DEVNULL, timeout=60)
+
+
+def app_only_restored_security(container):
+    sql = "set search_path='pg_catalog';" + notification_security_sql()
+    raw = docker(['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore',
+                  '-qAt','--set=ON_ERROR_STOP=1','--command='+sql], 'APP_ONLY_RESTORED_SECURITY', timeout=60)
+    return digest(encoded(validate_notification_security(strict(raw))))
+
+
+def attest_app_only_database(op):
+    need(service('phub-timeweb-beta-dependencies','postgres')==op['expectedPostgres'], 'APP_ONLY_POSTGRES_DRIFT')
+    with cutover_source_snapshot(op,digest(encoded(op)),capture_accounts=False):
+        pass
+
+
+def attest_app_only_source(op):
+    need(is_app_only_fresh(op),'APP_ONLY_OPERATION')
+    source, tree=app_only_source_checkout(op['controllerSha'])
+    need(tree==op['controllerTree'], 'APP_ONLY_CONTROLLER')
+    secure(source/'scripts/timeweb-api-web-upgrade.js',mode=0o644)
+    config=read_secure(Path('/etc/phub/timeweb-beta-standard-delivery.json'))
+    need(digest(config)==op['controllerConfigSha256'] and strict(config).get('enabled') is True
+         and strict(config).get('controllerSha')==op['controllerSha'],'APP_ONLY_CONTROLLER')
+    program=(
+        "import{readFileSync}from'node:fs';"
+        "import{attestAppOnlyBackupScope}from'./scripts/timeweb-api-web-upgrade.js';"
+        "process.stdout.write(attestAppOnlyBackupScope(JSON.parse(readFileSync(0,'utf8'))));"
+    )
+    need(command(['/usr/bin/node','--input-type=module','-e',program], 'APP_ONLY_SCOPE',
+                 input_data=encoded(op),cwd=str(source),timeout=60)==b'APP_ONLY_BACKUP_SCOPE_VERIFIED',
+         'APP_ONLY_SCOPE')
+
+
+def app_only_source_checkout(candidate):
+    source=ROOT/'standard/source'
+    secure(source,'dir');secure(source/'.git','dir')
+    git=['/usr/bin/git','-C',str(source),'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
+    need(command(git+['rev-parse','HEAD'],'APP_ONLY_CONTROLLER').decode().strip()==candidate
+         and not command(git+['status','--porcelain','--untracked-files=all'],'APP_ONLY_CONTROLLER').strip(),
+         'APP_ONLY_CONTROLLER')
+    tree=command(git+['rev-parse','HEAD^{tree}'],'APP_ONLY_CONTROLLER').decode().strip()
+    return source, tree
+
+
+def validate_app_only_checkpoint(op, as_of=None):
+    ref=op['priorRestore']
+    directory=ROOT/'backups'/(ref['releaseId']+'-app-restore')
+    secure(directory,'dir',0o700)
+    raw=read_secure(directory/'backup-operation.json')
+    receipt=read_secure(directory/'database-backup-receipt.json')
+    terminal=read_secure(directory/'SUCCESS_CLEANUP_VERIFIED.json')
+    need((digest(raw),digest(receipt),digest(terminal))==
+         (ref['operationSha256'],ref['receiptSha256'],ref['terminalSha256']), 'APP_ONLY_CHECKPOINT_HASH')
+    prior=strict(raw)
+    need(is_app_only_checkpoint(prior) and prior.get('releaseId')==ref['releaseId'], 'APP_ONLY_CHECKPOINT_SCHEMA')
+    validate_operation(prior,time.time(),prior['toolFileSha256'],allow_expired=True)
+    _tool_custody_local(prior)
+    need(all(prior[k]==op[k] for k in ('expectedDatabaseTarget','expectedLedgerSha256',
+                                       'expectedSchemaSha256','expectedSecuritySha256'))
+         and prior['expectedPostgres']['image']==op['expectedPostgres']['image'],'APP_ONLY_CHECKPOINT_INCOMPATIBLE')
+    validate_cutover_disk_terminal(prior,raw)
+    data=strict(receipt); seal=strict(terminal)
+    checkpoint_time=max(utc(data['completedAt']),utc(seal['observedAt']))
+    reference_time = time.time() if as_of is None else as_of
+    need(0 <= reference_time - checkpoint_time
+         and utc(op['expiresAt']) <= checkpoint_time + APP_ONLY_CHECKPOINT_MAX_AGE,
+         'APP_ONLY_CHECKPOINT_STALE')
+    return {**ref,'schema':'PHUB_TIMEWEB_APP_ONLY_VERIFIED_CHECKPOINT_V1',
+            'completedAt':data['completedAt'],'terminalAt':seal['observedAt'],
+            'databaseTarget':data['databaseTarget'],'ledgerSha256':data['sourceLedgerSha256'],
+            'schemaSha256':data['restoredSchemaSha256'],'securitySha256':data['sourceSecuritySha256'],
+            'restoredSecurityCatalogSha256':data['restoredSecurityCatalogSha256'],
+            'postgresImage':data['restoreImage'],'dumpSha256':data['backupSha256']}
+
+
+def fresh_policy_file(op):
+    return 'restore-reuse-policy.json' if is_app_only_fresh(op) else 'owner-restore-decision.json'
+
+
+def prepare_app_only_backup(candidate, run, checkpoint):
+    need(SHA.fullmatch(candidate) and re.fullmatch(r'[1-9][0-9]*',run)
+         and (checkpoint=='-' or RELEASE.fullmatch(checkpoint)), 'APP_ONLY_PREPARE_ARGUMENTS')
+    need(os.getuid()==os.getgid()==0 and sys.flags.isolated and sys.flags.dont_write_bytecode
+         and sys.flags.optimize==0 and os.uname().nodename=='msk-1-vm-z8ks'
+         and os.uname().machine=='x86_64', 'APP_ONLY_PREPARE_HOST')
+    ips=command(['/usr/bin/hostname','-I'],'APP_ONLY_PREPARE_HOST').decode().split()
+    need('100.77.212.57' in ips and '103.88.243.171' in ips,'APP_ONLY_PREPARE_HOST')
+    need(not os.path.lexists(LOCK), 'EXISTING_STATE')
+    file=ROOT/'operator/tools'/candidate/'control-timeweb-database-backup.py'
+    need(Path(__file__)==file,'TOOL_PATH')
+    config=read_secure(Path('/etc/phub/timeweb-beta-standard-delivery.json'))
+    need(strict(config).get('enabled') is True and strict(config).get('controllerSha')==candidate,
+         'APP_ONLY_CONTROLLER')
+    _, tree=app_only_source_checkout(candidate)
+    api=service('phub-timeweb-beta','api');web=service('phub-timeweb-beta','web')
+    pg=service('phub-timeweb-beta-dependencies','postgres')
+    ids=docker(['ps','-aq','--no-trunc']).decode().split()
+    need(len(ids)==len(set(ids)) and all(HASH.fullmatch(v) for v in ids),'CONTAINER_ID')
+    rows=[strict(docker(['inspect','--format',INSPECT_FORMAT,i])) for i in sorted(ids)]
+    scope_sha=digest(encoded(rows))
+    target=strict(source_query(SOURCE_CUTOVER_TARGET,pg['id']))
+    need(target=={**LOCATION_PHOTO_DATABASE_TARGET,'inRecovery':False}, 'APP_ONLY_DATABASE_TARGET')
+    op={'schema': APP_ONLY_RESTORE_SCHEMA if checkpoint=='-' else APP_ONLY_FRESH_SCHEMA,
+        'profile':'production','target':TARGET,'controllerSha':candidate,'toolCommit':candidate,
+        'controllerTree':tree,'controllerConfigSha256':digest(config),
+        'toolFileSha256':digest(read_secure(file,0o755)),
+        'toolProofSha256':digest(read_secure(file.parent/'source-proof.json')),
+        'toolInstallationSha256':digest(read_secure(file.parent/'installation-receipt.json')),
+        'candidateSha':candidate,'publicationRunId':run,'releaseId':candidate+'-'+run+'-1',
+        'expectedApi':api,'expectedWeb':web,'expectedPostgres':pg,
+        'expectedBoundarySha256':scope_sha,'predecessorAttestationSha256':scope_sha,
+        'expectedDatabaseTarget':LOCATION_PHOTO_DATABASE_TARGET,
+        'expectedLedgerSha256':digest(ledger_bytes(source_query(SOURCE_LEDGER,pg['id'])))}
+    _tool_custody_local(op)
+    with cutover_source_snapshot(op,digest(encoded(op)),derive_catalog=True,capture_accounts=False) as snapshot:
+        op['expectedSchemaSha256']=snapshot['witness']['schemaSha256']
+        op['expectedSecuritySha256']=snapshot['witness']['securitySha256']
+    if checkpoint!='-':
+        path=ROOT/'backups'/(checkpoint+'-app-restore')
+        op['priorRestore']={'releaseId':checkpoint,**{
+            key:digest(read_secure(path/name)) for key,name in
+            [('operationSha256','backup-operation.json'),('receiptSha256','database-backup-receipt.json'),
+             ('terminalSha256','SUCCESS_CLEANUP_VERIFIED.json')]}}
+    minutes = 115 if is_app_only_checkpoint(op) else 55
+    op['expiresAt']=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=minutes)).isoformat(timespec='milliseconds').replace('+00:00','Z')
+    op['confirmation']=app_only_backup_confirmation(op)
+    validate_operation(op,time.time(),op['toolFileSha256'])
+    if is_app_only_fresh(op):
+        attest_app_only_source(op)
+        validate_app_only_checkpoint(op)
+    need(not os.path.lexists(LOCK),'EXISTING_STATE')
+    sys.stdout.buffer.write(encoded(op))
+
+
+def fresh_policy_record(op):
+    if is_app_only_fresh(op):
+        return {'schema':APP_ONLY_POLICY,'controllerSha':op['controllerSha'],
+                'controllerTree':op['controllerTree'],'checkpoint':op['priorRestore']}
+    return op['ownerRestoreDecision']
+
+
+def fresh_lineage_phase(op):
+    if is_app_only_fresh(op): return 'APP_ONLY_LINEAGE_SEALED'
+    if is_canonical_fresh(op): return 'CANONICAL_LINEAGE_SEALED'
+    return None
+
+
+def fresh_lineage_fields(op, prior_raw):
+    check = 'runtimeScopeVerified' if is_app_only_fresh(op) else 'runtimeSecretsChecked'
+    return {'sha256':digest(prior_raw),check:True}
+
+
 def fresh_plan(op, raw, database_bytes):
     need(type(database_bytes) is int and 0<database_bytes<2**63,'FRESH_DATABASE_SIZE')
     sha=digest(raw);work=ROOT/'backups'/('.fresh-dump-'+sha)
-    return {'schema':CANONICAL_FRESH_PLAN if is_canonical_fresh(op) else FRESH_PLAN,'operationSha256':sha,'work':str(work),
+    return {'schema':APP_ONLY_FRESH_PLAN if is_app_only_fresh(op) else (CANONICAL_FRESH_PLAN if is_canonical_fresh(op) else FRESH_PLAN),'operationSha256':sha,'work':str(work),
             'canonical':str(ROOT/'backups'/(op['releaseId']+'-api-web')),
             'publication':str(work/'publication'),'pendingLock':str(ROOT/'standard'/('.fresh-lock-'+sha)),
             'expectedLedgerSha256':op['expectedLedgerSha256'],'databaseBytes':database_bytes,
             'dumpLimitBytes':CUTOVER_DUMP_LIMIT,'diskReserveBytes':DISK_HEADROOM+CUTOVER_CONTROL_BYTES}
+
+
+def fresh_files(op):
+    if is_app_only_fresh(op):
+        return [fresh_policy_file(op) if path=='owner-restore-decision.json' else path for path in FRESH_FILES]
+    return FRESH_FILES
 
 
 FRESH_FILES=['database.pgcustom','database-backup-receipt.json','backup-operation.json','snapshot-witness.json',
@@ -3954,31 +4304,42 @@ def validate_fresh_publication(op, raw, plan, directory):
     # Later cutover files are owned by the outer controller. Producer publication is
     # exact before atomic publication; retained validation reads only its sealed files.
     r=strict(read_secure(directory/'database-backup-receipt.json'))
+    app_only=is_app_only_fresh(op)
+    policy_hash_key='policySha256' if app_only else 'ownerReceiptSha256'
     exact(r,['schema','baselineReleaseId','completedAt','backupFile','backupSha256','operationSha256',
              'predecessorAttestationSha256','databaseTarget','sourceLedgerSha256','sourceAccountsSha256',
              'snapshotWitnessSha256','dumpBytes','dumpLimitBytes','dumpCompression','postgresImage',
-             'freshDumpRestored','freshDumpIntegrityStatus','restoreAdmissionPolicy','priorReferenceSha256','ownerReceiptSha256'])
+             'freshDumpRestored','freshDumpIntegrityStatus','restoreAdmissionPolicy','priorReferenceSha256',policy_hash_key])
     witness_raw=read_secure(directory/'snapshot-witness.json');w=strict(witness_raw)
-    exact(w,['schema','operationSha256','sourcePostgres','capturedAt','snapshotIdSha256','databaseTarget','ledgerSha256','accountsSha256'])
-    prior_raw=read_secure(directory/'prior-full-restore-reference.json');prior=validate_prior_restore(op)
-    owner_raw=read_secure(directory/'owner-restore-decision.json')
+    exact(w,['schema','operationSha256','sourcePostgres','capturedAt','snapshotIdSha256','databaseTarget','ledgerSha256','accountsSha256']
+          + (['schemaSha256','securitySha256','securityCatalogSha256'] if app_only else []))
+    prior_raw=read_secure(directory/'prior-full-restore-reference.json')
+    prior=validate_app_only_checkpoint(op,utc(w['capturedAt'])) if app_only else validate_prior_restore(op)
+    policy_raw=read_secure(directory/fresh_policy_file(op))
     need(read_secure(directory/'backup-operation.json')==raw and prior_raw==encoded(prior)
-         and owner_raw==encoded(op['ownerRestoreDecision']), 'FRESH_CAPSULE')
+         and policy_raw==encoded(fresh_policy_record(op)), 'FRESH_CAPSULE')
+    if app_only:
+        need(w['schemaSha256']==op['expectedSchemaSha256'] and w['securitySha256']==op['expectedSecuritySha256']
+             and HASH.fullmatch(w['securityCatalogSha256'] or '')
+             and w['securityCatalogSha256']==prior['restoredSecurityCatalogSha256'],
+             'APP_ONLY_FRESH_WITNESS')
+    history_time=(prior['terminalAt'] if app_only else
+                  prior['priorRolloutObservedAt'] if is_canonical_fresh(op) else prior['laterPreparationAbortAt'])
     need(r['schema']==fresh_receipt_schema(op) and r['baselineReleaseId']==op['expectedApi']['releaseId']
          and r['operationSha256']==digest(raw) and r['predecessorAttestationSha256']==op['predecessorAttestationSha256']
          and r['databaseTarget']==op['expectedDatabaseTarget'] and r['sourceLedgerSha256']==op['expectedLedgerSha256']
          and r['backupFile']==str(Path(plan['canonical'])/'database.pgcustom') and r['postgresImage']==PG_IMAGE
          and r['freshDumpRestored'] is False and r['freshDumpIntegrityStatus']=='PG16_TOC_PARSE_VERIFIED'
          and r['restoreAdmissionPolicy']==fresh_policy(op) and r['priorReferenceSha256']==digest(prior_raw)
-         and r['ownerReceiptSha256']==digest(owner_raw) and r['snapshotWitnessSha256']==digest(witness_raw)
+         and r[policy_hash_key]==digest(policy_raw) and r['snapshotWitnessSha256']==digest(witness_raw)
          and type(r['dumpBytes']) is int and 0<r['dumpBytes']<=CUTOVER_DUMP_LIMIT
          and r['dumpLimitBytes']==CUTOVER_DUMP_LIMIT and r['dumpCompression']=='zstd:3', 'FRESH_RECEIPT')
     need(w['schema']=='PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1' and w['operationSha256']==digest(raw)
          and w['sourcePostgres']==op['expectedPostgres'] and HASH.fullmatch(w['snapshotIdSha256'] or '')
          and w['databaseTarget']==r['databaseTarget'] and w['ledgerSha256']==r['sourceLedgerSha256']
          and w['accountsSha256']==r['sourceAccountsSha256'] and HASH.fullmatch(w['accountsSha256'] or '')
-         and utc(prior['priorRolloutObservedAt'] if is_canonical_fresh(op) else prior['laterPreparationAbortAt'])<utc(w['capturedAt'])<=utc(r['completedAt'])<=utc(op['expiresAt'])
-         and utc(op['ownerRestoreDecision']['receivedAt'])<=utc(w['capturedAt']), 'FRESH_WITNESS')
+         and utc(history_time)<utc(w['capturedAt'])<=utc(r['completedAt'])<=utc(op['expiresAt'])
+         and (app_only or utc(op['ownerRestoreDecision']['receivedAt'])<=utc(w['capturedAt'])), 'FRESH_WITNESS')
     need(secure(directory/'database.pgcustom',mode=0o600).st_size==r['dumpBytes']
          and file_digest(directory/'database.pgcustom')==r['backupSha256'],'FRESH_DUMP_CHANGED')
     return r
@@ -4009,17 +4370,18 @@ def validate_fresh_terminal(op, raw):
     plan=strict(read_secure(work/'disk-plan.json'))
     need(plan==fresh_plan(op,raw,plan['databaseBytes']),'FRESH_PLAN')
     journal=DiskJournal(work,digest(raw))
+    lineage=fresh_lineage_phase(op)
     need([e['phase'] for e in journal.events]==['PREPARED','DAEMON_NAMESPACE','LOCK_PREPARED',
-         'LOCK_PUBLISH_INTENT','LOCKED',*(['CANONICAL_LINEAGE_SEALED'] if is_canonical_fresh(op) else []),'DUMP_INTENT','DUMP_VERIFIED','TOC_VERIFIED','PUBLISH_READY',
+         'LOCK_PUBLISH_INTENT','LOCKED',*([lineage] if lineage else []),'DUMP_INTENT','DUMP_VERIFIED','TOC_VERIFIED','PUBLISH_READY',
          'PUBLISHED','UNLOCK_INTENT','RECONCILED'], 'FRESH_TERMINAL')
     fresh_retired_lock(plan,journal)
     canonical=Path(plan['canonical']);r=validate_fresh_publication(op,raw,plan,canonical)
-    need(sorted(p.name for p in canonical.iterdir())==sorted(FRESH_FILES),'FRESH_PUBLICATION_INVENTORY')
+    need(sorted(p.name for p in canonical.iterdir())==sorted(fresh_files(op)),'FRESH_PUBLICATION_INVENTORY')
     sha=validate_fresh_seal(op,raw,canonical,r)
-    if is_canonical_fresh(op):
+    if lineage:
         prior_raw=read_secure(work/'canonical-prior-lineage.json')
         need(prior_raw==read_secure(canonical/'prior-full-restore-reference.json')
-             and journal.find('CANONICAL_LINEAGE_SEALED')=={'sha256':digest(prior_raw),'runtimeSecretsChecked':True},'CANONICAL_LINEAGE_SEAL')
+             and journal.find(lineage)==fresh_lineage_fields(op,prior_raw),'CANONICAL_LINEAGE_SEAL')
     need(journal.find('PUBLISH_READY')=={'receiptSha256':sha}
          and journal.find('PUBLISHED')=={'receiptSha256':sha}
          and journal.find('DUMP_VERIFIED')=={'dumpSha256':r['backupSha256']}
@@ -4028,7 +4390,10 @@ def validate_fresh_terminal(op, raw):
 
 
 def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
-    need(is_fresh_operation(op),'FRESH_SCHEMA');validate_fresh_owner(op)
+    need(is_fresh_operation(op),'FRESH_SCHEMA')
+    app_only=is_app_only_fresh(op)
+    lineage=fresh_lineage_phase(op)
+    if not app_only: validate_fresh_owner(op)
     if attest:
         tool_custody(op)
         return {'status':'FRESH_DUMP_INTEGRITY_VERIFIED','receiptSha256':validate_fresh_terminal(op,raw),'authorizesDeploy':False}
@@ -4036,7 +4401,9 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
     if not reconcile:
         need(not os.path.lexists(LOCK) and not os.path.lexists(work),'EXISTING_STATE')
         for path in [ROOT,ROOT/'standard',ROOT/'operator',ROOT/'backups']:secure(path,'dir')
-        tool_custody(op);prior=validate_prior_restore(op)
+        tool_custody(op)
+        if app_only: attest_app_only_source(op)
+        prior=validate_app_only_checkpoint(op) if app_only else validate_prior_restore(op)
         cutover_disk_reserve()
         need(disk_free()>=CUTOVER_DUMP_LIMIT+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
         size=source_query(SOURCE_SIZE,op['expectedPostgres']['id']).decode().strip()
@@ -4048,7 +4415,7 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
         atomic_exclusive(work/'backup-operation.json',raw)
         atomic_exclusive(work/'disk-plan.json',encoded(plan))
         atomic_exclusive(work/'boundary.json',encoded({'sha256':op['expectedBoundarySha256']}))
-        if is_canonical_fresh(op):atomic_exclusive(work/'canonical-prior-lineage.json',encoded(prior))
+        if lineage: atomic_exclusive(work/'canonical-prior-lineage.json',encoded(prior))
         journal=DiskJournal(work,sha);journal.add('PREPARED');journal.add('DAEMON_NAMESPACE',**daemon)
         pending=Path(plan['pendingLock']);pending.mkdir(mode=0o700);sync_directory(pending.parent)
         marker={'schema':'PHUB_TIMEWEB_BACKUP_LOCK_V1','operationSha256':sha,'toolFileSha256':file_sha,
@@ -4109,18 +4476,26 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
     guard,owner=disk_context(op,raw,plan,journal,allow_expired=reconcile)
     if not reconcile:
         guard();cutover_disk_source_stopped(op,sha)
-        need(len(strict(ledger_bytes(source_query(SOURCE_LEDGER,op['expectedPostgres']['id']))))==122,'CUTOVER_LEDGER')
-        if is_canonical_fresh(op):
-            canonical_live_admission(op)
-            need(read_secure(work/'canonical-prior-lineage.json')==encoded(prior)==encoded(validate_canonical_prior_restore(op)),'CANONICAL_POST_LOCK_HISTORY_DRIFT')
-            guard();journal.add('CANONICAL_LINEAGE_SEALED',sha256=digest(encoded(prior)),runtimeSecretsChecked=True)
+        if app_only:
+            attest_app_only_source(op)
+        else:
+            need(len(strict(ledger_bytes(source_query(SOURCE_LEDGER,op['expectedPostgres']['id']))))==122,'CUTOVER_LEDGER')
+        if lineage:
+            if app_only:
+                current_prior=validate_app_only_checkpoint(op)
+            else:
+                canonical_live_admission(op)
+                current_prior=validate_canonical_prior_restore(op)
+            prior_raw=read_secure(work/'canonical-prior-lineage.json')
+            need(prior_raw==encoded(prior)==encoded(current_prior),'CANONICAL_POST_LOCK_HISTORY_DRIFT')
+            guard();journal.add(lineage,**fresh_lineage_fields(op,prior_raw))
         incoming=work/'database.pgcustom.incoming';journal.add('DUMP_INTENT')
         fd=os.open(incoming,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
         try:
             with os.fdopen(os.dup(fd),'wb') as stream:
                 with cutover_source_snapshot(op,sha) as snapshot:
                     atomic_exclusive(work/'snapshot-witness.json',encoded(snapshot['witness']))
-                    cutover_blocking_docker(['exec',op['expectedPostgres']['id'],'/bin/sh','-eu','-c',cutover_snapshot_dump_shell(sha,snapshot['token'])],
+                    cutover_blocking_docker(['exec',op['expectedPostgres']['id'],'/bin/sh','-eu','-c',cutover_snapshot_dump_shell(sha,snapshot['token'],preserve_acl=app_only)],
                                             'DUMP',stdout=stream,timeout=1230,file_limit=CUTOVER_DUMP_LIMIT)
                 stream.flush()
             os.fsync(fd)
@@ -4131,11 +4506,12 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
             cutover_blocking_docker(['exec','-i',op['expectedPostgres']['id'],'pg_restore','--list'],
                                     'FRESH_DUMP_TOC',stdin=stream,timeout=120)
         journal.add('TOC_VERIFIED',dumpSha256=dump_sha)
-        need(prior==validate_prior_restore(op),'FRESH_PRIOR_DRIFT');guard()
+        current_prior=validate_app_only_checkpoint(op) if app_only else validate_prior_restore(op)
+        need(prior==current_prior,'FRESH_PRIOR_DRIFT');guard()
         publication=Path(plan['publication']);publication.mkdir(mode=0o700);sync_directory(work)
         rename_noreplace(incoming,publication/'database.pgcustom')
         for name,data in [('backup-operation.json',raw),('snapshot-witness.json',read_secure(work/'snapshot-witness.json')),
-                          ('prior-full-restore-reference.json',encoded(prior)),('owner-restore-decision.json',encoded(op['ownerRestoreDecision']))]:
+                          ('prior-full-restore-reference.json',encoded(prior)),(fresh_policy_file(op),encoded(fresh_policy_record(op)))]:
             atomic_exclusive(publication/name,data)
         receipt={'schema':fresh_receipt_schema(op),'baselineReleaseId':op['expectedApi']['releaseId'],'completedAt':now_iso(),
                  'backupFile':str(Path(plan['canonical'])/'database.pgcustom'),'backupSha256':dump_sha,'operationSha256':sha,
@@ -4145,7 +4521,8 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
                  'dumpBytes':secure(publication/'database.pgcustom',mode=0o600).st_size,'dumpLimitBytes':CUTOVER_DUMP_LIMIT,
                  'dumpCompression':'zstd:3','postgresImage':PG_IMAGE,'freshDumpRestored':False,
                  'freshDumpIntegrityStatus':'PG16_TOC_PARSE_VERIFIED','restoreAdmissionPolicy':fresh_policy(op),
-                 'priorReferenceSha256':digest(encoded(prior)),'ownerReceiptSha256':digest(encoded(op['ownerRestoreDecision']))}
+                 'priorReferenceSha256':digest(encoded(prior)),
+                 ('policySha256' if app_only else 'ownerReceiptSha256'):digest(encoded(fresh_policy_record(op)))}
         atomic_exclusive(publication/'database-backup-receipt.json',encoded(receipt))
         validate_fresh_publication(op,raw,plan,publication)
         guard()
@@ -4157,7 +4534,7 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
     publication=Path(plan['publication']);canonical=Path(plan['canonical'])
     if journal.find('PUBLISH_READY') is not None:
         directory=canonical if canonical.exists() else publication
-        need(sorted(p.name for p in directory.iterdir())==sorted(FRESH_FILES),'FRESH_PUBLICATION_INVENTORY')
+        need(sorted(p.name for p in directory.iterdir())==sorted(fresh_files(op)),'FRESH_PUBLICATION_INVENTORY')
         receipt=validate_fresh_publication(op,raw,plan,directory)
         receipt_sha=validate_fresh_seal(op,raw,directory,receipt)
         need(journal.find('PUBLISH_READY')=={'receiptSha256':receipt_sha},'FRESH_PUBLICATION_DRIFT')
@@ -4501,7 +4878,7 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
                  and read_secure(LOCK / 'backup-restore.json') == encoded(marker['marker']), 'DISK_LOCK_DRIFT')
         return True
     def guard(restore=None, cleanup=False, optional_lock=False):
-        if op.get('schema') in (CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):
+        if is_app_only_backup(op) or op.get('schema') in (CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA):
             disk_daemon_guard(journal)
             if not cleanup:cutover_disk_reserve()
         if is_namespace_operation(op):namespace_frozen_source(plan)
@@ -4542,7 +4919,8 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
             initial = journal.find('MIGRATION_ATTESTATION')
             if initial is not None:
                 need(initial['proof'] == attestation, 'MIGRATION_ATTESTATION_DRIFT')
-        need(digest(ledger_bytes(source_query(SOURCE_LEDGER,op['expectedPostgres']['id'] if op.get('schema') in (CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA) else PG_ID))) == plan['expectedLedgerSha256'], 'SOURCE_LEDGER_DRIFT')
+        source_pg = op['expectedPostgres']['id'] if is_app_only_backup(op) or op.get('schema') in (CUTOVER_DISK_SCHEMA,SCHEDULE_DISK_SCHEMA,FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA) else PG_ID
+        need(digest(ledger_bytes(source_query(SOURCE_LEDGER,source_pg))) == plan['expectedLedgerSha256'], 'SOURCE_LEDGER_DRIFT')
     return guard, owned_lock
 
 
@@ -4554,7 +4932,7 @@ def disk_initialize(op, request_bytes, file_sha):
     need(not os.path.lexists(LOCK) and not os.path.lexists(work) and not os.path.lexists(canonical), 'EXISTING_STATE')
     for path in [ROOT, ROOT / 'standard', ROOT / 'operator', ROOT / 'backups']:
         secure(path, 'dir')
-    if op['schema']==SCHEDULE_DISK_SCHEMA:
+    if op['schema']==SCHEDULE_DISK_SCHEMA or is_app_only_checkpoint(op):
         need(secure(ROOT,'dir').st_dev==secure(ROOT/'backups','dir').st_dev,'SCHEDULE_BACKUP_FILESYSTEM')
     tool_custody(op)
     need(service('phub-timeweb-beta', 'api') == op['expectedApi']
@@ -4572,13 +4950,13 @@ def disk_initialize(op, request_bytes, file_sha):
     ledger = ledger_bytes(source_query(SOURCE_LEDGER,source_pg))
     need(digest(ledger) == disk_ledger_sha(op), 'DISK_LEDGER')
     if is_bounded_cutover_disk(op):
-        need(len(strict(ledger))==122,'CUTOVER_LEDGER')
+        need(is_app_only_checkpoint(op) or len(strict(ledger))==122,'CUTOVER_LEDGER')
         need(strict(source_query(SOURCE_CUTOVER_TARGET,source_pg))=={**op['expectedDatabaseTarget'],'inRecovery':False},'CUTOVER_DATABASE_TARGET')
     raw_size = source_query(SOURCE_SIZE,source_pg).decode().strip()
     need(re.fullmatch(r'[1-9][0-9]*', raw_size), 'DATABASE_SIZE')
     if is_bounded_cutover_disk(op):
         sizing=cutover_disk_sizing(int(raw_size),disk_memory_available(),disk_free(),
-                                  schedule=op['schema']==SCHEDULE_DISK_SCHEMA)
+                                  schedule=op['schema']==SCHEDULE_DISK_SCHEMA or is_app_only_checkpoint(op))
     else:
         sizing=disk_sizing(int(raw_size),disk_memory_available(),disk_free())
     plan = disk_plan(op, request_bytes, sizing)
@@ -4621,7 +4999,7 @@ def disk_create_storage(plan, journal, guard):
         raw=read_secure(work/'backup-operation.json')
         op=strict(raw)
         sizing=cutover_disk_sizing(plan['databaseBytes'],disk_memory_available(),disk_free(),after_dump=True,
-                                  schedule=op['schema']==SCHEDULE_DISK_SCHEMA)
+                                  schedule=op['schema']==SCHEDULE_DISK_SCHEMA or is_app_only_checkpoint(op))
         need(plan==disk_plan(op,raw,sizing),'CUTOVER_PLAN_DRIFT')
     elif plan['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2':
         namespace_sizing(plan['databaseBytes'], disk_memory_available(), disk_free(), plan['isolation']['image'], after_dump=True)
@@ -4853,7 +5231,7 @@ def execute_disk(op, request_bytes, file_sha):
                 with cutover_source_snapshot(op,plan['operationSha256']) as snapshot:
                     atomic_exclusive(work/'snapshot-witness.json',encoded(snapshot['witness']))
                     journal.add('SNAPSHOT_WITNESS',sha256=digest(encoded(snapshot['witness'])))
-                    cutover_blocking_docker(['exec',op['expectedPostgres']['id'],'/bin/sh','-eu','-c',cutover_snapshot_dump_shell(plan['operationSha256'],snapshot['token'])],
+                    cutover_blocking_docker(['exec',op['expectedPostgres']['id'],'/bin/sh','-eu','-c',cutover_snapshot_dump_shell(plan['operationSha256'],snapshot['token'],preserve_acl=is_app_only_checkpoint(op))],
                                             'DUMP',stdout=stream,timeout=1230,file_limit=plan['dumpLimitBytes'])
             else:
                 docker(['exec', op['expectedPostgres']['id'] if is_owner_acl_backup(op) else PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP.replace(' --no-owner --no-acl','') if is_owner_acl_backup(op) else SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
@@ -4901,9 +5279,14 @@ def execute_disk(op, request_bytes, file_sha):
         settings_sql="select json_build_array(current_setting('wal_level'),current_setting('max_wal_senders'),current_setting('max_replication_slots'),current_setting('archive_mode'),current_setting('fsync'),current_setting('full_page_writes'),current_setting('synchronous_commit'))::text"
         settings=strict(docker(['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','-qAt','--set=ON_ERROR_STOP=1','--command='+settings_sql],'CUTOVER_RESTORE_SETTINGS'))
         need(settings==['minimal','0','0','off','on','on','on'],'CUTOVER_RESTORE_SETTINGS')
+    app_checkpoint = is_app_only_checkpoint(op)
+    if app_checkpoint:
+        catalog = snapshot['securityCatalog']
+        app_only_restore_sql(container,notification_restore_prerequisites(catalog),'APP_ONLY_RESTORE_ROLES')
     with dump_stream(incoming, dump_sha) as stream:
         if cutover:
-            cutover_blocking_docker(['exec','-i',container,'/usr/bin/timeout','-s','TERM','-k','10','3500','pg_restore','--username=phub_restore','--dbname=phub_restore','--no-owner','--no-acl','--single-transaction','--exit-on-error'],
+            cutover_blocking_docker(['exec','-i',container,'/usr/bin/timeout','-s','TERM','-k','10','3500','pg_restore','--username=phub_restore','--dbname=phub_restore',
+                                    *([] if app_checkpoint else ['--no-owner','--no-acl']),'--single-transaction','--exit-on-error'],
                                     'RESTORE',stdin=stream,timeout=3600)
         else:
             docker(['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
@@ -4914,6 +5297,15 @@ def execute_disk(op, request_bytes, file_sha):
     if cutover:
         restored_accounts=digest(encoded(strict(docker(['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','-qAt','--set=ON_ERROR_STOP=1','--command='+CUTOVER_ACCOUNTS_SQL],'CUTOVER_RESTORED_ACCOUNTS'))))
         need(restored_accounts==snapshot['accountsSha256'],'CUTOVER_ACCOUNTS_MISMATCH')
+        if app_checkpoint:
+            app_only_restore_sql(container,notification_restore_extension_owners(catalog),'APP_ONLY_RESTORE_OWNERS')
+            restored_schema = app_only_schema_sha(container, restored=True)
+            need(restored_schema == snapshot['witness']['schemaSha256'], 'APP_ONLY_RESTORED_SCHEMA')
+            restored_catalog = app_only_restored_security(container)
+            need(restored_catalog==snapshot['witness']['securityCatalogSha256'], 'APP_ONLY_RESTORED_SECURITY')
+            attest_app_only_database(op)
+            journal.add('APP_ONLY_CATALOG_RESTORE_VERIFIED',schemaSha256=restored_schema,
+                        restoredSecurityCatalogSha256=restored_catalog)
         cutover_disk_source_stopped(op,plan['operationSha256'])
     guard(container)
     journal.add('RESTORE_VERIFIED', containerId=container, ledgerSha256=digest(restored), dumpSha256=dump_sha)
@@ -4932,6 +5324,11 @@ def execute_disk(op, request_bytes, file_sha):
                        dumpLimitBytes=CUTOVER_DUMP_LIMIT,dumpCompression='zstd:3')
         atomic_exclusive(Path(plan['publication'])/'backup-operation.json',request_bytes)
         atomic_exclusive(Path(plan['publication'])/'snapshot-witness.json',read_secure(work/'snapshot-witness.json'))
+    if is_app_only_checkpoint(op):
+        receipt.update(schema=APP_ONLY_RESTORE_RECEIPT,
+                       sourceSchemaSha256=snapshot['witness']['schemaSha256'],restoredSchemaSha256=restored_schema,
+                       sourceSecuritySha256=snapshot['witness']['securitySha256'],
+                       restoredSecurityCatalogSha256=restored_catalog)
     atomic_exclusive(Path(plan['publication']) / 'database-backup-receipt.json', encoded(receipt))
     journal.add('PUBLISH_READY', dumpSha256=dump_sha, receiptSha256=digest(encoded(receipt)))
     disk_cleanup(plan, journal, guard)
@@ -4951,7 +5348,7 @@ def reconcile_disk(op, request_bytes, file_sha):
     sizing = {key: plan[key] for key in ['databaseBytes', 'restoreDataBytes', 'imageBytes', 'memoryBytes', 'dumpLimitBytes', 'diskReserveBytes']}
     if is_bounded_cutover_disk(op):
         need(sizing==cutover_disk_sizing(plan['databaseBytes'],2**50,2**50,
-                                       schedule=op['schema']==SCHEDULE_DISK_SCHEMA),'CUTOVER_PLAN_DRIFT')
+                                       schedule=op['schema']==SCHEDULE_DISK_SCHEMA or is_app_only_checkpoint(op)),'CUTOVER_PLAN_DRIFT')
         cutover_disk_source_stopped(op,digest(request_bytes))
     need(plan == disk_plan(op, request_bytes, sizing), 'DISK_PLAN_DRIFT')
     journal = DiskJournal(work, plan['operationSha256'])
@@ -5841,6 +6238,8 @@ def pre105_retirement_main():
 
 
 def main():
+    if len(sys.argv)==5 and sys.argv[1]=='--prepare-app-only':
+        prepare_app_only_backup(*sys.argv[2:]);return
     if len(sys.argv)==3 and sys.argv[1]=='--baseline':
         need(os.getuid()==0 and sys.flags.isolated==1 and sys.flags.dont_write_bytecode,'BASELINE_ENTRY')
         derive_installed_mode(sys.argv[2]);return

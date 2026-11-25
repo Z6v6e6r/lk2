@@ -11,7 +11,7 @@ function scenario(body: string) {
       '-e',
       `
     import assert from 'node:assert/strict';
-    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade,validateScheduleRuntimeBridge,buildApiWebInstalledDescriptor,scheduleMonitoringScopeSha256,validateScheduleDirectObservation,validateScheduleSidecarArchiveReceipt} from './scripts/timeweb-api-web-upgrade.js';
+    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateAppOnlyRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade,validateScheduleRuntimeBridge,buildApiWebInstalledDescriptor,scheduleMonitoringScopeSha256,validateScheduleDirectObservation,validateScheduleSidecarArchiveReceipt} from './scripts/timeweb-api-web-upgrade.js';
     ${body}
   `,
     ],
@@ -70,6 +70,56 @@ const directOperation = {
   confirmation:
     'DEPLOY_API_WEB_0D6078BE7A50_FROM_C43E9DC8DA3E_C43E9DC8DA3E_DIRECT_15M_NO_PROVIDER_EVIDENCE',
 };
+
+describe('application-only prior restore policy', () => {
+  it('requires its own bound backup and preserves provider monitoring requirements', () => {
+    scenario(`const base=${JSON.stringify(operation)};
+      const op={...base,profile:'production',schema:'PHUB_TIMEWEB_API_WEB_APP_ONLY_OPERATION_V1',
+        controllerSha:base.candidateSha,backupOperationSha256:'b'.repeat(64),
+        expiresAt:'2026-11-25T12:00:00.000Z',confirmation:base.confirmation+'_APP_ONLY_PRIOR_RESTORE'};
+      assert.equal(validateApiWebOperation(op),op);
+      for(const override of [{backupOperationSha256:'missing'},{schema:base.schema},
+        {profile:'beta'},{controllerSha:base.controllerSha},{expiresAt:'never'},
+        {restoreVerified:true},{ownerProviderMonitoringWaiver:{}},{ownerRestoreDecision:{}}])
+        assert.throws(()=>validateApiWebOperation({...op,...override}));
+    `);
+  });
+
+  it('rejects DB and command changes, unsafe file modes and unreviewed shared schema edits', () => {
+    scenario(`const delta={oldMode:'100644',newMode:'100644',oldOid:'a'.repeat(40),
+      newOid:'b'.repeat(40),oldType:'blob',newType:'blob',status:'M'};
+      assert(validateAppOnlyRuntimeDelta([{...delta,path:'apps/web/src/styles.css'}]));
+      assert(validateAppOnlyRuntimeDelta([{...delta,path:'docs/locations.md'}]));
+      assert(validateAppOnlyRuntimeDelta([{...delta,path:'scripts/timeweb-api-web-upgrade.js'}]));
+      assert(validateAppOnlyRuntimeDelta([{...delta,path:'packages/locations/src/index.ts',
+        oldOid:'b7fa4d093ce4a66624e919db649559ba3c43df7c',
+        newOid:'c17679b5ac2d5e9867decc9c504290f3c120bd96'}]));
+      for(const path of ['packages/database/migrations/0119_cup_calculated_player_levels.sql',
+        'packages/database/src/permissions.ts','apps/api/src/locations/location-routes.ts',
+        'apps/api/src/payments.ts','scripts/run-timeweb-standard-delivery.js',
+        '.github/workflows/publish-timeweb-amd64-images.yaml',
+        'contracts/openapi/user/v1/openapi.yaml','deploy/timeweb/compose.beta.yaml',
+        'packages/locations/src/index.ts','package-lock.json'])
+        assert.throws(()=>validateAppOnlyRuntimeDelta([{...delta,path}]),path);
+      assert.throws(()=>validateAppOnlyRuntimeDelta([{...delta,path:'apps/web/src/styles.css',newMode:'120000'}]));
+      assert.throws(()=>validateAppOnlyRuntimeDelta([{...delta,path:'apps/web/src/styles.css',status:'D'}]));
+    `);
+  });
+
+  it('rolls back both images and removes only the candidate descriptor after a lost receipt ACK', () => {
+    scenario(`const calls=[];
+      const mark=async name=>calls.push(name);
+      const ops={backupMode:'app-only',preflight:()=>mark('preflight'),pullAndSmoke:()=>mark('smoke'),
+        journal:async phase=>{await mark(phase);if(phase==='SUCCESS')throw Error('lost ACK');},
+        activate:svc=>mark('activate '+svc),observe:()=>mark('observe'),attest:()=>mark('attest'),
+        installBaseline:()=>mark('descriptor'),restore:svc=>mark('restore '+svc),
+        removeCandidateBaseline:()=>mark('remove descriptor'),attestRestored:()=>mark('restored')};
+      await assert.rejects(()=>runApiWebTransition(ops),/lost ACK/);
+      assert(calls.indexOf('BASELINE_INTENT')<calls.indexOf('descriptor'));
+      assert.deepEqual(calls.slice(-5),['restore web','restore api','remove descriptor','restored','ROLLED_BACK']);
+    `);
+  });
+});
 
 describe('explicit API/Web upgrade boundary', () => {
   it('admits the one bounded direct-observation operation and no V1 fallback', () => {
