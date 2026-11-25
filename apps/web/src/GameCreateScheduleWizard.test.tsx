@@ -67,7 +67,7 @@ describe('game creation schedule', () => {
     expect(listSlots).not.toHaveBeenCalled();
   });
 
-  it('collapses the catalogue and cities independently and reveals search matches', async () => {
+  it('collapses all club cards while keeping city headings and reveals search matches', async () => {
     const source = {
       listSlots: vi.fn<GameCreateScheduleSource['listSlots']>(),
       readQuote: vi.fn<GameCreateScheduleSource['readQuote']>(),
@@ -84,6 +84,9 @@ describe('game creation schedule', () => {
     const user = userEvent.setup();
     const catalogue = screen.getByRole('button', { name: 'Станции по городам' });
     const moscow = screen.getByRole('button', { name: 'Москва' });
+    const sirius = screen.getByRole('button', { name: 'Сириус' });
+    expect(screen.getByRole('button', { name: 'Селигерская' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Сочи' })).toBeVisible();
     await user.click(moscow);
     expect(moscow).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('button', { name: 'Селигерская' })).not.toBeInTheDocument();
@@ -91,9 +94,14 @@ describe('game creation schedule', () => {
 
     await user.click(catalogue);
     expect(catalogue).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('button', { name: 'Сириус' })).not.toBeInTheDocument();
+    expect(moscow).toBeVisible();
+    expect(sirius).toBeVisible();
+    expect(sirius).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Сочи' })).not.toBeInTheDocument();
     await user.click(catalogue);
-    expect(moscow).toHaveAttribute('aria-expanded', 'false');
+    expect(moscow).toHaveAttribute('aria-expanded', 'true');
+    expect(sirius).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Селигерская' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Сочи' })).toBeVisible();
 
     await user.click(catalogue);

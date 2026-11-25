@@ -133,11 +133,10 @@ export function GameCreateScheduleWizard({
 }) {
   const wizard = useGameCreateWizard();
   const stationDetailsPrefix = useId();
-  const stationListId = useId();
+  const cityPanelPrefix = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const [stationId, setStation] = useState(stations[0]?.id ?? '');
   const [search, setSearch] = useState('');
-  const [showStations, setShowStations] = useState(true);
   const [collapsedCities, setCollapsedCities] = useState<ReadonlySet<string>>(() => new Set());
   const [showLocations, setShowLocations] = useState(false);
   const [preferredStart, setPreferredStart] = useState('');
@@ -301,7 +300,11 @@ export function GameCreateScheduleWizard({
       value?.toLocaleLowerCase('ru-RU').includes(query),
     ),
   );
-  const cities = [...new Set(visibleStations.map((item) => item.city ?? 'Другие города'))];
+  const cities = Array.from(
+    new Set(visibleStations.map((item) => item.city ?? 'Другие города')),
+    (city, index) => ({ city, panelId: `${cityPanelPrefix}-${index}` }),
+  );
+  const anyCityOpen = cities.some(({ city }) => !collapsedCities.has(city));
   const mapStations = showLocations
     ? visibleStations.filter(
         (item) => item.isActive !== false && item.latitude != null && item.longitude != null,
@@ -413,7 +416,6 @@ export function GameCreateScheduleWizard({
               const value = event.target.value;
               setSearch(value);
               if (value.trim()) {
-                setShowStations(true);
                 setCollapsedCities((current) => (current.size ? new Set() : current));
               }
             }}
@@ -451,17 +453,26 @@ export function GameCreateScheduleWizard({
             <button
               type="button"
               className="game-schedule-disclosure"
-              aria-controls={stationListId}
-              aria-expanded={showStations}
-              onClick={() => setShowStations((open) => !open)}
+              aria-controls={cities.map(({ panelId }) => panelId).join(' ') || undefined}
+              aria-expanded={anyCityOpen}
+              disabled={!cities.length}
+              onClick={() => {
+                setCollapsedCities((current) => {
+                  const next = new Set(current);
+                  for (const { city } of cities) {
+                    if (anyCityOpen) next.add(city);
+                    else next.delete(city);
+                  }
+                  return next;
+                });
+              }}
             >
               <span>{query ? 'Результаты поиска' : 'Станции по городам'}</span>
               <img src={stationChevronUrl} width={16} height={28} alt="" />
             </button>
           </h2>
-          <div id={stationListId} className="game-schedule-station-panel" hidden={!showStations}>
-            {cities.map((city, index) => {
-              const cityPanelId = `${stationListId}-city-${index}`;
+          <div className="game-schedule-station-panel">
+            {cities.map(({ city, panelId }) => {
               const cityOpen = !collapsedCities.has(city);
               return (
                 <div className="game-schedule-station-list" key={city}>
@@ -469,7 +480,7 @@ export function GameCreateScheduleWizard({
                     <button
                       type="button"
                       className="game-schedule-disclosure"
-                      aria-controls={cityPanelId}
+                      aria-controls={panelId}
                       aria-expanded={cityOpen}
                       onClick={() => toggleCity(city)}
                     >
@@ -477,7 +488,7 @@ export function GameCreateScheduleWizard({
                       <img src={stationChevronUrl} width={16} height={28} alt="" />
                     </button>
                   </h3>
-                  <div id={cityPanelId} className="game-schedule-station-panel" hidden={!cityOpen}>
+                  <div id={panelId} className="game-schedule-station-panel" hidden={!cityOpen}>
                     {visibleStations
                       .filter((item) => (item.city ?? 'Другие города') === city)
                       .map((item) => {
