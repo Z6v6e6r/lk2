@@ -174,7 +174,6 @@ body:has(.game-schedule-wizard) {
 .game-schedule-station-details {
   display: grid;
   min-width: 0;
-  gap: 2px;
 }
 
 .game-schedule-station-list .game-schedule-link strong {
