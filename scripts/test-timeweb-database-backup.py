@@ -1682,11 +1682,14 @@ class CutoverDiskScenario(DiskScenario):
         @contextmanager
         def snapshot(op,sha):
             accounts=m.digest(m.encoded(['a'*32,'b'*32]))
-            yield {'token':'00000001-00000002-1','ledger':m.encoded(CUTOVER_LEDGER),'accountsSha256':accounts,
-                   'witness':{'schema':'PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1','operationSha256':sha,
-                              'sourcePostgres':op['expectedPostgres'],'capturedAt':m.now_iso(),
-                              'snapshotIdSha256':'a'*64,'databaseTarget':op['expectedDatabaseTarget'],
-                              'ledgerSha256':op['expectedLedgerSha256'],'accountsSha256':accounts}}
+            witness={'schema':'PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1','operationSha256':sha,
+                     'sourcePostgres':op['expectedPostgres'],'capturedAt':m.now_iso(),
+                     'snapshotIdSha256':'a'*64,'databaseTarget':op['expectedDatabaseTarget'],
+                     'ledgerSha256':op['expectedLedgerSha256'],'accountsSha256':accounts}
+            if m.is_app_only_checkpoint(op):
+                witness.update(schemaSha256=op['expectedSchemaSha256'],securitySha256=op['expectedSecuritySha256'],securityCatalogSha256='d'*64)
+            yield {'token':'00000001-00000002-1','ledger':m.encoded(CUTOVER_LEDGER),
+                   'accountsSha256':accounts,'witness':witness,'securityCatalog':{}}
         def blocking(args,code,**kwargs):
             self.trip(code)
             if code=='DUMP':
@@ -1740,6 +1743,8 @@ class FreshDumpScenario(CutoverDiskScenario):
             witness={'schema':'PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1','operationSha256':sha,
                 'sourcePostgres':op['expectedPostgres'],'capturedAt':m.now_iso(),'snapshotIdSha256':'a'*64,
                 'databaseTarget':op['expectedDatabaseTarget'],'ledgerSha256':op['expectedLedgerSha256'],'accountsSha256':accounts}
+            if m.is_app_only_fresh(op):
+                witness.update(schemaSha256=op['expectedSchemaSha256'],securitySha256=op['expectedSecuritySha256'],securityCatalogSha256='d'*64)
             yield {'token':'00000001-00000002-1','witness':witness,'accountsSha256':accounts}
         def blocking(args,code,**kwargs):
             self.calls.append(['/usr/bin/docker']+args);self.trip(code)
@@ -1761,12 +1766,164 @@ class FreshDumpScenario(CutoverDiskScenario):
                             ('tool_custody',lambda op:b'validated-installation'),('v2_migration_proof',lambda *a:None),
                             ('disk_daemon_namespace',lambda:{'pid':44,'startTicks':'123','namespace':11}),('disk_daemon_guard',lambda j:None),
                             ('disk_free',lambda:50*1024**3),('validate_prior_restore',lambda op:self.prior),
+                            ('attest_app_only_source',lambda op:self.trip('APP_ONLY_SCOPE')),
+                            ('validate_app_only_checkpoint',lambda op,as_of=None:self.prior),
                             ('cutover_source_snapshot',snapshot),('cutover_blocking_docker',blocking),
                             ('rename_noreplace',lambda src,dst:os.rename(src,dst)),('now_iso',clock)]:
                 stack.enter_context(patch.object(m,name,side_effect=fn))
             stack.enter_context(patch.object(m.time,'time',return_value=m.utc(self.clockAt)))
             stack.enter_context(patch.object(m.DiskJournal,'add',new=phase))
             return m.fresh_dump(copy.deepcopy(self.op),m.encoded(self.op),self.op['toolFileSha256'],reconcile=reconcile,attest=attest)
+
+
+def app_only_operation(base, checkpoint=False):
+    op=copy.deepcopy(base)
+    for key in ('ownerRestoreDecision','predecessorRuntimeSha256'):
+        op.pop(key,None)
+    digest='a'*64
+    revision='f'*40
+    for name in ('api','web'):
+        op['expected'+name.capitalize()]={
+            **op['expectedApi'], 'revision':revision, 'releaseId':revision+'-123-1',
+            'image':'ghcr.io/z6v6e6r/phub-'+name+'@sha256:'+digest,'imageId':'sha256:'+digest}
+    op.update(schema=m.APP_ONLY_RESTORE_SCHEMA if checkpoint else m.APP_ONLY_FRESH_SCHEMA,
+              expectedSchemaSha256='b'*64,expectedSecuritySha256='c'*64,
+              predecessorAttestationSha256=op['expectedBoundarySha256'])
+    if checkpoint:
+        op.pop('priorRestore',None)
+    else:
+        op['priorRestore']={'releaseId':'e'*40+'-123-1','operationSha256':'a'*64,
+                            'receiptSha256':'b'*64,'terminalSha256':'c'*64}
+    op['confirmation']=m.app_only_backup_confirmation(op)
+    return op
+
+
+class AppOnlyBackupTests(unittest.TestCase):
+    def bind(self, scenario, checkpoint=False):
+        scenario.op=app_only_operation(scenario.op,checkpoint=checkpoint)
+        scenario.runtime_api=copy.deepcopy(scenario.op['expectedApi'])
+        boundary=[scenario.service_row(i==scenario.runtime_api['id'])
+                  for i in sorted([scenario.runtime_api['id'],scenario.runtime_pg['id']])]
+        scenario.op['expectedBoundarySha256']=m.digest(m.encoded(boundary))
+        scenario.op['predecessorAttestationSha256']=scenario.op['expectedBoundarySha256']
+        if not checkpoint:scenario.prior.update(scenario.op['priorRestore'],restoredSecurityCatalogSha256='d'*64)
+        scenario.request.write_bytes(m.encoded(scenario.op))
+        with patch.object(m,'ROOT',scenario.root):
+            raw=m.encoded(scenario.op)
+            scenario.plan=(m.disk_plan(scenario.op,raw,m.cutover_disk_sizing(1024,10**12,50*1024**3,schedule=True))
+                           if checkpoint else m.fresh_plan(scenario.op,raw,1024))
+        return scenario
+
+    def scenario(self, directory, fault=None):
+        return self.bind(FreshDumpScenario(directory,fault))
+
+    def test_scope_is_distinct_and_has_no_waiver_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scenario=self.scenario(directory)
+            op=scenario.op
+            now=m.utc(scenario.clockAt)
+            m.validate_operation(op,now,op['toolFileSha256'])
+            self.assertEqual(m.operation_mode(op),('api-web',op['releaseId']))
+            full=app_only_operation(op,checkpoint=True)
+            m.validate_operation(full,now,full['toolFileSha256'])
+            self.assertEqual(m.operation_mode(full),('app-restore',full['releaseId']))
+            for update in ({'restoreVerified':True},{'ownerRestoreDecision':{}},
+                           {'profile':'beta'},{'expectedSchemaSha256':'none'},
+                           {'expectedDatabaseTarget':{'databaseName':'other','systemIdentifier':'0'}},
+                           {'priorRestore':{**op['priorRestore'],'releaseId':'../old'}}):
+                with self.subTest(update=update),self.assertRaises(m.Stop):
+                    m.validate_operation({**op,**update},now,op['toolFileSha256'])
+
+    def test_fresh_dump_records_its_policy_and_never_restores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scenario=self.scenario(directory)
+            result=scenario.invoke()
+            self.assertEqual(result['status'],'FRESH_DUMP_INTEGRITY_VERIFIED')
+            path=Path(scenario.plan['canonical'])
+            receipt=m.strict((path/'database-backup-receipt.json').read_bytes())
+            self.assertIs(receipt['freshDumpRestored'],False)
+            self.assertEqual(receipt['schema'],m.APP_ONLY_FRESH_RECEIPT)
+            self.assertEqual(receipt['policySha256'],m.digest((path/'restore-reuse-policy.json').read_bytes()))
+            self.assertNotIn('restoreVerified',receipt)
+            self.assertTrue(all('--list' in args for args in scenario.calls if 'pg_restore' in args))
+            self.assertEqual(scenario.invoke(attest=True)['receiptSha256'],result['receiptSha256'])
+
+    def test_ambiguous_publish_reconciles_without_a_second_dump(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scenario=self.scenario(directory,'after:PHASE_PUBLISHED')
+            with self.assertRaises(m.Stop):
+                scenario.invoke()
+            scenario.fault=None
+            arguments=len(scenario.calls)
+            result=scenario.invoke(reconcile=True)
+            self.assertEqual(result['status'],'FRESH_DUMP_RECONCILED')
+            self.assertFalse(result['replayAllowed'])
+            self.assertFalse(any('pg_restore' in args or 'pg_dump' in ' '.join(args)
+                                 for args in scenario.calls[arguments:]))
+
+    def test_accepts_only_a_matching_current_terminal_restore_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scenario=self.bind(CutoverDiskScenario(directory),checkpoint=True)
+            old=scenario.op
+            with patch.object(m,'app_only_schema_sha',return_value=old['expectedSchemaSha256']), \
+                 patch.object(m,'attest_app_only_database') as attest, \
+                 patch.object(m,'notification_restore_prerequisites',return_value=''), \
+                 patch.object(m,'notification_restore_extension_owners',return_value=''), \
+                 patch.object(m,'app_only_restore_sql'), \
+                 patch.object(m,'app_only_restored_security',return_value='d'*64):
+                result=scenario.invoke()
+                self.assertEqual(result['status'],'BACKUP_RESTORE_VERIFIED')
+                attest.assert_called_once_with(old)
+                dump=next(args[-1] for args in scenario.calls if '1200 pg_dump' in args[-1])
+                restore=next(args for args in scenario.calls if '--single-transaction' in args)
+                for flag in ('--no-owner','--no-acl'):
+                    self.assertNotIn(flag,dump)
+                    self.assertNotIn(flag,restore)
+            canonical=Path(scenario.plan['canonical'])
+            new=app_only_operation(old)
+            names={'operationSha256':'backup-operation.json','receiptSha256':'database-backup-receipt.json',
+                   'terminalSha256':'SUCCESS_CLEANUP_VERIFIED.json'}
+            new['priorRestore']={'releaseId':old['releaseId'],**{
+                key:m.digest((canonical/name).read_bytes()) for key,name in names.items()}}
+            observed=m.utc(m.strict((canonical/names['terminalSha256']).read_bytes())['observedAt'])
+            with patch.object(m,'ROOT',scenario.root),patch.object(m,'read_secure',side_effect=scenario.read), \
+                 patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()), \
+                 patch.object(m,'_tool_custody_local'),patch.object(m.time,'time',return_value=observed+1):
+                new['expiresAt']=m.datetime.datetime.fromtimestamp(
+                    observed+60,m.datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
+                ref=m.validate_app_only_checkpoint(new)
+                self.assertEqual(ref['schemaSha256'],old['expectedSchemaSha256'])
+                self.assertEqual(ref['restoredSecurityCatalogSha256'],'d'*64)
+                for key in ('expectedSecuritySha256','expectedSchemaSha256','expectedLedgerSha256'):
+                    with self.subTest(key=key), self.assertRaisesRegex(m.Stop,'APP_ONLY_CHECKPOINT_INCOMPATIBLE'):
+                        m.validate_app_only_checkpoint({**new,key:'d'*64})
+                distant=m.datetime.datetime.fromtimestamp(
+                    observed+m.APP_ONLY_CHECKPOINT_MAX_AGE+1,m.datetime.timezone.utc
+                ).isoformat(timespec='milliseconds').replace('+00:00','Z')
+                with self.assertRaisesRegex(m.Stop,'APP_ONLY_CHECKPOINT_STALE'):
+                    m.validate_app_only_checkpoint({**new,'expiresAt':distant})
+                (canonical/'database.pgcustom').write_bytes(b'tampered')
+                with self.assertRaisesRegex(m.Stop,'CUTOVER_DUMP_CHANGED'):
+                    m.validate_app_only_checkpoint(new)
+
+    def test_definition_changes_affect_schema_hash_while_pg16_random_keys_do_not(self):
+        def dump(key,definition):
+            return ('--\n-- PostgreSQL database dump\n--\n\\restrict '+key+'\n'+definition+'\n-- PostgreSQL database dump complete\n'
+                    '\\unrestrict '+key+'\n').encode()
+        before=dump('alpha1','CREATE TABLE example (id int);')
+        new_key=dump('beta2','CREATE TABLE example (id int);')
+        changed=dump('beta2','CREATE TABLE example (id bigint);')
+        self.assertEqual(m.app_only_schema_fingerprint(before),m.app_only_schema_fingerprint(new_key))
+        self.assertNotEqual(m.app_only_schema_fingerprint(before),m.app_only_schema_fingerprint(changed))
+        builtin = ('--\n-- Name: plpgsql; Type: EXTENSION; Schema: -; Owner: -\n--\n\n'
+                   'CREATE EXTENSION IF NOT EXISTS plpgsql WITH SCHEMA pg_catalog;\n\n\n')
+        self.assertEqual(m.app_only_schema_fingerprint(before),
+                         m.app_only_schema_fingerprint(dump('beta2',builtin+'CREATE TABLE example (id int);')))
+        function = '-- Name: sample; Type: FUNCTION; Schema: public; Owner: -\n'
+        self.assertNotEqual(m.app_only_schema_fingerprint(dump('alpha1',function+'other body')),
+                            m.app_only_schema_fingerprint(dump('alpha1',function+builtin+'other body')))
+        with self.assertRaises(m.Stop):
+            m.app_only_schema_fingerprint(b'incomplete')
 
 
 def canonical_backup_baseline():

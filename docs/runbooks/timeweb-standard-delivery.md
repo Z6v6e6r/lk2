@@ -433,6 +433,68 @@ keep `readAt` fresh by merely changing its timestamp. Final canonical input snap
 observation are stored under the transaction and checksum-bound into `SUCCESS`, together with the
 installed descriptor.
 
+## API/Web rollout with a verified restore checkpoint
+
+The manual operation `PHUB_TIMEWEB_API_WEB_APP_ONLY_OPERATION_V1` uses a fresh,
+integrity-checked dump and an independently restored checkpoint. It compares the
+complete candidate diff against **each** running API and Web source. The initial
+scope admits regular Markdown documentation and Web CSS changes plus the exact
+reviewed before/after blobs for the station-cover read path, its tests and User
+OpenAPI. The policy scripts and their tests may change in the separately
+reviewed and enrolled controller source. New API changes require reviewed
+scope in that policy. Changes to migrations, database privileges, durable writes, payment,
+dependencies, containers, secrets or routing require their existing release procedure.
+The request cannot widen this list. When introducing this controller, use the
+existing release procedure for any cumulative diff outside the list.
+
+1. With an approved operation for the exact target, use the enrolled candidate's
+   root-owned backup helper to create the first **restore checkpoint**. Run the
+   read-only preparation below with `-` as the third argument. Review the JSON
+   and its confirmation before placing it at the fixed root-only
+   `operator/database-backup-restore.json` request path. Run the established
+   `--plan`, `--execute`, and, after an uncertain acknowledgement,
+   `--reconcile-disk` entry points with the same request. Checkpoint execution has
+   up to two hours. It uses the isolated encrypted-disk restore, then compares the restored migration ledger,
+   account witness, schema, object owners and grants to the source snapshot.
+   The isolated cluster recreates the admitted roles without login credentials.
+   The checkpoint also records a source fingerprint of role attributes,
+   memberships and settings to detect later drift. Keep the whole
+   `backups/<checkpoint-release-id>-app-restore` directory and its transaction
+   journal and tool installation. A checkpoint alone grants no rollout authority.
+2. For a qualifying release, use the same preparation command with the retained
+   checkpoint release ID as the third argument. The helper verifies the terminal
+   checkpoint and requires the same database identity, PostgreSQL image,
+   migration ledger, schema and source permissions. The rollout deadline must
+   fall within 30 days of checkpoint completion. Run the same plan and
+   execution sequence under exact authority to produce
+   `backups/<candidate-release-id>-api-web`. Its repeatable-read dump has a
+   SHA-256, a successfully parsed PG16 archive table of contents, and a bound
+   checkpoint reference. Its receipt records `freshDumpRestored: false`. Keep
+   the archive and its sealed evidence while this release is an installed baseline.
+3. Build the manual request using the V1 fields with schema
+   `PHUB_TIMEWEB_API_WEB_APP_ONLY_OPERATION_V1`, the exact fresh operation
+   `backupOperationSha256`, and `expiresAt` (UTC with milliseconds) no later
+   than the backup operation deadline. Use the V1 confirmation with suffix
+   `_APP_ONLY_PRIOR_RESTORE`. The reviewed controller SHA must equal the
+   canonical publication source. Activation uses the same `--critical-api-web`
+   command, with independent immutable API/Web identities, fresh Timeweb
+   monitor and alert evidence, and the same 900-second observation. The approved
+   monitor collector must refresh the canonical readback throughout this window.
+4. Reconcile the terminal receipt using `--critical-api-web-reconcile`. The
+   controller retains the lock until terminal reconciliation. On failure it
+   returns the previous Web and API images in that order. An interrupted
+   transition uses the existing `--critical-api-web-recover` entry point.
+   Rollback is limited to images and their release labels.
+
+This preparation prints the root-only operation JSON. It does not install the
+request or write a dump.
+
+```sh
+/usr/bin/python3 -I -S -B \
+  "/opt/phub/timeweb-beta/operator/tools/${sha}/control-timeweb-database-backup.py" \
+  --prepare-app-only "$sha" "$publication_run" "$checkpoint_release_id"
+```
+
 ## One-time callback direct observation
 
 On 2026-10-03 the release owner explicitly approved replacing the unavailable automatic Timeweb

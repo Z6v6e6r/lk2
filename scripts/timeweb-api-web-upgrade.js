@@ -185,6 +185,39 @@ const SCHEDULE_RECEIPT = 'PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_RECEIPT_V1';
 const SCHEDULE_INSTALLED_KIND = 'API_WEB_SCHEDULE_READ';
 const SCHEDULE_PHASES = ['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'BASELINE_INTENT'];
 const isScheduleOperation = (value) => value?.schema === SCHEDULE_OPERATION;
+const APP_ONLY_OPERATION = 'PHUB_TIMEWEB_API_WEB_APP_ONLY_OPERATION_V1';
+const APP_ONLY_PLAN = 'PHUB_TIMEWEB_API_WEB_APP_ONLY_PLAN_V1';
+const APP_ONLY_RECEIPT = 'PHUB_TIMEWEB_API_WEB_APP_ONLY_RECEIPT_V1';
+const APP_ONLY_BACKUP = 'PHUB_TIMEWEB_APP_ONLY_FRESH_BACKUP_V1';
+const APP_ONLY_BACKUP_RECEIPT = 'PHUB_TIMEWEB_APP_ONLY_FRESH_DUMP_V1';
+const APP_ONLY_BACKUP_POLICY = 'APP_ONLY_WITH_VERIFIED_PRIOR_RESTORE_V1';
+const isAppOnlyOperation = (value) => value?.schema === APP_ONLY_OPERATION;
+
+// These root-owned controller modules and their tests are not runtime inputs.
+const APP_ONLY_CONTROLLER_POLICY_FILES = new Set([
+  'scripts/timeweb-api-web-upgrade.js',
+  'scripts/timeweb-api-web-upgrade.test.ts',
+  'scripts/control-timeweb-database-backup.py',
+  'scripts/test-timeweb-database-backup.py',
+]);
+const REVIEWED_APP_ONLY_READ_CHANGES = new Map([
+  [
+    'apps/api/src/locations/location-routes.test.ts',
+    ['5cc449d84bb3f4b6e2fa345407826807cb6235e4', 'ed77394ea6e841d1ab79b4eb69339c35f4b20135'],
+  ],
+  [
+    'packages/locations/src/index.test.ts',
+    ['b7136a0d44acb6b97fd0fbacdb688149c213143e', 'c7006fc17eab6603b76fd05f2370db46e26b650b'],
+  ],
+  [
+    'packages/locations/src/index.ts',
+    ['b7fa4d093ce4a66624e919db649559ba3c43df7c', 'c17679b5ac2d5e9867decc9c504290f3c120bd96'],
+  ],
+  [
+    'contracts/openapi/user/v1/openapi.yaml',
+    ['8e412186cfea1f7c18de1384e0dbdcbda877d3ed', '889da8bba985597db0704f637a08e08c2c3d82c6'],
+  ],
+]);
 const SCHEDULE_MONITORING_POLICY = 'SCHEDULE_OWNER_DIRECT_API_WEB_V1';
 const SCHEDULE_MONITORING_MESSAGE =
   'cd676c7ab14c553671966ee0feede57c53c833b3075140ac1407e8adb108334e';
@@ -419,6 +452,26 @@ export function extractCanonicalPredecessorArtifactPair(archiveBytes) {
 export function validateApiWebOperation(value) {
   if (isProductionCutover(value)) return validateProductionCutover(value);
   if (isJoinOperation(value)) return validateJoinOperation(value);
+  if (isAppOnlyOperation(value)) {
+    const { backupOperationSha256, expiresAt, ...base } = value;
+    const suffix = '_APP_ONLY_PRIOR_RESTORE';
+    if (
+      value.profile !== 'production' ||
+      value.controllerSha !== value.candidateSha ||
+      !HASH.test(backupOperationSha256 ?? '') ||
+      !Number.isFinite(Date.parse(expiresAt)) ||
+      new Date(expiresAt).toISOString() !== expiresAt ||
+      typeof base.confirmation !== 'string' ||
+      !base.confirmation.endsWith(suffix)
+    )
+      fail('app_only_operation');
+    validateApiWebOperation({
+      ...base,
+      schema: 'PHUB_TIMEWEB_API_WEB_OPERATION_V1',
+      confirmation: base.confirmation.slice(0, -suffix.length),
+    });
+    return value;
+  }
   if (isScheduleOperation(value)) {
     const {
       expectedCurrentSecretSetReleaseId,
@@ -715,7 +768,7 @@ export async function runApiWebTransition(ops) {
     await ops.journal('OBSERVING');
     await ops.observe();
     await ops.attest();
-    if (swapsSecrets || ops.workerMode === 'legacy-roster-cutover')
+    if (swapsSecrets || ops.workerMode === 'legacy-roster-cutover' || ops.backupMode === 'app-only')
       await ops.journal('BASELINE_INTENT');
     await ops.installBaseline();
     await ops.journal('SUCCESS');
@@ -761,7 +814,7 @@ export async function recoverApiWebTransition(ops) {
       }
     }
     if (errors.length) fail('restore_failed');
-    if (swapsSecrets || ops.workerMode === 'legacy-roster-cutover')
+    if (swapsSecrets || ops.workerMode === 'legacy-roster-cutover' || ops.backupMode === 'app-only')
       await ops.removeCandidateBaseline();
     await (ops.attestRestored ?? ops.attest)();
     await ops.journal('ROLLED_BACK');
@@ -795,6 +848,7 @@ export async function recoverApiWebPhase(phase, ops) {
           ]
         : []),
       ...(swapsSecrets ? SCHEDULE_PHASES : []),
+      ...(ops.backupMode === 'app-only' ? ['BASELINE_INTENT'] : []),
     ].includes(phase)
   )
     fail('invalid_recovery_phase');
@@ -1538,14 +1592,54 @@ function attestScheduleSidecarArchive(op, previousFiles) {
   }
 }
 
-function validateScheduleBackupProof(directory, releaseId, op, api) {
+function validateBoundBackupPlan(backup, op, transaction) {
+  exact(backup, [
+    'path',
+    'sha256',
+    'operationPath',
+    'operationSha256',
+    'dumpPath',
+    'dumpSha256',
+    'dumpIdentity',
+    'terminalPath',
+    'terminalSha256',
+  ]);
+  const phases = isAppOnlyOperation(op)
+    ? ['FRESH_DUMP_INTEGRITY_VERIFIED']
+    : ['SUCCESS_CLEANUP_VERIFIED', 'FRESH_DUMP_INTEGRITY_VERIFIED'];
+  if (
+    backup.path !== `${transaction}/database-backup-receipt.json` ||
+    backup.operationPath !== `${transaction}/backup-operation.json` ||
+    backup.dumpPath !== `${transaction}/database.pgcustom` ||
+    !phases.some((phase) => backup.terminalPath === `${transaction}/${phase}.json`) ||
+    backup.operationSha256 !== op.backupOperationSha256 ||
+    ![backup.sha256, backup.dumpSha256, backup.terminalSha256].every((value) =>
+      HASH.test(value ?? ''),
+    )
+  )
+    fail('schedule_backup_plan_identity');
+}
+
+function attestBoundBackupFiles(backup) {
+  if (
+    hash(read(backup.path)) !== backup.sha256 ||
+    hash(read(backup.operationPath)) !== backup.operationSha256 ||
+    hash(read(backup.terminalPath)) !== backup.terminalSha256 ||
+    !equal(scheduleDumpIdentity(backup.dumpPath), backup.dumpIdentity)
+  )
+    fail('schedule_backup_drift');
+}
+
+function validateBoundApiWebBackupProof(directory, releaseId, op, api) {
   const dumpPath = `${directory}/database.pgcustom`;
   const dumpIdentity = scheduleDumpIdentity(dumpPath);
   const operationPath = `${directory}/backup-operation.json`;
   const bytes = read(operationPath);
   const backup = parseStrictJson(bytes);
   const disk = backup.schema === SCHEDULE_DISK_BACKUP_SCHEMA;
-  const fresh = backup.schema === CANONICAL_FRESH_OPERATION;
+  const appOnly = isAppOnlyOperation(op);
+  const fresh = backup.schema === CANONICAL_FRESH_OPERATION || backup.schema === APP_ONLY_BACKUP;
+  if (appOnly !== (backup.schema === APP_ONLY_BACKUP)) fail('app_only_backup_schema');
   const receiptPath = `${directory}/database-backup-receipt.json`;
   const receiptBytes = read(receiptPath);
   const receipt = parseStrictJson(receiptBytes);
@@ -1562,10 +1656,12 @@ function validateScheduleBackupProof(directory, releaseId, op, api) {
   if (
     (!disk && !fresh && backup.schema !== SCHEDULE_BACKUP_SCHEMA) ||
     (fresh &&
-      (backup.confirmation !==
-        `FRESH_DUMP_SCHEDULE_${op.candidateSha.slice(0, 12).toUpperCase()}_KEEP_API_0A4D640965E9` ||
-        receipt.schema !== CANONICAL_FRESH_RECEIPT ||
-        receipt.restoreAdmissionPolicy !== CANONICAL_PRIOR_RESTORE_POLICY ||
+      ((!appOnly &&
+        backup.confirmation !==
+          `FRESH_DUMP_SCHEDULE_${op.candidateSha.slice(0, 12).toUpperCase()}_KEEP_API_0A4D640965E9`) ||
+        receipt.schema !== (appOnly ? APP_ONLY_BACKUP_RECEIPT : CANONICAL_FRESH_RECEIPT) ||
+        receipt.restoreAdmissionPolicy !==
+          (appOnly ? APP_ONLY_BACKUP_POLICY : CANONICAL_PRIOR_RESTORE_POLICY) ||
         receipt.freshDumpRestored !== false ||
         receipt.freshDumpIntegrityStatus !== 'PG16_TOC_PARSE_VERIFIED' ||
         Date.parse(op.expiresAt) > Date.parse(backup.expiresAt))) ||
@@ -1585,7 +1681,9 @@ function validateScheduleBackupProof(directory, releaseId, op, api) {
     !Number.isFinite(Date.parse(receipt.completedAt)) ||
     Date.parse(receipt.completedAt) > Date.now() ||
     Date.now() - Date.parse(receipt.completedAt) > 3600000 ||
-    receipt.sourceLedgerSha256 !== SCHEDULE_LEDGER ||
+    receipt.sourceLedgerSha256 !== (appOnly ? backup.expectedLedgerSha256 : SCHEDULE_LEDGER) ||
+    (appOnly &&
+      (backup.candidateSha !== op.candidateSha || !equal(backup.expectedWeb, inspect('web')))) ||
     terminal.phase !== phase ||
     terminal.operationSha256 !== op.backupOperationSha256 ||
     terminal.receiptSha256 !== proof.sha256 ||
@@ -1602,7 +1700,7 @@ m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 raw=sys.stdin.buffer.read();op=m.strict(raw);m.validate_operation(op,time.time(),sys.argv[2],allow_expired=True)
 m.tool_custody(op)
 if op['schema']==m.SCHEDULE_DISK_SCHEMA: m.validate_cutover_disk_terminal(op,raw)
-if m.is_schedule_fresh(op): m.validate_fresh_terminal(op,raw)
+if m.is_schedule_fresh(op) or m.is_app_only_fresh(op): m.validate_fresh_terminal(op,raw)
 sys.stdout.write('SCHEDULE_BACKUP_CUSTODY_VERIFIED')`;
   if (
     command('/usr/bin/python3', ['-I', '-S', '-B', '-c', attest, helper, helperSha], {
@@ -2186,6 +2284,91 @@ export function parseRuntimeDelta(raw) {
     };
   });
 }
+function attestAppOnlyDatabase(backup) {
+  const proof = `import importlib.util,sys
+spec=importlib.util.spec_from_file_location('backup',sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+raw=sys.stdin.buffer.read()
+op=m.strict(raw)
+if not m.is_app_only_fresh(op): raise ValueError('APP_ONLY_BACKUP_SCHEMA')
+m.attest_app_only_database(op)
+sys.stdout.write('APP_ONLY_DATABASE_VERIFIED')`;
+  const bytes = read(backup.operationPath);
+  if (
+    hash(bytes) !== backup.operationSha256 ||
+    command(
+      '/usr/bin/python3',
+      ['-I', '-S', '-B', '-c', proof, `${SOURCE}/scripts/control-timeweb-database-backup.py`],
+      { input: bytes, stdio: ['pipe', 'pipe', 'pipe'], timeout: 180000 },
+    ) !== 'APP_ONLY_DATABASE_VERIFIED'
+  )
+    fail('app_only_database_drift');
+}
+
+// Nothing in the request can widen this scope. Every production read-code or
+// contract change outside presentation must have reviewed, exact before/after blobs.
+export function validateAppOnlyRuntimeDelta(entries) {
+  if (!Array.isArray(entries) || new Set(entries.map(({ path }) => path)).size !== entries.length)
+    fail('app_only_runtime_delta');
+  for (const entry of entries) {
+    const { path, oldMode, newMode, oldOid, newOid, status, oldType, newType } = entry;
+    if (
+      !['A', 'M'].includes(status) ||
+      newMode !== '100644' ||
+      newType !== 'blob' ||
+      !SHA.test(newOid) ||
+      (status === 'M'
+        ? oldMode !== '100644' || oldType !== 'blob' || !SHA.test(oldOid) || oldOid === newOid
+        : oldMode !== '000000' || oldType !== null || oldOid !== '0'.repeat(40))
+    )
+      fail('app_only_runtime_delta');
+    if (
+      /^docs\/[a-zA-Z0-9_./-]+\.md$/.test(path) ||
+      /^apps\/web\/src\/[a-zA-Z0-9_./-]+\.css$/.test(path) ||
+      (status === 'M' && APP_ONLY_CONTROLLER_POLICY_FILES.has(path))
+    )
+      continue;
+    const reviewed = REVIEWED_APP_ONLY_READ_CHANGES.get(path);
+    if (!reviewed || status !== 'M' || oldOid !== reviewed[0] || newOid !== reviewed[1])
+      fail('app_only_runtime_delta');
+  }
+  return true;
+}
+
+function attestAppOnlySourceDelta(from, to) {
+  if (!SHA.test(from) || !SHA.test(to)) fail('app_only_source');
+  git(['merge-base', '--is-ancestor', from, to]);
+  const changes = parseRuntimeDelta(
+    git(['diff', '--raw', '--no-abbrev', '--no-renames', '-z', from, to]),
+  );
+  validateAppOnlyRuntimeDelta(
+    changes.map((entry) => ({
+      ...entry,
+      oldType: entry.oldMode === '000000' ? null : git(['cat-file', '-t', entry.oldOid]),
+      newType: git(['cat-file', '-t', entry.newOid]),
+    })),
+  );
+}
+
+export function attestAppOnlyBackupScope(op) {
+  if (
+    op?.schema !== APP_ONLY_BACKUP ||
+    op.candidateSha !== op.controllerSha ||
+    !SHA.test(op.candidateSha ?? '') ||
+    git(['rev-parse', 'HEAD']) !== op.controllerSha ||
+    git(['rev-parse', 'HEAD^{tree}']) !== op.controllerTree ||
+    git(['status', '--porcelain', '--untracked-files=all']) !== ''
+  )
+    fail('app_only_source');
+  for (const svc of ['api', 'web']) {
+    const actual = inspect(svc);
+    const expected = svc === 'api' ? op.expectedApi : op.expectedWeb;
+    if (!ID.test(actual.releaseId ?? '') || !equal(actual, expected)) fail('app_only_predecessor');
+    attestAppOnlySourceDelta(actual.releaseId.slice(0, 40), op.candidateSha);
+  }
+  return 'APP_ONLY_BACKUP_SCOPE_VERIFIED';
+}
+
 export function validateRuntimeUpgrade(identity, entries, wholeCourtTail) {
   if (!Array.isArray(entries) || new Set(entries.map((v) => v.path)).size !== entries.length)
     fail('invalid_runtime_delta');
@@ -2229,6 +2412,7 @@ export function validateUpgradeReceipt(
   const keys = ['schema', 'status', 'planSha256', 'observedAt'];
   const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
   const schedule = receipt.schema === SCHEDULE_RECEIPT;
+  const appOnly = receipt.schema === APP_ONLY_RECEIPT;
   const scheduleWaived = schedule && Object.hasOwn(receipt, 'ownerProviderMonitoringWaiverSha256');
   const cutover = [
     CUTOVER_RECEIPT,
@@ -2288,6 +2472,7 @@ export function validateUpgradeReceipt(
       'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
       'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
       SCHEDULE_RECEIPT,
+      APP_ONLY_RECEIPT,
       CUTOVER_RECEIPT,
       ROSTER_CUTOVER_RECEIPT,
       WAIVER_RECEIPT,
@@ -2312,6 +2497,7 @@ export function validateUpgradeReceipt(
       'ABORTED',
       'RECONCILED',
       ...(schedule ? SCHEDULE_PHASES : []),
+      ...(appOnly ? ['BASELINE_INTENT'] : []),
       ...(roster
         ? [
             'WORKER_STOP_INTENT',
@@ -2372,6 +2558,8 @@ export function validateUpgradeReceipt(
       !plan ||
       isDirectOperation(op) !== direct ||
       isScheduleOperation(op) !== schedule ||
+      isAppOnlyOperation(op) !== appOnly ||
+      (appOnly && plan.backup?.operationSha256 !== op.backupOperationSha256) ||
       (schedule && scheduleWaived !== Object.hasOwn(op, 'ownerProviderMonitoringWaiver')) ||
       isProductionCutover(op) !== cutover ||
       (cutover && receipt.schema !== cutoverReceiptSchema(op)) ||
@@ -2389,7 +2577,9 @@ export function validateUpgradeReceipt(
             ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
             : schedule
               ? SCHEDULE_PLAN
-              : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
+              : appOnly
+                ? APP_ONLY_PLAN
+                : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
       (cutover &&
         (plan[baselineField] !== cutoverBaselineHash(op) ||
           receipt[baselineField] !== plan[baselineField]))
@@ -2639,6 +2829,10 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
   );
 }
 export function validateInstalledCutoverKind(kind, receiptSchema) {
+  if (receiptSchema === APP_ONLY_RECEIPT) {
+    if (kind !== 'API_WEB') fail('installed_app_only_kind');
+    return;
+  }
   if (kind === SCHEDULE_INSTALLED_KIND || receiptSchema === SCHEDULE_RECEIPT) {
     if (kind !== SCHEDULE_INSTALLED_KIND || receiptSchema !== SCHEDULE_RECEIPT)
       fail('installed_schedule_kind');
@@ -3263,6 +3457,21 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
       validateUpgradeReceipt(receipt, hash(planBytes));
       const transaction = `${ROOT}/backups/${releaseId}-api-web`;
       const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
+      if (receipt.schema === APP_ONLY_RECEIPT) {
+        const opBytes = read(`${transaction}/operation.json`);
+        const op = validateApiWebOperation(parseStrictJson(opBytes));
+        validateUpgradeReceipt(receipt, hash(planBytes), op, plan, planBytes);
+        if (
+          !isAppOnlyOperation(op) ||
+          plan.operationSha256 !== hash(opBytes) ||
+          `${op.candidateSha}-${op.publicationRunId}-1` !== releaseId ||
+          receipt.status !== 'RECONCILED' ||
+          receipt.reconciledStatus !== 'SUCCESS'
+        )
+          fail('installed_app_only_lineage');
+        validateBoundBackupPlan(plan.backup, op, transaction);
+        attestBoundBackupFiles(plan.backup);
+      }
       if (receipt.schema === SCHEDULE_RECEIPT) {
         const operationBytes = read(`${transaction}/operation.json`);
         const operation = validateApiWebOperation(parseStrictJson(operationBytes));
@@ -3390,6 +3599,7 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
           'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
           SCHEDULE_RECEIPT,
+          APP_ONLY_RECEIPT,
           CUTOVER_RECEIPT,
           ROSTER_CUTOVER_RECEIPT,
           WAIVER_RECEIPT,
@@ -3436,7 +3646,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   if (mode === 'reconcile' && !existsSync(LOCK)) {
     const terminalInput = parseStrictJson(read(REQUEST));
     const terminalOp =
-      isCanonicalOwnerDirectedUpgrade(terminalInput) || isScheduleOperation(terminalInput)
+      isCanonicalOwnerDirectedUpgrade(terminalInput) ||
+      isScheduleOperation(terminalInput) ||
+      isAppOnlyOperation(terminalInput)
         ? validateApiWebOperation(terminalInput)
         : validateJoinOperation(terminalInput);
     recoveredTransaction = `${ROOT}/backups/${terminalOp.candidateSha}-${terminalOp.publicationRunId}-1-api-web`;
@@ -3459,12 +3671,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const op = validateApiWebOperation(
     isJoinOperation(parsedOperation) ||
       isProductionCutover(parsedOperation) ||
-      isScheduleOperation(parsedOperation)
+      isScheduleOperation(parsedOperation) ||
+      isAppOnlyOperation(parsedOperation)
       ? parseStrictJson(opBytes)
       : parsedOperation,
   );
   const join = isJoinOperation(op);
   const schedule = isScheduleOperation(op);
+  const appOnly = isAppOnlyOperation(op);
   const scheduleWaiver =
     schedule && op.ownerProviderMonitoringWaiver ? scheduleMonitoringReceipt(op) : null;
   const swapsSecrets = join || schedule;
@@ -3479,7 +3693,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         ? SCHEDULE_PLAN
         : direct
           ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
-          : 'PHUB_TIMEWEB_API_WEB_PLAN_V1';
+          : appOnly
+            ? APP_ONLY_PLAN
+            : 'PHUB_TIMEWEB_API_WEB_PLAN_V1';
   const receiptSchema = cutover
     ? cutoverReceiptSchema(op)
     : join
@@ -3488,13 +3704,15 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         ? SCHEDULE_RECEIPT
         : direct
           ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
-          : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1';
+          : appOnly
+            ? APP_ONLY_RECEIPT
+            : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1';
   const targets = roster ? ['api', 'worker', 'web'] : ['api', 'web'];
   const overlays = ['candidate', ...targets.map((service) => `previous-${service}`)];
   const excludedTargets = () => excluded(targets);
   if (mode === 'deploy' && cutover) validateProductionCutover(op, true);
   const profile = join ? 'production' : (op.profile ?? 'beta');
-  if (mode === 'deploy' && schedule) validateScheduleExpiry(op.expiresAt, 20 * 60_000);
+  if (mode === 'deploy' && (schedule || appOnly)) validateScheduleExpiry(op.expiresAt, 20 * 60_000);
   if (
     mode === 'deploy' &&
     scheduleWaiver &&
@@ -3701,6 +3919,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         'ABORTED',
         'RECONCILED',
         ...(swapsSecrets ? SCHEDULE_PHASES : []),
+        ...(appOnly ? ['BASELINE_INTENT'] : []),
         ...(roster
           ? [
               'WORKER_STOP_INTENT',
@@ -3713,7 +3932,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       ].includes(receipt.status) ||
       (!terminalWithoutLock && !read(LOCK).equals(Buffer.from(`${planPath}\n`))) ||
       (terminalWithoutLock &&
-        ((!swapsSecrets && !isCanonicalOwnerDirectedUpgrade(op)) ||
+        ((!swapsSecrets && !appOnly && !isCanonicalOwnerDirectedUpgrade(op)) ||
           receipt.status !== 'RECONCILED' ||
           existsSync(provisionLock)))
     )
@@ -3752,6 +3971,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           entries,
           runtimeDelta(SCHEDULE_APPLICATION, op.candidateSha),
         );
+      } else if (appOnly) {
+        validateAppOnlyRuntimeDelta(entries);
       } else if (!join) {
         let wholeCourtTail;
         if (
@@ -3824,8 +4045,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     }
     const backup = join
       ? readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']))
-      : schedule
-        ? validateScheduleBackupProof(transaction, id, op, api)
+      : schedule || appOnly
+        ? validateBoundApiWebBackupProof(transaction, id, op, api)
         : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
     let ownerBytes;
     const monitoring =
@@ -3834,7 +4055,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           ? createOwnerDirectedBinding(op, hash(opBytes))
           : isWaivedRosterCutover(op)
             ? null
-            : validateMonitoring(transaction, profile, { fresh: cutover || schedule })
+            : validateMonitoring(transaction, profile, { fresh: cutover || schedule || appOnly })
         : null;
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
@@ -4034,7 +4255,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     fail('backup_incomplete');
   const expectedDescriptor = join
     ? buildJoinInstalledDescriptor(values, plan, id, journalPath)
-    : roster || schedule
+    : roster || schedule || appOnly
       ? buildApiWebInstalledDescriptor(values, plan, id, journalPath)
       : null;
   if (
@@ -4047,32 +4268,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       !equal(plan.candidateSecrets.files, op.candidateSecretHashes))
   )
     fail('schedule_plan_identity');
-  if (schedule) {
-    exact(plan.backup, [
-      'path',
-      'sha256',
-      'operationPath',
-      'operationSha256',
-      'dumpPath',
-      'dumpSha256',
-      'dumpIdentity',
-      'terminalPath',
-      'terminalSha256',
-    ]);
-    if (
-      plan.backup.path !== `${transaction}/database-backup-receipt.json` ||
-      plan.backup.operationPath !== `${transaction}/backup-operation.json` ||
-      plan.backup.dumpPath !== `${transaction}/database.pgcustom` ||
-      !['SUCCESS_CLEANUP_VERIFIED', 'FRESH_DUMP_INTEGRITY_VERIFIED'].some(
-        (phase) => plan.backup.terminalPath === `${transaction}/${phase}.json`,
-      ) ||
-      plan.backup.operationSha256 !== op.backupOperationSha256 ||
-      ![plan.backup.sha256, plan.backup.dumpSha256, plan.backup.terminalSha256].every((v) =>
-        HASH.test(v ?? ''),
-      )
-    )
-      fail('schedule_backup_plan_identity');
-  }
+  if (schedule || appOnly) validateBoundBackupPlan(plan.backup, op, transaction);
   if (
     join &&
     (plan.baselinePath !== baseline ||
@@ -4122,16 +4318,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const active = {};
   let stoppedWorkerId = null;
   const attest = (recovering = false) => {
-    if (schedule && !recovering) {
-      attestScheduleSidecarArchive(op, plan.previousSecrets.files);
-      const { backup } = plan;
-      if (
-        hash(read(backup.path)) !== backup.sha256 ||
-        hash(read(backup.operationPath)) !== backup.operationSha256 ||
-        hash(read(backup.terminalPath)) !== backup.terminalSha256 ||
-        !equal(scheduleDumpIdentity(backup.dumpPath), backup.dumpIdentity)
-      )
-        fail('schedule_backup_drift');
+    if ((schedule || appOnly) && !recovering) {
+      if (schedule) attestScheduleSidecarArchive(op, plan.previousSecrets.files);
+      if (appOnly && mode === 'deploy') validateScheduleExpiry(op.expiresAt);
+      attestBoundBackupFiles(plan.backup);
     }
     if (roster && !recovering && stoppedWorkerId && !active.worker) {
       const stopped = JSON.parse(docker(['inspect', stoppedWorkerId]))[0];
@@ -4273,6 +4463,23 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   };
   const ops = {
     journal,
+    ...(appOnly
+      ? {
+          backupMode: 'app-only',
+          removeCandidateBaseline: async () => {
+            const path = `${directory}/installed-components.env`;
+            if (!existsSync(path)) return;
+            if (!read(path).equals(expectedDescriptor)) fail('foreign_candidate_descriptor');
+            unlinkSync(path);
+            const fd = openSync(directory, 'r');
+            try {
+              fsyncSync(fd);
+            } finally {
+              closeSync(fd);
+            }
+          },
+        }
+      : {}),
     ...(roster
       ? {
           workerMode: 'legacy-roster-cutover',
@@ -4372,6 +4579,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     },
     installBaseline: async () => {
       if (schedule) validateScheduleExpiry(op.expiresAt);
+      if (appOnly) {
+        attest();
+        attestAppOnlyDatabase(plan.backup);
+        attest();
+      }
       if (swapsSecrets) {
         attest();
         attestJoinBackup();
@@ -4392,6 +4604,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     preflight: async () => {
       attest();
       attestJoinBackup();
+      if (appOnly) attestAppOnlyDatabase(plan.backup);
       for (const s of targets) {
         if (!equal(inspect(s), plan.previous[s])) fail('baseline_drift');
         imagePresent(
@@ -4444,7 +4657,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         fail('worker_changed_during_activation');
     },
     observe: async () => {
-      if (schedule) validateScheduleExpiry(op.expiresAt, 900_000);
+      if (schedule || appOnly) validateScheduleExpiry(op.expiresAt, 900_000);
       if (isDirectOperation(op)) {
         await callbackProbe();
         const direct = await observeDirectApiWeb({
@@ -4492,7 +4705,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         if (scheduleWaiver) {
           validateScheduleExpiry(op.expiresAt);
         } else if (!isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
-          validateMonitoring(transaction, profile);
+          validateMonitoring(transaction, profile, { fresh: appOnly });
         if (round < 60) await delay(15000);
       }
       for (const s of ['api', 'web']) {
@@ -4505,7 +4718,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         validateOwnerDirectedBinding(op, plan.monitoring, hash(opBytes));
       else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
       else if (!scheduleWaiver) {
-        const finalMonitoring = validateMonitoring(transaction, profile, { fresh: schedule });
+        const finalMonitoring = validateMonitoring(transaction, profile, {
+          fresh: schedule || appOnly,
+        });
         durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
         durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
       }
@@ -4598,7 +4813,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     await reconcileApiWebPhase(receipt, {
       attestTerminal: async (terminal) => {
         if (
-          (roster || swapsSecrets) &&
+          (roster || swapsSecrets || appOnly) &&
           terminal !== 'SUCCESS' &&
           existsSync(`${directory}/installed-components.env`)
         )
@@ -4646,14 +4861,29 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
               fail('installed_evidence_drift');
         }
         if (terminal === 'SUCCESS' && !swapsSecrets) {
-          const installed = readInstalledApiBaseline(id);
-          if (hash(installed.bytes) !== receipt.installedBaselineSha256)
+          // App-only installation is admitted by the installed reader after this reconciliation.
+          const bytes = appOnly
+            ? read(`${directory}/installed-components.env`)
+            : readInstalledApiBaseline(id).bytes;
+          if (
+            hash(bytes) !== receipt.installedBaselineSha256 ||
+            (appOnly && !bytes.equals(expectedDescriptor))
+          )
             fail('installed_baseline_drift');
+          if (appOnly) {
+            for (const [file, key] of [
+              ['observation.json', 'observationSha256'],
+              ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+              ['alert-test-readback.json', 'alertReadbackSha256'],
+            ])
+              if (hash(read(`${transaction}/${file}`)) !== receipt[key])
+                fail('installed_app_only_evidence');
+          }
         }
       },
       journalReconciled: async (terminal) => {
         if (
-          (swapsSecrets || isCanonicalOwnerDirectedUpgrade(op)) &&
+          (swapsSecrets || appOnly || isCanonicalOwnerDirectedUpgrade(op)) &&
           receipt.status === 'RECONCILED'
         )
           return;
@@ -4688,11 +4918,16 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     try {
       await runApiWebTransition(ops);
     } catch (error) {
-      if (!swapsSecrets && !roster && JSON.parse(read(journalPath)).status === 'ABORTED')
+      if (
+        !swapsSecrets &&
+        !roster &&
+        !appOnly &&
+        JSON.parse(read(journalPath)).status === 'ABORTED'
+      )
         releaseLock();
       throw error;
     }
-    if (!swapsSecrets && !roster) releaseLock();
+    if (!swapsSecrets && !roster && !appOnly) releaseLock();
   }
   return {
     status: mode === 'recover' ? recoveredStatus : 'SUCCESS',

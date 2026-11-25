@@ -34,8 +34,13 @@ cost.
 | `web` (presentation / bounded safe-Web) | Web only                                                  | automatic per main push, eligibility computed from **changed files**, not the cumulative diff since baseline | Web tests/lint/typecheck/build, smoke; no publication when no runtime code changed                          | < 5 min  |
 | `production`                            | full release                                              | one exact-SHA approval **per release package and target**                                                    | immutable digests, verified backup/restore, readiness/smoke, rollback, post-activation observation          | < 60 min |
 
-Beta is disposable: its evidence is operational, not production custody. Production keeps every
-existing immutability, backup, rollback and migration rule.
+Beta is disposable: its evidence is operational, not production custody. Production keeps
+immutable artifact custody, a fresh verified backup, rollback and migration gates. The
+[bounded API/Web operation](../runbooks/timeweb-standard-delivery.md#apiweb-rollout-with-a-verified-restore-checkpoint)
+can use a prior isolated restore checkpoint for an eligible cumulative diff. The current
+PostgreSQL image, database identity, migration ledger, schema and permissions must match the
+checkpoint, and the rollout deadline must fall within 30 days of its completion. Schema,
+database privilege and durable write changes use the full release procedure.
 
 ### 2. Approvals
 
@@ -69,7 +74,7 @@ existing immutability, backup, rollback and migration rule.
 
 - Beta: readiness, smoke and rollback proof are blocking; provider monitoring, alert readbacks and
   15-minute observation are recorded asynchronously after activation.
-- Production: backup/restore, readiness, smoke and rollback are blocking; the long observation runs
+- Production: verified backup evidence, readiness, smoke and rollback are blocking; the long observation runs
   after activation with an automatic rollback trigger, and provider evidence is attached, not used
   as a wall-clock gate.
 - Source CI authority is verified once per operation and bound into the immutable receipt; it is not
