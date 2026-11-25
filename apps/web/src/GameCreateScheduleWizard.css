@@ -197,8 +197,8 @@ body:has(.game-schedule-wizard) {
 }
 
 .game-schedule-map-toggle::before {
-  flex: 0 0 11px;
-  height: 11px;
+  flex: 0 0 13px;
+  height: 13px;
   background: currentColor;
   mask: url('./assets/recommendation-cards/location.svg') center / contain no-repeat;
   content: '';
