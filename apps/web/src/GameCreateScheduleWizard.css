@@ -116,11 +116,11 @@ body:has(.game-schedule-wizard) {
 
 .game-schedule-station-list h3 {
   font:
-    700 8px/1 'Recommendation RF Dewi',
+    700 12px/1 'Recommendation RF Dewi',
     'RF Dewi',
     sans-serif;
   letter-spacing: 0.12em;
-  text-align: center;
+  text-align: start;
   text-transform: uppercase;
 }
 
