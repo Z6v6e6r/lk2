@@ -2017,15 +2017,39 @@ Prepare a candidate runtime set
 with only `GAME_CREATE_SCHEDULE_LK1_URL=https://padlhub.su/` appended to `api.env`
 and the new release identity. Worker, Realtime and Migrator environment bytes
 must match the installed set. The controller rejects the QA loopback setting
-and active paid-create flags. Use the exported
-`provisionTimewebBetaRuntimeSecrets` function from the clean candidate checkout
-under `/opt/phub/timeweb-beta/releases/<candidate-release-id>/source`. Pass the
-approved `sourceDir`, candidate `releaseId`, exact `expectedSourceSha` and
-`expectedSourceTree`, the canonical host/tenant, `expectedCurrentReleaseId: null`,
-`targetDir: /etc/phub/timeweb-beta-candidates/<candidate-release-id>/timeweb-beta`
-and `backupRoot: /etc/phub/timeweb-beta-candidates/<candidate-release-id>/backups`.
-The provisioner CLI always targets the live directory. Use the exported function
-with both isolated paths for this preparation.
+and active paid-create flags. The specific installed secret set
+`8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1` may carry its existing
+comments, station media, game test courts, LK1 result bridge and result
+autoconfirm settings. The worker's enabled game commands and the API's
+absent phone-link flag match this predecessor's current behavior. The
+compatibility validator preserves the original bytes and rejects other keys.
+
+Verify the existing runtime files against running containers. Before preparing
+the candidate, inventory inactive `api.env.bak-*` and `worker.env.bak-*` files
+and the duplicate `lk1-result-bridge.token` sidecar. Verify that no process,
+mount, operator configuration or retained restore proof depends on those paths,
+and that the sidecar token exactly matches the active inline Worker token.
+Preserve only the exact inventoried sidecars by same-filesystem exclusive rename
+into the root-owned `0700` directory
+`/etc/phub/timeweb-beta-backups/<candidate-release-id>-preexisting-sidecars`.
+Record and recheck the file names, inodes, modes and hashes. This archive is the
+retained location for those historical rollback files. Application rollback
+restores the previous canonical runtime files. An independent archive restore
+uses the recorded inventory and the same verified, exclusive renames in reverse.
+For this secret-set identity, bind `archive-receipt.json` using
+`preexistingSidecarArchiveSha256` in the schedule operation. The receipt uses
+`PHUB_TIMEWEB_SCHEDULE_SIDECAR_ARCHIVE_V1` with status `ARCHIVED`, the exact
+`releaseId`, `previousSecretSetReleaseId`, `archivePlanSha256`, `activeFiles`
+holding the five preimage hashes, and `archivedFiles: 15`. The controller
+checks it during forward admission and observation. Rollback restores the
+sealed runtime set if archive evidence becomes unavailable.
+
+Use the exported `provisionTimewebScheduleRuntimeSecrets` function from the clean
+candidate checkout under `/opt/phub/timeweb-beta/releases/<candidate-release-id>/source`.
+Pass the candidate `releaseId`, exact `expectedSourceSha` and `expectedSourceTree`.
+The function prepares `/etc/phub/timeweb-beta-candidates/<candidate-release-id>/timeweb-beta`
+from the installed, root-owned, five-file runtime set. It copies the four files
+from their byte preimages and appends only the canonical schedule URL to API.
 
 Prepare the usual V1 API/Web inputs using
 `PHUB_TIMEWEB_API_WEB_SCHEDULE_READ_OPERATION_V1`, `profile=production`,

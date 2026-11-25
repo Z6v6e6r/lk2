@@ -52,6 +52,23 @@ const FILES = Object.freeze(Object.values(FILE_BY_SERVICE));
 const IDENTITY_FILE = '.release-identity.json';
 const RELEASE_ID_PATTERN = /^[0-9a-f]{40}-[1-9][0-9]*-1$/u;
 const MAX_SECRET_FILE_BYTES = 131_072;
+export const SCHEDULE_LEGACY_RUNTIME_SET_ID =
+  '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1';
+const SCHEDULE_LEGACY_KEYS = {
+  api: ['GAMES_TEST_COURTS_ENABLED', 'LOCATION_MEDIA_ENABLED'],
+  worker: [
+    'GAMES_TEST_COURTS_ENABLED',
+    'LK1_RESULT_BRIDGE_ENABLED',
+    'LK1_RESULT_BRIDGE_URL',
+    'LK1_RESULT_BRIDGE_TOKEN',
+    'GAME_RESULT_AUTO_CONFIRM_ENABLED',
+    'GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS',
+    'GAME_RESULT_AUTO_CONFIRM_POLL_INTERVAL_MS',
+    'GAME_RESULT_AUTO_CONFIRM_BATCH_SIZE',
+  ],
+  realtime: [],
+  migrator: [],
+};
 
 export class TimewebSecretProvisionError extends Error {
   constructor(reason) {
@@ -231,11 +248,19 @@ export function parseTimewebSecretEnvironment(bytes) {
   return values;
 }
 
-function requireExactKeys(environment, service) {
+function requireExactKeys(environment, service, scheduleLegacy) {
   const contract = runtimeContract.services[service];
   const keys = Object.keys(environment);
-  const unknown = keys.filter((key) => !contract.allowed.includes(key));
-  const missing = contract.required.filter((key) => !Object.hasOwn(environment, key));
+  const unknown = keys.filter(
+    (key) =>
+      !contract.allowed.includes(key) &&
+      !(scheduleLegacy && SCHEDULE_LEGACY_KEYS[service].includes(key)),
+  );
+  const missing = contract.required.filter(
+    (key) =>
+      !Object.hasOwn(environment, key) &&
+      !(scheduleLegacy && service === 'api' && key === 'AUTH_PHONE_SUBJECT_LINK_ENABLED'),
+  );
   const forbidden = contract.forbidden.filter((key) => Object.hasOwn(environment, key));
   if (unknown.length > 0) fail('unknown_key');
   if (missing.length > 0) fail('missing_key');
@@ -244,7 +269,17 @@ function requireExactKeys(environment, service) {
     if (environment[key] !== 'true') fail('required_true_flag');
   }
   for (const key of contract.requiredFalseFlags) {
-    if (environment[key] !== 'false') fail('required_false_flag');
+    const carriedWorkerCommands =
+      service === 'worker' && key === 'GAMES_COMMANDS_ENABLED' && environment[key] === 'true';
+    const defaultedPhoneLink =
+      service === 'api' &&
+      key === 'AUTH_PHONE_SUBJECT_LINK_ENABLED' &&
+      !Object.hasOwn(environment, key);
+    if (
+      environment[key] !== 'false' &&
+      !(scheduleLegacy && (carriedWorkerCommands || defaultedPhoneLink))
+    )
+      fail('required_false_flag');
   }
   for (const key of contract.requiredDisabledModes) {
     if (environment[key] !== 'disabled') fail('required_disabled_mode');
@@ -280,15 +315,34 @@ function assertPrivateKey(environment, key) {
 }
 
 export function validateTimewebRuntimeEnvironments(environments, { host, tenantKey }) {
+  return validateRuntimeEnvironments(environments, { host, tenantKey }, false);
+}
+
+function validateRuntimeEnvironments(environments, { host, tenantKey }, scheduleLegacy) {
   if (host !== targetContract.hostname) fail('host_identity');
   if (!/^[a-z0-9][a-z0-9-]{1,62}$/u.test(tenantKey)) fail('tenant_identity');
 
   for (const service of Object.keys(FILE_BY_SERVICE)) {
     if (!environments[service]) fail('missing_environment');
-    requireExactKeys(environments[service], service);
+    requireExactKeys(environments[service], service, scheduleLegacy);
   }
 
   const { api, worker, realtime, migrator } = environments;
+  if (
+    scheduleLegacy &&
+    (api.LOCATION_MEDIA_ENABLED !== 'true' ||
+      api.GAMES_TEST_COURTS_ENABLED !== 'true' ||
+      worker.GAMES_TEST_COURTS_ENABLED !== 'true' ||
+      worker.GAMES_COMMANDS_ENABLED !== 'true' ||
+      worker.LK1_RESULT_BRIDGE_ENABLED !== 'true' ||
+      !['https://padlhub.su', 'https://padlhub.su/'].includes(worker.LK1_RESULT_BRIDGE_URL) ||
+      (worker.LK1_RESULT_BRIDGE_TOKEN?.length ?? 0) < 32 ||
+      worker.GAME_RESULT_AUTO_CONFIRM_ENABLED !== 'true' ||
+      worker.GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS !== '12' ||
+      worker.GAME_RESULT_AUTO_CONFIRM_POLL_INTERVAL_MS !== '300000' ||
+      worker.GAME_RESULT_AUTO_CONFIRM_BATCH_SIZE !== '20')
+  )
+    fail('schedule_legacy_runtime');
   validateTimewebCommercialRuntime(api, fail);
   const corsOrigins = readTimewebCorsOrigins(targetContract);
   if (!corsOrigins.ok) fail(corsOrigins.reason);
@@ -303,7 +357,7 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
     api.CORS_ORIGINS !== corsOrigins.value ||
     api.TRUSTED_PROXY_CIDRS !== `${targetContract.network.ingressAddress}/32` ||
     api.CUP_DEV_AUTH_ENABLED !== 'false' ||
-    api.AUTH_PHONE_SUBJECT_LINK_ENABLED !== 'false' ||
+    (api.AUTH_PHONE_SUBJECT_LINK_ENABLED ?? (scheduleLegacy ? 'false' : undefined)) !== 'false' ||
     api.VIVA_MODE !== 'production' ||
     api.VIVA_OAUTH_ENABLED !== 'true' ||
     api.VIVA_OAUTH_ALLOWED_PROVIDERS !== 'yandex' ||
@@ -389,7 +443,15 @@ function readSourceSet(sourceDir, expectedUid, host, tenantKey) {
   if (directoryBefore.dev !== directoryAfter.dev || directoryBefore.ino !== directoryAfter.ino)
     fail('source_directory_race');
   validateTimewebRuntimeEnvironments(environments, { host, tenantKey });
-  return { environments, keys };
+  const files = Object.fromEntries(
+    Object.entries(FILE_BY_SERVICE).map(([service, name]) => [
+      name,
+      `${Object.entries(environments[service])
+        .map(([key, value]) => `${key}=${value}`)
+        .join('\n')}\n`,
+    ]),
+  );
+  return { files, keys };
 }
 
 function writeExclusive(path, contents, expectedUid, expectedGid) {
@@ -541,21 +603,28 @@ function recoverStaleProvision(lockPath, targetDir, backupRoot, expectedUid) {
   removeExactLock(lockPath, lockIdentity, dirname(targetDir));
 }
 
-export function provisionTimewebBetaRuntimeSecrets({
-  sourceDir,
-  host,
-  tenantKey,
-  releaseId,
-  expectedSourceSha,
-  expectedSourceTree,
-  expectedCurrentReleaseId = null,
-  targetDir = TARGET_DIR,
-  backupRoot = BACKUP_ROOT,
-  expectedUid = 0,
-  expectedGid = expectedUid,
-  dryRun = false,
-  failAfter,
-}) {
+export function provisionTimewebBetaRuntimeSecrets(options) {
+  return provisionRuntimeSet(options, readSourceSet);
+}
+
+function provisionRuntimeSet(
+  {
+    sourceDir,
+    host,
+    tenantKey,
+    releaseId,
+    expectedSourceSha,
+    expectedSourceTree,
+    expectedCurrentReleaseId = null,
+    targetDir = TARGET_DIR,
+    backupRoot = BACKUP_ROOT,
+    expectedUid = 0,
+    expectedGid = expectedUid,
+    dryRun = false,
+    failAfter,
+  },
+  readSources,
+) {
   const sourceAuthority = assertExactTimewebFrozenSource({
     expectedSourceSha,
     expectedSourceTree,
@@ -577,7 +646,7 @@ export function provisionTimewebBetaRuntimeSecrets({
   if (basename(targetDir) !== 'timeweb-beta' || targetDir === sourceDir) fail('target_path');
   if (relative(dirname(targetDir), backupRoot).startsWith('..')) fail('backup_path');
 
-  const { environments, keys } = readSourceSet(sourceDir, expectedUid, host, tenantKey);
+  const { files, keys } = readSources(sourceDir, expectedUid, host, tenantKey, expectedGid);
   const targetParent = dirname(targetDir);
   const lockPath = join(targetParent, '.timeweb-beta.provision.lock');
   if (dryRun && existsSync(lockPath)) fail('provision_transaction_present');
@@ -646,12 +715,8 @@ export function provisionTimewebBetaRuntimeSecrets({
     chownSync(incoming, expectedUid, expectedGid);
     chmodSync(incoming, 0o700);
     stagingIdentity = lstatSync(incoming);
-    for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
-      const contents = `${Object.entries(environments[service])
-        .map(([key, value]) => `${key}=${value}`)
-        .join('\n')}\n`;
-      writeExclusive(join(incoming, name), contents, expectedUid, expectedGid);
-    }
+    for (const name of FILES)
+      writeExclusive(join(incoming, name), files[name], expectedUid, expectedGid);
     writeExclusive(
       join(incoming, IDENTITY_FILE),
       `${JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId })}\n`,
@@ -808,10 +873,84 @@ export function validateTimewebFcmSecretDelta(
 
 const SCHEDULE_ENV_LINE = 'GAME_CREATE_SCHEDULE_LK1_URL=https://padlhub.su/\n';
 
+export function parseTimewebScheduleRuntimeEnvironment(bytes) {
+  const contents = decodeUtf8(bytes);
+  if (contents.includes('\0') || contents.includes('\r')) fail('forbidden_newline');
+  if (!contents.endsWith('\n')) fail('terminal_newline');
+  const entries = contents
+    .slice(0, -1)
+    .split('\n')
+    .filter((line) => line !== '' && !line.startsWith('#'));
+  return parseTimewebSecretEnvironment(`${entries.join('\n')}\n`);
+}
+
+function readScheduleSourceSet(sourceDir, expectedUid, host, tenantKey, expectedGid) {
+  const describe = () => describeTimewebRuntimeSecretSet(sourceDir, expectedUid, expectedGid);
+  const previous = describe();
+  if (previous.releaseId !== SCHEDULE_LEGACY_RUNTIME_SET_ID) fail('schedule_secret_identity');
+  const files = {};
+  const previousEnv = {};
+  const candidateEnv = {};
+  for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
+    const original = readRegularFile(
+      join(sourceDir, name),
+      expectedUid,
+      0o600,
+      'swap_file_security',
+    );
+    if (createHash('sha256').update(original).digest('hex') !== previous.files[name])
+      fail('schedule_secret_drift');
+    files[name] =
+      service === 'api' ? Buffer.concat([original, Buffer.from(SCHEDULE_ENV_LINE)]) : original;
+    previousEnv[service] = parseTimewebScheduleRuntimeEnvironment(original);
+    candidateEnv[service] = parseTimewebScheduleRuntimeEnvironment(files[name]);
+  }
+  validateTimewebScheduleRunningEnvironment(previousEnv.api, false);
+  validateTimewebScheduleRunningEnvironment(candidateEnv.api, true);
+  for (const env of [previousEnv, candidateEnv])
+    validateRuntimeEnvironments(env, { host, tenantKey }, true);
+  if (JSON.stringify(describe()) !== JSON.stringify(previous)) fail('schedule_secret_drift');
+  const keys = Object.fromEntries(
+    Object.entries(candidateEnv).map(([service, env]) => [service, Object.keys(env).sort()]),
+  );
+  return { files, keys };
+}
+
+export function provisionTimewebScheduleRuntimeSecrets({
+  releaseId,
+  expectedSourceSha,
+  expectedSourceTree,
+  configurationRoot = dirname(TARGET_DIR),
+}) {
+  assertReleaseId(releaseId);
+  assertAbsoluteNormalizedPath(configurationRoot, 'schedule_configuration_root');
+  const expectedUid = process.getuid?.() ?? 0;
+  const expectedGid = process.getgid?.() ?? 0;
+  if (expectedUid === 0 && configurationRoot !== dirname(TARGET_DIR))
+    fail('schedule_configuration_root');
+  const targetParent = join(configurationRoot, 'timeweb-beta-candidates', releaseId);
+  return provisionRuntimeSet(
+    {
+      sourceDir: join(configurationRoot, 'timeweb-beta'),
+      targetDir: join(targetParent, 'timeweb-beta'),
+      backupRoot: join(targetParent, 'backups'),
+      host: 'lk2.padlhub.su',
+      tenantKey: 'local-padel',
+      releaseId,
+      expectedSourceSha,
+      expectedSourceTree,
+      expectedUid,
+      expectedGid,
+    },
+    readScheduleSourceSet,
+  );
+}
+
 export function validateTimewebScheduleRunningEnvironment(api, scheduleActive, expected) {
   const owner = api.GAME_CREATE_SCHEDULE_LK1_URL;
   if (
     owner !== (scheduleActive ? 'https://padlhub.su/' : undefined) ||
+    (api.AUTH_PHONE_SUBJECT_LINK_ENABLED ?? 'false') !== 'false' ||
     api.GAME_CREATE_SCHEDULE_QA_LOOPBACK !== undefined ||
     api.GAME_COMMERCIAL_CREATE_ENABLED === 'true' ||
     ['PILOT', 'OWNER_URL', 'TIMEOUT_MS'].some(
@@ -837,14 +976,18 @@ export function validateTimewebScheduleSecretDelta(
   const describe = (dir) => describeTimewebRuntimeSecretSet(dir, expectedUid, expectedGid);
   const [previous, candidate] = dirs.map(describe);
   if (previous.releaseId === candidate.releaseId) fail('schedule_secret_identity');
+  const scheduleLegacy = previous.releaseId === SCHEDULE_LEGACY_RUNTIME_SET_ID;
+  const parse = scheduleLegacy
+    ? parseTimewebScheduleRuntimeEnvironment
+    : parseTimewebSecretEnvironment;
   const previousEnv = {};
   const candidateEnv = {};
   for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
     const [oldBytes, newBytes] = dirs.map((dir) =>
       readRegularFile(join(dir, name), expectedUid, 0o600, 'swap_file_security'),
     );
-    previousEnv[service] = parseTimewebSecretEnvironment(oldBytes);
-    candidateEnv[service] = parseTimewebSecretEnvironment(newBytes);
+    previousEnv[service] = parse(oldBytes);
+    candidateEnv[service] = parse(newBytes);
     if (service === 'api') {
       validateTimewebScheduleRunningEnvironment(previousEnv.api, false);
       validateTimewebScheduleRunningEnvironment(candidateEnv.api, true);
@@ -856,7 +999,11 @@ export function validateTimewebScheduleSecretDelta(
     } else if (!oldBytes.equals(newBytes)) fail('schedule_secret_delta');
   }
   for (const env of [previousEnv, candidateEnv])
-    validateTimewebRuntimeEnvironments(env, { host: 'lk2.padlhub.su', tenantKey: 'local-padel' });
+    validateRuntimeEnvironments(
+      env,
+      { host: 'lk2.padlhub.su', tenantKey: 'local-padel' },
+      scheduleLegacy,
+    );
   const [oldAfter, newAfter] = dirs.map(describe);
   if (
     JSON.stringify(oldAfter) !== JSON.stringify(previous) ||

@@ -11,7 +11,7 @@ function scenario(body: string) {
       '-e',
       `
     import assert from 'node:assert/strict';
-    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade,validateScheduleRuntimeBridge,buildApiWebInstalledDescriptor,scheduleMonitoringScopeSha256,validateScheduleDirectObservation} from './scripts/timeweb-api-web-upgrade.js';
+    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade,validateScheduleRuntimeBridge,buildApiWebInstalledDescriptor,scheduleMonitoringScopeSha256,validateScheduleDirectObservation,validateScheduleSidecarArchiveReceipt} from './scripts/timeweb-api-web-upgrade.js';
     ${body}
   `,
     ],
@@ -612,6 +612,16 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
       assert(descriptor.toString().includes('PHUB_COMPONENT_ROLLOUT_KIND=API_WEB_SCHEDULE_READ'));
 
       const originalOp=structuredClone(op);
+      const legacySet='8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1';
+      const legacyOp={...originalOp,expectedCurrentSecretSetReleaseId:legacySet,preexistingSidecarArchiveSha256:'f'.repeat(64)};
+      validateApiWebOperation(legacyOp);
+      assert.throws(()=>validateApiWebOperation({...legacyOp,preexistingSidecarArchiveSha256:undefined}),/schedule_operation/);
+      assert.throws(()=>validateApiWebOperation({...originalOp,preexistingSidecarArchiveSha256:'f'.repeat(64)}),/schedule_operation/);
+      const archive={schema:'PHUB_TIMEWEB_SCHEDULE_SIDECAR_ARCHIVE_V1',status:'ARCHIVED',releaseId:candidateId,previousSecretSetReleaseId:legacySet,archivePlanSha256:'1'.repeat(64),activeFiles:originalOp.candidateSecretHashes,archivedFiles:15};
+      validateScheduleSidecarArchiveReceipt(archive,legacyOp,originalOp.candidateSecretHashes);
+      for(const change of [v=>v.status='RESTORED',v=>v.releaseId=previousId,v=>v.previousSecretSetReleaseId=previousId,v=>v.archivedFiles=14,v=>v.activeFiles['worker.env']='b'.repeat(64)]){
+        const invalid=structuredClone(archive);change(invalid);assert.throws(()=>validateScheduleSidecarArchiveReceipt(invalid,legacyOp,originalOp.candidateSecretHashes),/schedule_sidecar_archive/);
+      }
       const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
       const receivedAt='2029-12-31T23:00:00.000Z';
       const messageSha256='cd676c7ab14c553671966ee0feede57c53c833b3075140ac1407e8adb108334e';
