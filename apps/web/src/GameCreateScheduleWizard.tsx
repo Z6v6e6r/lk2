@@ -33,6 +33,10 @@ const DATE_CHIP = new Intl.DateTimeFormat('ru-RU', {
   day: '2-digit',
 });
 const LEVELS = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'] as const;
+const GAME_FORMATS = [
+  { id: 'doubles', label: 'Игра 2 на 2' },
+  { id: 'singles', label: 'Игра 1 на 1' },
+] as const;
 type Level = (typeof LEVELS)[number];
 export interface GameCreateScheduleDetails {
   readonly title: string;
@@ -156,6 +160,7 @@ export function GameCreateScheduleWizard({
   const [levels, setLevels] = useState<readonly [number, number]>([0, 2]);
   const [title, setTitle] = useState('');
   const [day, setDay] = useState(today);
+  const [format, setFormat] = useState<(typeof GAME_FORMATS)[number]['id']>('doubles');
   const [duration, setDuration] = useState<60 | 90 | 120>(60);
   const [court, setCourt] = useState('');
   const [slotId, setSlot] = useState('');
@@ -168,13 +173,22 @@ export function GameCreateScheduleWizard({
   const station = stations.find((item) => item.id === stationId);
   const scheduleKey = JSON.stringify([stationId, day, duration, retry]);
   const currentSchedule = slotsRead?.key === scheduleKey ? slotsRead : undefined;
-  const slots = currentSchedule && 'value' in currentSchedule ? currentSchedule.value : [];
+  const slots =
+    currentSchedule && 'value' in currentSchedule
+      ? currentSchedule.value.filter(
+          ({ courtName }) =>
+            /сингл|single|1\s*на\s*1|1\s*[xх×]\s*1/i.test(courtName) === (format === 'singles'),
+        )
+      : [];
   const courts = new Map(
     slots
       .filter((slot) => !preferredStart || slot.startsAt === preferredStart)
       .map(({ courtKey, courtName }) => [courtKey, courtName]),
   );
-  const selected = slots.find((slot) => slot.id === slotId && slot.courtKey === court);
+  const selected =
+    format === 'doubles'
+      ? slots.find((slot) => slot.id === slotId && slot.courtKey === court)
+      : undefined;
   const quoteKey = JSON.stringify([scheduleKey, selected?.id, quoteVersion]);
   const quote = quoteRead?.key === quoteKey ? quoteRead : undefined;
   const quoteExpired = expiredQuoteKey === quoteKey;
@@ -536,17 +550,38 @@ export function GameCreateScheduleWizard({
       {wizard.step === 1 ? (
         <section className="game-schedule-stack" aria-label="Параметры игры">
           <button
-            className="game-schedule-card game-schedule-link"
+            className="game-schedule-card game-schedule-link game-schedule-station-card"
             type="button"
             onClick={wizard.back}
           >
             <span>
               <strong>{station?.title}</strong>
-              {station?.address ? <small>{station.address}</small> : null}
+              {station?.address ? (
+                <small className="game-schedule-station-meta">
+                  {stationAddressWithoutCity(station)}
+                </small>
+              ) : null}
             </span>
-            <span aria-hidden="true">›</span>
+            <img src={stationChevronUrl} width={16} height={28} alt="" />
           </button>
-          <h2>Продолжительность</h2>
+          <h2 className="game-schedule-settings-heading">Формат игры</h2>
+          <div className="game-schedule-formats" role="group" aria-label="Формат игры">
+            {GAME_FORMATS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                aria-pressed={option.id === format}
+                onClick={() => {
+                  if (option.id === format) return;
+                  setFormat(option.id);
+                  resetSlot();
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <h2 className="game-schedule-settings-heading">Продолжительность</h2>
           <div className="game-schedule-durations" role="group" aria-label="Продолжительность">
             {([60, 90, 120] as const).map((minutes) => (
               <button
@@ -563,7 +598,7 @@ export function GameCreateScheduleWizard({
               </button>
             ))}
           </div>
-          <h2>Дата и время начала игры</h2>
+          <h2 className="game-schedule-settings-heading">Дата и время начала игры</h2>
           <div className="game-schedule-days" role="group" aria-label="Дата игры">
             {days.map((item) => (
               <div key={item.day}>
@@ -607,7 +642,7 @@ export function GameCreateScheduleWizard({
           ) : null}
           {currentSchedule && 'value' in currentSchedule && !slots.length ? (
             <p className="game-schedule-empty" role="status">
-              Свободных слотов нет. Выберите другую дату или длительность.
+              Для этого формата нет свободных слотов. Выберите другую дату или длительность.
             </p>
           ) : null}
           {times.size ? (
@@ -634,7 +669,7 @@ export function GameCreateScheduleWizard({
               ))}
             </div>
           ) : null}
-          <h2>Корты</h2>
+          <h2 className="game-schedule-settings-heading">Корты</h2>
           <div className="game-schedule-courts" role="group" aria-label="Корты">
             {[...courts].map(([id, name]) => (
               <div key={id} className="game-schedule-pick">
@@ -657,7 +692,7 @@ export function GameCreateScheduleWizard({
           {selected ? (
             <div className="game-schedule-card game-schedule-payer-card">
               <fieldset className="game-schedule-payers">
-                <legend>Кто оплачивает корт?</legend>
+                <legend className="game-schedule-settings-heading">Кто оплачивает корт?</legend>
                 <label className="game-schedule-option">
                   <input
                     type="radio"
@@ -711,21 +746,29 @@ export function GameCreateScheduleWizard({
             </div>
           ) : null}
           {quoteMessage}
-          <button
-            className="game-schedule-primary game-schedule-continue"
-            aria-label="Продолжить"
-            type="button"
-            disabled={!selected}
-            onClick={() => wizard.advance(2)}
-          >
-            <strong>Продолжить</strong>
-            <span>
-              {station && selected
-                ? `${station.title} · ${selected.courtName}`
-                : 'Выберите клуб и корт'}
-            </span>
-            <span>{chosenTime ? `${chosenTime} · ${duration} мин` : 'Выберите время начала'}</span>
-          </button>
+          {format === 'singles' ? (
+            <p className="game-schedule-empty" role="status">
+              Запись на игру 1 на 1 пока недоступна.
+            </p>
+          ) : (
+            <button
+              className="game-schedule-primary game-schedule-continue"
+              aria-label="Продолжить"
+              type="button"
+              disabled={!selected}
+              onClick={() => wizard.advance(2)}
+            >
+              <strong>Продолжить</strong>
+              <span>
+                {station && selected
+                  ? `${station.title} · ${selected.courtName}`
+                  : 'Выберите клуб и корт'}
+              </span>
+              <span>
+                {chosenTime ? `${chosenTime} · ${duration} мин` : 'Выберите время начала'}
+              </span>
+            </button>
+          )}
         </section>
       ) : null}
 

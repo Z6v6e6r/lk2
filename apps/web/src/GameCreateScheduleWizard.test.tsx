@@ -165,6 +165,60 @@ describe('game creation schedule', () => {
     },
   );
 
+  it('filters courts and times by format and only quotes doubles', async () => {
+    const singles = {
+      ...slot,
+      id: 'c'.repeat(64),
+      courtKey: 'd'.repeat(64),
+      courtName: 'Корт №4 для игры 1 на 1 (сингл)',
+      startsAt: '2026-12-06T16:00:00+03:00',
+      endsAt: '2026-12-06T17:00:00+03:00',
+    };
+    const listSlots = vi
+      .fn<GameCreateScheduleSource['listSlots']>()
+      .mockResolvedValue([slot, singles]);
+    const readQuote = vi.fn<GameCreateScheduleSource['readQuote']>().mockResolvedValue({
+      ...quoteTimes(),
+      wholeCourtMinor: 400000,
+      shareMinor: 100000,
+      residency: { status: 'NOT_APPLICABLE' },
+    });
+    renderWizard({ listSlots, readQuote });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    const formats = within(screen.getByRole('group', { name: 'Формат игры' }));
+    const doublesButton = formats.getByRole('button', { name: 'Игра 2 на 2' });
+    const singlesButton = formats.getByRole('button', { name: 'Игра 1 на 1' });
+    expect(doublesButton).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: singles.courtName })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: courtName }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    expect(readQuote).toHaveBeenCalledOnce();
+
+    await user.click(singlesButton);
+    expect(singlesButton).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: courtName })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '12:00–13:00' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: singles.courtName }));
+    await user.click(screen.getByRole('button', { name: '16:00–17:00' }));
+    expect(screen.getByRole('button', { name: '16:00–17:00' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByText('Запись на игру 1 на 1 пока недоступна.')).toBeVisible();
+    expect(screen.queryByRole('group', { name: 'Кто оплачивает корт?' })).not.toBeInTheDocument();
+    expect(readQuote).toHaveBeenCalledOnce();
+    expect(listSlots).toHaveBeenCalledOnce();
+
+    await user.click(doublesButton);
+    expect(screen.getByRole('button', { name: 'Продолжить' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: courtName })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
   it('reports missing residency evidence independently from the base price', async () => {
     renderWizard({
       listSlots: () => Promise.resolve([slot]),
