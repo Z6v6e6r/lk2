@@ -346,13 +346,25 @@ export function validateTimewebMonitoringEvidence(monitoring, contractInput, obs
   const contract = validateTimewebObservabilityContract(contractInput);
   const observedAt = timestamp(observedAtInput, 'observability_observed_at');
   exactKeys(monitoring, ['monitors', 'alertTest'], 'observability_evidence_monitoring');
-  if (!Array.isArray(monitoring.monitors) || monitoring.monitors.length !== 2)
-    reject('observability_evidence_monitors');
-  monitoring.monitors.forEach((monitor, index) =>
-    validateMonitorEvidence(monitor, contract.monitoring.monitors[index], contract, observedAt),
-  );
+  validateProviderMonitors(monitoring.monitors, contract, observedAt);
   validateAlertTest(monitoring.alertTest, contract, observedAt);
   return true;
+}
+export function validateTimewebProviderMonitoringEvidence(
+  monitors,
+  contractInput,
+  observedAtInput,
+) {
+  const contract = validateTimewebObservabilityContract(contractInput);
+  const observedAt = timestamp(observedAtInput, 'observability_observed_at');
+  validateProviderMonitors(monitors, contract, observedAt);
+  return true;
+}
+function validateProviderMonitors(monitors, contract, observedAt) {
+  if (!Array.isArray(monitors) || monitors.length !== 2) reject('observability_evidence_monitors');
+  monitors.forEach((monitor, index) =>
+    validateMonitorEvidence(monitor, contract.monitoring.monitors[index], contract, observedAt),
+  );
 }
 function validateDeliveries(deliveries, expectedChannels, triggerAt, deadline, code) {
   if (!Array.isArray(deliveries) || deliveries.length !== expectedChannels.length) reject(code);

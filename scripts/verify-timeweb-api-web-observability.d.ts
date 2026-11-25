@@ -65,3 +65,9 @@ export function validateTimewebMonitoringEvidence(
   contractInput: unknown,
   observedAtInput: string,
 ): true;
+
+export function validateTimewebProviderMonitoringEvidence(
+  monitors: unknown,
+  contractInput: unknown,
+  observedAtInput: string,
+): true;

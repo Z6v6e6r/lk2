@@ -66,7 +66,10 @@ import {
   validateTimewebMonitorReadback,
   validateTimewebAlertReadback,
 } from './produce-timeweb-api-web-observability-evidence.js';
-import { validateTimewebMonitoringEvidence } from './verify-timeweb-api-web-observability.js';
+import {
+  validateTimewebMonitoringEvidence,
+  validateTimewebProviderMonitoringEvidence,
+} from './verify-timeweb-api-web-observability.js';
 import {
   OWNER_PLAN,
   OWNER_RECEIPT,
@@ -145,6 +148,7 @@ import {
   STATION_OPERATION,
   STATION_PLAN,
   STATION_RECEIPT,
+  STATION_ALERT_STATUS,
   STATION_KIND,
   STATION_POSTGRES,
   STATION_SNAPSHOT,
@@ -2150,30 +2154,37 @@ export function validateUpgradeMonitoring(provider, alerts, contract, observedAt
   const alertTest = validateTimewebAlertReadback(alerts, contract);
   validateTimewebMonitoringEvidence({ monitors, alertTest }, contract, observedAt);
 }
-function validateMonitoring(transaction, profile = 'beta', { fresh = false } = {}) {
-  const providerPath = `${ROOT}/observability/timeweb-monitor-readback.json`;
-  const alertPath = `${ROOT}/observability/alert-test-readback.json`;
-  const provider = read(providerPath),
-    alerts = read(alertPath);
+export function validateStationMonitoring(provider, contract, observedAt) {
+  assertCutoverReadbackFreshness(provider?.readAt, Date.parse(observedAt));
+  const monitors = validateTimewebMonitorReadback(provider, contract, observedAt);
+  validateTimewebProviderMonitoringEvidence(monitors, contract, observedAt);
+}
+function validateMonitoring(
+  transaction,
+  profile = 'beta',
+  { fresh = false, station = false } = {},
+) {
+  const provider = read(`${ROOT}/observability/timeweb-monitor-readback.json`);
+  const alerts = station ? null : read(`${ROOT}/observability/alert-test-readback.json`);
   if (profile === 'production') {
-    // Production keeps the full provider-readback contract: real monitor ids, alert delivery,
-    // acknowledgement and recovery semantics. The snapshot is validated against its own
-    // readAt, so a long apply cannot invalidate it by wall-clock age (the beta lesson).
     const contract = parseStrictJson(
       read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`, 0o644),
     );
     const providerValue = parseStrictJson(provider);
-    if (fresh) assertCutoverReadbackFreshness(providerValue.readAt);
-    validateUpgradeMonitoring(
-      providerValue,
-      parseStrictJson(alerts),
-      contract,
-      fresh ? new Date().toISOString() : providerValue.readAt,
-    );
+    if (station) {
+      validateStationMonitoring(providerValue, contract, new Date().toISOString());
+    } else {
+      if (fresh) assertCutoverReadbackFreshness(providerValue.readAt);
+      validateUpgradeMonitoring(
+        providerValue,
+        parseStrictJson(alerts),
+        contract,
+        fresh ? new Date().toISOString() : providerValue.readAt,
+      );
+    }
   }
-  // Beta records monitoring as evidence: keep immutable hash binding, but do not block on a
-  // re-read of external monitoring state.
-  return { providerSha256: hash(provider), alertSha256: hash(alerts), provider, alerts };
+  // Beta retains readbacks as evidence without revalidating current external state.
+  return { providerSha256: hash(provider), alertSha256: alerts && hash(alerts), provider, alerts };
 }
 export function overlayBytes(plan, name) {
   if (name === 'candidate')
@@ -2557,7 +2568,7 @@ export function validateUpgradeReceipt(
     CANONICAL_RECEIPT,
   ].includes(receipt.schema);
   if (cutover) keys.push(baselineField);
-  if (station) keys.push('databaseAdmissionSha256');
+  if (station) keys.push('databaseAdmissionSha256', 'alertTestStatus');
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
   if (scheduleWaived)
     keys.push(...Object.keys(SCHEDULE_MONITORING_STATUS), 'ownerProviderMonitoringWaiverSha256');
@@ -2589,7 +2600,7 @@ export function validateUpgradeReceipt(
             ? ['ownerObservationSha256', 'evidencePolicySha256']
             : scheduleWaived
               ? []
-              : ['providerReadbackSha256', 'alertReadbackSha256']),
+              : ['providerReadbackSha256', ...(!station ? ['alertReadbackSha256'] : [])]),
     );
   if (receipt.status === 'RECONCILED') keys.push('reconciledStatus');
   exact(receipt, keys);
@@ -2609,7 +2620,9 @@ export function validateUpgradeReceipt(
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
     (cutover && !HASH.test(receipt[baselineField] ?? '')) ||
-    (station && !HASH.test(receipt.databaseAdmissionSha256 ?? '')) ||
+    (station &&
+      (!HASH.test(receipt.databaseAdmissionSha256 ?? '') ||
+        receipt.alertTestStatus !== STATION_ALERT_STATUS)) ||
     !Number.isFinite(Date.parse(receipt.observedAt)) ||
     ![
       'PREPARING',
@@ -2676,7 +2689,7 @@ export function validateUpgradeReceipt(
               ? ['ownerObservationSha256', 'evidencePolicySha256']
               : scheduleWaived
                 ? []
-                : ['providerReadbackSha256', 'alertReadbackSha256']),
+                : ['providerReadbackSha256', ...(!station ? ['alertReadbackSha256'] : [])]),
       ].some((key) => !HASH.test(receipt[key] ?? '')))
   )
     fail('invalid_receipt');
@@ -3749,7 +3762,9 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           : [
               ['observation.json', 'observationSha256'],
               ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-              ['alert-test-readback.json', 'alertReadbackSha256'],
+              ...(receipt.schema === STATION_RECEIPT
+                ? []
+                : [['alert-test-readback.json', 'alertReadbackSha256']]),
             ])
         if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
       if (direct)
@@ -4287,7 +4302,8 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           : isWaivedRosterCutover(op)
             ? null
             : validateMonitoring(transaction, profile, {
-                fresh: cutover || schedule || appOnly || station,
+                fresh: cutover || schedule || appOnly,
+                station,
               })
         : null;
     if (direct) {
@@ -4330,7 +4346,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
               ...STATION_BACKUP,
               ownerScopeSha256: op.ownerDecision.scopeSha256,
               providerSha256: monitoring.providerSha256,
-              alertSha256: monitoring.alertSha256,
+              alertTestStatus: STATION_ALERT_STATUS,
             },
           }
         : { backup }),
@@ -4415,7 +4431,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     durable(`${transaction}/${admissionMarker}`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)) } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)), alertTestStatus: STATION_ALERT_STATUS } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
@@ -4576,7 +4592,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     assertOwned();
     if (mode === 'deploy') {
       validateStationWindow(op, Date.now(), minimumMs);
-      validateMonitoring(transaction, profile, { fresh: true });
+      validateMonitoring(transaction, profile, { station: true });
     }
     stationArchive = attestStationArchive(stationArchive, full);
     if (database) attestStationDatabase();
@@ -4698,7 +4714,10 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         status,
         planSha256,
         ...(station
-          ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)) }
+          ? {
+              databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)),
+              alertTestStatus: STATION_ALERT_STATUS,
+            }
           : {}),
         ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}),
         ...(isDirectOperation(op)
@@ -4727,9 +4746,13 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
                           providerReadbackSha256: hash(
                             read(`${transaction}/timeweb-monitor-readback.json`),
                           ),
-                          alertReadbackSha256: hash(
-                            read(`${transaction}/alert-test-readback.json`),
-                          ),
+                          ...(!station
+                            ? {
+                                alertReadbackSha256: hash(
+                                  read(`${transaction}/alert-test-readback.json`),
+                                ),
+                              }
+                            : {}),
                         }),
             }
           : {}),
@@ -5024,10 +5047,12 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
       else if (!scheduleWaiver) {
         const finalMonitoring = validateMonitoring(transaction, profile, {
-          fresh: schedule || appOnly || station,
+          fresh: schedule || appOnly,
+          station,
         });
         durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
-        durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
+        if (!station)
+          durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
       }
       const completedAt = new Date().toISOString();
       for (const service of ['api', 'web'])
@@ -5190,7 +5215,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
             for (const [file, key] of [
               ['observation.json', 'observationSha256'],
               ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-              ['alert-test-readback.json', 'alertReadbackSha256'],
+              ...(!station ? [['alert-test-readback.json', 'alertReadbackSha256']] : []),
             ])
               if (hash(read(`${transaction}/${file}`)) !== receipt[key])
                 fail('installed_app_only_evidence');

@@ -1,10 +1,12 @@
-export const STATION_OPERATION: 'PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V1';
-export const STATION_PLAN: 'PHUB_TIMEWEB_STATION_ROLLOUT_PLAN_V1';
-export const STATION_RECEIPT: 'PHUB_TIMEWEB_STATION_ROLLOUT_RECEIPT_V1';
+export const STATION_OPERATION: 'PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V2';
+export const STATION_PLAN: 'PHUB_TIMEWEB_STATION_ROLLOUT_PLAN_V2';
+export const STATION_RECEIPT: 'PHUB_TIMEWEB_STATION_ROLLOUT_RECEIPT_V2';
 export const STATION_KIND: 'API_WORKER_WEB_STATION_ROLLOUT';
 export const STATION_APPLICATION: string;
 export const STATION_TREE: string;
 export const STATION_WAIVER_SHA256: string;
+export const STATION_ALERT_WAIVER_SHA256: string;
+export const STATION_ALERT_STATUS: 'NOT_REQUIRED_OWNER_WAIVED';
 export const STATION_PREVIOUS: Readonly<{
   api: Readonly<{ id: string; image: string; releaseId: string }>;
   web: Readonly<{ id: string; image: string; releaseId: string }>;
