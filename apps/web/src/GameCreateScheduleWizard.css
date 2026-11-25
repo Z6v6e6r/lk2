@@ -139,6 +139,14 @@ body:has(.game-schedule-wizard) {
   font: inherit;
 }
 
+.game-schedule-wizard .game-schedule-input[type='search'] {
+  font:
+    500 14px/1 'Inter Display',
+    Inter,
+    sans-serif;
+  letter-spacing: 0.02em;
+}
+
 .game-schedule-wizard textarea.game-schedule-input {
   min-height: 64px;
   resize: vertical;
