@@ -114,6 +114,14 @@ body:has(.game-schedule-wizard) {
   gap: 12px;
 }
 
+.game-schedule-wizard .game-schedule-station-heading {
+  font:
+    600 16px/1.25 'Recommendation Inter Display',
+    'Inter Display',
+    Inter,
+    sans-serif;
+}
+
 .game-schedule-station-list h3 {
   font:
     700 12px/1 'Recommendation RF Dewi',

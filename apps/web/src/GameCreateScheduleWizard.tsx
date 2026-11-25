@@ -428,7 +428,9 @@ export function GameCreateScheduleWizard({
               ) : null}
             </div>
           ) : null}
-          <h2>{query ? 'Результаты поиска' : 'Станции по городам'}</h2>
+          <h2 className="game-schedule-station-heading">
+            {query ? 'Результаты поиска' : 'Станции по городам'}
+          </h2>
           {cities.map((city) => (
             <div className="game-schedule-station-list" key={city}>
               <h3>{city}</h3>
