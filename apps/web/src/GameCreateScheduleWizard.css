@@ -127,6 +127,20 @@ body:has(.game-schedule-wizard) {
   font: italic 800 16px/1.2 var(--schedule-display);
 }
 
+.game-schedule-station-list .game-schedule-link > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.game-schedule-station-list .game-schedule-link strong {
+  font:
+    700 15px/1 'Recommendation RF Dewi',
+    'RF Dewi',
+    sans-serif;
+  letter-spacing: 0.01em;
+  text-align: center;
+}
+
 .game-schedule-link small,
 .game-schedule-option small {
   display: block;
