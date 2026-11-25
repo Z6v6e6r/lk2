@@ -139,6 +139,29 @@ import {
   COMPONENTS,
 } from './timeweb-production-cutover.js';
 
+import {
+  STATION_APPLICATION,
+  STATION_TREE,
+  STATION_OPERATION,
+  STATION_PLAN,
+  STATION_RECEIPT,
+  STATION_KIND,
+  STATION_POSTGRES,
+  STATION_SNAPSHOT,
+  STATION_BACKUP,
+  STATION_CUP_RECEIPT,
+  isStationRollout,
+  validateStationOperation,
+  validateStationWindow,
+  validateStationSourceTail,
+  validateStationBackupMetadata,
+  validateStationDatabaseReadback,
+  validateStationRetainedAdmission,
+  validateStationRuntimeEnvironment,
+  validateStationObservation,
+} from './timeweb-station-rollout.js';
+import { CUP_0119, CUP_0119_TARGET, buildCup0119Sql } from './timeweb-cup-0119-migration.js';
+
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
 const REQUEST = `${ROOT}/operator/api-web-upgrade.json`;
@@ -452,6 +475,7 @@ export function extractCanonicalPredecessorArtifactPair(archiveBytes) {
 export function validateApiWebOperation(value) {
   if (isProductionCutover(value)) return validateProductionCutover(value);
   if (isJoinOperation(value)) return validateJoinOperation(value);
+  if (isStationRollout(value)) return validateStationOperation(value, validateApiWebOperation);
   if (isAppOnlyOperation(value)) {
     const { backupOperationSha256, expiresAt, ...base } = value;
     const suffix = '_APP_ONLY_PRIOR_RESTORE';
@@ -1034,6 +1058,106 @@ function hashBackupFile(path) {
   } finally {
     closeSync(fd);
   }
+}
+function attestStationPrevious(actual, expected) {
+  if (
+    !actual ||
+    actual.restarts !== 0 ||
+    Object.entries(expected).some(([key, value]) => actual[key] !== value) ||
+    actual.revision !== (expected.revision ?? expected.releaseId.slice(0, 40))
+  )
+    fail('station_rollout_predecessor');
+}
+function attestStationAuthorization(transaction, op) {
+  const bytes = read(`${transaction}/owner-authorization.txt`, 0o600, 16384, false);
+  if (!bytes.length || hash(bytes) !== op.ownerDecision.releaseAuthorizationSha256)
+    fail('station_rollout_release_authorization');
+}
+function attestStationDatabase() {
+  const postgres = JSON.parse(docker(['inspect', STATION_POSTGRES.id]))[0];
+  if (
+    postgres.Id !== STATION_POSTGRES.id ||
+    postgres.Name !== '/phub-timeweb-beta-dependencies-postgres-1' ||
+    postgres.Config.Image !== STATION_POSTGRES.image ||
+    postgres.State.StartedAt !== STATION_POSTGRES.startedAt ||
+    postgres.State.Status !== 'running' ||
+    postgres.State.Health?.Status !== 'healthy'
+  )
+    fail('station_rollout_postgres');
+  const migration = read(`${SOURCE}/packages/database/migrations/${CUP_0119.filename}`, 0o644);
+  const input = buildCup0119Sql(migration, CUP_0119_TARGET, 'readback');
+  const result = docker(
+    [
+      'exec',
+      '-i',
+      STATION_POSTGRES.id,
+      '/usr/local/bin/psql',
+      '-XqAt',
+      '-v',
+      'ON_ERROR_STOP=1',
+      '-h',
+      '/var/run/postgresql',
+      '-U',
+      CUP_0119_TARGET.projectionOwner,
+      '-d',
+      CUP_0119_TARGET.database,
+    ],
+    { input, stdio: ['pipe', 'pipe', 'pipe'], timeout: 45_000, maxBuffer: 8192 },
+  );
+  validateStationDatabaseReadback(parseStrictJson(result.trim()));
+}
+function attestStationArchive(previous, full) {
+  secure(STATION_SNAPSHOT, 0o700);
+  validateStationBackupMetadata(
+    read(`${STATION_SNAPSHOT}/backup-receipt.json`, 0o600, 16384, false),
+    read(`${STATION_SNAPSHOT}/toc.txt`, 0o600, 4 * 1024 * 1024, false),
+    read(STATION_CUP_RECEIPT, 0o600, 16384, false),
+    read(`${dirname(STATION_CUP_RECEIPT)}/intent.json`, 0o600, 16384, false),
+  );
+  const path = STATION_BACKUP.dumpPath;
+  const identity = (stat) => ({
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  });
+  const before = secure(path, 0o600);
+  const current = identity(before);
+  if (
+    !before.isFile() ||
+    current.size !== STATION_BACKUP.dumpBytes ||
+    (previous && !equal(current, previous))
+  )
+    fail('station_rollout_archive_identity');
+  if (!full) return current;
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    if (
+      !equal(identity(fstatSync(fd)), current) ||
+      hashUpgradeDescriptor(fd) !== STATION_BACKUP.dumpSha256
+    )
+      fail('station_rollout_archive_digest');
+    const toc = docker(
+      [
+        'exec',
+        '-i',
+        '-e',
+        'LC_ALL=C',
+        '-e',
+        'TZ=UTC',
+        STATION_POSTGRES.id,
+        '/usr/local/bin/pg_restore',
+        '--list',
+      ],
+      { stdio: [fd, 'pipe', 'pipe'], encoding: null, timeout: 45_000, maxBuffer: 4 * 1024 * 1024 },
+    );
+    if (hash(toc) !== STATION_BACKUP.tocSha256) fail('station_rollout_toc');
+  } finally {
+    closeSync(fd);
+  }
+  if (!equal(identity(secure(path, 0o600)), current)) fail('station_rollout_archive_drift');
+  return current;
 }
 function durable(path, bytes, exclusive = false) {
   secure(dirname(path));
@@ -2413,6 +2537,7 @@ export function validateUpgradeReceipt(
   const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
   const schedule = receipt.schema === SCHEDULE_RECEIPT;
   const appOnly = receipt.schema === APP_ONLY_RECEIPT;
+  const station = receipt.schema === STATION_RECEIPT;
   const scheduleWaived = schedule && Object.hasOwn(receipt, 'ownerProviderMonitoringWaiverSha256');
   const cutover = [
     CUTOVER_RECEIPT,
@@ -2432,6 +2557,7 @@ export function validateUpgradeReceipt(
     CANONICAL_RECEIPT,
   ].includes(receipt.schema);
   if (cutover) keys.push(baselineField);
+  if (station) keys.push('databaseAdmissionSha256');
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
   if (scheduleWaived)
     keys.push(...Object.keys(SCHEDULE_MONITORING_STATUS), 'ownerProviderMonitoringWaiverSha256');
@@ -2473,6 +2599,7 @@ export function validateUpgradeReceipt(
       'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
       SCHEDULE_RECEIPT,
       APP_ONLY_RECEIPT,
+      STATION_RECEIPT,
       CUTOVER_RECEIPT,
       ROSTER_CUTOVER_RECEIPT,
       WAIVER_RECEIPT,
@@ -2482,6 +2609,7 @@ export function validateUpgradeReceipt(
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
     (cutover && !HASH.test(receipt[baselineField] ?? '')) ||
+    (station && !HASH.test(receipt.databaseAdmissionSha256 ?? '')) ||
     !Number.isFinite(Date.parse(receipt.observedAt)) ||
     ![
       'PREPARING',
@@ -2498,7 +2626,7 @@ export function validateUpgradeReceipt(
       'RECONCILED',
       ...(schedule ? SCHEDULE_PHASES : []),
       ...(appOnly ? ['BASELINE_INTENT'] : []),
-      ...(roster
+      ...(roster || station
         ? [
             'WORKER_STOP_INTENT',
             'WORKER_STOPPED',
@@ -2559,6 +2687,9 @@ export function validateUpgradeReceipt(
       isDirectOperation(op) !== direct ||
       isScheduleOperation(op) !== schedule ||
       isAppOnlyOperation(op) !== appOnly ||
+      isStationRollout(op) !== station ||
+      (station &&
+        receipt.databaseAdmissionSha256 !== hash(JSON.stringify(plan.databaseAdmission))) ||
       (appOnly && plan.backup?.operationSha256 !== op.backupOperationSha256) ||
       (schedule && scheduleWaived !== Object.hasOwn(op, 'ownerProviderMonitoringWaiver')) ||
       isProductionCutover(op) !== cutover ||
@@ -2579,12 +2710,15 @@ export function validateUpgradeReceipt(
               ? SCHEDULE_PLAN
               : appOnly
                 ? APP_ONLY_PLAN
-                : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
+                : station
+                  ? STATION_PLAN
+                  : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
       (cutover &&
         (plan[baselineField] !== cutoverBaselineHash(op) ||
           receipt[baselineField] !== plan[baselineField]))
     )
       fail('receipt_context');
+    if (station) validateStationRetainedAdmission(plan.databaseAdmission, op);
     if (scheduleWaived) {
       validateScheduleMonitoringWaiver(op);
       const expected = scheduleMonitoringReceipt(op);
@@ -2768,11 +2902,13 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
           ? OWNER_KIND
           : plan.schema === WAIVER_PLAN
             ? WAIVER_KIND
-            : plan.candidate.worker
-              ? ROSTER_CUTOVER_KIND
-              : plan.schema === SCHEDULE_PLAN
-                ? SCHEDULE_INSTALLED_KIND
-                : 'API_WEB',
+            : plan.schema === STATION_PLAN
+              ? STATION_KIND
+              : plan.candidate.worker
+                ? ROSTER_CUTOVER_KIND
+                : plan.schema === SCHEDULE_PLAN
+                  ? SCHEDULE_INSTALLED_KIND
+                  : 'API_WEB',
     PHUB_RELEASE_ID: id,
     PHUB_RUNTIME_SECRET_SET_RELEASE_ID:
       plan.schema === SCHEDULE_PLAN ? plan.candidateSecrets.releaseId : plan.secretSetReleaseId,
@@ -2829,6 +2965,10 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
   );
 }
 export function validateInstalledCutoverKind(kind, receiptSchema) {
+  if (kind === STATION_KIND || receiptSchema === STATION_RECEIPT) {
+    if (kind !== STATION_KIND || receiptSchema !== STATION_RECEIPT) fail('installed_station_kind');
+    return;
+  }
   if (receiptSchema === APP_ONLY_RECEIPT) {
     if (kind !== 'API_WEB') fail('installed_app_only_kind');
     return;
@@ -3438,6 +3578,7 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           'API_WEB',
           SCHEDULE_INSTALLED_KIND,
           ROSTER_CUTOVER_KIND,
+          STATION_KIND,
           WAIVER_KIND,
           OWNER_KIND,
           CANONICAL_KIND,
@@ -3471,6 +3612,36 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           fail('installed_app_only_lineage');
         validateBoundBackupPlan(plan.backup, op, transaction);
         attestBoundBackupFiles(plan.backup);
+      }
+      if (receipt.schema === STATION_RECEIPT) {
+        const opBytes = read(`${transaction}/operation.json`);
+        const op = validateApiWebOperation(parseStrictJson(opBytes));
+        validateUpgradeReceipt(receipt, hash(planBytes), op, plan, planBytes);
+        const worker = inspect('worker');
+        if (
+          plan.operationSha256 !== hash(opBytes) ||
+          `${op.candidateSha}-${op.publicationRunId}-1` !== releaseId ||
+          receipt.status !== 'RECONCILED' ||
+          receipt.reconciledStatus !== 'SUCCESS' ||
+          plan.secretSetReleaseId !== values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID ||
+          ['api', 'worker', 'web'].some(
+            (service) =>
+              plan.candidate[service].image !==
+              `ghcr.io/z6v6e6r/phub-${service}@${values[service.toUpperCase() + '_IMAGE_DIGEST']}`,
+          ) ||
+          worker.image !== plan.candidate.worker.image ||
+          worker.revision !== op.candidateSha ||
+          worker.releaseId !== null ||
+          worker.restarts !== 0
+        )
+          fail('installed_station_lineage');
+        validateStationObservation(
+          parseStrictJson(read(`${transaction}/observation.json`)),
+          validateRosterCutoverObservation,
+          receipt.observedAt,
+        );
+        attestStationAuthorization(transaction, op);
+        attestStationArchive(null, true);
       }
       if (receipt.schema === SCHEDULE_RECEIPT) {
         const operationBytes = read(`${transaction}/operation.json`);
@@ -3600,6 +3771,7 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
           SCHEDULE_RECEIPT,
           APP_ONLY_RECEIPT,
+          STATION_RECEIPT,
           CUTOVER_RECEIPT,
           ROSTER_CUTOVER_RECEIPT,
           WAIVER_RECEIPT,
@@ -3648,7 +3820,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     const terminalOp =
       isCanonicalOwnerDirectedUpgrade(terminalInput) ||
       isScheduleOperation(terminalInput) ||
-      isAppOnlyOperation(terminalInput)
+      isAppOnlyOperation(terminalInput) ||
+      isStationRollout(terminalInput)
         ? validateApiWebOperation(terminalInput)
         : validateJoinOperation(terminalInput);
     recoveredTransaction = `${ROOT}/backups/${terminalOp.candidateSha}-${terminalOp.publicationRunId}-1-api-web`;
@@ -3672,10 +3845,23 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     isJoinOperation(parsedOperation) ||
       isProductionCutover(parsedOperation) ||
       isScheduleOperation(parsedOperation) ||
-      isAppOnlyOperation(parsedOperation)
+      isAppOnlyOperation(parsedOperation) ||
+      isStationRollout(parsedOperation)
       ? parseStrictJson(opBytes)
       : parsedOperation,
   );
+  const options = { mode, op, opBytes, config, terminalWithoutLock };
+  if (!isStationRollout(op)) return runApiWebOperation(options);
+  const { acquireApiWorkerExecutor } = await import('./timeweb-api-worker-upgrade.js');
+  secure(`${ROOT}/standard`);
+  const owner = acquireApiWorkerExecutor(`${ROOT}/standard/api-worker-executor.lock`);
+  try {
+    return await runApiWebOperation({ ...options, assertOwned: owner.assertOwned });
+  } finally {
+    owner.close();
+  }
+}
+async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLock, assertOwned }) {
   const join = isJoinOperation(op);
   const schedule = isScheduleOperation(op);
   const appOnly = isAppOnlyOperation(op);
@@ -3683,7 +3869,15 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     schedule && op.ownerProviderMonitoringWaiver ? scheduleMonitoringReceipt(op) : null;
   const swapsSecrets = join || schedule;
   const cutover = isProductionCutover(op);
-  const roster = isRosterCutover(op);
+  const station = isStationRollout(op);
+  const roster = isRosterCutover(op) || station;
+  const admissionMarker = station ? 'admission.complete' : 'backup.complete';
+  const consumed = `${ROOT}/standard/station-702-admission-consumed.json`;
+  const opSha256 = hash(opBytes);
+  const stationReservation =
+    () => `${JSON.stringify({ schema: STATION_OPERATION, operationSha256: opSha256 })}
+`;
+  if (mode === 'deploy' && station) validateStationWindow(op, Date.now(), 25 * 60_000);
   const direct = isDirectOperation(op);
   const planSchema = cutover
     ? cutoverPlanSchema(op)
@@ -3695,7 +3889,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
           : appOnly
             ? APP_ONLY_PLAN
-            : 'PHUB_TIMEWEB_API_WEB_PLAN_V1';
+            : station
+              ? STATION_PLAN
+              : 'PHUB_TIMEWEB_API_WEB_PLAN_V1';
   const receiptSchema = cutover
     ? cutoverReceiptSchema(op)
     : join
@@ -3706,7 +3902,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
           : appOnly
             ? APP_ONLY_RECEIPT
-            : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1';
+            : station
+              ? STATION_RECEIPT
+              : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1';
   const targets = roster ? ['api', 'worker', 'web'] : ['api', 'web'];
   const overlays = ['candidate', ...targets.map((service) => `previous-${service}`)];
   const excludedTargets = () => excluded(targets);
@@ -3755,6 +3953,12 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         newType: entry.newOid === '0'.repeat(40) ? null : git(['cat-file', '-t', entry.newOid]),
       }),
     );
+  if (station) {
+    git(['merge-base', '--is-ancestor', STATION_APPLICATION, op.candidateSha]);
+    if (git(['rev-parse', `${STATION_APPLICATION}^{tree}`]) !== STATION_TREE)
+      fail('station_rollout_application');
+    validateStationSourceTail(runtimeDelta(STATION_APPLICATION, op.candidateSha));
+  }
   if (join && op.candidateSha !== op.controllerSha) {
     validateJoinRuntimeTail(
       parseRuntimeDelta(
@@ -3806,7 +4010,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         checkRuntimeSecrets: !swapsSecrets || mode === 'deploy',
       });
   const predecessorSource = (previous) =>
-    cutover ? cutoverBaseline(op).sourceSha : previous.releaseId.slice(0, 40);
+    cutover
+      ? cutoverBaseline(op).sourceSha
+      : station
+        ? previous.revision
+        : previous.releaseId.slice(0, 40);
   const {
     path: predecessorPath,
     bytes: baselineBytes,
@@ -3823,18 +4031,21 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     values.PHUB_MIGRATOR_ENABLED !== 'false'
   )
     fail('baseline_identity');
+  if (station && values.PHUB_WORKER_DELIVERY_GATE_RECEIPT)
+    fail('station_rollout_existing_worker_gate');
   if (!swapsSecrets || mode === 'deploy')
     validateTimewebRuntimeSecretPaths(RUNTIME, secretSetReleaseId);
   const candidateDir = `/etc/phub/timeweb-beta-candidates/${id}/timeweb-beta`;
   const backupDir = `/etc/phub/timeweb-beta-backups/${secretSetReleaseId}--replaced-by--${id}`;
   const provisionLock = '/etc/phub/.timeweb-beta.provision.lock';
   let plan;
+  let stationArchive;
   if (mode !== 'deploy') {
     if (!terminalWithoutLock) secure(LOCK, 0o600);
     if (
       !existsSync(planPath) ||
       !existsSync(journalPath) ||
-      !existsSync(`${transaction}/backup.complete`)
+      !existsSync(`${transaction}/${admissionMarker}`)
     ) {
       if (swapsSecrets) fail('secret_swap_incomplete_preparation_preserved');
       if (mode !== 'recover' || !read(LOCK).equals(Buffer.from(`${planPath}\n`)))
@@ -3867,7 +4078,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         'previous-web.env',
         ...(roster ? ['previous-worker.env'] : []),
         'release-owner-observation.json',
-        'backup.complete',
+        admissionMarker,
         'rollout-receipt.json',
       ]) {
         const path = `${transaction}/${file}`;
@@ -3893,6 +4104,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         receipt: `${transaction}/preparation-aborted.json`,
       };
     }
+    if (station && !read(consumed).equals(Buffer.from(stationReservation())))
+      fail('station_rollout_reservation_drift');
     plan = JSON.parse(read(planPath));
     const receipt = validateUpgradeReceipt(
       JSON.parse(read(journalPath)),
@@ -3932,12 +4145,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       ].includes(receipt.status) ||
       (!terminalWithoutLock && !read(LOCK).equals(Buffer.from(`${planPath}\n`))) ||
       (terminalWithoutLock &&
-        ((!swapsSecrets && !appOnly && !isCanonicalOwnerDirectedUpgrade(op)) ||
+        ((!swapsSecrets && !appOnly && !station && !isCanonicalOwnerDirectedUpgrade(op)) ||
           receipt.status !== 'RECONCILED' ||
           existsSync(provisionLock)))
     )
       fail('recovery_identity');
   } else {
+    if (station && (existsSync(consumed) || existsSync(`${transaction}/preparation-aborted.json`)))
+      fail('station_rollout_already_consumed');
     if (
       (isWaivedRosterCutover(op) || isOwnerDirectedCutover(op)) &&
       existsSync(`${transaction}/preparation-aborted.json`)
@@ -3945,6 +4160,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       fail('native_aborted_operation_not_replayable');
     if (existsSync(LOCK) || existsSync(planPath) || existsSync(journalPath))
       fail('unreconciled_transaction');
+    if (station) attestStationAuthorization(transaction, op);
     await verifyCi(op.sourceCiRunId, op.candidateSha);
     if (isLegacyProductionCutover(op)) {
       await verifyLegacyAuthority(op);
@@ -3958,8 +4174,12 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       );
     }
     for (const previous of [previousApi, previousWeb]) {
-      git(['merge-base', '--is-ancestor', predecessorSource(previous), op.candidateSha]);
-      const entries = runtimeDelta(predecessorSource(previous), op.candidateSha);
+      const previousSource = station
+        ? previous.releaseId.slice(0, 40)
+        : predecessorSource(previous);
+      git(['merge-base', '--is-ancestor', previousSource, op.candidateSha]);
+      if (station) continue; // Exact live predecessor and anchored application tree replace the generic delta.
+      const entries = runtimeDelta(previousSource, op.candidateSha);
       if (schedule) {
         git(['merge-base', '--is-ancestor', SCHEDULE_APPLICATION, op.candidateSha]);
         validateScheduleRuntimeBridge(
@@ -4043,11 +4263,22 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       )
         fail('baseline_drift');
     }
-    const backup = join
-      ? readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']))
-      : schedule || appOnly
-        ? validateBoundApiWebBackupProof(transaction, id, op, api)
-        : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
+    const worker = roster ? inspect('worker') : null;
+    if (station) {
+      attestStationPrevious(api, previousApi);
+      attestStationPrevious(web, previousWeb);
+      attestStationPrevious(worker, op.expectedWorker);
+      attestStationDatabase();
+      stationArchive = attestStationArchive(null, true);
+      git(['merge-base', '--is-ancestor', worker.revision, op.candidateSha]);
+    }
+    const backup = station
+      ? null
+      : join
+        ? readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']))
+        : schedule || appOnly
+          ? validateBoundApiWebBackupProof(transaction, id, op, api)
+          : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
     let ownerBytes;
     const monitoring =
       !direct && !scheduleWaiver
@@ -4055,7 +4286,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           ? createOwnerDirectedBinding(op, hash(opBytes))
           : isWaivedRosterCutover(op)
             ? null
-            : validateMonitoring(transaction, profile, { fresh: cutover || schedule || appOnly })
+            : validateMonitoring(transaction, profile, {
+                fresh: cutover || schedule || appOnly || station,
+              })
         : null;
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
@@ -4068,7 +4301,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       manifestSha256: op.manifestSha256,
       artifactDigest: op.artifactDigest,
       composeSha256: hash(read(COMPOSE, 0o644)),
-      previous: { api, web, ...(roster ? { worker: inspect('worker') } : {}) },
+      previous: { api, web, ...(roster ? { worker } : {}) },
       candidate: Object.fromEntries(
         targets.map((service) => [
           service,
@@ -4091,7 +4324,16 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       secretSetReleaseId,
       baselineSha256: hash(baselineBytes),
       secretHashes: secretHashes(),
-      backup,
+      ...(station
+        ? {
+            databaseAdmission: {
+              ...STATION_BACKUP,
+              ownerScopeSha256: op.ownerDecision.scopeSha256,
+              providerSha256: monitoring.providerSha256,
+              alertSha256: monitoring.alertSha256,
+            },
+          }
+        : { backup }),
       createdAt: new Date().toISOString(),
       ...(cutover
         ? {
@@ -4158,17 +4400,22 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         durable,
       );
     if (cutover) retainLegacyAttestation(baseline, baselineBytes, read, durable);
+    if (station) {
+      assertOwned();
+      if (!read(REQUEST).equals(opBytes)) fail('station_rollout_request_drift');
+    }
     durable(LOCK, `${planPath}\n`, true);
+    if (station) durable(consumed, stationReservation(), true);
     if (isWaivedRosterCutover(op))
       plan.monitoring = await admitNativeWaiverMonitoring(op, transaction, hash(opBytes));
     if (direct) durable(`${transaction}/release-owner-observation.json`, ownerBytes, true);
     durable(planPath, `${JSON.stringify(plan)}\n`, true);
     for (const name of overlays)
       durable(`${transaction}/${name}.env`, overlayBytes(plan, name), true);
-    durable(`${transaction}/backup.complete`, `${hash(read(planPath))}\n`, true);
+    durable(`${transaction}/${admissionMarker}`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)) } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
@@ -4195,7 +4442,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     'secretSetReleaseId',
     'baselineSha256',
     'secretHashes',
-    'backup',
+    station ? 'databaseAdmission' : 'backup',
     'createdAt',
     ...(cutover ? [cutoverBaselineField(op), 'monitoring'] : []),
     ...(swapsSecrets ? ['baselinePath', 'previousSecrets', 'candidateSecrets'] : []),
@@ -4209,6 +4456,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   exact(plan.candidate, targets);
   if (
     roster &&
+    !station &&
     (!equal(plan.previous.worker, cutoverBaseline(op).containers.worker) ||
       op.expectedWorker.id !== plan.previous.worker.id)
   )
@@ -4249,9 +4497,15 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       plan.candidate[service].image === plan.previous[service].image
     )
       fail('no_op_upgrade');
+  if (station)
+    for (const service of targets)
+      attestStationPrevious(
+        plan.previous[service],
+        op[`expected${service[0].toUpperCase()}${service.slice(1)}`],
+      );
   const planSha256 = hash(read(planPath));
   if (cutover) validateCutoverPlanProofs(op, plan, transaction);
-  if (!read(`${transaction}/backup.complete`).equals(Buffer.from(`${planSha256}\n`)))
+  if (!read(`${transaction}/${admissionMarker}`).equals(Buffer.from(`${planSha256}\n`)))
     fail('backup_incomplete');
   const expectedDescriptor = join
     ? buildJoinInstalledDescriptor(values, plan, id, journalPath)
@@ -4317,7 +4571,20 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   };
   const active = {};
   let stoppedWorkerId = null;
+  const attestStationForward = ({ full = false, database = false, minimumMs = 0 } = {}) => {
+    if (!station) return;
+    assertOwned();
+    if (mode === 'deploy') {
+      validateStationWindow(op, Date.now(), minimumMs);
+      validateMonitoring(transaction, profile, { fresh: true });
+    }
+    stationArchive = attestStationArchive(stationArchive, full);
+    if (database) attestStationDatabase();
+    if (mode === 'deploy' && (full || database)) validateStationWindow(op, Date.now(), minimumMs);
+  };
   const attest = (recovering = false) => {
+    if (station) assertOwned();
+    if (!recovering) attestStationForward();
     if ((schedule || appOnly) && !recovering) {
       if (schedule) attestScheduleSidecarArchive(op, plan.previousSecrets.files);
       if (appOnly && mode === 'deploy') validateScheduleExpiry(op.expiresAt);
@@ -4372,17 +4639,42 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     )
       fail('excluded_or_configuration_drift');
   };
-  const attestRunningEnv = () => {
-    if (!swapsSecrets) return;
-    const api = inspect('api');
-    const rows = JSON.parse(docker(['inspect', api.id]));
+  const attestRunningEnv = (restored = false) => {
+    if (!swapsSecrets && !station) return;
     const parseDockerEnv = (values) => {
       const entries = values.map((v) => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)]);
       if (new Set(entries.map(([key]) => key)).size !== entries.length)
         fail('running_env_duplicates');
       return Object.fromEntries(entries);
     };
-    const running = parseDockerEnv(rows[0].Config.Env);
+    if (station) {
+      const name = restored ? 'previous-api' : 'candidate';
+      const rendered = JSON.parse(compose(name, 'config', 'api'));
+      for (const service of ['api', 'worker']) {
+        const ids = docker([
+          'ps',
+          '-q',
+          '--filter',
+          'label=com.docker.compose.project=phub-timeweb-beta',
+          '--filter',
+          `label=com.docker.compose.service=${service}`,
+        ]).trim();
+        // Worker is deliberately stopped between containment and worker activation.
+        if (service === 'worker' && stoppedWorkerId && !active.worker && !restored && !ids)
+          continue;
+        const actual = inspect(service);
+        const running = JSON.parse(docker(['inspect', actual.id]))[0].Config.Env;
+        const defaults = JSON.parse(docker(['image', 'inspect', actual.image]))[0].Config.Env;
+        validateStationRuntimeEnvironment(
+          running,
+          defaults,
+          rendered.services[service].environment,
+        );
+      }
+      return;
+    }
+    const api = inspect('api');
+    const running = parseDockerEnv(JSON.parse(docker(['inspect', api.id]))[0].Config.Env);
     const parse = schedule ? parseTimewebScheduleRuntimeEnvironment : parseTimewebSecretEnvironment;
     const file = parse(read(`${RUNTIME}/api.env`));
     if (join) validateJoinRunningEnvironment(running, file);
@@ -4405,6 +4697,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         schema: receiptSchema,
         status,
         planSha256,
+        ...(station
+          ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)) }
+          : {}),
         ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}),
         ...(isDirectOperation(op)
           ? {
@@ -4487,6 +4782,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
             if (!recovering && (isWaivedRosterCutover(op) || isOwnerDirectedCutover(op)))
               validateProductionCutover(op, true);
             attest(recovering);
+            if (station && !recovering) {
+              attestStationForward({ database: true, minimumMs: 20 * 60_000 });
+              attestStationPrevious(inspect('worker'), op.expectedWorker);
+            }
             stoppedWorkerId = containRosterCutoverWorker(plan);
             delete active.worker;
             attest(recovering);
@@ -4568,7 +4867,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       : {}),
     attestRestored: async () => {
       await attestApiWebTerminal('ROLLED_BACK', attest);
-      attestRunningEnv();
+      attestRunningEnv(true);
       if (roster) for (const service of targets) await wait(service, plan.previous[service]);
     },
     abort: async () => {
@@ -4578,6 +4877,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         if (!equal(inspect(service), plan.previous[service])) fail('abort_baseline_changed');
     },
     installBaseline: async () => {
+      attestStationForward({ full: true, database: true });
       if (schedule) validateScheduleExpiry(op.expiresAt);
       if (appOnly) {
         attest();
@@ -4602,6 +4902,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         if (!equal(inspect(service), active[service])) fail('candidate_changed_before_success');
     },
     preflight: async () => {
+      attestStationForward({ database: true });
       attest();
       attestJoinBackup();
       if (appOnly) attestAppOnlyDatabase(plan.backup);
@@ -4622,7 +4923,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         await probe(s);
         if (s !== 'worker') await probe(s, true);
       }
-      attestRunningEnv();
+      attestRunningEnv(station);
     },
     pullAndSmoke: async () => {
       for (const s of targets) {
@@ -4644,9 +4945,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       if (cutover) validateProductionCutover(op, true);
       if (isDirectOperation(op)) validateDirectApiWebOperation(op, true);
       attest();
+      if (s === 'worker') attestStationForward({ database: true });
       compose('candidate', 'up', s);
       active[s] = await wait(s, plan.candidate[s]);
-      if (s === 'api') attestRunningEnv();
+      if (s === 'api' || (station && s === 'worker')) attestRunningEnv();
       attest();
       if (s === 'api' && !equal(inspect('web'), plan.previous.web))
         fail('web_changed_before_activation');
@@ -4657,6 +4959,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         fail('worker_changed_during_activation');
     },
     observe: async () => {
+      if (station) validateStationWindow(op, Date.now(), 17 * 60_000);
       if (schedule || appOnly) validateScheduleExpiry(op.expiresAt, 900_000);
       if (isDirectOperation(op)) {
         await callbackProbe();
@@ -4686,6 +4989,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         web: { privateMs: [], publicMs: [], timestamps: [] },
       };
       const times = { api: [], web: [] };
+      const publicLatencyMs = station ? { api: [], web: [] } : null;
       if (roster) times.worker = [];
       for (let round = 0; round <= 60; round++) {
         for (const s of targets) {
@@ -4693,6 +4997,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           const privateMs = await probe(s),
             publicMs = s === 'worker' ? null : await probe(s, true);
           times[s].push(privateMs);
+          if (publicLatencyMs && s !== 'worker') publicLatencyMs[s].push(publicMs);
           if (detailedObservation) {
             samples[s].privateMs.push(privateMs);
             samples[s].publicMs.push(publicMs);
@@ -4704,7 +5009,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         attestRunningEnv();
         if (scheduleWaiver) {
           validateScheduleExpiry(op.expiresAt);
-        } else if (!isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
+        } else if (!station && !isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
           validateMonitoring(transaction, profile, { fresh: appOnly });
         if (round < 60) await delay(15000);
       }
@@ -4719,7 +5024,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
       else if (!scheduleWaiver) {
         const finalMonitoring = validateMonitoring(transaction, profile, {
-          fresh: schedule || appOnly,
+          fresh: schedule || appOnly || station,
         });
         durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
         durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
@@ -4756,6 +5061,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
             latencyMs: times,
             serverErrors: 0,
             completedAt,
+            ...(station ? { publicLatencyMs } : {}),
             ...(roster
               ? {
                   startedAt,
@@ -4763,7 +5069,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
                 }
               : {}),
           };
-      if (roster) validateRosterCutoverObservation(observation);
+      if (station) validateStationObservation(observation, validateRosterCutoverObservation);
+      else if (roster) validateRosterCutoverObservation(observation);
       durable(`${transaction}/observation.json`, `${JSON.stringify(observation)}\n`, true);
     },
     restore: async (s) => {
@@ -4827,7 +5134,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
             service,
             terminal === 'SUCCESS' ? plan.candidate[service] : plan.previous[service],
           );
-        attestRunningEnv();
+        attestRunningEnv(terminal !== 'SUCCESS');
         if (terminal === 'SUCCESS' && swapsSecrets) {
           if (join)
             validateJoinObservation(
@@ -4862,15 +5169,24 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         }
         if (terminal === 'SUCCESS' && !swapsSecrets) {
           // App-only installation is admitted by the installed reader after this reconciliation.
-          const bytes = appOnly
-            ? read(`${directory}/installed-components.env`)
-            : readInstalledApiBaseline(id).bytes;
+          const bytes =
+            appOnly || station
+              ? read(`${directory}/installed-components.env`)
+              : readInstalledApiBaseline(id).bytes;
           if (
             hash(bytes) !== receipt.installedBaselineSha256 ||
-            (appOnly && !bytes.equals(expectedDescriptor))
+            ((appOnly || station) && !bytes.equals(expectedDescriptor))
           )
             fail('installed_baseline_drift');
-          if (appOnly) {
+          if (appOnly || station) {
+            if (station) {
+              attestStationForward({ full: true, database: true });
+              validateStationObservation(
+                parseStrictJson(read(`${transaction}/observation.json`)),
+                validateRosterCutoverObservation,
+                receipt.observedAt,
+              );
+            }
             for (const [file, key] of [
               ['observation.json', 'observationSha256'],
               ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
@@ -4883,7 +5199,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       },
       journalReconciled: async (terminal) => {
         if (
-          (swapsSecrets || appOnly || isCanonicalOwnerDirectedUpgrade(op)) &&
+          (swapsSecrets || appOnly || station || isCanonicalOwnerDirectedUpgrade(op)) &&
           receipt.status === 'RECONCILED'
         )
           return;
