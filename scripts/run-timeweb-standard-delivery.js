@@ -2,24 +2,32 @@
 // copy of this program or npm scripts on the operator. No PR checkout on the privileged runner.
 import { execFileSync } from 'node:child_process';
 import { runCriticalWeb } from './timeweb-critical-web.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
 import { verifySourceCi } from './verify-source-ci.js';
-import { runManualApiWorkerUpgrade } from './timeweb-api-worker-upgrade.js';
+import {
+  acquireApiWorkerExecutor,
+  runManualApiWorkerUpgrade,
+} from './timeweb-api-worker-upgrade.js';
 import {
   runManualApiWorkerMigration,
   runManualNotificationMigratorPrefetch,
@@ -34,6 +42,17 @@ import {
   standardRange,
   standardWebComposeArgs,
 } from './timeweb-standard-policy.js';
+
+import { parseStrictJson } from './strict-json.js';
+import { createCup0119LockCustody } from './r1-tail-migration-locks.js';
+import {
+  buildCup0119Sql,
+  CUP_0119,
+  CUP_0119_BACKUP,
+  CUP_0119_TARGET,
+  validateCup0119Request,
+  validateCup0119RetainedBackup,
+} from './timeweb-cup-0119-migration.js';
 
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
@@ -585,6 +604,307 @@ async function main(ciRunId) {
     if (finished) rmSync(lock, { recursive: true });
   }
 }
+const CUP_0119_REQUEST = `${ROOT}/operator/cup-0119-migration.json`;
+
+function syncParent(path) {
+  const fd = openSync(dirname(path), 'r');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function writeExclusive(path, bytes) {
+  const fd = openSync(path, 'wx', 0o600);
+  try {
+    writeFileSync(fd, bytes);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  syncParent(path);
+}
+
+function cup0119LockIO(pathCupAttempt) {
+  const info = (path) => {
+    secure(path, 0o600);
+    const st = lstatSync(path);
+    if (!st.isFile() || ![1, 2].includes(st.nlink)) fail('CUP_0119_LOCK_METADATA');
+    return st;
+  };
+  const read = (path) => {
+    const st = info(path);
+    if (st.nlink !== 1) fail('CUP_0119_LOCK_LINK_COUNT');
+    return readFileSync(path);
+  };
+  return {
+    info,
+    read,
+    rawRead: readFileSync,
+    durable: writeExclusive,
+    syncParent,
+    link: linkSync,
+    unlink: unlinkSync,
+    stage: (path, marker) => {
+      const file = `${path}.incoming-${randomBytes(12).toString('hex')}`;
+      writeExclusive(file, marker);
+      return file;
+    },
+    present: (path) => {
+      try {
+        lstatSync(path);
+        return true;
+      } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      }
+    },
+    // Only used after the shared custody helper verified that the sealed staged name
+    // is the second link of this operation's inode.
+    normalize: (path) => {
+      const { locks } = parseStrictJson(read(`${pathCupAttempt}/ownership.json`));
+      const staged = locks[path].stage;
+      unlinkSync(staged);
+      syncParent(staged);
+    },
+  };
+}
+
+function cup0119ArchiveDigest(path, admitted) {
+  const same = (info) =>
+    info.isFile() &&
+    ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'nlink'].every(
+      (key) => admitted[key] === info[key],
+    );
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    if (!same(fstatSync(fd))) fail('CUP_0119_BACKUP_DRIFT');
+    const hash = createHash('sha256');
+    const chunk = Buffer.alloc(1024 * 1024);
+    for (let remaining = admitted.size; remaining > 0;) {
+      const count = readSync(fd, chunk, 0, Math.min(remaining, chunk.length), null);
+      if (count < 1) fail('CUP_0119_BACKUP_DRIFT');
+      hash.update(chunk.subarray(0, count));
+      remaining -= count;
+    }
+    if (!same(fstatSync(fd)) || !same(lstatSync(path))) fail('CUP_0119_BACKUP_DRIFT');
+    return hash.digest('hex');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+async function runManualCup0119(mode, requestPath) {
+  if (
+    requestPath !== CUP_0119_REQUEST ||
+    process.getuid?.() !== 0 ||
+    fileURLToPath(import.meta.url) !== `${SOURCE}/scripts/run-timeweb-standard-delivery.js` ||
+    !['apply', 'reconcile'].includes(mode)
+  )
+    fail('CUP_0119_ENTRY');
+  secure(SOURCE);
+  secure(`${ROOT}/operator`, 0o700);
+  const configBytes = readSecure(CONFIG);
+  const config = parseStrictJson(configBytes);
+  if (
+    config.schema !== 1 ||
+    config.enabled !== true ||
+    config.controllerSha !== git(['rev-parse', 'HEAD']) ||
+    git(['status', '--porcelain', '--untracked-files=no']) !== ''
+  )
+    fail('CUP_0119_ENROLLMENT');
+
+  const requestBytes = readSecure(requestPath);
+  const op = validateCup0119Request(
+    parseStrictJson(requestBytes),
+    config,
+    mode === 'apply' ? Date.now() : undefined,
+  );
+  const migration = command(
+    '/usr/bin/git',
+    ['show', `${CUP_0119.source}:packages/database/migrations/${CUP_0119.filename}`],
+    { encoding: 'buffer' },
+  );
+  const readbackSql = buildCup0119Sql(migration, CUP_0119_TARGET, 'readback');
+  const attempt = `${ROOT}/operator/cup-0119-${op.attemptId}`;
+  const marker = Buffer.from(`${attempt}/intent.json\n`);
+  const owner = acquireApiWorkerExecutor(`${ROOT}/standard/api-worker-executor.lock`);
+  const io = cup0119LockIO(attempt);
+  const locks = createCup0119LockCustody(attempt, marker, owner, io);
+  const started = `${attempt}/sql-started.json`;
+  let postgresStartedAt;
+  const bound = () => {
+    owner.assertOwned();
+    assertNoMigrator();
+    if (
+      git(['rev-parse', 'HEAD']) !== op.controllerSha ||
+      git(['status', '--porcelain', '--untracked-files=no']) !== '' ||
+      !readSecure(CONFIG).equals(configBytes) ||
+      !readSecure(requestPath).equals(requestBytes)
+    )
+      fail('CUP_0119_OPERATION_DRIFT');
+    const postgres = JSON.parse(docker(['inspect', op.postgresContainerId]))[0];
+    if (
+      postgres.Id !== op.postgresContainerId ||
+      postgres.Name !== '/phub-timeweb-beta-dependencies-postgres-1' ||
+      postgres.State.Status !== 'running' ||
+      postgres.State.Health?.Status !== 'healthy' ||
+      (postgresStartedAt && postgres.State.StartedAt !== postgresStartedAt)
+    )
+      fail('CUP_0119_DATABASE_CONTAINER');
+    postgresStartedAt ??= postgres.State.StartedAt;
+  };
+  const query = (sql) =>
+    command(
+      '/usr/bin/docker',
+      [
+        'exec',
+        '-i',
+        op.postgresContainerId,
+        '/usr/local/bin/psql',
+        '-XqAt',
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-h',
+        '/var/run/postgresql',
+        '-U',
+        CUP_0119_TARGET.projectionOwner,
+        '-d',
+        CUP_0119_TARGET.database,
+      ],
+      { input: sql, stdio: ['pipe', 'pipe', 'pipe'], timeout: 100000, maxBuffer: 8192 },
+    ).trim();
+  const readback = () => {
+    const value = parseStrictJson(query(readbackSql));
+    if (
+      !['PREIMAGE', 'COMMITTED', 'DRIFT'].includes(value.state) ||
+      !/^[a-f0-9]{64}$/.test(value.catalogSha256)
+    )
+      fail('CUP_0119_READBACK');
+    return value;
+  };
+  const result = (state, catalogSha256) => ({
+    schema: 'PHUB_TIMEWEB_CUP_0119_RECEIPT_V1',
+    attemptId: op.attemptId,
+    requestSha256: sha256(requestBytes),
+    migrationSha256: CUP_0119.checksum,
+    state,
+    catalogSha256,
+  });
+  const sealReceipt = (state, catalogSha256) => {
+    bound();
+    const receipt = result(state, catalogSha256);
+    const bytes = Buffer.from(JSON.stringify(receipt) + '\n');
+    const path = `${attempt}/receipt.json`;
+    if (io.present(path)) {
+      if (!readSecure(path).equals(bytes)) fail('CUP_0119_RECEIPT_CONFLICT');
+    } else {
+      const staged = `${path}.incoming-${randomBytes(12).toString('hex')}`;
+      writeExclusive(staged, bytes);
+      linkSync(staged, path);
+      syncParent(path);
+      unlinkSync(staged);
+      syncParent(staged);
+    }
+    locks.release();
+    return receipt;
+  };
+  const assertRetainedBackup = () => {
+    const api = inspect('api');
+    if (api.releaseId !== CUP_0119_BACKUP.releaseId) fail('CUP_0119_BASELINE');
+    const backupDir = `${ROOT}/backups/${CUP_0119_BACKUP.releaseId}-api-web`;
+    const backupPath = `${backupDir}/database.pgcustom`;
+    const receipt = readSecure(`${backupDir}/database-backup-receipt.json`);
+    secure(backupPath, 0o600);
+    if (sha256(receipt) !== op.retainedBackupReceiptSha256) fail('CUP_0119_BACKUP_RECEIPT');
+    const backup = parseStrictJson(receipt);
+    const archive = lstatSync(backupPath);
+    validateCup0119RetainedBackup(backup, archive, backupPath);
+    if (cup0119ArchiveDigest(backupPath, archive) !== backup.backupSha256)
+      fail('CUP_0119_BACKUP_CHECKSUM');
+    return api;
+  };
+  try {
+    bound();
+    if (mode === 'reconcile') {
+      if (!readSecure(`${attempt}/intent.json`).equals(requestBytes)) fail('CUP_0119_INTENT');
+      locks.load();
+      locks.assert(false);
+      const { state, catalogSha256 } = readback();
+      if (!io.present(started)) {
+        if (state === 'PREIMAGE') return sealReceipt('ABORTED_BEFORE_SQL', catalogSha256);
+        return result('UNRESOLVED_DRIFT', catalogSha256);
+      }
+      const witness = parseStrictJson(readSecure(started));
+      const api = inspect('api');
+      if (
+        witness.requestSha256 !== sha256(requestBytes) ||
+        witness.catalogSha256 !== catalogSha256 ||
+        witness.apiId !== api.id ||
+        witness.apiStartedAt !== api.startedAt ||
+        witness.postgresStartedAt !== postgresStartedAt
+      )
+        return result('UNRESOLVED_DRIFT', catalogSha256);
+      if (state === 'COMMITTED') return sealReceipt(state, catalogSha256);
+      if (state === 'PREIMAGE' && io.present(`${attempt}/receipt.json`))
+        return sealReceipt('ROLLED_BACK', catalogSha256);
+      return result(`UNRESOLVED_${state === 'PREIMAGE' ? 'PREIMAGE' : 'DRIFT'}`, catalogSha256);
+    }
+
+    const api = inspect('api');
+    mkdirSync(attempt, { mode: 0o700 });
+    syncParent(attempt);
+    writeExclusive(`${attempt}/intent.json`, requestBytes);
+    locks.claim(bound);
+    locks.assert(true);
+    bound();
+    const preimage = readback();
+    if (preimage.state !== 'PREIMAGE') fail('CUP_0119_PREIMAGE');
+    locks.assert(true);
+    bound();
+    if (JSON.stringify(assertRetainedBackup()) !== JSON.stringify(api)) fail('CUP_0119_BASELINE');
+    validateCup0119Request(op, config, Date.now());
+    locks.assert(true);
+    bound();
+    writeExclusive(
+      started,
+      Buffer.from(
+        JSON.stringify({
+          requestSha256: sha256(requestBytes),
+          catalogSha256: preimage.catalogSha256,
+          apiId: api.id,
+          apiStartedAt: api.startedAt,
+          postgresStartedAt,
+        }) + '\n',
+      ),
+    );
+    try {
+      query(buildCup0119Sql(migration, CUP_0119_TARGET, 'apply', preimage.catalogSha256));
+    } catch (error) {
+      // A normal ON_ERROR_STOP exit is a confirmed server error. Transport loss or
+      // timeout leaves the markers in place until reconciliation.
+      if (error.status === 3 && !error.signal) {
+        const state = readback();
+        if (state.state === 'PREIMAGE' && state.catalogSha256 === preimage.catalogSha256)
+          return sealReceipt('ROLLED_BACK', state.catalogSha256);
+      }
+      throw error;
+    }
+    bound();
+    const postimage = readback();
+    if (
+      postimage.state !== 'COMMITTED' ||
+      postimage.catalogSha256 !== preimage.catalogSha256 ||
+      JSON.stringify(inspect('api')) !== JSON.stringify(api)
+    )
+      fail('CUP_0119_UNCERTAIN');
+    return sealReceipt('COMMITTED', postimage.catalogSha256);
+  } finally {
+    owner.close();
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const manual =
@@ -613,56 +933,65 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       '--critical-notification-migrator-prefetch',
       '--critical-notification-migrator-prefetch-reconcile',
     ].includes(args[0]);
-  const operation = notificationPrefetch
-    ? runManualNotificationMigratorPrefetch(
-        args[0] === '--critical-notification-migrator-prefetch' ? 'pull' : 'reconcile',
-        args[1],
-      ).then((receipt) => {
-        process.stdout.write(JSON.stringify(receipt) + '\n');
-      })
-    : apiWorkerMigration
-      ? runManualApiWorkerMigration(
-          args[0] === '--critical-api-worker-migration' ? 'deploy' : 'reconcile',
+  const cup0119 =
+    args.length === 2 && ['--critical-cup-0119', '--critical-cup-0119-reconcile'].includes(args[0]);
+  const operation = cup0119
+    ? runManualCup0119(args[0] === '--critical-cup-0119' ? 'apply' : 'reconcile', args[1]).then(
+        (receipt) => {
+          process.stdout.write(JSON.stringify(receipt) + '\n');
+          if (receipt.state !== 'COMMITTED') process.exitCode = 1;
+        },
+      )
+    : notificationPrefetch
+      ? runManualNotificationMigratorPrefetch(
+          args[0] === '--critical-notification-migrator-prefetch' ? 'pull' : 'reconcile',
           args[1],
         ).then((receipt) => {
           process.stdout.write(JSON.stringify(receipt) + '\n');
         })
-      : apiWorker
-        ? runManualApiWorkerUpgrade(
-            args[0] === '--critical-api-worker'
-              ? 'deploy'
-              : args[0] === '--critical-api-worker-recover'
-                ? 'recover'
-                : 'reconcile',
+      : apiWorkerMigration
+        ? runManualApiWorkerMigration(
+            args[0] === '--critical-api-worker-migration' ? 'deploy' : 'reconcile',
             args[1],
           ).then((receipt) => {
             process.stdout.write(JSON.stringify(receipt) + '\n');
           })
-        : criticalWeb
-          ? runCriticalWeb(
-              args[0] === '--critical-web'
+        : apiWorker
+          ? runManualApiWorkerUpgrade(
+              args[0] === '--critical-api-worker'
                 ? 'deploy'
-                : args[0] === '--critical-web-recover'
+                : args[0] === '--critical-api-worker-recover'
                   ? 'recover'
                   : 'reconcile',
               args[1],
             ).then((receipt) => {
               process.stdout.write(JSON.stringify(receipt) + '\n');
             })
-          : manual
-            ? runManualApiWebUpgrade(
-                args[0] === '--critical-api-web'
+          : criticalWeb
+            ? runCriticalWeb(
+                args[0] === '--critical-web'
                   ? 'deploy'
-                  : args[0] === '--critical-api-web-recover'
+                  : args[0] === '--critical-web-recover'
                     ? 'recover'
                     : 'reconcile',
                 args[1],
               ).then((receipt) => {
                 process.stdout.write(JSON.stringify(receipt) + '\n');
               })
-            : args.length === 1
-              ? main(args[0])
-              : Promise.reject(new Error('Invalid controller arguments'));
+            : manual
+              ? runManualApiWebUpgrade(
+                  args[0] === '--critical-api-web'
+                    ? 'deploy'
+                    : args[0] === '--critical-api-web-recover'
+                      ? 'recover'
+                      : 'reconcile',
+                  args[1],
+                ).then((receipt) => {
+                  process.stdout.write(JSON.stringify(receipt) + '\n');
+                })
+              : args.length === 1
+                ? main(args[0])
+                : Promise.reject(new Error('Invalid controller arguments'));
   operation.catch((error) => {
     // External command errors may contain runtime environment; never print raw error/stdout.
     let pointer = 'unavailable';
