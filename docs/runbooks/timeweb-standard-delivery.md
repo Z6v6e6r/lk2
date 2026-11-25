@@ -2147,3 +2147,60 @@ provider monitoring and `NOT_REQUIRED_OWNER_WAIVED` for the alert test.
 Successful reconciliation verifies the retained direct observations, waiver
 and installed runtime evidence. Standard schedule operations retain the
 required Timeweb evidence and the `_SCHEDULE_READ` suffix.
+
+## One-off station release with the 25 November manual dump
+
+`PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V1` is limited to the station release
+anchored at the #702 merge `3c7373a543d8` and its reviewed descendant.
+The permitted delta covers the rollout controller and the exact generated Jetson
+bundle regenerated from #702's station-cover schema. Publish the final enrolled
+controller SHA from green `main` using the
+canonical workflow. The request binds that exact source, CI run, publication,
+artifact and manifest to the three pinned predecessor containers. A release owner
+must approve those exact inputs and the use of the named archive without a
+restore. The regular API/Web checkpoint policy has its own request schema.
+
+With that approval, use the root-only `operator/api-web-upgrade.json` and the
+usual `--critical-api-web` entry point. Start with the production V1 request,
+replace its schema, add `expectedWorker` from the pinned predecessors and
+`expiresAt` in UTC with milliseconds. Use the normal confirmation with suffix
+`_ONE_OFF_STATION_MANUAL_DUMP`. In `ownerDecision`, use schema
+`PHUB_TIMEWEB_STATION_OWNER_DECISION_V1`, authority
+`ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1`, and decision
+`DUMP_INTEGRITY_ONLY_OWNER_ACCEPTED`. Use the enrolled `STATION_WAIVER_SHA256`
+as `waiverMessageSha256` and prefix it with `codex-user-message-sha256:` for
+`waiverReference`. This records the owner's decision to omit a restore.
+Separately retain the explicit release-owner authorization for activation in
+the transaction's root-only `owner-authorization.txt`. Set
+`releaseAuthorizationSha256` to the hash of those bytes and `receivedAt` to the
+UTC time of approval. The owner must approve how old this specific dump may be
+at the operation deadline. Put that limit in `acceptedSnapshotAgeSeconds`,
+between the exact elapsed age at expiry rounded up and 86,400 seconds.
+Use `stationScopeHash` from the enrolled module to compute `scopeSha256`.
+The request window is at most one hour and must end by
+**2026-11-26 09:33:03.301 UTC**. Allow at least 25 minutes
+at entry, 20 minutes before Worker containment, and 17 minutes at the start
+of the 900-second observation so probes and attestations have time to run. Refreshing this
+specific archive or extending this deadline requires a new reviewed decision.
+
+The controller checks the original archive bytes, custody, a new PG16 TOC parse against the retained TOC,
+and the live PostgreSQL identity and committed 0119 catalogue and ledger. The
+admission plan records that restore and snapshot-time catalogue were unverified.
+It uses its own `admission.complete` marker and a fixed one-use reservation in
+the standard directory. Keep the original dump and the transaction evidence.
+A consumed reservation remains closed after a success, abort or rollback.
+
+The full production monitor and alert proof is required before activation and
+through all 61 health samples in the 15-minute window. The controller stops the
+old Worker, activates API, Worker and Web in order, and checks the three runtime
+identities, running configuration, and the public API and Web routes. Realtime,
+dependencies, runtime secrets and the database schema and migration ledger stay
+as established at preflight. The migrator must be absent throughout. API and
+Worker can still perform their normal business operations during observation.
+Image rollback leaves those writes and any provider effects in place.
+
+On failure after activation intent, the controller contains Worker and restores
+Web, API and Worker from the pinned previous images. If interrupted, use
+`--critical-api-web-recover`; use `--critical-api-web-reconcile` for a terminal
+receipt. Keep the lease until reconciliation, and keep the durable one-use
+reservation thereafter. A failed rollback keeps the lock and its evidence.
