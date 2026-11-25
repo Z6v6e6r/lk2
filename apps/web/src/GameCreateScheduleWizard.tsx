@@ -8,7 +8,6 @@ import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import backIconUrl from './assets/game-schedule-back.svg';
 import stationChevronUrl from './assets/game-schedule-station-chevron.svg';
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
-import mapPinUrl from './assets/recommendation-cards/location.svg';
 import { locationCourtLabel } from './location-court-label.js';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
 import { TrainingPeopleIcon } from './TrainingPeopleIcon.js';
@@ -439,7 +438,6 @@ export function GameCreateScheduleWizard({
               aria-expanded={showLocations}
               onClick={() => setShowLocations((value) => !value)}
             >
-              <img src={mapPinUrl} width={11} height={11} alt="" />
               Карта
             </button>
           </div>

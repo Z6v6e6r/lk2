@@ -188,11 +188,20 @@ body:has(.game-schedule-wizard) {
   border: 1px solid var(--schedule-line);
   border-radius: 14px;
   background: var(--schedule-paper);
+  color: #757579;
   font:
-    500 14px/1 'Inter Display',
+    400 14px/1 'Inter Display',
     Inter,
     sans-serif;
   white-space: nowrap;
+}
+
+.game-schedule-map-toggle::before {
+  flex: 0 0 11px;
+  height: 11px;
+  background: currentColor;
+  mask: url('./assets/recommendation-cards/location.svg') center / contain no-repeat;
+  content: '';
 }
 
 .game-schedule-wizard .game-schedule-input[type='search'] {
