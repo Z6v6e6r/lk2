@@ -866,7 +866,7 @@ describe('PadlHub web authentication', () => {
     });
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Выберите место' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Выберите клуб' })).toBeVisible();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Селигерская' }));
     expect(await screen.findByRole('heading', { name: 'Дата и время' })).toBeVisible();
     expect(gateway.listGameCreateSlots).toHaveBeenCalledWith(

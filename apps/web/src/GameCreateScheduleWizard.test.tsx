@@ -87,7 +87,7 @@ describe('game creation schedule', () => {
       });
       renderWizard({ listSlots, readQuote });
       const user = userEvent.setup();
-      expect(screen.getByRole('heading', { name: 'Выберите место' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Выберите клуб' })).toBeTruthy();
       await user.click(screen.getByRole('button', { name: 'Селигерская' }));
       expect(screen.getByRole('heading', { name: 'Дата и время' })).toBeTruthy();
       expect(listSlots).toHaveBeenCalledTimes(1);

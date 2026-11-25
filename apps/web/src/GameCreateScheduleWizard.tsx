@@ -281,7 +281,7 @@ export function GameCreateScheduleWizard({
     else setLevels([from, index]);
   }
 
-  const headerTitle = ['Выберите место', 'Дата и время', 'Создание игры'][wizard.step];
+  const headerTitle = ['Выберите клуб', 'Дата и время', 'Создание игры'][wizard.step];
   const query = search.trim().toLocaleLowerCase('ru-RU');
   const visibleStations = stations.filter((item) =>
     [item.title, item.city, item.address].some((value) =>
@@ -400,7 +400,7 @@ export function GameCreateScheduleWizard({
           />
           <button
             type="button"
-            className="game-schedule-card game-schedule-link"
+            className="game-schedule-card game-schedule-link game-schedule-station-card"
             aria-expanded={showLocations}
             onClick={() => setShowLocations((value) => !value)}
           >
@@ -408,7 +408,7 @@ export function GameCreateScheduleWizard({
               <strong>Найти на карте</strong>
               <small>Клубы рядом с вами</small>
             </span>
-            <span aria-hidden="true">›</span>
+            <img src={stationChevronUrl} width={16} height={28} alt="" />
           </button>
           {showLocations ? (
             <div className="game-schedule-card game-schedule-stack">
@@ -442,7 +442,7 @@ export function GameCreateScheduleWizard({
                     <button
                       type="button"
                       key={item.id}
-                      className="game-schedule-card game-schedule-link"
+                      className="game-schedule-card game-schedule-link game-schedule-station-card"
                       aria-label={item.title}
                       aria-describedby={detailsId}
                       disabled={openingSoon}

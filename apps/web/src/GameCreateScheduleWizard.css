@@ -152,7 +152,7 @@ body:has(.game-schedule-wizard) {
   font: italic 800 16px/1.2 var(--schedule-display);
 }
 
-.game-schedule-station-list .game-schedule-link > span {
+.game-schedule-station-card > span {
   display: grid;
   flex: 1;
   min-width: 0;
@@ -160,11 +160,11 @@ body:has(.game-schedule-wizard) {
   overflow-wrap: anywhere;
 }
 
-.game-schedule-station-list .game-schedule-link > img {
+.game-schedule-station-card > img {
   flex: none;
 }
 
-.game-schedule-wizard .game-schedule-station-list .game-schedule-link:disabled {
+.game-schedule-wizard .game-schedule-station-card:disabled {
   border-color: #dfe2e8;
   background: #eef0f4;
   color: #606574;
@@ -176,7 +176,7 @@ body:has(.game-schedule-wizard) {
   min-width: 0;
 }
 
-.game-schedule-station-list .game-schedule-link strong {
+.game-schedule-station-card strong {
   font:
     700 15px/1 'Recommendation RF Dewi',
     'RF Dewi',
@@ -190,7 +190,7 @@ body:has(.game-schedule-wizard) {
   color: var(--schedule-muted);
 }
 
-.game-schedule-station-list .game-schedule-link small {
+.game-schedule-station-card small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
