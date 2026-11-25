@@ -204,7 +204,6 @@ body:has(.game-schedule-wizard) {
 .game-schedule-station-card .game-schedule-court-count {
   font-size: 11px;
   line-height: 1;
-  text-align: center;
 }
 
 .game-schedule-durations,

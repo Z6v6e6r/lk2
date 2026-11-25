@@ -106,7 +106,8 @@ function stationCourtSummary(station: Station) {
   const courtTypes = [
     panoramicCourtsCount != null &&
       `Панорамик: ${panoramicCourtsCount} ${locationCourtLabel(panoramicCourtsCount)}`,
-    singleCourtsCount != null && `Сингл: ${singleCourtsCount}`,
+    singleCourtsCount != null &&
+      `Сингл: ${singleCourtsCount} ${locationCourtLabel(singleCourtsCount)}`,
     outdoorCourtsCount != null && `Открытых кортов: ${outdoorCourtsCount}`,
   ].filter(Boolean);
   if (courtTypes.length) return courtTypes.join(', ');
