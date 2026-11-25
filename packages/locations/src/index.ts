@@ -90,17 +90,16 @@ export const locationAmenitySchema = z
   .strict();
 export type LocationAmenity = z.infer<typeof locationAmenitySchema>;
 
+const locationMediaPath =
+  /^\/public\/api\/v1\/[a-z0-9][a-z0-9-]{1,62}\/location-media\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export const locationGalleryImageSchema = z
   .object({
     url: z
       .string()
       .max(2_000)
       .refine(
-        (value) =>
-          value.startsWith('https://') ||
-          /^\/public\/api\/v1\/[a-z0-9][a-z0-9-]{1,62}\/location-media\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-            value,
-          ),
+        (value) => value.startsWith('https://') || locationMediaPath.test(value),
         'gallery images must use HTTPS or a PadlHub location media URL',
       ),
     alt: z.string().trim().max(180),
@@ -268,7 +267,9 @@ export const locationSummarySchema = z
     title: z.string().min(1).max(120),
     city: nullableText(120),
     courtCount: z.number().int().min(0),
-    coverImageUrl: z.string().url().nullable(),
+    coverImageUrl: z
+      .union([z.string().url().startsWith('https://'), z.string().regex(locationMediaPath)])
+      .nullable(),
     route: publicRoute,
   })
   .strict();

@@ -4,6 +4,7 @@ import {
   buildLocationDetail,
   locationCompleteness,
   locationProfileInputSchema,
+  locationSummarySchema,
   slugifyLocationTitle,
   type LocationAdminView,
   type LocationProfileInput,
@@ -93,6 +94,20 @@ describe('location profile contract', () => {
     expect(
       locationProfileInputSchema.safeParse({ ...input, timezone: 'Moscow/Nowhere' }).success,
     ).toBe(false);
+  });
+
+  it.each([
+    '//other.example/court.webp',
+    '/other/path.webp',
+    'javascript:alert(1)',
+    'data:image/webp;base64,AA==',
+    'http://cdn.padlhub.test/court.webp',
+    '/public/api/v1/local-padel/location-media/invalid',
+    '/public/api/v1/local-padel/location-media/../22222222-2222-4222-8222-222222222222',
+    '/public/api/v1/local-padel/location-media/22222222-2222-4222-8222-222222222222?redirect=1',
+    '/public/api/v1/local-padel/location-media/22222222-2222-4222-8222-222222222222#photo',
+  ])('rejects an unsupported cover URL %s', (coverImageUrl) => {
+    expect(locationSummarySchema.shape.coverImageUrl.safeParse(coverImageUrl).success).toBe(false);
   });
 
   it('accepts the stable PadlHub media URL returned by the location upload command', () => {
