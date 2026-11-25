@@ -101,6 +101,19 @@ function failureCode(error: unknown) {
 const price = (amount: number | null) =>
   amount === null ? 'Цена уточняется' : RUBLES.format(amount / 100);
 
+function stationAddressWithoutCity({ address, city }: Station) {
+  if (!address || !city) return address;
+  const comma = address.indexOf(',');
+  if (comma === -1) return address;
+  const prefix = address
+    .slice(0, comma)
+    .trim()
+    .replace(/^(?:г\.?\s+|г\.\s*|город\s+)/iu, '');
+  return prefix.toLocaleLowerCase('ru-RU') === city.trim().toLocaleLowerCase('ru-RU')
+    ? address.slice(comma + 1).trim()
+    : address;
+}
+
 function stationCourtSummary(station: Station) {
   const { courtCount, panoramicCourtsCount, singleCourtsCount, outdoorCourtsCount } = station;
   const courtTypes = [
@@ -302,7 +315,7 @@ export function GameCreateScheduleWizard({
     new Set(visibleStations.map((item) => item.city ?? 'Другие города')),
     (city, index) => ({ city, panelId: `${cityPanelPrefix}-${index}` }),
   );
-  const anyCityOpen = cities.some(({ city }) => !collapsedCities.has(city));
+  const CityHeading = query ? 'h3' : 'h2';
   const mapStations = showLocations
     ? visibleStations.filter(
         (item) => item.isActive !== false && item.latitude != null && item.longitude != null,
@@ -403,12 +416,12 @@ export function GameCreateScheduleWizard({
       </header>
 
       {wizard.step === 0 ? (
-        <section className="game-schedule-stack" aria-label="Станции">
+        <section className="game-schedule-stack" aria-label="Клубы">
           <input
             type="search"
             className="game-schedule-input"
-            aria-label="Найти станцию"
-            placeholder="Найти станцию"
+            aria-label="Найти клуб"
+            placeholder="Найти клуб"
             value={search}
             onChange={(event) => {
               const value = event.target.value;
@@ -443,38 +456,17 @@ export function GameCreateScheduleWizard({
                 </a>
               ))}
               {!mapStations.length ? (
-                <p className="game-schedule-empty">Карта станций недоступна.</p>
+                <p className="game-schedule-empty">Карта клубов недоступна.</p>
               ) : null}
             </div>
           ) : null}
-          <h2 className="game-schedule-station-heading">
-            <button
-              type="button"
-              className="game-schedule-disclosure"
-              aria-controls={cities.map(({ panelId }) => panelId).join(' ') || undefined}
-              aria-expanded={anyCityOpen}
-              disabled={!cities.length}
-              onClick={() => {
-                setCollapsedCities((current) => {
-                  const next = new Set(current);
-                  for (const { city } of cities) {
-                    if (anyCityOpen) next.add(city);
-                    else next.delete(city);
-                  }
-                  return next;
-                });
-              }}
-            >
-              <span>{query ? 'Результаты поиска' : 'Станции по городам'}</span>
-              <img src={stationChevronUrl} width={16} height={28} alt="" />
-            </button>
-          </h2>
+          {query ? <h2 className="game-schedule-station-heading">Результаты поиска</h2> : null}
           <div className="game-schedule-station-panel">
             {cities.map(({ city, panelId }) => {
               const cityOpen = !collapsedCities.has(city);
               return (
                 <div className="game-schedule-station-list" key={city}>
-                  <h3>
+                  <CityHeading className="game-schedule-city-heading">
                     <button
                       type="button"
                       className="game-schedule-disclosure"
@@ -485,17 +477,16 @@ export function GameCreateScheduleWizard({
                       <span>{city}</span>
                       <img src={stationChevronUrl} width={16} height={28} alt="" />
                     </button>
-                  </h3>
+                  </CityHeading>
                   <div id={panelId} className="game-schedule-station-panel" hidden={!cityOpen}>
                     {visibleStations
                       .filter((item) => (item.city ?? 'Другие города') === city)
                       .map((item) => {
                         const openingSoon = item.isActive === false;
                         const details = openingSoon ? 'Скоро открытие' : stationCourtSummary(item);
+                        const address = stationAddressWithoutCity(item);
                         const detailsId =
-                          item.address || details
-                            ? `${stationDetailsPrefix}-${item.id}`
-                            : undefined;
+                          address || details ? `${stationDetailsPrefix}-${item.id}` : undefined;
                         return (
                           <button
                             type="button"
@@ -510,10 +501,8 @@ export function GameCreateScheduleWizard({
                               <strong>{item.title}</strong>
                               {detailsId ? (
                                 <span className="game-schedule-station-details" id={detailsId}>
-                                  {item.address ? (
-                                    <small className="game-schedule-station-meta">
-                                      {item.address}
-                                    </small>
+                                  {address ? (
+                                    <small className="game-schedule-station-meta">{address}</small>
                                   ) : null}
                                   {details ? (
                                     <small
@@ -539,7 +528,7 @@ export function GameCreateScheduleWizard({
             })}
             {!visibleStations.length ? (
               <p className="game-schedule-empty" role="status">
-                Станции не найдены.
+                Клубы не найдены.
               </p>
             ) : null}
           </div>
@@ -606,7 +595,7 @@ export function GameCreateScheduleWizard({
             <div className="game-schedule-message">
               <p role="alert">
                 {currentSchedule.error === 'GAME_CREATE_SCHEDULE_STATION_UNAVAILABLE'
-                  ? 'Станция пока не подключена к расписанию ЛК1.'
+                  ? 'Для этого клуба расписание ЛК1 пока недоступно.'
                   : currentSchedule.error === 'VIVA_REAUTH_REQUIRED'
                     ? 'Для расписания нужен действующий вход через Viva.'
                     : currentSchedule.error === 'GAME_PERMISSION_REQUIRED'
@@ -735,7 +724,7 @@ export function GameCreateScheduleWizard({
             <span>
               {station && selected
                 ? `${station.title} · ${selected.courtName}`
-                : 'Выберите станцию и корт'}
+                : 'Выберите клуб и корт'}
             </span>
             <span>{chosenTime ? `${chosenTime} · ${duration} мин` : 'Выберите время начала'}</span>
           </button>

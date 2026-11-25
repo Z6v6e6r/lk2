@@ -123,7 +123,8 @@ body:has(.game-schedule-wizard) {
     sans-serif;
 }
 
-.game-schedule-station-list h3 {
+.game-schedule-wizard .game-schedule-city-heading {
+  color: var(--schedule-muted);
   font:
     700 12px/1 'Recommendation RF Dewi',
     'RF Dewi',
