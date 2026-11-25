@@ -6,6 +6,18 @@ export const STATION_APPLICATION: string;
 export const STATION_TREE: string;
 export const STATION_WAIVER_SHA256: string;
 export const STATION_ALERT_WAIVER_SHA256: string;
+export const STATION_PROVIDER_STATUS: 'NOT_COLLECTED_EXPLICIT_OVERRIDE';
+export const STATION_PROVIDER_WAIVER_SHA256: string;
+export const STATION_DIRECT_RELEASE: Readonly<{
+  candidateSha: string;
+  candidateTree: string;
+  sourceCiRunId: string;
+  publicationRunId: string;
+  artifactId: string;
+  artifactDigest: string;
+  manifestSha256: string;
+}>;
+export function validateStationDirectControllerTail(entries: unknown[]): void;
 export const STATION_ALERT_STATUS: 'NOT_REQUIRED_OWNER_WAIVED';
 export const STATION_PREVIOUS: Readonly<{
   api: Readonly<{ id: string; image: string; releaseId: string }>;
