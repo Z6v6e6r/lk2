@@ -104,13 +104,11 @@ const price = (amount: number | null) =>
 function stationCourtSummary(station: Station) {
   const { courtCount, panoramicCourtsCount, singleCourtsCount, outdoorCourtsCount } = station;
   const courtTypes = [
-    panoramicCourtsCount != null &&
-      `Панорамик: ${panoramicCourtsCount} ${locationCourtLabel(panoramicCourtsCount)}`,
-    singleCourtsCount != null &&
-      `Сингл: ${singleCourtsCount} ${locationCourtLabel(singleCourtsCount)}`,
-    outdoorCourtsCount != null && `Открытых кортов: ${outdoorCourtsCount}`,
+    panoramicCourtsCount != null && `Панорамные: ${panoramicCourtsCount}`,
+    singleCourtsCount != null && `Синглы: ${singleCourtsCount}`,
+    outdoorCourtsCount != null && `Открытые: ${outdoorCourtsCount}`,
   ].filter(Boolean);
-  if (courtTypes.length) return courtTypes.join(', ');
+  if (courtTypes.length) return courtTypes.join(' · ');
   return courtCount === undefined ? null : `${courtCount} ${locationCourtLabel(courtCount)}`;
 }
 
@@ -512,11 +510,15 @@ export function GameCreateScheduleWizard({
                               <strong>{item.title}</strong>
                               {detailsId ? (
                                 <span className="game-schedule-station-details" id={detailsId}>
-                                  {item.address ? <small>{item.address}</small> : null}
+                                  {item.address ? (
+                                    <small className="game-schedule-station-meta">
+                                      {item.address}
+                                    </small>
+                                  ) : null}
                                   {details ? (
                                     <small
                                       className={
-                                        openingSoon ? undefined : 'game-schedule-court-count'
+                                        openingSoon ? undefined : 'game-schedule-station-meta'
                                       }
                                     >
                                       {details}

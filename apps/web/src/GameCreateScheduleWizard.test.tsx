@@ -58,7 +58,7 @@ describe('game creation schedule', () => {
     );
     const active = screen.getByRole('button', { name: /Селигерская/ });
     expect(within(active).getByText('ул. Ивана Сусанина, 1')).toBeVisible();
-    expect(within(active).getByText('Панорамик: 3 корта, Сингл: 1 корт')).toBeVisible();
+    expect(within(active).getByText('Панорамные: 3 · Синглы: 1')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Сочи' })).toHaveAccessibleDescription('4 корта');
     const opening = screen.getByRole('button', { name: /Котельники/ });
     expect(within(opening).getByText('Скоро открытие')).toBeVisible();

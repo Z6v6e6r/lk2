@@ -260,9 +260,10 @@ body:has(.game-schedule-wizard) {
   letter-spacing: 0.02em;
 }
 
-.game-schedule-station-card .game-schedule-court-count {
-  font-size: 11px;
-  line-height: 1;
+.game-schedule-station-card .game-schedule-station-meta {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
 }
 
 .game-schedule-durations,
