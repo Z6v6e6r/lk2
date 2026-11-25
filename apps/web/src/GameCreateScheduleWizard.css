@@ -197,8 +197,8 @@ body:has(.game-schedule-wizard) {
 
 .game-schedule-wizard .game-schedule-input[type='search'] {
   box-sizing: border-box;
+  flex: 1;
   min-width: 0;
-  width: min(100%, 247px);
   height: 42px;
   min-height: 0;
   padding: 0 16px 0 38px;
