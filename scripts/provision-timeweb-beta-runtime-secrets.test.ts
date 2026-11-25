@@ -23,6 +23,8 @@ import {
   validateTimewebDormantJoinSecretDelta,
   validateTimewebScheduleRunningEnvironment,
   validateTimewebScheduleSecretDelta,
+  parseTimewebScheduleRuntimeEnvironment,
+  provisionTimewebScheduleRuntimeSecrets,
   transitionPreparedTimewebRuntimeSecrets,
   parseTimewebSecretEnvironment,
   provisionTimewebBetaRuntimeSecrets,
@@ -990,6 +992,179 @@ describe('LK1 schedule runtime set', () => {
         sealed,
       ),
     ).toThrow('schedule_running_environment');
+  });
+
+  it('carries the installed legacy settings as exact bytes under the schedule profile', () => {
+    const f = fixture();
+    const candidate = join(f.root, 'schedule-candidate');
+    const legacyId = '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1';
+    const fixtureBridgeToken = Buffer.alloc(32, 17).toString('hex');
+    const settings = safeRuntimeEnvironments();
+    Object.assign(settings.api!, signing, {
+      LOCATION_MEDIA_ENABLED: 'true',
+      GAMES_TEST_COURTS_ENABLED: 'true',
+    });
+    delete settings.api!.AUTH_PHONE_SUBJECT_LINK_ENABLED;
+    Object.assign(settings.worker!, {
+      GAMES_COMMANDS_ENABLED: 'true',
+      GAMES_TEST_COURTS_ENABLED: 'true',
+      LK1_RESULT_BRIDGE_ENABLED: 'true',
+      LK1_RESULT_BRIDGE_URL: 'https://padlhub.su/',
+      LK1_RESULT_BRIDGE_TOKEN: fixtureBridgeToken,
+      GAME_RESULT_AUTO_CONFIRM_ENABLED: 'true',
+      GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS: '12',
+      GAME_RESULT_AUTO_CONFIRM_POLL_INTERVAL_MS: '300000',
+      GAME_RESULT_AUTO_CONFIRM_BATCH_SIZE: '20',
+    });
+    const identity = (releaseId: string) =>
+      JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId }) + '\n';
+    const files = Object.fromEntries(
+      Object.entries(settings).map(([service, environment]) => [
+        service + '.env',
+        '\n# Retained deployment annotation\n' + encodeEnvironment(environment),
+      ]),
+    );
+    const scheduleLine = `GAME_CREATE_SCHEDULE_LK1_URL=${owner}\n`;
+    for (const path of [f.targetDir, candidate]) {
+      mkdirSync(path, { mode: 0o700, recursive: true });
+      for (const [name, contents] of Object.entries(files)) {
+        const suffix = path === candidate && name === 'api.env' ? scheduleLine : '';
+        writeFileSync(join(path, name), contents + suffix, { mode: 0o600 });
+      }
+      writeFileSync(
+        join(path, '.release-identity.json'),
+        identity(path === candidate ? `${'9'.repeat(40)}-777-1` : legacyId),
+        { mode: 0o600 },
+      );
+    }
+    const validate = () => validateTimewebScheduleSecretDelta(f.targetDir, candidate, uid, gid);
+    expect(validate).not.toThrow();
+    if (uid !== 0) {
+      const configurationRoot = join(f.targetDir, '..');
+      const id = `${sourceSha}-761-1`;
+      const candidates = join(configurationRoot, 'timeweb-beta-candidates');
+      mkdirSync(candidates, { mode: 0o700 });
+      const opts = {
+        configurationRoot,
+        releaseId: id,
+        expectedSourceSha: sourceSha,
+        expectedSourceTree: sourceTree,
+      };
+      expect(provisionTimewebScheduleRuntimeSecrets(opts).previousBackedUp).toBe(false);
+      const isolated = join(candidates, id, 'timeweb-beta');
+      expect(() =>
+        validateTimewebScheduleSecretDelta(f.targetDir, isolated, uid, gid),
+      ).not.toThrow();
+      expect(readFileSync(join(isolated, 'worker.env'), 'utf8')).toBe(files['worker.env']);
+      expect(readFileSync(join(isolated, 'api.env'), 'utf8')).toBe(files['api.env'] + scheduleLine);
+      expect(installedReleaseId(f.targetDir)).toBe(legacyId);
+      expect(() => provisionTimewebScheduleRuntimeSecrets(opts)).toThrow(
+        'current_release_identity_mismatch',
+      );
+    }
+    const candidateApi = join(candidate, 'api.env');
+    const candidateWorker = join(candidate, 'worker.env');
+    for (const [path, contents] of [
+      [
+        candidateApi,
+        (files['api.env']! + scheduleLine).replace(
+          'LOCATION_MEDIA_ENABLED=true',
+          'LOCATION_MEDIA_ENABLED=false',
+        ),
+      ],
+      [
+        candidateApi,
+        files['api.env']!.replace('# Retained deployment annotation\n', '') + scheduleLine,
+      ],
+      [
+        candidateWorker,
+        files['worker.env']!.replace(
+          'LK1_RESULT_BRIDGE_ENABLED=true',
+          'LK1_RESULT_BRIDGE_ENABLED=false',
+        ),
+      ],
+      [
+        candidateWorker,
+        files['worker.env']!.replace(
+          'GAME_RESULT_AUTO_CONFIRM_BATCH_SIZE=20',
+          'GAME_RESULT_AUTO_CONFIRM_BATCH_SIZE=21',
+        ),
+      ],
+    ] as const) {
+      const original = readFileSync(path);
+      writeFileSync(path, contents);
+      expect(validate).toThrow('schedule_secret_delta');
+      writeFileSync(path, original);
+    }
+    for (const field of ['UNREVIEWED_LEGACY_FLAG=true', 'LK1_RESULT_BRIDGE_ENABLED=true']) {
+      const old = files['api.env']!;
+      writeFileSync(join(f.targetDir, 'api.env'), `${old}${field}\n`);
+      writeFileSync(candidateApi, `${old}${field}\n${scheduleLine}`);
+      expect(validate).toThrow('unknown_key');
+      writeFileSync(join(f.targetDir, 'api.env'), old);
+      writeFileSync(candidateApi, old + scheduleLine);
+    }
+    for (const [name, from, to] of [
+      ['api.env', 'LOCATION_MEDIA_ENABLED=true', 'LOCATION_MEDIA_ENABLED=false'],
+      [
+        'worker.env',
+        'LK1_RESULT_BRIDGE_URL=https://padlhub.su/',
+        'LK1_RESULT_BRIDGE_URL=https://other.example/',
+      ],
+      [
+        'worker.env',
+        `LK1_RESULT_BRIDGE_TOKEN=${fixtureBridgeToken}`,
+        'LK1_RESULT_BRIDGE_TOKEN=short',
+      ],
+      [
+        'worker.env',
+        'GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS=12',
+        'GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS=99',
+      ],
+      [
+        'worker.env',
+        'GAME_RESULT_AUTO_CONFIRM_POLL_INTERVAL_MS=300000',
+        'GAME_RESULT_AUTO_CONFIRM_POLL_INTERVAL_MS=300001',
+      ],
+    ] as const) {
+      const old = files[name]!;
+      const suffix = name === 'api.env' ? scheduleLine : '';
+      const changed = old.replace(from, to);
+      writeFileSync(join(f.targetDir, name), changed);
+      writeFileSync(join(candidate, name), changed + suffix);
+      expect(validate).toThrow('schedule_legacy_runtime');
+      writeFileSync(join(f.targetDir, name), old);
+      writeFileSync(join(candidate, name), old + suffix);
+    }
+    expect(() =>
+      validateTimewebScheduleRunningEnvironment(
+        {
+          GAME_CREATE_SCHEDULE_LK1_URL: owner,
+          AUTH_PHONE_SUBJECT_LINK_ENABLED: 'true',
+        },
+        true,
+      ),
+    ).toThrow('schedule_secret_policy');
+    writeFileSync(join(f.targetDir, '.release-identity.json'), identity(releaseId));
+    expect(validate).toThrow('env_format');
+  });
+
+  it('parses only inert comments and blank lines in the legacy schedule grammar', () => {
+    const parse = (value: string) => parseTimewebScheduleRuntimeEnvironment(Buffer.from(value));
+    expect(parse('PHOTO=true\n\n# comment\nBRIDGE=true\n')).toEqual({
+      PHOTO: 'true',
+      BRIDGE: 'true',
+    });
+    for (const bad of [
+      'PHOTO=true\r\n',
+      '# \0comment\nPHOTO=true\n',
+      'PHOTO=true',
+      'PHOTO=true\n # indented\n',
+      'PHOTO=true\n# comment\nPHOTO=false\n',
+      'export PHOTO=true\n',
+      'PHOTO=true # value\n',
+    ])
+      expect(() => parse(bad)).toThrow();
   });
 });
 

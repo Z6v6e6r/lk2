@@ -37,7 +37,9 @@ import { verifySourceCi } from './verify-source-ci.js';
 import { parseStrictJson } from './strict-json.js';
 import {
   describeTimewebRuntimeSecretSet,
+  parseTimewebScheduleRuntimeEnvironment,
   parseTimewebSecretEnvironment,
+  SCHEDULE_LEGACY_RUNTIME_SET_ID,
   validateTimewebDormantJoinSecretDelta,
   validateTimewebScheduleRunningEnvironment,
   validateTimewebScheduleSecretDelta,
@@ -422,6 +424,7 @@ export function validateApiWebOperation(value) {
       expectedCurrentSecretSetReleaseId,
       candidateSecretHashes,
       backupOperationSha256,
+      preexistingSidecarArchiveSha256,
       ownerProviderMonitoringWaiver,
       expiresAt,
       ...base
@@ -435,6 +438,9 @@ export function validateApiWebOperation(value) {
       value.controllerSha !== value.candidateSha ||
       !ID.test(expectedCurrentSecretSetReleaseId ?? '') ||
       !HASH.test(backupOperationSha256 ?? '') ||
+      (expectedCurrentSecretSetReleaseId === SCHEDULE_LEGACY_RUNTIME_SET_ID
+        ? !HASH.test(preexistingSidecarArchiveSha256 ?? '')
+        : preexistingSidecarArchiveSha256 !== undefined) ||
       typeof expiresAt !== 'string' ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(expiresAt) ||
       !Number.isFinite(Date.parse(expiresAt)) ||
@@ -1444,6 +1450,92 @@ function scheduleDumpIdentity(path) {
   return Object.fromEntries(
     ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].map((key) => [key, info[key]]),
   );
+}
+
+export function validateScheduleSidecarArchiveReceipt(receipt, op, previousFiles) {
+  exact(receipt, [
+    'schema',
+    'status',
+    'releaseId',
+    'previousSecretSetReleaseId',
+    'archivePlanSha256',
+    'activeFiles',
+    'archivedFiles',
+  ]);
+  exact(receipt.activeFiles, SECRET_NAMES);
+  if (
+    receipt.schema !== 'PHUB_TIMEWEB_SCHEDULE_SIDECAR_ARCHIVE_V1' ||
+    receipt.status !== 'ARCHIVED' ||
+    receipt.releaseId !== `${op.candidateSha}-${op.publicationRunId}-1` ||
+    receipt.previousSecretSetReleaseId !== SCHEDULE_LEGACY_RUNTIME_SET_ID ||
+    op.expectedCurrentSecretSetReleaseId !== SCHEDULE_LEGACY_RUNTIME_SET_ID ||
+    !HASH.test(receipt.archivePlanSha256 ?? '') ||
+    receipt.archivedFiles !== 15 ||
+    SECRET_NAMES.some(
+      (name) =>
+        !HASH.test(receipt.activeFiles[name] ?? '') ||
+        receipt.activeFiles[name] !== previousFiles[name],
+    )
+  )
+    fail('schedule_sidecar_archive');
+}
+
+function attestScheduleSidecarArchive(op, previousFiles) {
+  if (!op.preexistingSidecarArchiveSha256) return;
+  const id = `${op.candidateSha}-${op.publicationRunId}-1`;
+  const directory = `/etc/phub/timeweb-beta-backups/${id}-preexisting-sidecars`;
+  secure(directory, 0o700);
+  const bytes = read(`${directory}/archive-receipt.json`);
+  if (hash(bytes) !== op.preexistingSidecarArchiveSha256) fail('schedule_sidecar_archive_hash');
+  const receipt = parseStrictJson(bytes);
+  validateScheduleSidecarArchiveReceipt(receipt, op, previousFiles);
+  const planBytes = read(`${directory}/archive-plan.json`);
+  if (hash(planBytes) !== receipt.archivePlanSha256) fail('schedule_sidecar_plan_hash');
+  const archivePlan = parseStrictJson(planBytes);
+  exact(archivePlan, [
+    'schema',
+    'releaseId',
+    'previousSecretSetReleaseId',
+    'activeFiles',
+    'sidecars',
+  ]);
+  if (
+    archivePlan.schema !== 'PHUB_TIMEWEB_SCHEDULE_SIDECAR_ARCHIVE_PLAN_V1' ||
+    archivePlan.releaseId !== id ||
+    archivePlan.previousSecretSetReleaseId !== SCHEDULE_LEGACY_RUNTIME_SET_ID ||
+    !equal(archivePlan.activeFiles, receipt.activeFiles)
+  )
+    fail('schedule_sidecar_plan');
+  const sidecars = Object.entries(archivePlan.sidecars);
+  if (
+    sidecars.length !== receipt.archivedFiles ||
+    !archivePlan.sidecars['lk1-result-bridge.token'] ||
+    !equal(
+      readdirSync(directory).sort(),
+      [
+        'archive-plan.json',
+        'archive-receipt.json',
+        'local-operator.lock',
+        ...sidecars.map(([name]) => name),
+      ].sort(),
+    )
+  )
+    fail('schedule_sidecar_inventory');
+  for (const [name, record] of sidecars) {
+    if (!/^(?:(?:api|worker)\.env\.bak-[A-Za-z0-9+_-]+|lk1-result-bridge\.token)$/.test(name))
+      fail('schedule_sidecar_name');
+    exact(record, ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size', 'mtime_ns', 'sha256']);
+    const path = `${directory}/${name}`;
+    const info = secure(path, 0o600);
+    if (
+      ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size'].some(
+        (key) => info[key] !== record[key],
+      ) ||
+      String(lstatSync(path, { bigint: true }).mtimeNs) !== record.mtime_ns ||
+      hash(read(path, 0o600, 131072)) !== record.sha256
+    )
+      fail('schedule_sidecar_file');
+  }
 }
 
 function validateScheduleBackupProof(directory, releaseId, op, api) {
@@ -3712,6 +3804,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     if (schedule) {
       if (secretSetReleaseId !== op.expectedCurrentSecretSetReleaseId || existsSync(provisionLock))
         fail('schedule_secret_preimage');
+      attestScheduleSidecarArchive(op, describeTimewebRuntimeSecretSet(RUNTIME).files);
       validateTimewebScheduleSecretDelta(RUNTIME, candidateDir);
     }
     const manifest = await candidateAuthority(op, directory);
@@ -4030,6 +4123,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   let stoppedWorkerId = null;
   const attest = (recovering = false) => {
     if (schedule && !recovering) {
+      attestScheduleSidecarArchive(op, plan.previousSecrets.files);
       const { backup } = plan;
       if (
         hash(read(backup.path)) !== backup.sha256 ||
@@ -4099,7 +4193,8 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       return Object.fromEntries(entries);
     };
     const running = parseDockerEnv(rows[0].Config.Env);
-    const file = parseTimewebSecretEnvironment(read(`${RUNTIME}/api.env`));
+    const parse = schedule ? parseTimewebScheduleRuntimeEnvironment : parseTimewebSecretEnvironment;
+    const file = parse(read(`${RUNTIME}/api.env`));
     if (join) validateJoinRunningEnvironment(running, file);
     if (schedule) {
       const defaults = JSON.parse(
@@ -4247,7 +4342,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
               planSha256,
             });
             expectedSecrets = plan.previousSecrets;
-            attest();
+            attest(true);
           },
           removeCandidateBaseline: async () => {
             const path = `${directory}/installed-components.env`;

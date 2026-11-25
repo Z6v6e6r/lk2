@@ -69,6 +69,14 @@ export function validateTimewebScheduleRunningEnvironment(
   scheduleActive: boolean,
   expected?: TimewebRuntimeEnvironment,
 ): void;
+export function parseTimewebScheduleRuntimeEnvironment(bytes: Buffer): TimewebRuntimeEnvironment;
+export const SCHEDULE_LEGACY_RUNTIME_SET_ID: string;
+export function provisionTimewebScheduleRuntimeSecrets(options: {
+  releaseId: string;
+  expectedSourceSha: string;
+  expectedSourceTree: string;
+  configurationRoot?: string;
+}): ReturnType<typeof provisionTimewebBetaRuntimeSecrets>;
 export function validateTimewebScheduleSecretDelta(
   previousDir: string,
   candidateDir: string,
