@@ -49,7 +49,8 @@ export interface VivaHomeProfileSource {
    */
   readonly phoneE164?: string;
   readonly balanceMinor: number;
-  readonly level: {
+  /** Ignored when reading historical fixture snapshots created before the CUP cutover. */
+  readonly level?: {
     readonly label: string;
     readonly value: number;
     readonly assessmentRequired: boolean;
@@ -104,11 +105,6 @@ export interface VivaHomeSourceAdapterOptions {
   readonly onMetric?: (metric: VivaHomeSourceMetric) => void;
 }
 
-const customFieldSchema = z.object({
-  id: z.string().uuid(),
-  value: z.array(z.string()),
-});
-
 const profileSchema = z.object({
   id: z.string().uuid(),
   firstName: z.string().nullish(),
@@ -117,7 +113,6 @@ const profileSchema = z.object({
   phone: z.string().nullish(),
   photo: z.string().url().nullish(),
   deposit: z.number().int(),
-  customFields: z.array(customFieldSchema),
 });
 
 const transactionSchema = z
@@ -190,18 +185,6 @@ export function levelLabel(value: number): string {
   if (value < 4.7) return 'B';
   if (value < 5.5) return 'B+';
   return 'A';
-}
-
-function readLevel(fields: z.infer<typeof customFieldSchema>[]): VivaHomeProfileSource['level'] {
-  for (const fieldId of LEVEL_FIELD_IDS) {
-    const raw = fields.find((field) => field.id === fieldId)?.value[0];
-    if (!raw) continue;
-    const value = Number(raw.replace(',', '.'));
-    if (Number.isFinite(value) && value >= 0 && value <= 10) {
-      return { label: levelLabel(value), value, assessmentRequired: false };
-    }
-  }
-  return { label: 'D', value: 0, assessmentRequired: true };
 }
 
 function bounded(value: string, maxLength: number): string {
@@ -490,7 +473,6 @@ export class VivaHomeSourceAdapter {
         ...(phoneDigits.length >= 4 ? { phoneLast4: phoneDigits.slice(-4) } : {}),
         ...(phoneE164 ? { phoneE164 } : {}),
         balanceMinor: profile.deposit,
-        level: readLevel(profile.customFields),
       },
       upcoming,
       subscriptions: subscriptions.content.slice(0, 6).map((item) => ({

@@ -231,6 +231,7 @@ export interface PlayerLevelState {
   readonly scaleVersion: number | null;
   readonly levels: readonly CanonicalProfileLevel[];
   readonly currentLevel: PlayerSportLevel | null;
+  readonly projectionStatus?: 'PENDING' | 'PROJECTED';
 }
 export interface LevelAssessmentOption {
   readonly id: string;

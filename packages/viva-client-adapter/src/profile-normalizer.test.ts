@@ -39,12 +39,11 @@ describe('profile normalization', () => {
       phoneLast4: '3190',
       balanceMinor: 245_000,
       currency: 'RUB',
-      level: { label: 'C+', value: 3.8, assessmentRequired: false },
     });
     expect(JSON.stringify(result)).not.toContain(vivaProfileId);
   });
 
-  it('uses an explicit unassessed level when Viva has no supported rating field', () => {
+  it('normalizes identity and balance when Viva omits custom fields', () => {
     expect(
       normalizeVivaUserProfile(
         {
@@ -54,15 +53,14 @@ describe('profile normalization', () => {
           lastName: null,
           phone: null,
           deposit: -1500,
-          customFields: [],
         },
         padlHubUserId,
       ),
-    ).toMatchObject({
+    ).toEqual({
       userId: padlHubUserId,
       displayName: 'Игрок ПадлхАБ',
       balanceMinor: -1500,
-      level: { label: 'D', value: 0, assessmentRequired: true },
+      currency: 'RUB',
     });
   });
 

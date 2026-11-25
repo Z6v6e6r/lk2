@@ -3,7 +3,10 @@ import type { ClosedPackageFamily } from '../../../scripts/closed-application-pa
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { assertClosedApplicationMigrationsNotPending } from '../../../scripts/closed-schema-migration-guard.js';
+import {
+  assertClosedApplicationMigrationsNotPending,
+  assertCupLevelProjection0119NotPending,
+} from '../../../scripts/closed-schema-migration-guard.js';
 import {
   closedSingleMode,
   closedProfile,
@@ -151,7 +154,9 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
     const appliedFilenames = new Set(applied.map((entry) => entry.filename));
     const packagedFilenames = packagedMigrations.map((migration) => migration.filename);
     if (input.mode === lk2BetaLaneMode) {
-      // Bound to the disposable lk2 cluster only; refuses before any DDL elsewhere.
+      if (!input.dryRun)
+        assertCupLevelProjection0119NotPending({ applied, packaged: packagedMigrations });
+      // The legacy target pin alone does not confer authority to run a newly guarded migration.
       assertLk2BetaLaneTarget(
         (await client.query<Lk2BetaLaneTargetRow>(LK2_BETA_LANE_TARGET_SQL)).rows[0],
       );
@@ -195,6 +200,12 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
               )
             ).rows[0]?.empty_database_catalog ?? false)
           : false;
+      if (input.mode === 'ordinary')
+        assertCupLevelProjection0119NotPending({
+          applied,
+          packaged: packagedMigrations,
+          emptyDatabaseCatalogVerified,
+        });
       assertMigrationExecutionAllowed({
         appliedFilenames,
         packagedFilenames,

@@ -1,3 +1,4 @@
+import { PlayerLevelProjectionConflictError } from '@phub/database';
 import {
   registerJoinableSubscriptionsRoutes,
   type JoinableSubscriptionsOptions,
@@ -86,6 +87,7 @@ import type {
   ProfileLevelHistoryRepository,
   ProfilePrivacyRepository,
   ProfileSummaryRepository,
+  CupProjectedProfileLevel,
   PromotionEngagementRepository,
   RealtimeAuthorizationRepository,
   TrainerAvatarRepository,
@@ -212,7 +214,11 @@ import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-r
 import { registerProfileProviderIdentityRoutes } from './profile/profile-provider-identity-routes.js';
 import type { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
 import type { ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
-import { buildLocalHomeProfile, freshProviderObservation } from './profile/local-home-profile.js';
+import {
+  buildLocalHomeProfile,
+  freshProviderObservation,
+  localProfileLevel,
+} from './profile/local-home-profile.js';
 import {
   homeProfilePhotoUserIds,
   stabilizeHomeProfilePhotos,
@@ -386,7 +392,8 @@ export interface BuildAppOptions {
   readonly profileReachabilityRepository?: ProfileReachabilityRepository;
   readonly profileLevelHistoryRepository?: ProfileLevelHistoryRepository;
   readonly profileProviderObservationRepository?: ProfileProviderObservationRepository;
-  readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'>;
+  readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'> &
+    Partial<Pick<ProfileSummaryRepository, 'getCupProjectedLevels'>>;
   /** One server-side answer for the verified user's configured residency product. */
   readonly clientResidencyService?: ClientResidencyService;
   /** Read-only CUP view of a user's Viva card, subscriptions, bookings and transactions. */
@@ -405,7 +412,7 @@ export interface BuildAppOptions {
       Pick<
         ProfileSummaryRepository,
         | 'getDisplayNames'
-        | 'getLevelValues'
+        | 'getCupProjectedLevels'
         | 'getPhotoDeliveryState'
         | 'reserveClientAssistedPhoto'
         | 'finalizeClientAssistedPhoto'
@@ -530,19 +537,76 @@ function unavailableUpcomingBookingsResponse(observedAt = new Date().toISOString
   };
 }
 
+class ProfileLevelProjectionUnavailable extends Error {}
+
+async function readCupProfileLevels(
+  repository: Partial<Pick<ProfileSummaryRepository, 'getCupProjectedLevels'>> | undefined,
+  tenantId: string,
+  userIds: readonly string[],
+): Promise<ReadonlyMap<string, CupProjectedProfileLevel>> {
+  try {
+    return (await repository?.getCupProjectedLevels?.(tenantId, userIds)) ?? new Map();
+  } catch (error) {
+    if (error instanceof PlayerLevelProjectionConflictError) throw error;
+    throw new ProfileLevelProjectionUnavailable('CUP_PROFILE_LEVEL_READ_FAILED');
+  }
+}
+
 async function normalizeProjectedHomeDashboard(input: {
   readonly payload: unknown;
   readonly tenantId: string;
   readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'>;
+  readonly levelRepository?: Partial<Pick<ProfileSummaryRepository, 'getCupProjectedLevels'>>;
 }): Promise<unknown> {
   const normalized = normalizeHomeDashboardPayload(input.payload);
-  const deliveryIds = input.photoRepository
-    ? await input.photoRepository.getPhotoDeliveryIds(
-        input.tenantId,
-        homeProfilePhotoUserIds(normalized),
-      )
-    : new Map<string, string>();
-  return stabilizeHomeProfilePhotos(normalized, input.tenantId, deliveryIds);
+  const userIds = homeProfilePhotoUserIds(normalized);
+  const [deliveryIds, projectedLevels] = await Promise.all([
+    input.photoRepository?.getPhotoDeliveryIds(input.tenantId, userIds) ?? new Map(),
+    readCupProfileLevels(input.levelRepository, input.tenantId, userIds),
+  ]);
+  return applyHomeProfileLevels(
+    stabilizeHomeProfilePhotos(normalized, input.tenantId, deliveryIds),
+    projectedLevels,
+  );
+}
+
+function isProfileObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function applyHomeProfileLevels(
+  value: unknown,
+  projectedLevels: ReadonlyMap<string, CupProjectedProfileLevel>,
+): unknown {
+  if (!isProfileObject(value)) return value;
+  const profile = isProfileObject(value.profile) ? { ...value.profile } : value.profile;
+  if (isProfileObject(profile)) {
+    const level =
+      typeof profile.userId === 'string' ? projectedLevels.get(profile.userId) : undefined;
+    delete profile.level;
+    if (level) profile.level = localProfileLevel(level.label, level.value);
+  }
+  const upcoming = Array.isArray(value.upcoming)
+    ? (value.upcoming as unknown[]).map((item) => {
+        if (!isProfileObject(item) || !Array.isArray(item.participants)) return item;
+        return {
+          ...item,
+          participants: (item.participants as unknown[]).map((participant) => {
+            if (!isProfileObject(participant)) return participant;
+            const level =
+              typeof participant.profileId === 'string'
+                ? projectedLevels.get(participant.profileId)
+                : undefined;
+            return {
+              ...participant,
+              level: level?.label ?? null,
+              levelValue: level?.value ?? null,
+            };
+          }),
+        };
+      })
+    : value.upcoming;
+  return { ...value, profile, upcoming };
 }
 
 function parseAllowedOrigins(value: string): ReadonlySet<string> {
@@ -1962,7 +2026,10 @@ export async function buildApp(options: BuildAppOptions) {
           summary && options.profilePhotoMediaRepository
             ? await options.profilePhotoMediaRepository.getPhotoDeliveryIds(tenantId, [userId])
             : new Map<string, string>();
-        // A fresh observation only adds the provider fields the local slice cannot see; a
+        const level = (
+          await readCupProfileLevels(options.profileSummaryRepository, tenantId, [userId])
+        ).get(userId);
+        // A fresh observation only adds the provider balance the local slice cannot see; a
         // transient observation read failure degrades to the local slice instead of failing it.
         // The rollout flag is the read-path kill switch as well: off means no merge at all, so an
         // immediate rollback hides an already stored observation without waiting for its age window.
@@ -1995,10 +2062,9 @@ export async function buildApp(options: BuildAppOptions) {
                   currentUrl: summary.avatarUrl,
                   deliveryIds,
                 }),
-                levelLabel: summary.levelLabel,
-                levelValue: summary.levelValue,
               }
             : {}),
+          ...(level ? { levelLabel: level.label, levelValue: level.value } : {}),
           ...(observation ? { observation } : {}),
         });
       }
@@ -2006,6 +2072,9 @@ export async function buildApp(options: BuildAppOptions) {
         await normalizeProjectedHomeDashboard({
           payload: projection.payload,
           tenantId,
+          ...(options.profileSummaryRepository
+            ? { levelRepository: options.profileSummaryRepository }
+            : {}),
           ...(options.profilePhotoMediaRepository
             ? { photoRepository: options.profilePhotoMediaRepository }
             : {}),
@@ -2128,6 +2197,9 @@ export async function buildApp(options: BuildAppOptions) {
             ? undefined
             : await options.profileSummaryRepository?.get(tenantId, targetUserId);
         if (summary) {
+          const level = (
+            await readCupProfileLevels(options.profileSummaryRepository, tenantId, [summary.userId])
+          ).get(summary.userId);
           const deliveryIds = options.profilePhotoMediaRepository
             ? await options.profilePhotoMediaRepository.getPhotoDeliveryIds(tenantId, [
                 summary.userId,
@@ -2144,8 +2216,7 @@ export async function buildApp(options: BuildAppOptions) {
                 currentUrl: summary.avatarUrl,
                 deliveryIds,
               }),
-              levelLabel: summary.levelLabel,
-              levelValue: summary.levelValue,
+              ...(level ? { levelLabel: level.label, levelValue: level.value } : {}),
             }),
             viewerUserId,
             permissions,
@@ -2160,6 +2231,9 @@ export async function buildApp(options: BuildAppOptions) {
         await normalizeProjectedHomeDashboard({
           payload: projection.payload,
           tenantId,
+          ...(options.profileSummaryRepository
+            ? { levelRepository: options.profileSummaryRepository }
+            : {}),
           ...(options.profilePhotoMediaRepository
             ? { photoRepository: options.profilePhotoMediaRepository }
             : {}),
@@ -2350,6 +2424,9 @@ export async function buildApp(options: BuildAppOptions) {
         await normalizeProjectedHomeDashboard({
           payload: projection.payload,
           tenantId,
+          ...(options.profileSummaryRepository
+            ? { levelRepository: options.profileSummaryRepository }
+            : {}),
           ...(options.profilePhotoMediaRepository
             ? { photoRepository: options.profilePhotoMediaRepository }
             : {}),
@@ -2435,6 +2512,9 @@ export async function buildApp(options: BuildAppOptions) {
         await normalizeProjectedHomeDashboard({
           payload: projection.payload,
           tenantId,
+          ...(options.profileSummaryRepository
+            ? { levelRepository: options.profileSummaryRepository }
+            : {}),
           ...(options.profilePhotoMediaRepository
             ? { photoRepository: options.profilePhotoMediaRepository }
             : {}),
@@ -2590,6 +2670,26 @@ export async function buildApp(options: BuildAppOptions) {
       'request failed',
     );
     if (reply.sent) return;
+    if (error instanceof PlayerLevelProjectionConflictError) {
+      sendApiError(
+        request,
+        reply,
+        409,
+        'PROFILE_LEVEL_PROJECTION_CONFLICT',
+        'Данные проекции уровня требуют проверки.',
+      );
+      return;
+    }
+    if (error instanceof ProfileLevelProjectionUnavailable) {
+      sendApiError(
+        request,
+        reply,
+        503,
+        'PROFILE_LEVEL_UNAVAILABLE',
+        'Уровень профиля временно недоступен.',
+      );
+      return;
+    }
     const statusCode = (error as { statusCode?: unknown }).statusCode;
     if (statusCode === 429 && (error as { code?: unknown }).code === 'RATE_LIMIT_EXCEEDED') {
       sendApiError(

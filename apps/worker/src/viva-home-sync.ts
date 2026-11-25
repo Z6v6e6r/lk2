@@ -188,22 +188,14 @@ async function synchronizeLegacyGameRostersForHome(input: {
     correlationId: input.correlationId,
     now: input.now,
   });
-  const viewerLevel = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'].includes(
-    input.snapshot.profile.level.label,
-  )
-    ? (input.snapshot.profile.level.label as 'D' | 'D+' | 'C' | 'C+' | 'B' | 'B+' | 'A')
-    : null;
-  const viewerProfileEnriched =
-    viewerParticipant && viewerLevel
-      ? await persistLegacyParticipantViewerProfile({
-          pool: input.pool,
-          tenantId: imported.tenantId,
-          participantExternalId: viewerParticipant.externalId,
-          displayName: input.snapshot.profile.displayName,
-          level: viewerLevel,
-          levelValue: input.snapshot.profile.level.value,
-        })
-      : false;
+  const viewerProfileEnriched = viewerParticipant
+    ? await persistLegacyParticipantViewerProfile({
+        pool: input.pool,
+        tenantId: imported.tenantId,
+        participantExternalId: viewerParticipant.externalId,
+        displayName: input.snapshot.profile.displayName,
+      })
+    : false;
   const avatarSync = await synchronizeLegacyParticipantPhotos({
     pool: input.pool,
     tenantId: imported.tenantId,

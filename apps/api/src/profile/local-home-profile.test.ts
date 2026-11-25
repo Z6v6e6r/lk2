@@ -35,11 +35,7 @@ describe('local home profile fallback', () => {
   });
 
   it('reports a level only from stored assessment data', () => {
-    expect(localProfileLevel('C', null)).toEqual({
-      label: 'C',
-      value: 3,
-      assessmentRequired: false,
-    });
+    expect(localProfileLevel('C', null)).toBeUndefined();
     expect(localProfileLevel('C+', 3.8)).toEqual({
       label: 'C+',
       value: 3.8,
@@ -69,7 +65,7 @@ describe('local home profile provider observation merge', () => {
     observedAt,
   };
 
-  it('adds the provider level and balance to the local slice', () => {
+  it('adds provider balance without the legacy level to the local slice', () => {
     const profile = buildLocalHomeProfile({
       userId,
       displayName: 'Сергеев Алексей',
@@ -81,22 +77,21 @@ describe('local home profile provider observation merge', () => {
       displayName: 'Сергеев Алексей',
       firstName: 'Сергеев',
       lastName: 'Алексей',
-      level: { label: 'C+', value: 3.8, assessmentRequired: false },
       balanceMinor: 54_000,
       currency: 'RUB',
     });
   });
 
-  it('prefers the fresh provider level over the cached summary level', () => {
+  it('preserves the CUP value despite a fresh Viva observation', () => {
     const profile = buildLocalHomeProfile({
       userId,
       displayName: 'Сергеев Алексей',
       levelLabel: 'D',
-      levelValue: 0.5,
+      levelValue: 1.5,
       observation,
     });
 
-    expect(profile.level).toEqual({ label: 'C+', value: 3.8, assessmentRequired: false });
+    expect(profile.level).toEqual({ label: 'D', value: 1.5, assessmentRequired: false });
   });
 
   it('keeps the cached level when the observation carries none', () => {
@@ -104,6 +99,7 @@ describe('local home profile provider observation merge', () => {
       userId,
       displayName: 'Сергеев Алексей',
       levelLabel: 'B',
+      levelValue: 4.5,
       observation: { balanceMinor: 12_500, currency: 'RUB', observedAt },
     });
 
@@ -148,6 +144,7 @@ describe('local home profile provider observation merge', () => {
       userId,
       displayName: 'Сергеев Алексей',
       levelLabel: 'C',
+      levelValue: 3,
       ...(stale ? { observation: stale } : {}),
     });
 

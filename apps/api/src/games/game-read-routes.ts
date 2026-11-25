@@ -176,7 +176,7 @@ export function registerGameReadRoutes(
     readonly repository?: CardReadRepository;
     readonly testCourtRepository?: GameTestCourtRepository;
     readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'> &
-      Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
+      Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getCupProjectedLevels'>>;
     /**
      * Attaches the authorized game chat reference to viewer cards. Omitted (or disabled per tenant)
      * cards keep `conversation: null` and no `OPEN_CHAT`, which is the pre-chat card contract.

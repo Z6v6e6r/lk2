@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
-import type { PlayerLevelRepository } from '@phub/database';
-import { evaluatePadelLevelAssessment, PADEL_LEVEL_ASSESSMENT_DEFINITION } from '@phub/domain';
+import { PlayerLevelProjectionConflictError, type PlayerLevelRepository } from '@phub/database';
+import { PADEL_LEVEL_ASSESSMENT_DEFINITION } from '@phub/domain';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { z } from 'zod';
 
@@ -57,13 +57,13 @@ function requestHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-function normalizedAnswers(
-  answers: Readonly<Record<string, readonly string[]>>,
-): Readonly<Record<string, readonly string[]>> {
-  return Object.fromEntries(
-    Object.entries(answers)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([questionId, optionIds]) => [questionId, [...optionIds].sort()]),
+function cupAuthoritative(request: FastifyRequest, reply: FastifyReply) {
+  return sendApiError(
+    request,
+    reply,
+    409,
+    'PROFILE_LEVEL_CUP_AUTHORITATIVE',
+    'Уровень назначается в ЦУП. Подтвердите его в личном кабинете клуба.',
   );
 }
 
@@ -92,7 +92,21 @@ export function registerProfileLevelRoutes(
         return sendApiError(request, reply, 400, 'SPORT_CODE_INVALID', 'Некорректный вид спорта.');
       }
       if (!options.repository) return unavailable(request, reply);
-      return options.repository.getState(current.tenantId, current.playerId, sport.data);
+      try {
+        return await options.repository.getState(current.tenantId, current.playerId, sport.data);
+      } catch (error) {
+        if (error instanceof PlayerLevelProjectionConflictError) {
+          return sendApiError(
+            request,
+            reply,
+            409,
+            'PROFILE_LEVEL_PROJECTION_CONFLICT',
+            'Данные проекции уровня требуют проверки.',
+          );
+        }
+        request.log.warn({ correlationId: request.id }, 'profile level read failed');
+        return unavailable(request, reply);
+      }
     },
   );
 
@@ -117,6 +131,7 @@ export function registerProfileLevelRoutes(
           'Выберите уровень из актуальной шкалы.',
         );
       }
+      if (parsed.data.sportCode === 'PADEL') return cupAuthoritative(request, reply);
       if (!options.repository) return unavailable(request, reply);
       const result = await options.repository.setLevel({
         tenantId: current.tenantId,
@@ -137,15 +152,7 @@ export function registerProfileLevelRoutes(
           'Idempotency-Key уже использован для другой команды.',
         );
       }
-      if (result.outcome === 'cup_authoritative') {
-        return sendApiError(
-          request,
-          reply,
-          409,
-          'PROFILE_LEVEL_CUP_AUTHORITATIVE',
-          'Уровень уже подтверждён в ЦУП и не может быть изменён самооценкой.',
-        );
-      }
+      if (result.outcome === 'cup_authoritative') return cupAuthoritative(request, reply);
       if (result.outcome === 'level_not_found') {
         return sendApiError(
           request,
@@ -197,90 +204,7 @@ export function registerProfileLevelRoutes(
           'Ответы анкеты некорректны.',
         );
       }
-      const answers = normalizedAnswers(parsed.data.answers);
-      const assessment = evaluatePadelLevelAssessment(parsed.data.assessmentVersion, answers);
-      if (assessment.outcome === 'invalid') {
-        return sendApiError(
-          request,
-          reply,
-          400,
-          assessment.reason === 'VERSION_UNSUPPORTED'
-            ? 'LEVEL_ASSESSMENT_VERSION_UNSUPPORTED'
-            : 'LEVEL_ASSESSMENT_ANSWERS_INVALID',
-          'Ответы анкеты не соответствуют актуальной версии.',
-        );
-      }
-      if (!options.repository) return unavailable(request, reply);
-      const state = await options.repository.getState(
-        current.tenantId,
-        current.playerId,
-        parsed.data.sportCode,
-      );
-      const canonicalLevel = state.levels.find((level) => level.code === assessment.levelCode);
-      if (!canonicalLevel) {
-        return sendApiError(
-          request,
-          reply,
-          409,
-          'PROFILE_LEVEL_SCALE_MISMATCH',
-          'Результат анкеты не сопоставлен с актуальной шкалой.',
-        );
-      }
-      const commandPayload = {
-        sportCode: parsed.data.sportCode,
-        assessmentVersion: parsed.data.assessmentVersion,
-        answers,
-      };
-      const result = await options.repository.setLevel({
-        tenantId: current.tenantId,
-        playerId: current.playerId,
-        sportCode: parsed.data.sportCode,
-        levelId: canonicalLevel.id,
-        source: 'ONBOARDING',
-        numericValue: assessment.numericScore,
-        idempotencyKey,
-        requestHash: requestHash(commandPayload),
-        correlationId: request.id,
-      });
-      if (result.outcome === 'idempotency_conflict') {
-        return sendApiError(
-          request,
-          reply,
-          409,
-          'IDEMPOTENCY_KEY_REUSED',
-          'Idempotency-Key уже использован для другой команды.',
-        );
-      }
-      if (result.outcome === 'cup_authoritative') {
-        return sendApiError(
-          request,
-          reply,
-          409,
-          'PROFILE_LEVEL_CUP_AUTHORITATIVE',
-          'Уровень уже подтверждён в ЦУП и не может быть изменён повторной оценкой.',
-        );
-      }
-      if (result.outcome === 'level_not_found') {
-        return sendApiError(
-          request,
-          reply,
-          409,
-          'PROFILE_LEVEL_STALE',
-          'Шкала уровней изменилась. Пройдите определение ещё раз.',
-        );
-      }
-      if (result.outcome === 'profile_not_found') {
-        return sendApiError(request, reply, 404, 'PROFILE_NOT_FOUND', 'Профиль не найден.');
-      }
-      reply.header('X-Idempotent-Replayed', String(result.replayed));
-      return {
-        assessment: {
-          version: assessment.version,
-          numericScore: assessment.numericScore,
-          levelCode: assessment.levelCode,
-        },
-        level: result.level,
-      };
+      return cupAuthoritative(request, reply);
     },
   );
 }

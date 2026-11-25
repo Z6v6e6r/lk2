@@ -692,8 +692,8 @@ async function resolvePlayer(
   });
   await client.query(
     `insert into profile.user_summaries (
-       tenant_id, user_id, display_name, level_label, level_value
-     ) values ($1, $2, $3, $4, $5)
+       tenant_id, user_id, display_name
+     ) values ($1, $2, $3)
      on conflict (tenant_id, user_id) ${
        preserveExistingProfile
          ? 'do nothing'
@@ -701,13 +701,7 @@ async function resolvePlayer(
        display_name = excluded.display_name,
        updated_at = now()`
      }`,
-    [
-      tenantId,
-      userId,
-      cleanText(participant.displayName, 200, 'Игрок'),
-      participant.level,
-      participant.levelValue,
-    ],
+    [tenantId, userId, cleanText(participant.displayName, 200, 'Игрок')],
   );
   return userId;
 }

@@ -78,7 +78,7 @@ export function ParticipationLevelPicker({
       </label>
       {error ? <p role="alert">{error}</p> : null}
       <button type="button" disabled={busy || !selected} onClick={() => void save()}>
-        Сохранить и записаться
+        Сохранить уровень
       </button>
       <button type="button" disabled={busy} onClick={onCancel}>
         Отмена

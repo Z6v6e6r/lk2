@@ -1184,7 +1184,7 @@ function GamesPageContent({
     game: GameCardModel,
   ): Promise<void> {
     if (!gateway.getOwnPlayerLevel || !gateway.setOwnPlayerLevel) {
-      setError('Укажите уровень в профиле и повторите запись.');
+      setError('Подтвердите уровень в личном кабинете клуба и запишитесь снова.');
       return;
     }
     const pending = {
@@ -2124,11 +2124,10 @@ function GamesPageContent({
     setLevelRecoveryError(null);
     try {
       await gateway.setOwnPlayerLevel(selectedLevelId, 'PADEL');
-      const pending = levelRecovery;
       setLevelRecovery(null);
       setLevelState(null);
       setSelectedLevelId('');
-      await handleAction(pending.action, pending.game);
+      clearPendingLevelRecovery();
     } catch (cause) {
       setLevelRecoveryError(errorMessage(cause));
     } finally {
@@ -2188,12 +2187,11 @@ function GamesPageContent({
     setLevelRecoveryError(null);
     try {
       await gateway.completeOwnLevelAssessment(assessmentDefinition.version, assessmentAnswers);
-      const pending = levelRecovery;
       setLevelRecovery(null);
       setAssessmentDefinition(null);
       setAssessmentAnswers({});
       setAssessmentIndex(0);
-      await handleAction(pending.action, pending.game);
+      clearPendingLevelRecovery();
     } catch (cause) {
       setLevelRecoveryError(errorMessage(cause));
     } finally {
@@ -2276,7 +2274,7 @@ function GamesPageContent({
                 disabled={!selectedLevelId || levelRecoveryBusy !== null}
                 onClick={() => void saveLevelAndContinue()}
               >
-                {levelRecoveryBusy === 'saving' ? 'Сохраняем…' : 'Сохранить и продолжить запись'}
+                {levelRecoveryBusy === 'saving' ? 'Сохраняем…' : 'Сохранить уровень'}
               </button>
               <button
                 className="games-level-recovery__back"
@@ -2343,7 +2341,7 @@ function GamesPageContent({
                   {assessmentIndex === assessmentQuestions.length - 1
                     ? levelRecoveryBusy === 'saving'
                       ? 'Сохраняем…'
-                      : 'Завершить и продолжить'
+                      : 'Сохранить результат'
                     : 'Далее'}
                 </button>
               </div>

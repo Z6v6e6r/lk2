@@ -150,7 +150,7 @@ async function accessToken(): Promise<string> {
 async function appWith(
   repositoryValue: CardReadRepository,
   photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoObjectKey' | 'getPhotoDeliveryIds'> &
-    Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>,
+    Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getCupProjectedLevels'>>,
   conversationReader?: Pick<MessagingRepository, 'listGameConversationSummaries'>,
   testCourtRepository?: GameTestCourtRepository,
 ) {
@@ -305,12 +305,9 @@ describe('Games read APIs', () => {
           [playerId, 'Артур Ситдиков'],
         ]),
       ),
-      getLevelValues: vi.fn<ProfileSummaryRepository['getLevelValues']>().mockResolvedValue(
-        new Map([
-          [userId, 3.43844],
-          [playerId, 3.82],
-        ]),
-      ),
+      getCupProjectedLevels: vi
+        .fn<ProfileSummaryRepository['getCupProjectedLevels']>()
+        .mockResolvedValue(new Map([[userId, { label: 'C', value: 3.43844 }]])),
     };
     const app = await appWith(
       repository({
@@ -339,7 +336,7 @@ describe('Games read APIs', () => {
     expect(serialized).not.toContain('"displayName":"Организатор"');
     expect(serialized).not.toContain('"displayName":"Игрок 2"');
     expect(serialized).toContain('"levelValue":3.43844');
-    expect(serialized).toContain('"levelValue":3.82');
+    expect(serialized).not.toContain('"level":"C+"');
   });
 
   it('binds an opaque cursor to the original filters', async () => {

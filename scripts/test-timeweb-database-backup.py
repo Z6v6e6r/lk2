@@ -1794,6 +1794,16 @@ def canonical_backup_baseline():
     return b
 
 
+def canonical_beta122_ledger():
+    # Preserve the retained database prefix and its exact digest when application
+    # migrations are appended after the captured release.
+    migrations=sorted(Path(__file__).parent.parent.joinpath('packages/database/migrations').glob('*.sql'))
+    ledger=[[p.name,m.digest(p.read_bytes())] for p in migrations[:122]]
+    assert len(ledger)==122 and ledger[-1][0]=='0118_push_attribution.sql'
+    assert m.digest(m.encoded(ledger))==canonical_backup_baseline()['ledgerSha256']
+    return ledger
+
+
 class CanonicalFreshDumpScenario(FreshDumpScenario):
     def __init__(self,directory,fault=None):
         super().__init__(directory,fault)
@@ -1805,8 +1815,7 @@ class CanonicalFreshDumpScenario(FreshDumpScenario):
             confirmation='FRESH_DUMP_CANONICAL_PRIOR_RESTORE_BETA122_'+self.op['candidateSha'][:12].upper()+'_KEEP_DATA_AND_ACCOUNTS')
         self.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(self.op)
         self.runtime_api=copy.deepcopy(self.op['expectedApi'])
-        self.ledger=[[p.name,m.digest(p.read_bytes())] for p in sorted(Path(__file__).parent.parent.joinpath('packages/database/migrations').glob('*.sql'))]
-        assert m.digest(m.encoded(self.ledger))==b['ledgerSha256']
+        self.ledger=canonical_beta122_ledger()
         self.op['expectedBoundarySha256']=m.digest(m.encoded(sorted([self.service_row(True),self.service_row(False)],key=lambda r:r['Id'])))
         self.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(self.op)
         self.request.write_bytes(m.encoded(self.op))
@@ -1934,7 +1943,7 @@ class CanonicalHistoryTests(unittest.TestCase):
                 publicationRunId='43751306581',releaseId=m.CANONICAL_PRIOR_RELEASE,
                 confirmation='FRESH_DUMP_PRIOR_RESTORE_BETA122_'+commit[:12].upper()+'_KEEP_DATA_AND_ACCOUNTS')
             s.config=m.encoded({'controllerSha':commit,'enabled':True});s.op['controllerConfigSha256']=m.digest(s.config)
-            s.ledger=[[p.name,m.digest(p.read_bytes())] for p in sorted(Path(__file__).parent.parent.joinpath('packages/database/migrations').glob('*.sql'))]
+            s.ledger=canonical_beta122_ledger()
             s.op['expectedLedgerSha256']=m.digest(m.encoded(s.ledger))
             s.op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(s.op)
             s.prior['ledgerSha256']=s.op['expectedLedgerSha256']

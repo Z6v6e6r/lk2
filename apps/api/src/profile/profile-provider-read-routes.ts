@@ -17,7 +17,7 @@ import {
 } from './profile-read-job-store.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-/** The relayed provider payload must stay small: the screen needs a level and a balance. */
+/** The relayed provider payload must stay small: the screen uses the provider balance. */
 export const PROFILE_PROVIDER_READ_RESULT_BODY_LIMIT_BYTES = 64 * 1_024;
 
 export interface ProfileProviderReadRoutesOptions {
@@ -120,7 +120,7 @@ function jobMatches(job: ProfileProviderReadJob, current: { tenantId: string; us
 /**
  * Android-only endpoint exception ADR-0023/0020: the native client cannot read the Viva profile
  * itself, so it receives a short-lived job and delegated access, reads the provider payload and
- * relays it here. The server re-validates that payload and keeps only the provider level and
+ * relays it here. The server re-validates that payload and keeps only the provider
  * balance. No provider token or identifier is accepted, returned or logged by these routes.
  */
 export function registerProfileProviderReadRoutes(
@@ -269,7 +269,13 @@ export function registerProfileProviderReadRoutes(
         putStatus = await observationRepository.put({
           tenantId: current.tenantId,
           userId: current.userId,
-          observation: { ...normalized, observedAt },
+          observation: {
+            ...(normalized.balanceMinor === undefined
+              ? {}
+              : { balanceMinor: normalized.balanceMinor }),
+            currency: normalized.currency,
+            observedAt,
+          },
         });
       } catch {
         return storeUnavailable(request, reply);

@@ -383,6 +383,11 @@ export function createLevelEligibilityPolicyRepository(
                  select 1 from eligibility.player_sport_levels player
                   where player.tenant_id = person.tenant_id
                     and player.player_id = person.id and player.sport_code = $2
+                    and (player.sport_code <> 'PADEL' or exists (
+                      select 1 from eligibility.cup_player_level_projections cup
+                       where cup.tenant_id = player.tenant_id and cup.player_id = player.player_id
+                         and cup.sport_code = player.sport_code and cup.level_id = player.level_id
+                    ))
                )) as players_without_level,
              (select count(*)::integer
                 from games.participations participation
@@ -393,6 +398,11 @@ export function createLevelEligibilityPolicyRepository(
                   on player.tenant_id = participation.tenant_id
                  and player.player_id = participation.user_id
                  and player.sport_code = joined_game.sport_code
+                    and (player.sport_code <> 'PADEL' or exists (
+                      select 1 from eligibility.cup_player_level_projections cup
+                       where cup.tenant_id = player.tenant_id and cup.player_id = player.player_id
+                         and cup.sport_code = player.sport_code and cup.level_id = player.level_id
+                    ))
                 join eligibility.canonical_levels player_level
                   on player_level.tenant_id = player.tenant_id
                  and player_level.sport_code = player.sport_code

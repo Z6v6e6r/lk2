@@ -28,7 +28,7 @@ paths:
         '200':
           description: Applied, replayed or stale projection.
         '400':
-          description: Invalid strict contract or idempotency key.
+          description: Invalid contract, inconsistent numeric and letter level, or invalid idempotency key.
         '403':
           description: Invalid server credential or tenant outside its exact configured scope.
         '409':
@@ -91,6 +91,24 @@ components:
                 - RATING_INITIAL_IMPORTED
                 - RATING_BOOTSTRAPPED_FROM_VIVA
                 - RATING_MANUALLY_CHANGED
+                - RATING_BOOTSTRAPPED_FROM_GAME_RESULT
+                - RATING_BOOTSTRAPPED_FROM_TOURNAMENT
+                - RATING_TOURNAMENT_CANONICAL_RECONCILED
+                - RATING_LEVEL_CORRECTION_APPLIED
+                - FPR_CANONICAL_RECONCILIATION_APPLIED
+                - GAME_RESULT_SUBMITTED_APPLIED
+                - GAME_RESULT_CORRECTION_APPLIED
+                - GAME_RESULT_CORRECTION_REVERTED
+                - GAME_RESULT_DISPUTED_REVERTED
+                - GAME_RESULT_EXPIRED_REVERTED
+                - GAME_RESULT_CONFIRMED
+                - GAME_RESULT_TIMEOUT_CONFIRMED
+                - TOURNAMENT_RATING_FINALIZED
+                - TOURNAMENT_RATING_CORRECTION_APPLIED
+                - TOURNAMENT_RATING_REOPENED_REVERTED
+                - TOURNAMENT_RATING_ANNULLED
+                - TOURNAMENT_RATING_CORRECTION_REVERTED
+                - TOURNAMENT_START_RATING_CHANGED
             formulaVersion:
               type: string
               const: padel-rating-grade-v1

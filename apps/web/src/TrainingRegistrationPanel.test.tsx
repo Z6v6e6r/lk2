@@ -173,7 +173,7 @@ it('storage getter denial renders a recoverable error and never sends a registra
     denied.mockRestore();
   }
 });
-it('missing level offers a self-declared level, then retries under the same key', async () => {
+it('an explicit training retry retains its key after a level save', async () => {
   const h = setup();
   const level = {
     id: '66666666-6666-4666-8666-666666666666',
@@ -208,13 +208,15 @@ it('missing level offers a self-declared level, then retries under the same key'
   await user.selectOptions(await screen.findByLabelText('Выберите подписку'), subscriptionId);
   await user.click(screen.getByRole('button', { name: 'Записаться по подписке' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Чтобы записаться, укажите свой уровень.',
+    'Подтвердите уровень в личном кабинете клуба и запишитесь снова.',
   );
   expect(screen.getByRole('button', { name: 'Продолжить исходный запрос' })).toBeInTheDocument();
   await user.selectOptions(await screen.findByLabelText('Ваш уровень'), level.id);
-  await user.click(screen.getByRole('button', { name: 'Сохранить и записаться' }));
+  await user.click(screen.getByRole('button', { name: 'Сохранить уровень' }));
+  await waitFor(() => expect(setOwnPlayerLevel).toHaveBeenCalledWith(level.id, 'PADEL'));
+  expect(h.registerTraining).toHaveBeenCalledTimes(1);
+  await user.click(screen.getByRole('button', { name: 'Продолжить исходный запрос' }));
   await waitFor(() => expect(h.registerTraining).toHaveBeenCalledTimes(2));
-  expect(setOwnPlayerLevel).toHaveBeenCalledWith(level.id, 'PADEL');
   const calls = h.registerTraining.mock.calls as unknown as [string, unknown, string][];
   expect(calls[1]![2]).toBe(calls[0]![2]);
   await screen.findByText('Текущая запись не подтверждена. Проверка не создаёт новую запись.');
