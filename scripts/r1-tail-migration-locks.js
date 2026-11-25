@@ -1,4 +1,4 @@
-// Exact two-lock custody for R1 only. Publication intent includes inode identity before link.
+// Exact two-lock custody for closed migration profiles. Publication intent includes inode identity before link.
 import { r1Encode, r1Exact, r1Hash, r1Same, r1Stop } from './r1-tail-migration-profile.js';
 export const R1_TAIL_LOCKS = Object.freeze([
   '/opt/phub/timeweb-beta/standard/active',
@@ -6,15 +6,39 @@ export const R1_TAIL_LOCKS = Object.freeze([
 ]);
 const rootPattern =
   /^\/opt\/phub\/timeweb-beta\/backups\/r1-tail108-119-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const cupRootPattern =
+  /^\/opt\/phub\/timeweb-beta\/operator\/cup-0119-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+
 export function createR1TailLockCustody(root, marker, owner, io) {
-  if (!rootPattern.test(root) || !Buffer.isBuffer(marker)) r1Stop('LOCK_SCOPE');
+  return createMigrationLockCustody(
+    root,
+    marker,
+    owner,
+    io,
+    rootPattern,
+    'PHUB_R1_TAIL_LOCK_CUSTODY_V1',
+  );
+}
+
+export function createCup0119LockCustody(root, marker, owner, io) {
+  return createMigrationLockCustody(
+    root,
+    marker,
+    owner,
+    io,
+    cupRootPattern,
+    'PHUB_CUP_0119_LOCK_CUSTODY_V1',
+  );
+}
+
+function createMigrationLockCustody(root, marker, owner, io, pattern, schema) {
+  if (!pattern.test(root) || !Buffer.isBuffer(marker)) r1Stop('LOCK_SCOPE');
   const file = root + '/ownership.json';
   let record = null;
   function validate(value) {
     r1Exact(value, ['schema', 'markerSha256', 'locks']);
     r1Exact(value.locks, R1_TAIL_LOCKS);
-    if (value.schema !== 'PHUB_R1_TAIL_LOCK_CUSTODY_V1' || value.markerSha256 !== r1Hash(marker))
-      r1Stop('LOCK_RECORD');
+    if (value.schema !== schema || value.markerSha256 !== r1Hash(marker)) r1Stop('LOCK_RECORD');
     for (const target of R1_TAIL_LOCKS) {
       const entry = value.locks[target];
       r1Exact(entry, ['device', 'inode', 'stage']);
@@ -77,7 +101,7 @@ export function createR1TailLockCustody(root, marker, owner, io) {
       if (info.nlink !== 1 || !io.read(stage).equals(marker)) r1Stop('LOCK_STAGE');
     }
     record = validate({
-      schema: 'PHUB_R1_TAIL_LOCK_CUSTODY_V1',
+      schema,
       markerSha256: r1Hash(marker),
       locks,
     });

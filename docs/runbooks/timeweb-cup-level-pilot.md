@@ -42,6 +42,33 @@ cannot own the exact transaction, stop for separate owner admission. Missing or 
 requires read-only reconciliation of that attempt, ledger and catalog, with no automatic retry.
 Application rollback retains the expanded constraint and migration history.
 
+### Exact 0119 exception for the retained schedule archive
+
+The `--critical-cup-0119` profile is only for migration bytes from `2105e3e03d68`
+on the currently pinned Timeweb database and the `43d4bd64e5ae` application baseline.
+It requires a separately reviewed and enrolled controller. The root-only request lives
+at `/opt/phub/timeweb-beta/operator/cup-0119-migration.json`. Its schema
+`PHUB_TIMEWEB_CUP_0119_REQUEST_V1` binds a new v4 attempt ID, exact enrolled
+`controllerSha`, exact `migrationSourceSha`, running `postgresContainerId`, UTC
+`expiresAt` within an hour, and `retainedBackupReceiptSha256`.
+
+Set `externalRestoreDecision` to an object with status
+`OWNER_WAIVED_EXTERNAL_RESTORE_FOR_CUP_0119`, the enrolled `owner`, and the
+`referenceSha256` of the explicit owner decision. The decision applies to this schema
+operation. The controller verifies the named local archive and its receipt without
+requiring an independent restore of that archive. Retain its actual archive time and
+unrestored status in recovery evidence. Application releases still use their own
+backup admission.
+
+Use the exact enrolled controller with `--critical-cup-0119` and the request path.
+It claims the common migrations executor and both host markers, records the catalog
+fingerprint and intent before SQL, then compares the exact committed ledger and catalog
+before sealing a receipt. A normal PostgreSQL rollback is terminal only after an exact
+preimage readback. On uncertain exit use `--critical-cup-0119-reconcile` with the same
+request. Reconciliation never applies the SQL. If the launch was recorded and exact
+preimage remains without a terminal rollback receipt, keep the markers and reconcile
+the client/backend before any lock cleanup.
+
 The shared test-stand updater also uses the ordinary packaged migrator. On an existing 122-row
 stand, schedule that stand's separate migration admission before the updater. An empty
 disposable stand can bootstrap normally. This runbook does not authorize a shared stand reset.

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { createR1TailLockCustody, R1_TAIL_LOCKS } from './r1-tail-migration-locks.js';
+import {
+  createCup0119LockCustody,
+  createR1TailLockCustody,
+  R1_TAIL_LOCKS,
+} from './r1-tail-migration-locks.js';
 import type { R1LockIO } from './r1-tail-migration-locks.js';
 const root = '/opt/phub/timeweb-beta/backups/r1-tail108-119-00000000-0000-4000-8000-000000000001';
 const marker = Buffer.from('synthetic exact plan/operation-bound marker\n');
-function fixture() {
+function fixture(lockRoot = root, makeCustody = createR1TailLockCustody) {
   type Inode = { dev: number; ino: number; nlink: number; bytes: Buffer };
   const files = new Map<string, Inode>();
   let next = 100,
@@ -71,7 +75,7 @@ function fixture() {
     io,
     files,
     events,
-    instance: () => createR1TailLockCustody(root, marker, owner, io),
+    instance: () => makeCustody(lockRoot, marker, owner, io),
     crash: (at: number) => {
       step = 0;
       fail = at;
@@ -168,5 +172,24 @@ describe('fixed R1 write-ahead lock inode custody', () => {
     recovery.load();
     recovery.release();
     expect(R1_TAIL_LOCKS.some((path) => f.files.has(path))).toBe(false);
+  });
+});
+
+describe('CUP 0119 host lock custody', () => {
+  const operation = '/opt/phub/timeweb-beta/operator/cup-0119-00000000-0000-4000-8000-000000000001';
+  it('seals independent ownership under the same shared lock names', () => {
+    const f = fixture(operation, createCup0119LockCustody);
+    f.crash(4);
+    expect(() => f.instance().claim(() => {})).toThrow('SYNTHETIC_ACK_LOST');
+    f.clear();
+    const ownership = f.instance().load();
+    expect(ownership).toMatchObject({ schema: 'PHUB_CUP_0119_LOCK_CUSTODY_V1' });
+    f.instance().release();
+    expect(R1_TAIL_LOCKS.some((path) => f.files.has(path))).toBe(false);
+  });
+
+  it('cannot use an R1 attempt directory', () => {
+    const f = fixture(root, createCup0119LockCustody);
+    expect(() => f.instance()).toThrow('R1_TAIL_LOCK_SCOPE');
   });
 });

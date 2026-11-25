@@ -23,3 +23,4 @@ export function createR1TailLockCustody(
   owner: { assertOwned: () => void },
   io: R1LockIO,
 ): R1LockCustody;
+export const createCup0119LockCustody: typeof createR1TailLockCustody;
