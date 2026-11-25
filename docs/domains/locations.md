@@ -61,6 +61,9 @@ re-encoding with `sharp`, and writes one content-addressed WebP object to S3-com
 stable PadlHub URL `/public/api/v1/{tenantKey}/location-media/{assetId}`. The browser never sees S3
 credentials or a persisted signed URL; the public media endpoint redirects each request to a
 short-lived S3 read URL.
+The directory preserves the gallery's cover address in `coverImageUrl`. The API accepts a valid
+HTTPS URL or the stable location-media path. Clients resolve the path against their configured API
+origin, just as they do for the detail gallery.
 
 Recommendation-card bindings are stored in `locations.recommendation_card_photos`. A create or
 explicit replacement validates every asset as `READY` in the same tenant before updating the

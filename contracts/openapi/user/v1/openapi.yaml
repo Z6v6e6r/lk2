@@ -9971,8 +9971,14 @@ components:
           type: integer
           minimum: 0
         coverImageUrl:
-          type: [string, 'null']
-          format: uri
+          description: HTTPS URL or a stable PadlHub location-media path on the API origin.
+          oneOf:
+            - type: string
+              format: uri
+              pattern: '^https://'
+            - type: string
+              pattern: '^/public/api/v1/[a-zA-Z0-9][a-zA-Z0-9-]{1,62}/location-media/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+            - type: 'null'
         route:
           type: string
           pattern: '^/'
