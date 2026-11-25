@@ -276,27 +276,23 @@ describe('legacy game import repository', () => {
     const profileSummaryInserts = clientQuery.mock.calls.filter(([text]) =>
       text.includes('insert into profile.user_summaries'),
     );
-    expect(profileSummaryInserts.map(([, values]) => values?.slice(3, 5))).toEqual([
-      ['C+', 3.8],
-      ['B', 4.2],
-    ]);
+    expect(profileSummaryInserts).toHaveLength(2);
+    expect(profileSummaryInserts.map(([, values]) => values?.[2])).toEqual(
+      snapshot.participants.map((participant) => participant.displayName),
+    );
+    for (const [text, values] of profileSummaryInserts) {
+      expect(text).not.toMatch(/level_(label|value)/);
+      expect(values).toHaveLength(3);
+    }
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into identity.users')),
     ).toBe(true);
-    expect(
-      clientQuery.mock.calls.some(([text]) =>
-        text.includes(
-          'level_label = coalesce(excluded.level_label, profile.user_summaries.level_label)',
-        ),
-      ),
-    ).toBe(false);
-    expect(
-      clientQuery.mock.calls.some(([text]) =>
-        text.includes(
-          'level_value = coalesce(excluded.level_value, profile.user_summaries.level_value)',
-        ),
-      ),
-    ).toBe(false);
+    const profileSummaryUpdates = clientQuery.mock.calls.filter(([text]) =>
+      text.includes('update profile.user_summaries'),
+    );
+    for (const [text] of profileSummaryUpdates) {
+      expect(text).not.toMatch(/level_(label|value)/);
+    }
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into locations.profiles')),
     ).toBe(true);

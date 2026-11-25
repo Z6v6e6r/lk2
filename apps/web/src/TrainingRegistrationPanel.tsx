@@ -230,7 +230,7 @@ function TrainingRegistrationSession({
       {levelSetup && canPickParticipationLevel(gateway) ? (
         <ParticipationLevelPicker
           gateway={gateway}
-          onSaved={() => void run(false)}
+          onSaved={() => setLevelSetup(false)}
           onCancel={() => setLevelSetup(false)}
         />
       ) : null}

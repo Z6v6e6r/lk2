@@ -44,6 +44,7 @@ interface HomeDashboardPageProps {
     readonly displayName: string;
   };
   readonly viewer: HomeSectionEnvelope<UserProfile> | null;
+  readonly viewerPadelLevel?: UserProfile['level'] | null;
   readonly upcoming: HomeSectionEnvelope<UserUpcomingBookings> | null;
   readonly tenantName: string;
   readonly layoutVariant?: 'default' | 'v2' | 'v3';
@@ -1139,22 +1140,30 @@ function HomeViewerHeader({
   notificationUnreadCount,
   onRetry,
   viewer,
+  viewerPadelLevel,
 }: {
   readonly fallback: HomeDashboardPageProps['viewerFallback'];
   readonly notificationsAvailable: boolean;
   readonly notificationUnreadCount: number;
   readonly onRetry: () => void;
   readonly viewer: HomeSectionEnvelope<UserProfile> | null;
+  readonly viewerPadelLevel?: UserProfile['level'] | null;
 }): React.JSX.Element {
   const profile = viewer && viewer.state !== 'UNAVAILABLE' ? viewer.value : null;
   const displayName = profile?.displayName ?? fallback.displayName;
   const userId = profile?.userId ?? fallback.id;
   const balance = profile ? formatBalance(profile.balanceMinor, profile.currency) : null;
+  const level =
+    viewerPadelLevel === undefined
+      ? profile?.level
+      : profile?.userId === fallback.id
+        ? viewerPadelLevel
+        : null;
   const levelLabel = profile
-    ? profile.level
-      ? profile.level.assessmentRequired
+    ? level
+      ? level.assessmentRequired
         ? '?'
-        : profile.level.label
+        : level.label
       : UNKNOWN_VALUE_PLACEHOLDER
     : 'не загружен';
 
@@ -1165,8 +1174,8 @@ function HomeViewerHeader({
           alt={displayName}
           fallbackSeed={userId}
           level={levelLabel}
-          progress={profile ? levelAvatarProgress(profile.level) : 0}
-          showLevelRing={Boolean(profile?.level)}
+          progress={profile ? levelAvatarProgress(level ?? undefined) : 0}
+          showLevelRing={Boolean(level)}
           src={profile?.avatarUrl ?? null}
         />
         <span className="fh-profile-copy">
@@ -1277,6 +1286,7 @@ export function HomeDashboardPage({
   dashboard,
   viewerFallback,
   viewer,
+  viewerPadelLevel,
   upcoming,
   tenantName,
   layoutVariant = 'default',
@@ -1556,6 +1566,7 @@ export function HomeDashboardPage({
             notificationUnreadCount={notificationUnreadCount}
             onRetry={onRetryViewer}
             viewer={viewer}
+            viewerPadelLevel={viewerPadelLevel}
           />
 
           {layoutVariant === 'v3' ? (

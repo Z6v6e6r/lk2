@@ -2246,6 +2246,8 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Unauthorized
         '403':
           $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
     put:
@@ -2253,8 +2255,8 @@ paths:
       operationId: setOwnPlayerLevel
       summary: Save a self-declared level from the current canonical scale
       description: |
-        The authenticated subject is always the target player. This endpoint records
-        `SELF_DECLARED`; an onboarding result requires a separate trusted assessment command.
+        The authenticated subject is always the target player. PADEL writes return
+        `PROFILE_LEVEL_CUP_AUTHORITATIVE`. Other sports can record `SELF_DECLARED`.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -2304,10 +2306,11 @@ paths:
     post:
       tags: [profiles]
       operationId: completeOwnLevelAssessment
-      summary: Complete the authenticated player's level assessment
+      summary: Legacy PADEL level assessment endpoint
+      deprecated: true
       description: |
-        The server validates the active branch and computes the numeric score and canonical
-        level. Caller-supplied player, source, score, rank or level fields are rejected.
+        PADEL level assignment is owned by CUP. Valid submissions return
+        `PROFILE_LEVEL_CUP_AUTHORITATIVE`.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -7365,6 +7368,10 @@ components:
           anyOf:
             - $ref: '#/components/schemas/PlayerSportLevel'
             - type: 'null'
+        projectionStatus:
+          type: string
+          enum: [PENDING, PROJECTED]
+          description: PADEL only. PENDING means no CUP projection has arrived yet.
     SetOwnPlayerLevelRequest:
       type: object
       additionalProperties: false
@@ -8578,7 +8585,7 @@ components:
       properties:
         place: { type: integer, minimum: 1 }
         displayName: { type: string, minLength: 1, maxLength: 120 }
-        currentLevel: { type: number }
+        currentLevel: { type: [number, 'null'] }
         score: { type: number }
         delta: { type: number }
         games: { type: number }

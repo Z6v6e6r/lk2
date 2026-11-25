@@ -292,9 +292,11 @@ export function createBookingPreferencesRepository(pool: Pool): BookingPreferenc
       return withTenantTransaction(pool, tenantId, async (client) => {
         const row = await queryOne<LevelRow>(
           client,
-          `select level_label
-             from profile.user_summaries
-            where tenant_id = $1 and user_id = $2`,
+          `select summary.level_label
+             from eligibility.cup_player_level_projections cup
+             join profile.user_summaries summary
+               on summary.tenant_id = cup.tenant_id and summary.user_id = cup.player_id
+            where cup.tenant_id = $1 and cup.player_id = $2 and cup.sport_code = 'PADEL' `,
           [tenantId, userId],
         );
         return row?.level_label && LEVELS.includes(row.level_label) ? row.level_label : null;
@@ -307,12 +309,16 @@ export function createBookingPreferencesRepository(pool: Pool): BookingPreferenc
           client,
           `select p.favorite_station_ids, p.preferred_time_windows, p.use_history,
                   p.recommend_friends, p.recommendation_display,
-                  p.version, p.updated_at, s.level_label
+                  p.version, p.updated_at,
+                  case when cup.player_id is not null then s.level_label end as level_label
              from identity.users u
              left join profile.booking_preferences p
                on p.tenant_id = u.tenant_id and p.user_id = u.id
              left join profile.user_summaries s
                on s.tenant_id = u.tenant_id and s.user_id = u.id
+             left join eligibility.cup_player_level_projections cup
+               on cup.tenant_id = s.tenant_id and cup.player_id = s.user_id
+              and cup.sport_code = 'PADEL'
             where u.tenant_id = $1 and u.id = $2`,
           [tenantId, userId],
         );

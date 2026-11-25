@@ -194,6 +194,8 @@ describe('CUP player level projection repository', () => {
     ['RATING_INITIAL_IMPORTED', 'MIGRATED'],
     ['RATING_BOOTSTRAPPED_FROM_VIVA', 'VIVA'],
     ['RATING_MANUALLY_CHANGED', 'MANUAL'],
+    ['GAME_RESULT_TIMEOUT_CONFIRMED', 'CALCULATED'],
+    ['TOURNAMENT_RATING_CORRECTION_APPLIED', 'CALCULATED'],
   ] as const)('preserves %s provenance as %s', async (sourceEventType, expectedSource) => {
     let savedSource: unknown;
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {

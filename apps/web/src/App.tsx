@@ -1,3 +1,4 @@
+import { confirmedPadelProfileLevel } from './profile-padel-level.js';
 import { HomePushPrompt } from './HomePushPrompt.js';
 import { MonthlyPurchasePanel } from './MonthlyPurchasePanel.js';
 import { cancelGameAndRead } from './game-cancel-readback.js';
@@ -1255,6 +1256,53 @@ export function App({
     protectedRoute.kind === 'home' ||
     protectedRoute.kind === 'home-v2' ||
     protectedRoute.kind === 'home-v3';
+  const session = state.session;
+  const viewerId = session?.context.user.id;
+  const webPadelLevelRoute =
+    clientPlatform === 'web' && state.view === 'home' && viewerId && gateway.getOwnPlayerLevel
+      ? isHomeRoute
+        ? 'home'
+        : protectedRoute.kind === 'profile' && (requestedProfileUserId ?? viewerId) === viewerId
+          ? 'profile'
+          : null
+      : null;
+  const webPadelLevelReload = webPadelLevelRoute === 'home' ? homeViewerReloadToken : 0;
+  const [webPadelLevelRead, setWebPadelLevelRead] = useState<{
+    readonly gateway: AuthGateway;
+    readonly session: AuthenticatedSession;
+    readonly route: 'home' | 'profile';
+    readonly reload: number;
+    readonly level: UserProfile['level'] | null;
+  } | null>(null);
+  const webPadelLevel =
+    webPadelLevelRead?.gateway === gateway &&
+    webPadelLevelRead.session === session &&
+    webPadelLevelRead.route === webPadelLevelRoute &&
+    webPadelLevelRead.reload === webPadelLevelReload
+      ? webPadelLevelRead.level
+      : null;
+  useEffect(() => {
+    if (!session || !viewerId || !webPadelLevelRoute || !gateway.getOwnPlayerLevel) return;
+    let active = true;
+    const publish = (level: UserProfile['level'] | null) => {
+      if (active)
+        setWebPadelLevelRead({
+          gateway,
+          session,
+          route: webPadelLevelRoute,
+          reload: webPadelLevelReload,
+          level,
+        });
+    };
+    void gateway.getOwnPlayerLevel('PADEL').then(
+      (result) => publish(confirmedPadelProfileLevel(result, viewerId)),
+      () => publish(null),
+    );
+    return () => {
+      active = false;
+    };
+  }, [gateway, session, viewerId, webPadelLevelRoute, webPadelLevelReload]);
+
   const phoneInput = useRef<HTMLInputElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   const chatLastSequenceRef = useRef(0);
@@ -3028,6 +3076,9 @@ export function App({
         <ProfilePage
           subscriptionRenewalAvailable={clientPlatform === 'web'}
           profile={userProfile}
+          {...(webPadelLevelRoute === 'profile'
+            ? { padelLevel: userProfile.profile.userId === viewerId ? webPadelLevel : null }
+            : {})}
           logoutBusy={state.busy === 'logout'}
           notificationUnreadCount={(notifications?.unreadCount ?? 0) + friendRequests.length}
           privacySettings={profilePrivacy}
@@ -3608,6 +3659,7 @@ export function App({
           dashboard={homeBase}
           viewerFallback={context.user}
           viewer={homeViewer}
+          {...(webPadelLevelRoute === 'home' ? { viewerPadelLevel: webPadelLevel } : {})}
           upcoming={homeUpcoming}
           tenantName={context.tenant.name}
           layoutVariant={

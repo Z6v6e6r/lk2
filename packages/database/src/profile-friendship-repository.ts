@@ -391,13 +391,16 @@ async function listPendingRequests(
     `select request.id,
             ${peerColumn} as peer_user_id,
             coalesce(nullif(btrim(summary.display_name), ''), 'Игрок ПадлхАБ') as display_name,
-            summary.level_label,
+            case when cup.player_id is not null then summary.level_label end as level_label,
             photo.delivery_id,
             request.created_at
        from profile.friend_requests request
        left join profile.user_summaries summary
          on summary.tenant_id = request.tenant_id
         and summary.user_id = ${peerColumn}
+       left join eligibility.cup_player_level_projections cup
+         on cup.tenant_id = summary.tenant_id and cup.player_id = summary.user_id
+        and cup.sport_code = 'PADEL'
        left join integration.user_profile_photo_sync photo
          on photo.tenant_id = request.tenant_id
         and photo.user_id = ${peerColumn}
@@ -695,12 +698,15 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
            )
            select f.user_id,
                   coalesce(nullif(btrim(s.display_name), ''), 'Игрок ПадлхАБ') as display_name,
-                  s.level_label,
+                  case when cup.player_id is not null then s.level_label end as level_label,
                   p.delivery_id,
                   f.created_at
              from friend_ids f
              left join profile.user_summaries s
                on s.tenant_id = $1 and s.user_id = f.user_id
+             left join eligibility.cup_player_level_projections cup
+               on cup.tenant_id = s.tenant_id and cup.player_id = s.user_id
+              and cup.sport_code = 'PADEL'
              left join integration.user_profile_photo_sync p
                on p.tenant_id = $1 and p.user_id = f.user_id
             order by f.created_at desc`,
@@ -1222,11 +1228,14 @@ export async function listNotificationFriendCandidates(
   }>(
     `with friends as (select case when left_user_id=$2 then right_user_id else left_user_id end user_id
       from profile.friendships where tenant_id=$1 and (left_user_id=$2 or right_user_id=$2))
-     select f.user_id,p.favorite_station_ids,p.preferred_time_windows,s.level_label from friends f
+     select f.user_id,p.favorite_station_ids,p.preferred_time_windows,case when cup.player_id is not null then s.level_label end as level_label from friends f
      join identity.users u on u.tenant_id=$1 and u.id=f.user_id and u.status='ACTIVE'
      join identity.user_access_profiles a on a.tenant_id=$1 and a.user_id=f.user_id and 'games.play'=any(a.permissions)
      join profile.booking_preferences p on p.tenant_id=$1 and p.user_id=f.user_id and p.recommend_friends=true
      left join profile.user_summaries s on s.tenant_id=$1 and s.user_id=f.user_id
+     left join eligibility.cup_player_level_projections cup
+       on cup.tenant_id = s.tenant_id and cup.player_id = s.user_id
+      and cup.sport_code = 'PADEL'
      where ($3::uuid is null or f.user_id>$3) and ($4::uuid is null or f.user_id=$4)
        and ${profileReachableSql({ tenantParam: '$1', userParam: 'f.user_id' })}
      order by f.user_id limit 100`,

@@ -45,7 +45,7 @@ export const communityReadExperienceRatingRowSchema = z
   .object({
     place: z.number().int().positive(),
     displayName: z.string().min(1).max(120),
-    currentLevel: finite,
+    currentLevel: finite.nullable(),
     score: finite,
     delta: finite,
     games: finite,

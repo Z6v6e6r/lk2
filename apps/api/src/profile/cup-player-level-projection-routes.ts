@@ -1,6 +1,10 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-import type { CupPlayerLevelProjectionRepository } from '@phub/database';
+import {
+  CUP_PLAYER_LEVEL_PROJECTION_EVENT_TYPES,
+  type CupPlayerLevelProjectionRepository,
+} from '@phub/database';
+import { padelGradeForScore } from '@phub/domain';
 import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { z } from 'zod';
 
@@ -26,11 +30,7 @@ const payloadSchema = z
       .strict(),
     source: z
       .object({
-        eventType: z.enum([
-          'RATING_INITIAL_IMPORTED',
-          'RATING_BOOTSTRAPPED_FROM_VIVA',
-          'RATING_MANUALLY_CHANGED',
-        ]),
+        eventType: z.enum(CUP_PLAYER_LEVEL_PROJECTION_EVENT_TYPES),
         formulaVersion: z.string().trim().min(1).max(100),
       })
       .strict(),
@@ -120,6 +120,15 @@ export function registerCupPlayerLevelProjectionRoutes(
           400,
           'CUP_PLAYER_LEVEL_FORMULA_MISMATCH',
           'Версия формулы уровня не поддерживается.',
+        );
+      }
+      if (padelGradeForScore(parsed.data.level.numericValue) !== parsed.data.level.code) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'CUP_PLAYER_LEVEL_GRADE_MISMATCH',
+          'Число и буквенный уровень не соответствуют шкале ЦУП.',
         );
       }
       const key = idempotencyKey(request);

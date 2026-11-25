@@ -844,15 +844,6 @@ const communityMediaRuntime = communityMediaObjectStore
 const participationLevelGate = createParticipationLevelGate(pool);
 const logLevelDecision = (event: Record<string, string>) =>
   logger.info({ eligibility: event }, 'external participation level decision');
-const tournamentLevelCheck = createExternalLevelCheck({
-  gate: participationLevelGate,
-  activityType: 'TOURNAMENT',
-  action: 'REGISTER',
-  constraintSource: 'LEGACY_TOURNAMENT_SETTINGS',
-  // Captured by the fresh registration-date read that immediately precedes this check.
-  levelRange: (_actor, id) => Promise.resolve(tournamentSummarySource?.registrationLevelRange(id)),
-  onDecision: logLevelDecision,
-});
 const trainingLevelCheck = createExternalLevelCheck({
   gate: participationLevelGate,
   activityType: 'TRAINING',
@@ -884,7 +875,6 @@ const tournamentLocal = createTournamentLocalRuntime({
         token: async (actor: Parameters<typeof authService.issueVivaAccessToken>[0]) =>
           (await authService.issueVivaAccessToken(actor)).accessToken,
         date: (id: string) => tournamentSummarySource!.resolveRegistrationDate(id),
-        levelCheck: tournamentLevelCheck,
       }
     : {}),
 });

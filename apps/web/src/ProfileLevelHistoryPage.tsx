@@ -156,8 +156,6 @@ export function ProfileLevelHistoryPage({
   readonly history: ProfileLevelHistory | null;
   readonly error?: string | null;
 }): React.JSX.Element {
-  const current = history?.items.at(-1);
-
   return (
     <div className="profile-level-history-shell">
       <main className="profile-level-history-page">
@@ -172,12 +170,6 @@ export function ProfileLevelHistoryPage({
           <p>динамика игрока</p>
           <h1>История уровня</h1>
           <small>Дата по оси X · уровень по оси Y</small>
-          {current ? (
-            <div>
-              <span>текущий уровень</span>
-              <strong>{current.levelLabel}</strong>
-            </div>
-          ) : null}
         </section>
 
         <div className="profile-level-history-content">

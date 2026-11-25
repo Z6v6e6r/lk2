@@ -1628,13 +1628,11 @@ describe('browser auth gateway', () => {
       balanceMinor: 54_000,
       avatarUrl:
         'https://api.padlhub.test/public/api/v1/media/profile-photos/00000000-0000-4000-8000-000000000002/44444444-4444-4444-8444-444444444444',
-      level: { label: 'C+', value: 3.8, assessmentRequired: false },
     });
     expect(profile).toMatchObject({
       profile: {
         userId,
         displayName: 'Анна Петрова',
-        level: { label: 'C+', value: 3.8, assessmentRequired: false },
       },
       privateAccount: {
         phoneLast4: '0001',
@@ -1643,6 +1641,8 @@ describe('browser auth gateway', () => {
       },
       access: { audience: 'SELF', tier: 'SELF' },
     });
+    expect(selfProfile).not.toHaveProperty('level');
+    expect(profile.profile).not.toHaveProperty('level');
     expect(fetchImplementation).toHaveBeenCalledTimes(8);
     expect(fetchImplementation.mock.calls[2]?.[0]).toBe(
       'https://api.padlhub.test/user/api/v1/padlhub/auth/viva/access',

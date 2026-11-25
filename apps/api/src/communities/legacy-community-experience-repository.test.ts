@@ -40,6 +40,9 @@ function repository(
   bridgeImplementation: ConstructorParameters<
     typeof LegacyCommunityExperienceRepository
   >[0]['bridge'] = bridge(),
+  readCupLevels?: ConstructorParameters<
+    typeof LegacyCommunityExperienceRepository
+  >[0]['readCupLevels'],
 ) {
   return new LegacyCommunityExperienceRepository({
     baseUrl: 'https://legacy.test',
@@ -48,6 +51,7 @@ function repository(
     circuitFailureThreshold: 3,
     circuitResetMs: 30_000,
     bridge: bridgeImplementation,
+    ...(readCupLevels ? { readCupLevels } : {}),
     fetchImplementation,
   });
 }
@@ -169,11 +173,17 @@ describe('legacy community experience repository', () => {
                 {
                   playerId: 'player-1',
                   playerName: 'Player',
-                  currentLevel: null,
+                  currentLevel: 6.5,
                   overallScore: '2.5',
                   levelDelta: 0,
                   gamesPlayed: 3,
                   tournamentsPlayed: 4,
+                },
+                {
+                  playerId: '99999999-9999-4999-8999-999999999999',
+                  playerName: 'Projected player',
+                  currentLevel: 1.5,
+                  overallScore: 2,
                 },
               ],
             }),
@@ -186,7 +196,12 @@ describe('legacy community experience repository', () => {
         }),
       );
     });
-    const subject = repository(fetchImplementation);
+    const readCupLevels = vi
+      .fn()
+      .mockResolvedValue(
+        new Map([['99999999-9999-4999-8999-999999999999', { label: 'C', value: 3.12345 }]]),
+      );
+    const subject = repository(fetchImplementation, bridge(), readCupLevels);
     await expect(subject.getChat({ ...input, limit: 1 })).resolves.toMatchObject({
       items: [{ isViewer: true, author: { displayName: 'Viewer' } }],
     });
@@ -195,8 +210,14 @@ describe('legacy community experience repository', () => {
     ).resolves.toMatchObject({
       calculationVersion: 'community-rating-v1.3.0',
       tab: 'dynamics',
-      rows: [{ place: 1, currentLevel: 0, score: 2.5 }],
+      rows: [
+        { place: 1, currentLevel: null, score: 2.5 },
+        { place: 2, currentLevel: 3.12345, score: 2 },
+      ],
     });
+    expect(readCupLevels).toHaveBeenCalledWith(input.tenantId, [
+      '99999999-9999-4999-8999-999999999999',
+    ]);
     expect(
       fetchImplementation.mock.calls.some(([value]) => fetchUrl(value).href.includes('/messages')),
     ).toBe(true);

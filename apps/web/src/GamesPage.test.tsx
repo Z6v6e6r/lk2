@@ -761,7 +761,7 @@ describe('GamesPage discovery', () => {
     expect(await screen.findByText(/Вы в игре/)).toBeInTheDocument();
   });
 
-  it('saves a self-declared canonical level and resumes the interrupted join', async () => {
+  it('requires another explicit game attempt after a level save', async () => {
     const levelId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
     const api: AuthGateway = {
       ...gateway(),
@@ -828,14 +828,17 @@ describe('GamesPage discovery', () => {
 
     await user.click(within(dialog).getByRole('button', { name: 'Знаю свой уровень' }));
     expect(within(dialog).getByRole('combobox', { name: 'Ваш уровень' })).toHaveValue(levelId);
-    await user.click(within(dialog).getByRole('button', { name: 'Сохранить и продолжить запись' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Сохранить уровень' }));
 
     await waitFor(() => expect(api.setOwnPlayerLevel).toHaveBeenCalledWith(levelId, 'PADEL'));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(api.joinGame).toHaveBeenCalledTimes(1);
+    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
     await waitFor(() => expect(api.joinGame).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/Вы в игре/)).toBeVisible();
   });
 
-  it('completes the server-owned assessment and resumes the interrupted join', async () => {
+  it('requires another explicit game attempt after an assessment save', async () => {
     const levelId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
     const api: AuthGateway = {
       ...gateway(),
@@ -917,7 +920,7 @@ describe('GamesPage discovery', () => {
     await user.click(await within(dialog).findByRole('button', { name: 'Меньше месяца' }));
     await user.click(within(dialog).getByRole('button', { name: 'Далее' }));
     await user.click(within(dialog).getByRole('button', { name: 'Нет' }));
-    await user.click(within(dialog).getByRole('button', { name: 'Завершить и продолжить' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Сохранить результат' }));
 
     await waitFor(() =>
       expect(api.completeOwnLevelAssessment).toHaveBeenCalledWith('padel-self-assessment-v1', {
@@ -925,6 +928,9 @@ describe('GamesPage discovery', () => {
         q1_2: ['no'],
       }),
     );
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(api.joinGame).toHaveBeenCalledTimes(1);
+    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
     await waitFor(() => expect(api.joinGame).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/Вы в игре/)).toBeVisible();
   });

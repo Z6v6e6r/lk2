@@ -199,7 +199,7 @@ describe('explicit API/Web upgrade boundary', () => {
         assert.throws(()=>validateRuntimeUpgrade({previousSha,candidateSha,candidateTree},[...entries,{path:renderer}]),service);
       }
       assert.throws(()=>validateRuntimeDelta([renderer]),/runtime_definition_changed/);
-      for(const path of ['packages/database/migrations/0123.sql','contracts/openapi/user/v1/openapi.yaml','apps/api/Dockerfile','deploy/timeweb/compose.beta.yaml'])
+      for(const path of ['packages/database/migrations/0123.sql','contracts/openapi/user/v1/openapi.yaml','contracts/openapi/user/v1/tournament-local.yaml','apps/api/Dockerfile','deploy/timeweb/compose.beta.yaml'])
         assert.throws(()=>validateRuntimeUpgrade({previousSha,candidateSha,candidateTree},[...entries,{path}]));
     `);
   });
