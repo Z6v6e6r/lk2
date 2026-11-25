@@ -417,32 +417,44 @@ export function GameCreateScheduleWizard({
 
       {wizard.step === 0 ? (
         <section className="game-schedule-stack" aria-label="Клубы">
-          <input
-            type="search"
-            className="game-schedule-input"
-            aria-label="Найти клуб"
-            placeholder="Найти клуб"
-            value={search}
-            onChange={(event) => {
-              const value = event.target.value;
-              setSearch(value);
-              if (value.trim()) {
-                setCollapsedCities((current) => (current.size ? new Set() : current));
-              }
-            }}
-          />
-          <button
-            type="button"
-            className="game-schedule-card game-schedule-link game-schedule-station-card"
-            aria-expanded={showLocations}
-            onClick={() => setShowLocations((value) => !value)}
-          >
-            <span>
-              <strong>Найти на карте</strong>
-              <small>Клубы рядом с вами</small>
-            </span>
-            <img src={stationChevronUrl} width={16} height={28} alt="" />
-          </button>
+          <div className="game-schedule-club-tools">
+            <input
+              type="search"
+              className="game-schedule-input"
+              aria-label="Найти клуб"
+              placeholder="Найти клуб"
+              value={search}
+              onChange={(event) => {
+                const value = event.target.value;
+                setSearch(value);
+                if (value.trim()) {
+                  setCollapsedCities((current) => (current.size ? new Set() : current));
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="game-schedule-map-toggle"
+              aria-expanded={showLocations}
+              onClick={() => setShowLocations((value) => !value)}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M13.4 6.75c0 3.14-3.58 6.07-4.86 7.04a.9.9 0 0 1-1.08 0C6.18 12.82 2.6 9.89 2.6 6.75a5.4 5.4 0 1 1 10.8 0Z" />
+                <circle cx="8" cy="6.75" r="1.75" />
+              </svg>
+              Карта
+            </button>
+          </div>
           {showLocations ? (
             <div className="game-schedule-card game-schedule-stack">
               {mapStations.map((item) => (
