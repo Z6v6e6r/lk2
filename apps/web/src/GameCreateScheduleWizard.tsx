@@ -367,16 +367,15 @@ export function GameCreateScheduleWizard({
     <main className="games-page game-schedule-wizard">
       <header className="game-schedule-header">
         {wizard.step === 0 ? (
-          <a href={gamesHref}>← Назад</a>
+          <a className="game-schedule-back" href={gamesHref} aria-label="Назад" />
         ) : (
           <button
+            className="game-schedule-back"
             type="button"
             aria-label={wizard.step === 2 ? 'Закрыть' : 'Назад'}
             disabled={checkout?.busy}
             onClick={wizard.back}
-          >
-            {wizard.step === 2 ? 'Закрыть' : '← Назад'}
-          </button>
+          />
         )}
         <h1 ref={heading} tabIndex={-1}>
           {headerTitle}

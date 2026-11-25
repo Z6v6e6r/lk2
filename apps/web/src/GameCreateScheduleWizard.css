@@ -11,11 +11,12 @@ body:has(.game-schedule-wizard) {
   --schedule-accent: #7253d8;
   --schedule-pale: #f8f6fe;
   --schedule-display: 'RF Dewi', 'Inter Display', sans-serif;
+  --schedule-inline-padding: 16px;
   width: min(100%, 480px);
   max-width: 480px;
   min-height: 100dvh;
   margin: 0 auto;
-  padding: 16px 16px 40px;
+  padding: 16px var(--schedule-inline-padding) 40px;
   background: var(--schedule-ground);
   color: var(--schedule-ink);
   font-synthesis: style;
@@ -34,23 +35,56 @@ body:has(.game-schedule-wizard) {
 }
 
 .game-schedule-header {
+  box-sizing: border-box;
   display: flex;
-  min-height: 36px;
+  height: 64px;
   align-items: center;
-  gap: 16px;
-  margin: 0 0 12px;
+  justify-content: space-between;
+  margin: 0 calc(-1 * var(--schedule-inline-padding)) 12px;
+  padding: 16px 20px;
+  border-bottom: 0.5px solid #ededed;
 }
 
-.game-schedule-header > :first-child {
-  padding: 6px 10px;
-  color: var(--schedule-ink);
+.game-schedule-header::after {
+  flex: 0 0 32px;
+  content: '';
+}
+
+.game-schedule-header .game-schedule-back {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #f1f1f1;
   text-decoration: none;
-  font: italic 800 13px/1.4 var(--schedule-display);
+}
+
+.game-schedule-back::before {
+  width: 7px;
+  height: 12px;
+  background: #888889;
+  clip-path: polygon(100% 13%, 78% 0, 0 50%, 78% 100%, 100% 87%, 41% 50%);
+  content: '';
+}
+
+.game-schedule-header .game-schedule-back:disabled {
+  cursor: not-allowed;
 }
 
 .game-schedule-header h1 {
-  font: 800 18px/1.25 var(--schedule-display);
-  letter-spacing: -0.25px;
+  flex: 1;
+  min-width: 0;
+  color: #353436;
+  font:
+    600 14px/1.2 'Inter Display',
+    Inter,
+    sans-serif;
+  letter-spacing: 0.01em;
+  text-align: center;
 }
 
 .game-schedule-wizard h2,
@@ -793,7 +827,7 @@ body:has(.game-schedule-wizard) {
 
 @media (max-width: 350px) {
   .games-page.game-schedule-wizard {
-    padding-inline: 12px;
+    --schedule-inline-padding: 12px;
   }
   .game-schedule-visibility strong {
     font-size: 15px;
