@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
+  STATION_ALERT_STATUS,
+  STATION_ALERT_WAIVER_SHA256,
   STATION_BACKUP,
   STATION_OPERATION,
   STATION_PREVIOUS,
@@ -34,11 +36,12 @@ function operation() {
     confirmation:
       'DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_43D4BD64E5AE_43D4BD64E5AE_ONE_OFF_STATION_MANUAL_DUMP',
     ownerDecision: {
-      schema: 'PHUB_TIMEWEB_STATION_OWNER_DECISION_V1',
+      schema: 'PHUB_TIMEWEB_STATION_OWNER_DECISION_V2',
       authority: 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
       decision: STATION_BACKUP.policy,
       waiverMessageSha256: STATION_WAIVER_SHA256,
       waiverReference: `codex-user-message-sha256:${STATION_WAIVER_SHA256}`,
+      alertWaiverMessageSha256: STATION_ALERT_WAIVER_SHA256,
       releaseAuthorizationSha256: 'e'.repeat(64),
       receivedAt: '2026-11-25T09:40:00.000Z',
       acceptedSnapshotAgeSeconds: 3600,
@@ -58,9 +61,10 @@ function run(body: string) {
       `
     import assert from 'node:assert/strict';
     import { createHash } from 'node:crypto';
+    import { readFileSync } from 'node:fs';
     import { validateApiWebOperation, validateUpgradeReceipt, buildApiWebInstalledDescriptor,
-      runApiWebTransition, apiWebComposeArgs, validateInstalledCutoverKind } from './scripts/timeweb-api-web-upgrade.js';
-    import { STATION_BACKUP, STATION_KIND, STATION_PLAN, STATION_RECEIPT, validateStationObservation } from './scripts/timeweb-station-rollout.js';
+      runApiWebTransition, apiWebComposeArgs, validateInstalledCutoverKind, validateStationMonitoring, validateUpgradeMonitoring } from './scripts/timeweb-api-web-upgrade.js';
+    import { STATION_BACKUP, STATION_KIND, STATION_PLAN, STATION_RECEIPT, STATION_ALERT_STATUS, validateStationObservation } from './scripts/timeweb-station-rollout.js';
     const op = ${JSON.stringify(operation())};
     ${body}
   `,
@@ -80,6 +84,8 @@ describe('Timeweb station one-off rollout', () => {
       assert.throws(() => validateApiWebOperation({...op, controllerSha:'f'.repeat(40)}), /operation/);
       assert.throws(() => validateApiWebOperation({...op, skipMonitoring:true}), /invalid_keys/);
       assert.throws(() => validateApiWebOperation({...op, ownerDecision:{...op.ownerDecision, waiverMessageSha256:'f'.repeat(64)}}), /owner_scope/);
+      assert.throws(() => validateApiWebOperation({...op, ownerDecision:{...op.ownerDecision, alertWaiverMessageSha256:'f'.repeat(64)}}), /owner_scope/);
+      assert.throws(() => validateApiWebOperation({...op, schema:'PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V1'}), /invalid_keys/);
       assert.throws(() => validateApiWebOperation({...op, ownerDecision:{...op.ownerDecision, acceptedSnapshotAgeSeconds:1800}}), /operation/);
     `);
   });
@@ -113,6 +119,8 @@ describe('Timeweb station one-off rollout', () => {
     });
     const entries = [
       make('scripts/timeweb-api-web-upgrade.js', 'M'),
+      make('scripts/verify-timeweb-api-web-observability.js', 'M'),
+      make('scripts/verify-timeweb-api-web-observability.d.ts', 'M'),
       make('scripts/timeweb-station-rollout.js', 'A'),
       make('scripts/timeweb-station-rollout.d.ts', 'A'),
       make('scripts/timeweb-station-rollout.test.ts', 'A'),
@@ -162,21 +170,21 @@ describe('Timeweb station one-off rollout', () => {
     ).toThrow('backup_metadata');
   });
 
-  it('retains exact dump-only admission, and requires monitoring hashes', () => {
+  it('retains dump admission, a provider hash and the explicit alert decision', () => {
     const op = operation();
     const proof = {
       ...STATION_BACKUP,
       ownerScopeSha256: op.ownerDecision.scopeSha256,
       providerSha256: 'a'.repeat(64),
-      alertSha256: 'b'.repeat(64),
+      alertTestStatus: STATION_ALERT_STATUS,
     };
     expect(() => validateStationRetainedAdmission(proof, op)).not.toThrow();
     expect(() => validateStationRetainedAdmission({ ...proof, restoreVerified: true }, op)).toThrow(
       'retained_admission',
     );
-    expect(() => validateStationRetainedAdmission({ ...proof, alertSha256: '' }, op)).toThrow(
-      'retained_admission',
-    );
+    expect(() =>
+      validateStationRetainedAdmission({ ...proof, alertTestStatus: 'PASS' }, op),
+    ).toThrow('retained_admission');
   });
 
   it('rejects environment overrides that image replacement would silently discard', () => {
@@ -198,7 +206,7 @@ describe('Timeweb station one-off rollout', () => {
       const plan = {
         schema: STATION_PLAN, controllerSha: op.controllerSha,
         databaseAdmission: {...STATION_BACKUP, ownerScopeSha256: op.ownerDecision.scopeSha256,
-          providerSha256: 'a'.repeat(64), alertSha256: 'b'.repeat(64)},
+          providerSha256: 'a'.repeat(64), alertTestStatus: STATION_ALERT_STATUS},
         previous: {}, unchangedServiceImages: {}, secretSetReleaseId: op.expectedApi.releaseId,
         candidate: Object.fromEntries(['api','worker','web'].map(service => [
           service, {image:'ghcr.io/z6v6e6r/phub-'+service+'@sha256:'+'d'.repeat(64)}
@@ -208,7 +216,15 @@ describe('Timeweb station one-off rollout', () => {
       const planBytes = Buffer.from(JSON.stringify(plan));
       const planHash = sha(planBytes);
       const receipt = {schema: STATION_RECEIPT, status:'WORKER_INTENT', planSha256:planHash,
-        observedAt:'2026-11-25T10:00:00Z', databaseAdmissionSha256:sha(JSON.stringify(plan.databaseAdmission))};
+        observedAt:'2026-11-25T10:00:00Z', databaseAdmissionSha256:sha(JSON.stringify(plan.databaseAdmission)),
+        alertTestStatus:STATION_ALERT_STATUS};
+      const success = {...receipt,status:'SUCCESS', installedBaselineSha256:'f'.repeat(64),
+        observationSha256:'e'.repeat(64), providerReadbackSha256:'d'.repeat(64)};
+      assert.equal(validateUpgradeReceipt(success, planHash, op, plan, planBytes), success);
+      const reconciled = {...success,status:'RECONCILED',reconciledStatus:'SUCCESS'};
+      assert.equal(validateUpgradeReceipt(reconciled, planHash, op, plan, planBytes), reconciled);
+      assert.throws(() => validateUpgradeReceipt({...success, alertReadbackSha256:'b'.repeat(64)}, planHash, op, plan, planBytes), /invalid_keys/);
+      assert.throws(() => validateUpgradeReceipt({...success, providerReadbackSha256:''}, planHash, op, plan, planBytes), /invalid_receipt/);
       assert.equal(validateUpgradeReceipt(receipt, planHash, op, plan, planBytes), receipt);
       assert.throws(() => validateUpgradeReceipt({...receipt, databaseAdmissionSha256:'a'.repeat(64)}, planHash, op, plan, planBytes), /receipt_context/);
       const id = op.candidateSha+'-456-1';
@@ -218,6 +234,33 @@ describe('Timeweb station one-off rollout', () => {
       assert.throws(() => validateInstalledCutoverKind('API_WEB', STATION_RECEIPT), /installed_station_kind/);
     `,
     );
+  });
+
+  it('waives delivery proof only for station and continues to reject unsafe monitor evidence', () => {
+    run(`
+      const contract = JSON.parse(readFileSync('deploy/timeweb/api-web-observability.v1.json','utf8'));
+      const observedAt = '2026-11-25T10:00:00.000Z';
+      const provider = {
+        schema:'PHUB_TIMEWEB_MONITOR_READBACK_V1', source:'timeweb-approved-read-only-readback',
+        readAt:'2026-11-25T09:59:30.000Z', projectId:262717,
+        monitors:contract.monitoring.monitors.map(({service, ...definition}, index) => ({
+          ...definition, enabled:true,
+          providerMonitorId:['26ed404e-98e5-45c5-98e3-31b9dfd6f0f2','b25e28a0-02d8-49e4-a0a1-f49f62abc02c'][index],
+          regions:['nl-1','ru-1'], intervalSeconds:60, timeoutSeconds:10,
+          authorizationHeaderConfigured:true, lastCheckAt:'2026-11-25T09:59:00.000Z',
+          successfulConsecutiveRounds:3, activeIncidentCount:0,
+        })),
+      };
+      validateStationMonitoring(provider, contract, observedAt);
+      assert.throws(() => validateUpgradeMonitoring(provider, null, contract, observedAt), /producer_alert_readback/);
+      assert.throws(() => validateStationMonitoring({...provider, readAt:'2026-11-25T09:59:29.999Z'}, contract, observedAt), /monitoring_stale/);
+      assert.throws(() => validateStationMonitoring({...provider, projectId:1}, contract, observedAt), /provider_readback_identity/);
+      provider.monitors[0].activeIncidentCount = 1;
+      assert.throws(() => validateStationMonitoring(provider, contract, observedAt), /observability_abort_active_incident/);
+      provider.monitors[0].activeIncidentCount = 0;
+      provider.monitors[0].successfulConsecutiveRounds = 2;
+      assert.throws(() => validateStationMonitoring(provider, contract, observedAt), /observability_evidence_monitor_rounds/);
+    `);
   });
 
   it('rejects absent and slow public health samples before recording success', () => {

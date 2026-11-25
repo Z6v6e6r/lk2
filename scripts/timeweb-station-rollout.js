@@ -2,15 +2,19 @@ import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
 import { CUP_0119 } from './timeweb-cup-0119-migration.js';
 
-export const STATION_OPERATION = 'PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V1';
-export const STATION_PLAN = 'PHUB_TIMEWEB_STATION_ROLLOUT_PLAN_V1';
-export const STATION_RECEIPT = 'PHUB_TIMEWEB_STATION_ROLLOUT_RECEIPT_V1';
+export const STATION_OPERATION = 'PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V2';
+export const STATION_PLAN = 'PHUB_TIMEWEB_STATION_ROLLOUT_PLAN_V2';
+export const STATION_RECEIPT = 'PHUB_TIMEWEB_STATION_ROLLOUT_RECEIPT_V2';
 export const STATION_KIND = 'API_WORKER_WEB_STATION_ROLLOUT';
 export const STATION_APPLICATION = '3c7373a543d8a47717baa3b051568a6d34806f24';
 export const STATION_TREE = '28886d7929a080e34e153ebea7e713d0e40dabd0';
 export const STATION_WAIVER_SHA256 =
   '80bbed794dd6c16f2d5a122f3652f494a9ade234ebeed9814d307925e23f9799';
-const ownerSchema = 'PHUB_TIMEWEB_STATION_OWNER_DECISION_V1';
+// This decision applies only to delivery/recovery drills for this station rollout.
+export const STATION_ALERT_WAIVER_SHA256 =
+  'd04114a3a512ac2a5c950fce6f7e78bb1760cb652b7e90675d858d35797efa02';
+export const STATION_ALERT_STATUS = 'NOT_REQUIRED_OWNER_WAIVED';
+const ownerSchema = 'PHUB_TIMEWEB_STATION_OWNER_DECISION_V2';
 const ownerAuthority = 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1';
 const timewebTarget = Object.freeze({ serverId: 8886471, projectId: 262717 });
 export const STATION_ROOT = '/opt/phub/timeweb-beta';
@@ -101,6 +105,8 @@ export function stationScopeHash(value) {
       STATION_BACKUP,
       value.expiresAt,
       STATION_WAIVER_SHA256,
+      STATION_ALERT_WAIVER_SHA256,
+      STATION_ALERT_STATUS,
       value.ownerDecision.releaseAuthorizationSha256,
       value.ownerDecision.receivedAt,
       value.ownerDecision.acceptedSnapshotAgeSeconds,
@@ -149,6 +155,7 @@ export function validateStationOperation(value, validateBase) {
       decision: STATION_BACKUP.policy,
       waiverMessageSha256: STATION_WAIVER_SHA256,
       waiverReference: `codex-user-message-sha256:${STATION_WAIVER_SHA256}`,
+      alertWaiverMessageSha256: STATION_ALERT_WAIVER_SHA256,
       releaseAuthorizationSha256: ownerDecision.releaseAuthorizationSha256,
       receivedAt: ownerDecision.receivedAt,
       acceptedSnapshotAgeSeconds: ownerDecision.acceptedSnapshotAgeSeconds,
@@ -177,6 +184,8 @@ const stationSchemaBundle =
   'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs';
 const controllerTail = new Map([
   ['scripts/timeweb-api-web-upgrade.js', 'M'],
+  ['scripts/verify-timeweb-api-web-observability.js', 'M'],
+  ['scripts/verify-timeweb-api-web-observability.d.ts', 'M'],
   ['scripts/timeweb-station-rollout.js', 'A'],
   ['scripts/timeweb-station-rollout.d.ts', 'A'],
   ['scripts/timeweb-station-rollout.test.ts', 'A'],
@@ -249,10 +258,9 @@ export function validateStationRetainedAdmission(admission, op) {
       ...STATION_BACKUP,
       ownerScopeSha256: op.ownerDecision.scopeSha256,
       providerSha256: admission?.providerSha256,
-      alertSha256: admission?.alertSha256,
+      alertTestStatus: STATION_ALERT_STATUS,
     }) ||
-    !hex.test(admission.providerSha256 ?? '') ||
-    !hex.test(admission.alertSha256 ?? '')
+    !hex.test(admission.providerSha256 ?? '')
   )
     stop('retained_admission');
 }

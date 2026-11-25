@@ -2150,7 +2150,7 @@ required Timeweb evidence and the `_SCHEDULE_READ` suffix.
 
 ## One-off station release with the 25 November manual dump
 
-`PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V1` is limited to the station release
+`PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V2` is limited to the station release
 anchored at the #702 merge `3c7373a543d8` and its reviewed descendant.
 The permitted delta covers the rollout controller and the exact generated Jetson
 bundle regenerated from #702's station-cover schema. Publish the final enrolled
@@ -2160,16 +2160,26 @@ artifact and manifest to the three pinned predecessor containers. A release owne
 must approve those exact inputs and the use of the named archive without a
 restore. The regular API/Web checkpoint policy has its own request schema.
 
+This V2 admission replaces the unused V1 station admission. Before
+enrollment, verify that the pinned predecessor is still running and that no
+V1 station request, active lease, consumed reservation, transaction capsule or
+installed descriptor exists.
+
 With that approval, use the root-only `operator/api-web-upgrade.json` and the
 usual `--critical-api-web` entry point. Start with the production V1 request,
 replace its schema, add `expectedWorker` from the pinned predecessors and
 `expiresAt` in UTC with milliseconds. Use the normal confirmation with suffix
 `_ONE_OFF_STATION_MANUAL_DUMP`. In `ownerDecision`, use schema
-`PHUB_TIMEWEB_STATION_OWNER_DECISION_V1`, authority
+`PHUB_TIMEWEB_STATION_OWNER_DECISION_V2`, authority
 `ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1`, and decision
 `DUMP_INTEGRITY_ONLY_OWNER_ACCEPTED`. Use the enrolled `STATION_WAIVER_SHA256`
 as `waiverMessageSha256` and prefix it with `codex-user-message-sha256:` for
 `waiverReference`. This records the owner's decision to omit a restore.
+Set `alertWaiverMessageSha256` to the enrolled `STATION_ALERT_WAIVER_SHA256`,
+which hashes the exact UTF-8 owner reply without an added newline or text
+normalization. This decision waives the Email and Telegram delivery and recovery drill for
+this operation. The journal records `NOT_REQUIRED_OWNER_WAIVED` and retains
+the checksum of the actual Timeweb monitor readback.
 Separately retain the explicit release-owner authorization for activation in
 the transaction's root-only `owner-authorization.txt`. Set
 `releaseAuthorizationSha256` to the hash of those bytes and `receivedAt` to the
@@ -2190,8 +2200,11 @@ It uses its own `admission.complete` marker and a fixed one-use reservation in
 the standard directory. Keep the original dump and the transaction evidence.
 A consumed reservation remains closed after a success, abort or rollback.
 
-The full production monitor and alert proof is required before activation and
-through all 61 health samples in the 15-minute window. The controller stops the
+Fresh Timeweb monitor readback for both real monitors is required before
+activation and through all 61 health samples in the 15-minute window.
+Provider monitor identity, health, freshness and active-incident checks still
+gate the release. Use the established alert evidence requirements for other
+operation profiles. The controller stops the
 old Worker, activates API, Worker and Web in order, and checks the three runtime
 identities, running configuration, and the public API and Web routes. Realtime,
 dependencies, runtime secrets and the database schema and migration ledger stay
