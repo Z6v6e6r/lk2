@@ -154,8 +154,9 @@ body:has(.game-schedule-wizard) {
 
 .game-schedule-station-list .game-schedule-link > span {
   display: grid;
+  flex: 1;
+  min-width: 0;
   gap: 7px;
-  width: min(100%, 227px);
   overflow-wrap: anywhere;
 }
 
@@ -172,6 +173,7 @@ body:has(.game-schedule-wizard) {
 
 .game-schedule-station-details {
   display: grid;
+  min-width: 0;
   gap: 2px;
 }
 
@@ -190,6 +192,9 @@ body:has(.game-schedule-wizard) {
 }
 
 .game-schedule-station-list .game-schedule-link small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font:
     500 12px/1.48 'Inter Display',
     Inter,
