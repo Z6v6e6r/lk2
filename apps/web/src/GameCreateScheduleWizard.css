@@ -201,6 +201,12 @@ body:has(.game-schedule-wizard) {
   letter-spacing: 0.02em;
 }
 
+.game-schedule-station-card .game-schedule-court-count {
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+}
+
 .game-schedule-durations,
 .game-schedule-times,
 .game-schedule-courts,

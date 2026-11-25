@@ -453,7 +453,13 @@ export function GameCreateScheduleWizard({
                         {detailsId ? (
                           <span className="game-schedule-station-details" id={detailsId}>
                             {item.address ? <small>{item.address}</small> : null}
-                            {details ? <small>{details}</small> : null}
+                            {details ? (
+                              <small
+                                className={openingSoon ? undefined : 'game-schedule-court-count'}
+                              >
+                                {details}
+                              </small>
+                            ) : null}
                           </span>
                         ) : null}
                       </span>
