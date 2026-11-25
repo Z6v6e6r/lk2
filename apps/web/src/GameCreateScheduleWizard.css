@@ -129,7 +129,7 @@ body:has(.game-schedule-wizard) {
 
 .game-schedule-station-list .game-schedule-link > span {
   display: grid;
-  gap: 10px;
+  gap: 7px;
   width: min(100%, 227px);
   overflow-wrap: anywhere;
 }
