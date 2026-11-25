@@ -2151,8 +2151,10 @@ required Timeweb evidence and the `_SCHEDULE_READ` suffix.
 ## One-off station release with the 25 November manual dump
 
 `PHUB_TIMEWEB_STATION_ROLLOUT_OPERATION_V1` is limited to the station release
-anchored at the #702 merge `3c7373a543d8` and its reviewed controller-only
-descendant. Publish the final enrolled controller SHA from green `main` using the
+anchored at the #702 merge `3c7373a543d8` and its reviewed descendant.
+The permitted delta covers the rollout controller and the exact generated Jetson
+bundle regenerated from #702's station-cover schema. Publish the final enrolled
+controller SHA from green `main` using the
 canonical workflow. The request binds that exact source, CI run, publication,
 artifact and manifest to the three pinned predecessor containers. A release owner
 must approve those exact inputs and the use of the named archive without a

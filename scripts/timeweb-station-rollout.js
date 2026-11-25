@@ -172,12 +172,16 @@ export function validateStationWindow(op, now = Date.now(), minimumMs = 0) {
     stop('expired');
 }
 
+// The Jetson bundle is a tracked derivative of the public station cover contract in #702.
+const stationSchemaBundle =
+  'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs';
 const controllerTail = new Map([
   ['scripts/timeweb-api-web-upgrade.js', 'M'],
   ['scripts/timeweb-station-rollout.js', 'A'],
   ['scripts/timeweb-station-rollout.d.ts', 'A'],
   ['scripts/timeweb-station-rollout.test.ts', 'A'],
   ['docs/runbooks/timeweb-standard-delivery.md', 'M'],
+  [stationSchemaBundle, 'M'],
 ]);
 
 export function validateStationSourceTail(entries) {
@@ -186,10 +190,13 @@ export function validateStationSourceTail(entries) {
     new Set(entries.map(({ path }) => path)).size !== entries.length
   )
     stop('source_tail');
-  for (const { path, status, oldMode, newMode, oldType, newType } of entries) {
+  for (const { path, status, oldMode, newMode, oldType, newType, oldOid, newOid } of entries) {
     if (
       !controllerTail.has(path) ||
       status !== controllerTail.get(path) ||
+      (path === stationSchemaBundle &&
+        (oldOid !== '955d237156a6a73aa89135b7a57934291b818abb' ||
+          newOid !== '8b633b272f8456949222201c4c91ce696e028b2e')) ||
       newType !== 'blob' ||
       newMode !== '100644' ||
       (status === 'A'

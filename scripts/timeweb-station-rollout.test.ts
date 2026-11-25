@@ -117,8 +117,22 @@ describe('Timeweb station one-off rollout', () => {
       make('scripts/timeweb-station-rollout.d.ts', 'A'),
       make('scripts/timeweb-station-rollout.test.ts', 'A'),
       make('docs/runbooks/timeweb-standard-delivery.md', 'M'),
+      {
+        ...make(
+          'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs',
+          'M',
+        ),
+        oldOid: '955d237156a6a73aa89135b7a57934291b818abb',
+        newOid: '8b633b272f8456949222201c4c91ce696e028b2e',
+      },
     ];
     expect(() => validateStationSourceTail(entries)).not.toThrow();
+    expect(() =>
+      validateStationSourceTail([
+        ...entries.slice(0, -1),
+        { ...entries.at(-1), newOid: 'f'.repeat(40) },
+      ]),
+    ).toThrow('source_tail');
     expect(() =>
       validateStationSourceTail([...entries, make('deploy/timeweb/compose.beta.yaml', 'M')]),
     ).toThrow('source_tail');

@@ -29096,11 +29096,10 @@ var locationAmenitySchema = external_exports.object({
   description: nullableText(300),
   sortOrder: external_exports.number().int().min(0).max(99)
 }).strict();
+var locationMediaPath = /^\/public\/api\/v1\/[a-z0-9][a-z0-9-]{1,62}\/location-media\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 var locationGalleryImageSchema = external_exports.object({
   url: external_exports.string().max(2e3).refine(
-    (value) => value.startsWith("https://") || /^\/public\/api\/v1\/[a-z0-9][a-z0-9-]{1,62}\/location-media\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value
-    ),
+    (value) => value.startsWith("https://") || locationMediaPath.test(value),
     "gallery images must use HTTPS or a PadlHub location media URL"
   ),
   alt: external_exports.string().trim().max(180),
@@ -29228,7 +29227,7 @@ var locationSummarySchema = external_exports.object({
   title: external_exports.string().min(1).max(120),
   city: nullableText(120),
   courtCount: external_exports.number().int().min(0),
-  coverImageUrl: external_exports.string().url().nullable(),
+  coverImageUrl: external_exports.union([external_exports.string().url().startsWith("https://"), external_exports.string().regex(locationMediaPath)]).nullable(),
   route: publicRoute
 }).strict();
 var locationListSchema = external_exports.object({
