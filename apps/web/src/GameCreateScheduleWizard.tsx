@@ -5,6 +5,7 @@ import type {
   WholeCourtCheckoutOffer,
 } from '@phub/api-sdk';
 import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
+import backIconUrl from './assets/game-schedule-back.svg';
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import { locationCourtLabel } from './location-court-label.js';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
@@ -367,7 +368,9 @@ export function GameCreateScheduleWizard({
     <main className="games-page game-schedule-wizard">
       <header className="game-schedule-header">
         {wizard.step === 0 ? (
-          <a className="game-schedule-back" href={gamesHref} aria-label="Назад" />
+          <a className="game-schedule-back" href={gamesHref} aria-label="Назад">
+            <img src={backIconUrl} width={32} height={32} alt="" />
+          </a>
         ) : (
           <button
             className="game-schedule-back"
@@ -375,7 +378,9 @@ export function GameCreateScheduleWizard({
             aria-label={wizard.step === 2 ? 'Закрыть' : 'Назад'}
             disabled={checkout?.busy}
             onClick={wizard.back}
-          />
+          >
+            <img src={backIconUrl} width={32} height={32} alt="" />
+          </button>
         )}
         <h1 ref={heading} tabIndex={-1}>
           {headerTitle}

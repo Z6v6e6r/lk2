@@ -59,16 +59,7 @@ body:has(.game-schedule-wizard) {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: #f1f1f1;
   text-decoration: none;
-}
-
-.game-schedule-back::before {
-  width: 7px;
-  height: 12px;
-  background: #888889;
-  clip-path: polygon(100% 13%, 78% 0, 0 50%, 78% 100%, 100% 87%, 41% 50%);
-  content: '';
 }
 
 .game-schedule-header .game-schedule-back:disabled {
