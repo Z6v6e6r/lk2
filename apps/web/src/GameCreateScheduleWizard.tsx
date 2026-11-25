@@ -118,9 +118,9 @@ function stationAddressWithoutCity({ address, city }: Station) {
 function stationCourtSummary(station: Station) {
   const { courtCount, panoramicCourtsCount, singleCourtsCount, outdoorCourtsCount } = station;
   const courtTypes = [
-    panoramicCourtsCount != null && `Панорамные: ${panoramicCourtsCount}`,
-    singleCourtsCount != null && `Синглы: ${singleCourtsCount}`,
-    outdoorCourtsCount != null && `Открытые: ${outdoorCourtsCount}`,
+    panoramicCourtsCount != null && `панорамик: ${panoramicCourtsCount}`,
+    singleCourtsCount != null && `сингл: ${singleCourtsCount}`,
+    outdoorCourtsCount != null && `открытые: ${outdoorCourtsCount}`,
   ].filter(Boolean);
   if (courtTypes.length) return courtTypes.join(' · ');
   return courtCount === undefined ? null : `${courtCount} ${locationCourtLabel(courtCount)}`;

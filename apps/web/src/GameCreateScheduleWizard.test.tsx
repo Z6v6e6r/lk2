@@ -64,7 +64,7 @@ describe('game creation schedule', () => {
     );
     const active = screen.getByRole('button', { name: /Селигерская/ });
     expect(within(active).getByText('ул. Ивана Сусанина, 1')).toBeVisible();
-    expect(within(active).getByText('Панорамные: 3 · Синглы: 1')).toBeVisible();
+    expect(within(active).getByText('панорамик: 3 · сингл: 1')).toBeVisible();
     const sochi = screen.getByRole('button', { name: 'Сочи' });
     expect(within(sochi).getByText('Краснодарский край, пгт Сириус')).toBeVisible();
     expect(within(sochi).getByText('4 корта')).toBeVisible();
