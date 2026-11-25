@@ -134,6 +134,18 @@ body:has(.game-schedule-wizard) {
   overflow-wrap: anywhere;
 }
 
+.game-schedule-wizard .game-schedule-station-list .game-schedule-link:disabled {
+  border-color: #dfe2e8;
+  background: #eef0f4;
+  color: #606574;
+  cursor: not-allowed;
+}
+
+.game-schedule-station-details {
+  display: grid;
+  gap: 2px;
+}
+
 .game-schedule-station-list .game-schedule-link strong {
   font:
     700 15px/1 'Recommendation RF Dewi',

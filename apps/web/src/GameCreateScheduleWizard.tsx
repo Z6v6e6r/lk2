@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type {
   GameCreateScheduleQuote,
   GameCreateScheduleSlot,
@@ -6,6 +6,7 @@ import type {
 } from '@phub/api-sdk';
 import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
+import { locationCourtLabel } from './location-court-label.js';
 import { useGameCreateWizard } from './use-game-create-wizard.js';
 import { TrainingPeopleIcon } from './TrainingPeopleIcon.js';
 import './GameCreateScheduleWizard.css';
@@ -80,6 +81,11 @@ type Station = {
   readonly address?: string | null;
   readonly latitude?: number | null;
   readonly longitude?: number | null;
+  readonly courtCount?: number;
+  readonly panoramicCourtsCount?: number | null;
+  readonly singleCourtsCount?: number | null;
+  readonly outdoorCourtsCount?: number | null;
+  readonly isActive?: boolean;
 };
 type ReadResult<T> =
   { readonly key: string; readonly value: T } | { readonly key: string; readonly error: string };
@@ -92,6 +98,18 @@ function failureCode(error: unknown) {
 
 const price = (amount: number | null) =>
   amount === null ? 'Цена уточняется' : RUBLES.format(amount / 100);
+
+function stationCourtSummary(station: Station) {
+  const { courtCount, panoramicCourtsCount, singleCourtsCount, outdoorCourtsCount } = station;
+  const courtTypes = [
+    panoramicCourtsCount != null &&
+      `Панорамик: ${panoramicCourtsCount} ${locationCourtLabel(panoramicCourtsCount)}`,
+    singleCourtsCount != null && `Сингл: ${singleCourtsCount}`,
+    outdoorCourtsCount != null && `Открытых кортов: ${outdoorCourtsCount}`,
+  ].filter(Boolean);
+  if (courtTypes.length) return courtTypes.join(', ');
+  return courtCount === undefined ? null : `${courtCount} ${locationCourtLabel(courtCount)}`;
+}
 
 function slotTime(slot: GameCreateScheduleSlot) {
   return `${TIME_LABEL.format(new Date(slot.startsAt))}–${TIME_LABEL.format(new Date(slot.endsAt))}`;
@@ -111,6 +129,7 @@ export function GameCreateScheduleWizard({
   readonly today?: string;
 }) {
   const wizard = useGameCreateWizard();
+  const stationDetailsPrefix = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const [stationId, setStation] = useState(stations[0]?.id ?? '');
   const [search, setSearch] = useState('');
@@ -268,6 +287,11 @@ export function GameCreateScheduleWizard({
     ),
   );
   const cities = [...new Set(visibleStations.map((item) => item.city ?? 'Другие города'))];
+  const mapStations = showLocations
+    ? visibleStations.filter(
+        (item) => item.isActive !== false && item.latitude != null && item.longitude != null,
+      )
+    : [];
   const share = currentQuote?.shareMinor ?? null;
   const whole = currentQuote?.wholeCourtMinor ?? null;
   const residency = currentQuote?.residency;
@@ -383,19 +407,17 @@ export function GameCreateScheduleWizard({
           </button>
           {showLocations ? (
             <div className="game-schedule-card game-schedule-stack">
-              {visibleStations
-                .filter((item) => item.latitude != null && item.longitude != null)
-                .map((item) => (
-                  <a
-                    key={item.id}
-                    href={`https://yandex.ru/maps/?ll=${item.longitude}%2C${item.latitude}&z=17`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {item.title}
-                  </a>
-                ))}
-              {!visibleStations.some((item) => item.latitude != null && item.longitude != null) ? (
+              {mapStations.map((item) => (
+                <a
+                  key={item.id}
+                  href={`https://yandex.ru/maps/?ll=${item.longitude}%2C${item.latitude}&z=17`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {item.title}
+                </a>
+              ))}
+              {!mapStations.length ? (
                 <p className="game-schedule-empty">Карта станций недоступна.</p>
               ) : null}
             </div>
@@ -406,19 +428,33 @@ export function GameCreateScheduleWizard({
               <h3>{city}</h3>
               {visibleStations
                 .filter((item) => (item.city ?? 'Другие города') === city)
-                .map((item) => (
-                  <button
-                    type="button"
-                    key={item.id}
-                    className="game-schedule-card game-schedule-link"
-                    onClick={() => chooseStation(item.id)}
-                  >
-                    <span>
-                      <strong>{item.title}</strong>
-                      {item.address ? <small>{item.address}</small> : null}
-                    </span>
-                  </button>
-                ))}
+                .map((item) => {
+                  const openingSoon = item.isActive === false;
+                  const details = openingSoon ? 'Скоро открытие' : stationCourtSummary(item);
+                  const detailsId =
+                    item.address || details ? `${stationDetailsPrefix}-${item.id}` : undefined;
+                  return (
+                    <button
+                      type="button"
+                      key={item.id}
+                      className="game-schedule-card game-schedule-link"
+                      aria-label={item.title}
+                      aria-describedby={detailsId}
+                      disabled={openingSoon}
+                      onClick={() => chooseStation(item.id)}
+                    >
+                      <span>
+                        <strong>{item.title}</strong>
+                        {detailsId ? (
+                          <span className="game-schedule-station-details" id={detailsId}>
+                            {item.address ? <small>{item.address}</small> : null}
+                            {details ? <small>{details}</small> : null}
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                  );
+                })}
             </div>
           ))}
           {!visibleStations.length ? (

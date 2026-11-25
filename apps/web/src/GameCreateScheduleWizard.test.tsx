@@ -35,6 +35,38 @@ afterEach(() => {
 });
 
 describe('game creation schedule', () => {
+  it('shows court types and opening status from the station catalogue', async () => {
+    const listSlots = vi.fn<GameCreateScheduleSource['listSlots']>().mockResolvedValue([]);
+    const source = { listSlots, readQuote: vi.fn<GameCreateScheduleSource['readQuote']>() };
+    render(
+      <GameCreateScheduleWizard
+        source={source}
+        today="2026-12-06"
+        stations={[
+          {
+            id: 'station',
+            title: 'Селигерская',
+            city: 'Москва',
+            address: 'ул. Ивана Сусанина, 1',
+            panoramicCourtsCount: 3,
+            singleCourtsCount: 1,
+          },
+          { id: 'opening', title: 'Котельники', city: 'Москва', isActive: false },
+          { id: 'total-only', title: 'Сочи', city: 'Сириус', courtCount: 4 },
+        ]}
+      />,
+    );
+    const active = screen.getByRole('button', { name: /Селигерская/ });
+    expect(within(active).getByText('ул. Ивана Сусанина, 1')).toBeVisible();
+    expect(within(active).getByText('Панорамик: 3 корта, Сингл: 1')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Сочи' })).toHaveAccessibleDescription('4 корта');
+    const opening = screen.getByRole('button', { name: /Котельники/ });
+    expect(within(opening).getByText('Скоро открытие')).toBeVisible();
+    expect(opening).toBeDisabled();
+    await userEvent.setup().click(opening);
+    expect(listSlots).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     'keeps the same flow and preserves a choice on Back (mobile media query %s)',
     async (matches) => {
