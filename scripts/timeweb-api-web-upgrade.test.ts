@@ -144,6 +144,33 @@ describe('application-only prior restore policy', () => {
       assert.deepEqual(calls.slice(-5),['restore web','restore api','remove descriptor','restored','ROLLED_BACK']);
     `);
   });
+
+  it('checks invitation eligibility before activation and verifies the schema after binary rollback', () => {
+    scenario(`for (const failsAt of [null,'api','web','baseline','rollback']) {
+      const calls=[];
+      const mark=async name=>calls.push(name);
+      const ops={backupMode:'app-only',preflight:()=>mark('preflight'),pullAndSmoke:()=>mark('smoke'),
+        journal:phase=>mark(phase),activate:svc=>mark('start:'+svc),
+        observe:async ()=>{await mark('monitor');if(failsAt==='rollback')throw Error('provider stale')},
+        attest:()=>mark('attest'),installBaseline:()=>mark('descriptor'),
+        restore:svc=>mark('restore:'+svc),removeCandidateBaseline:()=>mark('remove descriptor'),
+        attestRestored:()=>mark('restored'),
+        attestGameInvitationsTransition:async phase=>{
+          await mark('verify:'+phase);
+          if(phase===failsAt)throw Error('invitation evidence drift');
+        }};
+      if(failsAt) await assert.rejects(()=>runApiWebTransition(ops),
+        failsAt==='rollback'?/rollback_failed/:/invitation evidence drift/);
+      else await runApiWebTransition(ops);
+      for(const [phase,next] of [['api','start:api'],['web','start:web'],['baseline','descriptor']]){
+        assert(!calls.includes(next)||calls.indexOf(next)===calls.indexOf('verify:'+phase)+1);
+        if(failsAt===phase)assert(!calls.includes(next));
+      }
+      assert.equal(calls.includes('SUCCESS'),!failsAt);
+      if(failsAt)assert.deepEqual(calls.slice(-6),['restore:web','restore:api',
+        'remove descriptor','restored','verify:rollback',failsAt==='rollback'?'ROLLBACK_FAILED':'ROLLED_BACK']);
+    }`);
+  });
 });
 
 describe('explicit API/Web upgrade boundary', () => {

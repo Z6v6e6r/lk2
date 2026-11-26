@@ -1917,7 +1917,7 @@ class AppOnlyBackupTests(unittest.TestCase):
                 'schema':'PHUB_TIMEWEB_GAME_INVITATIONS_0120_RESTORE_DECISION_V1',
                 'authority':'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
                 'decision':'FRESH_DUMP_INTEGRITY_ONLY','messageSha256':message_hash,
-                'reference':'codex-user-message-sha256:'+message_hash,'receivedAt':'2026-11-15T20:09:00.000Z'}
+                'reference':'codex-user-message-sha256:'+message_hash,'receivedAt':'2026-11-15T17:09:00.000Z','openedAt':'2026-11-15T20:09:00.000Z'}
             op['confirmation']=m.app_only_backup_confirmation(op)
             op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(op)
             (scenario.root/'operator/game-invitations-0120-restore-waiver.txt').write_bytes(message)
@@ -1925,7 +1925,7 @@ class AppOnlyBackupTests(unittest.TestCase):
                 'schema':'PHUB_TIMEWEB_GAME_INVITATIONS_0120_RESTORE_WINDOW_V1','messageSha256':message_hash,
                 'candidateSha':op['candidateSha'],'controllerTree':op['controllerTree'],
                 'releaseId':op['releaseId'],'receivedAt':op['ownerRestoreDecision']['receivedAt'],
-                'expiresAt':op['expiresAt']}))
+                'openedAt':op['ownerRestoreDecision']['openedAt'],'expiresAt':op['expiresAt']}))
             scenario.request.write_bytes(m.encoded(op))
             with patch.object(m,'ROOT',scenario.root):
                 scenario.plan=m.fresh_plan(op,m.encoded(op),1024)

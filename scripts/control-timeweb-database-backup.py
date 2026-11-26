@@ -197,7 +197,7 @@ GAME_INVITATIONS_0120_FRESH_RECEIPT = 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_FRESH_
 GAME_INVITATIONS_0120_FRESH_POLICY = 'GAME_INVITATIONS_0120_INTEGRITY_ONLY_V1'
 GAME_INVITATIONS_0120_PREDECESSOR = 'dd73c7e02e81ad790f9c8c3ceb9f9ca988ad87a5-45820580791-1'
 GAME_INVITATIONS_0120_LEDGER = '70adb2cea831f5b5ad58a44c6fd0b18324dba914b3eab4a4fd3c7c723c9e70c6'
-GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256 = '68915d6c67cff26463f4145fccaac5bebdfbcacd3125a187c737561ff2b0caf4'
+GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256 = 'a1d31967a5a9da85a81764580b9f545defb47f83977a7555101017d13e8ea5fc'
 
 
 def is_cup_support_fresh(op):
@@ -2213,7 +2213,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         if is_integrity_only_fresh(value):
             integrity_only_restore_reference(value)
             if is_game_invitations_0120_fresh(value):
-                need(utc(value['ownerRestoreDecision']['receivedAt']) <= now,
+                decision=value['ownerRestoreDecision']
+                need(utc(decision['receivedAt']) <= utc(decision['openedAt']) <= now,
                      'GAME_INVITATIONS_0120_RESTORE_WINDOW')
         elif is_app_only_fresh(value):
             ref = value['priorRestore']
@@ -4251,13 +4252,14 @@ def integrity_only_restore_reference(op):
     scoped = is_game_invitations_0120_fresh(op)
     time_field = 'receivedAt' if scoped else 'attestedAt'
     exact(decision, ['schema', 'authority', 'decision', 'messageSha256', 'reference', time_field]
-          + (['scopeSha256'] if scoped else []))
+          + (['scopeSha256','openedAt'] if scoped else []))
     need(decision['schema'] == 'PHUB_TIMEWEB_' + name + '_RESTORE_DECISION_V1'
          and decision['authority'] == 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1'
          and decision['decision'] == 'FRESH_DUMP_INTEGRITY_ONLY'
          and decision['messageSha256'] == message_sha
          and decision['reference'] == 'codex-user-message-sha256:' + message_sha
-         and 0 < utc(op['expiresAt']) - utc(decision[time_field]) <= 60 * 60
+         and utc(decision[time_field]) <= utc(decision['openedAt'] if scoped else decision[time_field])
+         and 0 < utc(op['expiresAt']) - utc(decision['openedAt'] if scoped else decision[time_field]) <= 60 * 60
          and op['expectedApi']['releaseId'] == op['expectedWeb']['releaseId'] == predecessor
          and (not scoped or (op['expectedLedgerSha256'] == GAME_INVITATIONS_0120_LEDGER
                              and decision['scopeSha256'] == fresh_owner_scope(op))),
@@ -4267,7 +4269,8 @@ def integrity_only_restore_reference(op):
             'apiContainerId': op['expectedApi']['id'], 'webContainerId': op['expectedWeb']['id'],
             'releaseId': op['releaseId'], 'expiresAt': op['expiresAt'],
             'ownerDecisionSha256': digest(encoded(decision)),
-            'attestedAt': decision[time_field], 'restoreVerified': False}
+            'attestedAt': decision['openedAt'] if scoped else decision[time_field],
+            'restoreVerified': False}
 
 
 def fresh_restore_reference(op, as_of=None):
@@ -4278,12 +4281,14 @@ def fresh_restore_reference(op, as_of=None):
 
 def game_invitations_0120_restore_window(op):
     window = strict(read_secure(ROOT/'operator/game-invitations-0120-restore-window.json'))
-    exact(window, ['schema','messageSha256','candidateSha','controllerTree','releaseId','receivedAt','expiresAt'])
+    exact(window, ['schema','messageSha256','candidateSha','controllerTree','releaseId','receivedAt','openedAt','expiresAt'])
     need(window['schema']=='PHUB_TIMEWEB_GAME_INVITATIONS_0120_RESTORE_WINDOW_V1'
          and window['messageSha256']==GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256
          and window['candidateSha']==op['candidateSha'] and window['controllerTree']==op['controllerTree']
          and window['releaseId']==op['releaseId']
-         and utc(window['receivedAt'])<utc(window['expiresAt']), 'GAME_INVITATIONS_0120_RESTORE_WINDOW')
+         and utc(window['receivedAt'])<=utc(window['openedAt'])
+         and 0 < utc(window['expiresAt'])-utc(window['openedAt']) <= 3600,
+         'GAME_INVITATIONS_0120_RESTORE_WINDOW')
     return window
 
 
@@ -4294,7 +4299,8 @@ def attest_integrity_only_restore_message(op):
     if is_game_invitations_0120_fresh(op) and 'ownerRestoreDecision' in op:
         window=game_invitations_0120_restore_window(op)
         need(window['expiresAt']==op['expiresAt']
-             and window['receivedAt']==op['ownerRestoreDecision']['receivedAt'],
+             and window['receivedAt']==op['ownerRestoreDecision']['receivedAt']
+             and window['openedAt']==op['ownerRestoreDecision']['openedAt'],
              'GAME_INVITATIONS_0120_RESTORE_WINDOW_DRIFT')
 
 
@@ -4380,6 +4386,7 @@ def prepare_app_only_backup(candidate, run, checkpoint):
         decision=op['ownerRestoreDecision']
         del decision['attestedAt']
         decision['receivedAt']=window['receivedAt']
+        decision['openedAt']=window['openedAt']
         decision['scopeSha256']=fresh_owner_scope(op)
         attest_integrity_only_restore_message(op)
     validate_operation(op,time.time(),op['toolFileSha256'])

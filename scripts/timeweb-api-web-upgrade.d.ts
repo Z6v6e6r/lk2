@@ -72,6 +72,8 @@ export function runManualApiWebUpgrade(
   requestPath: string,
 ): Promise<{ status: string; candidate: string; receipt: string }>;
 
+export function validateApiWebOperation<T>(value: T): T;
+
 export function readNativeOperatorSnapshot(path: string): Buffer;
 export function admitNativeWaiverMonitoring(
   op: Record<string, unknown>,
