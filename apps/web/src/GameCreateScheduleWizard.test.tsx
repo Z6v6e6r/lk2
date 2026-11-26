@@ -263,7 +263,7 @@ describe('game creation schedule', () => {
     );
   });
 
-  it('keeps past dates disabled and lets the user browse the next month and select an overnight slot', async () => {
+  it('shows the next 14 days alongside today and allows an overnight slot across the month boundary', async () => {
     const overnight = {
       ...slot,
       startsAt: '2026-12-01T23:00:00+03:00',
@@ -286,12 +286,12 @@ describe('game creation schedule', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
     const calendar = within(screen.getByRole('group', { name: 'Дата игры' }));
-    const past = calendar.getByRole('button', { name: /25 нояб/ });
-    expect(past).toBeDisabled();
-    await user.click(past);
-    expect(listSlots).toHaveBeenCalledOnce();
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Месяц' }), '2026-12');
-    expect(calendar.queryByRole('button', { name: /26 нояб/ })).not.toBeInTheDocument();
+    const dates = calendar.getAllByRole('button');
+    expect(dates).toHaveLength(15);
+    expect(dates[0]).toHaveAccessibleName(/26 нояб/);
+    expect(dates.at(-1)).toHaveAccessibleName(/10 дек/);
+    expect(calendar.queryByRole('button', { name: /25 нояб/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Месяц' })).not.toBeInTheDocument();
     expect(listSlots).toHaveBeenCalledOnce();
     await user.click(calendar.getByRole('button', { name: /1 дек/ }));
     expect(listSlots).toHaveBeenLastCalledWith(expect.objectContaining({ day: '2026-12-01' }));

@@ -173,7 +173,6 @@ export function GameCreateScheduleWizard({
   const [levels, setLevels] = useState<readonly [number, number]>([0, 2]);
   const [title, setTitle] = useState('');
   const [day, setDay] = useState(today);
-  const [browsedMonth, setBrowsedMonth] = useState<string>();
   const [format, setFormat] = useState<(typeof GAME_FORMATS)[number]['id']>('doubles');
   const [duration, setDuration] = useState<60 | 90 | 120>(60);
   const [court, setCourt] = useState('');
@@ -220,25 +219,17 @@ export function GameCreateScheduleWizard({
     currentQuote.currency === offer.currency
       ? { offer, expiresAt: currentQuote.expiresAt }
       : undefined;
-  const days = Array.from({ length: 16 }, (_, offset) => {
-    const date = new Date(Date.parse(today + 'T12:00:00+03:00') + (offset - 1) * 86_400_000);
+  const days = Array.from({ length: 15 }, (_, offset) => {
+    const date = new Date(Date.parse(today + 'T12:00:00+03:00') + offset * 86_400_000);
     const parts = Object.fromEntries(
       DATE_CHIP.formatToParts(date).map((part) => [part.type, part.value]),
     );
-    const dateKey = DAY.format(date);
-    const month = MONTH_LABEL.format(date);
     return {
-      day: dateKey,
-      monthKey: dateKey.slice(0, 7),
-      monthName: month.charAt(0).toUpperCase() + month.slice(1),
+      day: DAY.format(date),
       label: DATE_LABEL.format(date),
       parts,
     };
   });
-  const months = new Map(
-    days.filter((item) => item.day >= today).map((item) => [item.monthKey, item.monthName]),
-  );
-  const calendarMonth = browsedMonth ?? day.slice(0, 7);
 
   useEffect(() => {
     if (!stationId || wizard.step === 0 || currentSchedule) return;
@@ -685,44 +676,27 @@ export function GameCreateScheduleWizard({
           <div className="game-schedule-settings-section">
             <div className="game-schedule-settings-row">
               <h2 className="game-schedule-settings-heading">Дата игры</h2>
-              {months.size > 1 ? (
-                <select
-                  className="game-schedule-month"
-                  aria-label="Месяц"
-                  value={calendarMonth}
-                  onChange={(event) => setBrowsedMonth(event.target.value)}
-                >
-                  {[...months].map(([key, month]) => (
-                    <option key={key} value={key}>
-                      {month}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <span className="game-schedule-month">{months.get(calendarMonth)}</span>
-              )}
+              <span className="game-schedule-month">
+                {MONTH_LABEL.format(new Date(day + 'T12:00:00+03:00'))}
+              </span>
             </div>
             <div className="game-schedule-days" role="group" aria-label="Дата игры">
-              {days
-                .filter((item) => item.monthKey === calendarMonth)
-                .map((item) => (
-                  <button
-                    key={item.day}
-                    type="button"
-                    aria-label={item.label}
-                    aria-pressed={day === item.day}
-                    disabled={item.day < today}
-                    onClick={() => {
-                      if (day === item.day) return;
-                      setDay(item.day);
-                      setBrowsedMonth(undefined);
-                      resetSlot();
-                    }}
-                  >
-                    <small>{item.parts.weekday?.replace('.', '')}</small>
-                    <strong>{item.parts.day}</strong>
-                  </button>
-                ))}
+              {days.map((item) => (
+                <button
+                  key={item.day}
+                  type="button"
+                  aria-label={item.label}
+                  aria-pressed={day === item.day}
+                  onClick={() => {
+                    if (day === item.day) return;
+                    setDay(item.day);
+                    resetSlot();
+                  }}
+                >
+                  <small>{item.parts.weekday?.replace('.', '')}</small>
+                  <strong>{item.parts.day}</strong>
+                </button>
+              ))}
             </div>
           </div>
           <div className="game-schedule-settings-section">
