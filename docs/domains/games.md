@@ -501,6 +501,17 @@ setting. The recipient row, notification, and notification outbox facts commit i
 transaction as the scheduled game. The original create command and the recipient key prevent
 duplicate notifications after retry or payment return.
 
+Migration `0120` grants the separately provisioned `phub_runtime` role read
+access to `games.friend_invitations`, initial insertion of the game and
+recipient keys, and updates to `issued_at`. The table forces tenant row-level
+security. The production migration package must admit this specific table and
+verify its effective grants using the actual API role before the new API starts.
+Provision `phub_runtime` before applying `0120`. The migration must execute
+as `phub_migrator`, which needs create access in the games schema and references
+access to the exact composite keys in `games.games` and `identity.users`. Verify
+that `phub_migrator` owns the new table. Image rollback can leave the additive
+table in place. Already delivered invitations remain recorded.
+
 ### 7.2.1 Card projection and reads
 
 Every Games fact is delivered to the dedicated card projector through a durable bounded quorum
