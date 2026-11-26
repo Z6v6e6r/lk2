@@ -3171,6 +3171,9 @@ export function App({
           messages={conversationMessages}
           mode={protectedRoute.mode}
           stationSupport={stationSupportSource}
+          {...(import.meta.env.VITE_CUP_SUPPORT_REPLIES === '1' && gateway.loadCupSupportReplies
+            ? { cupSupport: gateway.loadCupSupportReplies }
+            : {})}
           communityChats={communityChatsSource}
           {...(requestedConversationId ? { selectedConversationId: requestedConversationId } : {})}
           hasExplicitRecipient={Boolean(validChatRecipientId)}

@@ -28,6 +28,39 @@ const stationDialogId = '33333333-3333-4333-8333-333333333333';
 const otherStationUuid = '11111111-1111-4111-8111-111111111111';
 const unmappedDialogId = '44444444-4444-4444-8444-444444444444';
 
+it('opens the dedicated CUP chat and shows the ticket number and public reply', async () => {
+  const date = '2026-11-26T14:00:00.000Z';
+  const before = { at: date, id: conversationId };
+  const load = vi
+    .fn()
+    .mockResolvedValueOnce({
+      messages: [
+        { id: conversationId, number: 'PDH-41', body: 'Синтетический ответ CUP', createdAt: date },
+      ],
+      next: before,
+    })
+    .mockResolvedValueOnce({
+      messages: [
+        { id: stationDialogId, number: 'PDH-40', body: 'Предыдущий ответ CUP', createdAt: date },
+      ],
+      next: null,
+    });
+  const user = userEvent.setup();
+  render(
+    <ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} cupSupport={load} />,
+  );
+  expect(load).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: 'Поддержка CUP' }));
+  const dialog = screen.getByRole('region', { name: 'Поддержка CUP' });
+  expect(await within(dialog).findByText('Синтетический ответ CUP')).toBeVisible();
+  expect(within(dialog).getByText('PDH-41')).toBeVisible();
+  await user.click(within(dialog).getByRole('button', { name: 'Загрузить более ранние' }));
+  expect(await within(dialog).findByText('Предыдущий ответ CUP')).toBeVisible();
+  expect(load).toHaveBeenLastCalledWith(before, expect.any(AbortSignal));
+  await user.click(within(dialog).getByRole('button', { name: 'К списку чатов' }));
+  expect(screen.queryByRole('region', { name: 'Поддержка CUP' })).not.toBeInTheDocument();
+});
+
 /**
  * `noUncheckedIndexedAccess` widens every CSS module lookup to `string | undefined`, so the lookup
  * is guarded here: a renamed or deleted layout class must fail the test instead of comparing

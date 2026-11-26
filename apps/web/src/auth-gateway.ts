@@ -1,4 +1,5 @@
 import type { MonthlyPurchaseGateway } from './monthly-purchase-attempt.js';
+import type { CupReplyPage, CupReplySource } from './chats-ui/CupSupportChat.js';
 import {
   profileSettingsCommand,
   profileSettingsIdentity,
@@ -525,6 +526,7 @@ export interface AuthGateway {
   readonly getVivaAccessToken: () => string | undefined;
   readonly refreshVivaAccessToken: () => Promise<string>;
   readonly issueCupSupportStagingHandoff?: (draft: string) => Promise<{ readonly proof: string }>;
+  readonly loadCupSupportReplies?: CupReplySource;
   readonly issueRealtimeTicket: () => Promise<RealtimeTicket>;
   readonly getRoutingPlan: (forceRefresh?: boolean) => Promise<ClientRoutingPlan>;
   readonly getSelfProfile: () => Promise<UserProfile>;
@@ -2468,6 +2470,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     async refreshVivaAccessToken() {
       return applyVivaAccess();
+    },
+
+    loadCupSupportReplies(before, signal) {
+      const query = before
+        ? '?' + new URLSearchParams({ beforeAt: before.at, beforeId: before.id }).toString()
+        : '';
+      return client.request<CupReplyPage>(`/support/cup-replies${query}`, signal ? { signal } : {});
     },
 
     async issueCupSupportStagingHandoff(draft) {

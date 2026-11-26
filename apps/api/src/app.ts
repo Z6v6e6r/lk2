@@ -198,6 +198,7 @@ import { registerMessagingRoutes } from './messaging/messaging-routes.js';
 import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { registerStationSupportRoutes } from './support/station-support-routes.js';
+import { cupReplyCursor, type CupReplyReader } from './support/cup-replies.js';
 import { registerSupportTicketRoutes } from './support/support-ticket-routes.js';
 import type { StationSupportProvider } from './support/station-support-provider.js';
 import type { StationSupportMediaStore } from './support/station-support-media.js';
@@ -298,6 +299,7 @@ export interface BuildAppOptions {
   readonly authService?: AuthService;
   readonly phoneSubjectLinkService?: PhoneSubjectLinkService;
   readonly cupSupportHandoffIssuer?: CupSupportHandoffIssuer;
+  readonly cupReplyReader?: CupReplyReader;
   readonly accessSessionChecker?: (input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -1241,6 +1243,55 @@ export async function buildApp(options: BuildAppOptions) {
         }
         request.log.info('CUP Support STAGING intake handoff issued');
         return { proof };
+      },
+    );
+  }
+
+  const readCupReplies = options.cupReplyReader;
+  if (readCupReplies) {
+    app.get<{
+      Params: { tenantKey: string };
+      Querystring: { beforeAt?: string; beforeId?: string };
+    }>(
+      '/user/api/v1/:tenantKey/support/cup-replies',
+      {
+        preHandler: [authenticate, resolveTenant],
+        config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+      },
+      async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const claims = request.padlHubClaims;
+        if (
+          request.params.tenantKey !== 'local-padel' ||
+          options.config.JWT_AUDIENCE === options.config.JWT_ADMIN_AUDIENCE ||
+          claims?.aud !== options.config.JWT_AUDIENCE ||
+          !claims.roles.includes('client') ||
+          !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(claims.sub)
+        ) {
+          return sendApiError(request, reply, 403, 'CUP_REPLY_FORBIDDEN', 'Нет доступа.');
+        }
+        const { beforeAt, beforeId } = request.query;
+        const cursor =
+          beforeAt === undefined && beforeId === undefined
+            ? undefined
+            : cupReplyCursor.safeParse({ at: beforeAt, id: beforeId });
+        if (
+          cursor?.success === false ||
+          Object.keys(request.query).some((key) => key !== 'beforeAt' && key !== 'beforeId')
+        ) {
+          return sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная страница.');
+        }
+        try {
+          return await readCupReplies(claims.sub.toLowerCase(), cursor?.data);
+        } catch {
+          return sendApiError(
+            request,
+            reply,
+            503,
+            'CUP_REPLY_UNAVAILABLE',
+            'Ответы CUP временно недоступны.',
+          );
+        }
       },
     );
   }

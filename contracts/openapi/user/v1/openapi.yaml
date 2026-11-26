@@ -1177,6 +1177,62 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/cup-replies:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: listCupSupportReplies
+      summary: List replies from CUP Support STAGING for the current client
+      description: Optional local-padel integration. Only returns staff replies to intake tickets confirmed by the authenticated LK2 client. Requests with a continuation require both cursor parameters.
+      parameters:
+        - name: beforeAt
+          in: query
+          schema: { type: string, format: date-time }
+        - name: beforeId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Page of support messages, newest first
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages, next]
+                properties:
+                  messages:
+                    type: array
+                    maxItems: 40
+                    items:
+                      type: object
+                      required: [id, number, body, createdAt]
+                      properties:
+                        id: { type: string, format: uuid }
+                        number: { type: string }
+                        body: { type: string }
+                        createdAt: { type: string, format: date-time }
+                  next:
+                    type: [object, 'null']
+                    required: [at, id]
+                    properties:
+                      at: { type: string, format: date-time }
+                      id: { type: string, format: uuid }
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/auth/password/login:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey

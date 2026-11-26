@@ -25,6 +25,7 @@ import {
 } from './chats-ui/ChatFilters.js';
 import { ChatList } from './chats-ui/ChatList.js';
 import { ChatThread } from './chats-ui/ChatThread.js';
+import { CupSupportChat, type CupReplySource } from './chats-ui/CupSupportChat.js';
 import { CommunityChatList, CommunityThread } from './chats-ui/CommunityChats.js';
 import {
   appendCommunityPage,
@@ -200,6 +201,7 @@ function readChatViewState(userId: string): Partial<ChatViewState> {
 type ChatBusy = 'create' | 'send' | 'refresh' | 'load-earlier' | null;
 
 interface ChatsPageProps {
+  readonly cupSupport?: CupReplySource;
   readonly page: ConversationPage | null;
   readonly messages: readonly ConversationMessage[];
   readonly mode: ChatRouteMode;
@@ -538,7 +540,9 @@ export function ChatsPage({
   onSetNotificationPolicy,
   stationSupport,
   communityChats,
+  cupSupport,
 }: ChatsPageProps): React.JSX.Element {
+  const [cupOpen, setCupOpen] = useState(false);
   const [filter, setFilter] = useState<ChatFilter>(
     () => readChatViewState(currentUserId).filter ?? 'ALL',
   );
@@ -1415,7 +1419,10 @@ export function ChatsPage({
       <ChatErrorBanner error={error} busy={busy} onRefresh={onRefresh} />
       <section
         className={`${styles.shell} ${
-          mode === 'thread' || stationThreadOpen || communityThreadOpen
+          mode === 'thread' ||
+          stationThreadOpen ||
+          communityThreadOpen ||
+          (cupOpen && filter === 'ALL')
             ? styles.threadMode
             : styles.listMode
         }`}
@@ -1438,7 +1445,26 @@ export function ChatsPage({
               <ChatCategoryIcon name="UNREAD" />
             </button>
           </header>
-          <ChatFilters filter={filter} onFilterChange={setFilter} />
+          <ChatFilters
+            filter={filter}
+            onFilterChange={(next) => {
+              setCupOpen(false);
+              setFilter(next);
+            }}
+          />
+          {cupSupport &&
+          filter === 'ALL' &&
+          !unreadOnly &&
+          'поддержка cup'.includes(query.toLowerCase().trim()) ? (
+            <button
+              type="button"
+              className={styles.cupChatRow}
+              aria-pressed={cupOpen}
+              onClick={() => setCupOpen(true)}
+            >
+              Поддержка CUP
+            </button>
+          ) : null}
           {filter === 'STATION' ? (
             stationSource ? (
               <StationDialogList
@@ -1526,6 +1552,8 @@ export function ChatsPage({
             onLoadEarlier={onLoadEarlier}
             onSetNotificationPolicy={onSetNotificationPolicy}
           />
+        ) : cupSupport && cupOpen && filter === 'ALL' ? (
+          <CupSupportChat key={currentUserId} load={cupSupport} close={() => setCupOpen(false)} />
         ) : filter === 'STATION' && stationSource ? (
           stationSelectedDialog || stationState.pendingStationId ? (
             <StationThread
