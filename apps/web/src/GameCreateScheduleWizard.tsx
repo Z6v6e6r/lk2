@@ -759,9 +759,6 @@ export function GameCreateScheduleWizard({
                         }}
                       >
                         {TIME_LABEL.format(new Date(item.startsAt))}
-                        {nextDay ? (
-                          <small>до {TIME_LABEL.format(new Date(item.endsAt))} (след. день)</small>
-                        ) : null}
                       </button>
                       {preferredStart === item.startsAt ? (
                         <button

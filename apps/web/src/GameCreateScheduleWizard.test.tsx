@@ -302,6 +302,7 @@ describe('game creation schedule', () => {
     const time = await screen.findByRole('button', {
       name: '23:00–01:00, окончание на следующий день',
     });
+    expect(time).toHaveTextContent(/^23:00$/);
     await user.click(time);
     const courtButton = screen.getByRole('button', { name: 'Корт №1' });
     expect(within(courtButton).getByText('Панорамик')).toBeVisible();
