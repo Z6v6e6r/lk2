@@ -803,23 +803,64 @@ html:has(.game-schedule-wizard--settings) {
 
 .game-schedule-levels {
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 4px;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--schedule-line);
+  border-radius: 14px;
+  background: var(--schedule-paper);
+  box-shadow: 0 0 0 5px var(--schedule-pale);
 }
 
 .game-schedule-wizard .game-schedule-levels button {
+  position: relative;
+  min-width: 0;
   min-height: 42px;
-  border: 1px solid var(--schedule-line);
-  border-radius: 16px;
   padding: 0;
-  background: var(--schedule-paper);
-  font: inherit;
-  font-weight: 500;
+  font:
+    italic 700 14px/1.2 'Recommendation RF Dewi',
+    'RF Dewi',
+    sans-serif;
+}
+
+.game-schedule-wizard .game-schedule-levels button + button {
+  border-inline-start: 1px solid var(--schedule-line);
+}
+
+.game-schedule-levels button::before,
+.game-schedule-levels button::after {
+  position: absolute;
+  inset-inline: 0;
+  height: 8px;
+  background:
+    linear-gradient(currentColor, currentColor) 25% 0 / 1px 4px no-repeat,
+    linear-gradient(currentColor, currentColor) 50% 0 / 1px 8px no-repeat,
+    linear-gradient(currentColor, currentColor) 75% 0 / 1px 4px no-repeat;
+  opacity: 0.23;
+  pointer-events: none;
+  content: '';
+}
+
+.game-schedule-levels button::before {
+  inset-block-start: 0;
+}
+
+.game-schedule-levels button::after {
+  inset-block-end: 0;
+  transform: scaleY(-1);
 }
 
 .game-schedule-wizard .game-schedule-levels button[aria-pressed='true'] {
-  border-color: var(--schedule-accent);
   background: var(--schedule-accent);
   color: var(--schedule-paper);
+}
+
+.game-schedule-wizard .game-schedule-levels button:focus-visible {
+  z-index: 1;
+  outline-offset: -3px;
+}
+
+.game-schedule-wizard .game-schedule-levels button[aria-pressed='true']:focus-visible {
+  outline-color: var(--schedule-paper);
 }
 
 .game-schedule-visibility .game-schedule-option {
