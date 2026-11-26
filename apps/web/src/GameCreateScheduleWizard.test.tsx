@@ -363,7 +363,7 @@ describe('game creation schedule', () => {
     expect(courtButton).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('narrows and restores both ends one quarter at a time in the local level preview', async () => {
+  it('selects every contiguous range within one level using the existing scale', async () => {
     render(
       <GameCreateScheduleWizard
         stations={stations}
@@ -388,22 +388,53 @@ describe('game creation schedule', () => {
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     const levels = within(screen.getByRole('group', { name: 'Уровень игры' }));
     const summary = within(screen.getByRole('region', { name: 'Выбранная игра' }));
-    const from = levels.getByRole('button', { name: 'D' });
-    const to = levels.getByRole('button', { name: 'C' });
+    const quarter = (name: string) => levels.getByRole('button', { name });
     expect(summary.getByText('D₁ – C₄')).toBeVisible();
-    for (const edge of ['D₂', 'D₃', 'D₄', 'D₃', 'D₂', 'D₁', 'D₂']) {
-      await user.click(from);
-      expect(summary.getByText(`${edge} – C₄`)).toBeVisible();
-      expect(from).toHaveAccessibleDescription(edge);
+    expect(quarter('D₂')).toHaveAttribute('aria-disabled', 'true');
+    await user.click(quarter('D₂'));
+    expect(summary.getByText('D₁ – C₄')).toBeVisible();
+    for (const edge of ['C₄', 'C₃', 'C₂', 'C₁', 'D+₄', 'D+₃', 'D+₂', 'D+₁']) {
+      await user.click(quarter(edge));
     }
-    for (const edge of ['C₃', 'C₂', 'C₁', 'C₂', 'C₃', 'C₄', 'C₃']) {
-      await user.click(to);
-      expect(summary.getByText(`D₂ – ${edge}`)).toBeVisible();
-      expect(to).toHaveAccessibleDescription(edge);
+    expect(summary.getByText('D₁ – D₄')).toBeVisible();
+    for (const [clicked, expected] of [
+      ['D₁', 'D₂ – D₄'],
+      ['D₂', 'D₃ – D₄'],
+      ['D₄', 'D₃'],
+      ['D₂', 'D₂ – D₃'],
+      ['D₃', 'D₂'],
+      ['D₃', 'D₂ – D₃'],
+      ['D₁', 'D₁ – D₃'],
+      ['D₃', 'D₁ – D₂'],
+      ['D₂', 'D₁'],
+      ['D₂', 'D₁ – D₂'],
+      ['D₃', 'D₁ – D₃'],
+      ['D₄', 'D₁ – D₄'],
+      ['D₁', 'D₂ – D₄'],
+      ['D₂', 'D₃ – D₄'],
+      ['D₃', 'D₄'],
+    ] as const) {
+      await user.click(quarter(clicked));
+      expect(summary.getByText(expected)).toBeVisible();
     }
+    expect(quarter('D₄')).toHaveAttribute('aria-disabled', 'true');
+    await user.click(quarter('D₄'));
+    expect(summary.getByText('D₄', { exact: true })).toBeVisible();
+    await user.keyboard('{ArrowRight}');
+    expect(quarter('D+₁')).toHaveFocus();
+    await user.keyboard(' ');
+    expect(summary.getByText('D₄ – D+₁')).toBeVisible();
+    for (const edge of ['D₄', 'D+₂', 'D+₁', 'D+₃']) {
+      await user.click(quarter(edge));
+    }
+    expect(summary.getByText('D+₂ – D+₃')).toBeVisible();
+    expect(quarter('D+₁')).toHaveAttribute('aria-pressed', 'false');
+    expect(quarter('D+₂')).toHaveAttribute('aria-pressed', 'true');
+    expect(quarter('D+₃')).toHaveAttribute('aria-pressed', 'true');
+    expect(quarter('D+₄')).toHaveAttribute('aria-pressed', 'false');
     await user.click(summary.getByRole('button', { name: 'Изменить' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
-    expect(summary.getByText('D₂ – C₃')).toBeVisible();
+    expect(summary.getByText('D+₂ – D+₃')).toBeVisible();
   });
 
   it('reports missing residency evidence independently from the base price', async () => {
