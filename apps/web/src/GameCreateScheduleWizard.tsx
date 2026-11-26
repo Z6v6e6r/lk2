@@ -889,12 +889,12 @@ export function GameCreateScheduleWizard({
           ) : (
             <button
               className="game-schedule-primary game-schedule-continue"
-              aria-label={selected ? 'Показать 1 вариант' : 'Продолжить'}
+              aria-label="Продолжить"
               type="button"
               disabled={!selected}
               onClick={() => wizard.advance(2)}
             >
-              <strong>{selected ? 'Показать 1 вариант' : 'Продолжить'}</strong>
+              <strong>Продолжить</strong>
               <span>
                 {selected && summaryDate
                   ? `${Number(summaryDate.day)} ${summaryDate.month?.slice(0, 3)} · ${chosenTime}${endsNextDay(selected) ? ' (след. день)' : ''} · ${summaryCourtName}`

@@ -143,7 +143,7 @@ describe('game creation schedule', () => {
       expect(payers.getByRole('radio', { name: /Каждый за себя/ })).toBeChecked();
       expect(await payers.findByText(/700\s*₽/)).toBeTruthy();
       expect(payers.queryByText('По подписке')).not.toBeInTheDocument();
-      await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
+      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('С Резидентством')).toBeTruthy();
       expect(screen.getByText(/700\s*₽/)).toBeTruthy();
       expect(readQuote.mock.calls[0]?.[0]).toMatchObject({
@@ -193,7 +193,7 @@ describe('game creation schedule', () => {
     await user.click(payers.getByRole('radio', { name: /^Весь корт/ }));
     expect(summary().getByText('Я оплачиваю весь корт')).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     expect(summary().getByText('Приватная')).toBeVisible();
     expect(summary().getByText('D – C')).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'B' }));
@@ -307,7 +307,7 @@ describe('game creation schedule', () => {
     const courtButton = screen.getByRole('button', { name: 'Корт №1' });
     expect(within(courtButton).getByText('Панорамик')).toBeVisible();
     await user.click(courtButton);
-    const continueButton = screen.getByRole('button', { name: 'Показать 1 вариант' });
+    const continueButton = screen.getByRole('button', { name: 'Продолжить' });
     expect(continueButton).toHaveTextContent('1 дек · 23:00–01:00 (след. день) · Корт №1');
     await user.click(screen.getByRole('button', { name: 'Сбросить выбранный корт' }));
     expect(time).toHaveAttribute('aria-pressed', 'true');
@@ -333,7 +333,7 @@ describe('game creation schedule', () => {
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
     await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
-    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     expect(await screen.findByText('ЛК1 не подтвердил условия')).toBeTruthy();
     expect(screen.queryByText('Не применяется')).toBeNull();
   });
@@ -360,9 +360,9 @@ describe('game creation schedule', () => {
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
     await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
-    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     await user.click(screen.getByRole('button', { name: 'Изменить' }));
-    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
 
     expect(readQuote).toHaveBeenCalledOnce();
     expect(readQuote.mock.calls[0]?.[0].signal.aborted).toBe(false);
@@ -415,7 +415,7 @@ describe('game creation schedule', () => {
       await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
       await user.click(screen.getByRole('radio', { name: /^Весь корт/ }));
-      await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
+      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('Оплата выбранного слота сейчас недоступна.')).toBeTruthy();
       if (mismatch === 'price-unavailable') {
         expect(screen.getByText('ЛК1 не вернул цену корта для выбранного времени.')).toBeTruthy();
@@ -443,7 +443,7 @@ describe('game creation schedule', () => {
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
     await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
-    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     await user.click(await screen.findByRole('button', { name: 'Обновить цену' }));
     expect(await screen.findByText('Разовое участие')).toBeTruthy();
     expect(readQuote.mock.calls.map(([input]) => input.slotId)).toEqual([slot.id, slot.id]);
