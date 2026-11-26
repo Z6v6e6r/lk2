@@ -464,6 +464,57 @@ describe('game creation schedule', () => {
     expectRange('D … D+2');
   });
 
+  it('keeps demo friend selections while filtering and revisiting the review step', async () => {
+    render(
+      <GameCreateScheduleWizard
+        stations={stations}
+        today="2026-12-06"
+        previewFriends={[
+          { id: 'anna', name: 'Анна Ветрова' },
+          { id: 'artem', name: 'Артём Соколов' },
+        ]}
+        source={{
+          listSlots: () => Promise.resolve([slot]),
+          readQuote: () =>
+            Promise.resolve({
+              ...quoteTimes(),
+              wholeCourtMinor: 240000,
+              shareMinor: 60000,
+              residency: { status: 'NOT_APPLICABLE' },
+            }),
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+
+    const picker = () => within(screen.getByRole('region', { name: 'Пригласить друзей' }));
+    const search = () => picker().getByRole('searchbox', { name: 'Найти друга' });
+    const friend = (name: string) => picker().getByRole('checkbox', { name });
+    await user.click(friend('Анна Ветрова'));
+    await user.type(search(), 'АРТЕМ');
+    expect(picker().queryByRole('checkbox', { name: 'Анна Ветрова' })).not.toBeInTheDocument();
+    await user.click(friend('Артём Соколов'));
+    expect(picker().getByText('Выбрано 2')).toBeVisible();
+    await user.clear(search());
+    await user.type(search(), 'пусто');
+    expect(picker().getByRole('status')).toHaveTextContent('Никого не нашли');
+    await user.clear(search());
+
+    await user.click(screen.getByRole('radio', { name: /^Приватная игра/ }));
+    expect(friend('Анна Ветрова')).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Изменить' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expect(friend('Анна Ветрова')).toBeChecked();
+    expect(friend('Артём Соколов')).toBeChecked();
+    await user.click(friend('Анна Ветрова'));
+    expect(friend('Анна Ветрова')).not.toBeChecked();
+    expect(picker().getByText('Выбрано 1')).toBeVisible();
+  });
+
   it('reports missing residency evidence independently from the base price', async () => {
     renderWizard({
       listSlots: () => Promise.resolve([slot]),

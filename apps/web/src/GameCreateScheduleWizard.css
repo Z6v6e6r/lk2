@@ -977,12 +977,14 @@ html:has(.game-schedule-wizard--settings) {
   margin-block-start: 4px;
 }
 
-.game-schedule-community {
+.game-schedule-community,
+.game-schedule-friend-list {
   display: grid;
   gap: 8px;
 }
 
-.game-schedule-community > div {
+.game-schedule-community > div,
+.game-schedule-friend {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) 16px;
   align-items: center;
@@ -996,14 +998,41 @@ html:has(.game-schedule-wizard--settings) {
   overflow-wrap: anywhere;
 }
 
-.game-schedule-community > .is-selected {
+.game-schedule-community > .is-selected,
+.game-schedule-friend:has(input:checked) {
   border-color: var(--schedule-accent);
   background: var(--schedule-pale);
   color: var(--schedule-ink);
 }
 
-.game-schedule-community strong {
+.game-schedule-community strong,
+.game-schedule-friend strong {
   font-weight: 600;
+}
+
+.game-schedule-friend-list {
+  max-height: 240px;
+  padding: 3px;
+  margin: -3px;
+  overflow: auto;
+}
+
+.game-schedule-friend {
+  margin: 0;
+  color: var(--schedule-ink);
+  cursor: pointer;
+}
+
+.game-schedule-friend > span {
+  display: flex;
+}
+
+.game-schedule-friend input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--schedule-accent);
+  cursor: inherit;
 }
 
 .game-schedule-community img,

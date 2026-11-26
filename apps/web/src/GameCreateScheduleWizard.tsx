@@ -9,6 +9,7 @@ import backIconUrl from './assets/game-schedule-back.svg';
 import stationChevronUrl from './assets/game-schedule-station-chevron.svg';
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import { locationCourtLabel } from './location-court-label.js';
+import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import type { GameCreateStep } from './use-game-create-wizard.js';
 import { TrainingPeopleIcon } from './TrainingPeopleIcon.js';
 import './GameCreateScheduleWizard.css';
@@ -57,6 +58,11 @@ const GAME_FORMATS = [
 type Level = (typeof LEVELS)[number];
 type LevelDisplay = { readonly level: Level; readonly step?: number };
 type LevelRangeDisplay = readonly [LevelDisplay] | readonly [LevelDisplay, LevelDisplay];
+type PreviewFriend = {
+  readonly id: string;
+  readonly name: string;
+  readonly avatarUrl?: string;
+};
 type QuarterRange = {
   readonly from: number;
   readonly to: number;
@@ -267,6 +273,7 @@ export function GameCreateScheduleWizard({
   source,
   checkout,
   previewLevelQuarters = false,
+  previewFriends,
   gamesHref = '/games',
   today = DAY.format(new Date()),
 }: {
@@ -274,6 +281,7 @@ export function GameCreateScheduleWizard({
   readonly source: GameCreateScheduleSource;
   readonly checkout?: GameCreateScheduleCheckout;
   readonly previewLevelQuarters?: boolean;
+  readonly previewFriends?: readonly PreviewFriend[];
   readonly gamesHref?: string;
   readonly today?: string;
 }) {
@@ -281,6 +289,7 @@ export function GameCreateScheduleWizard({
   const stationDetailsPrefix = useId();
   const cityPanelPrefix = useId();
   const heading = useRef<HTMLHeadingElement>(null);
+  const inviteHeadingId = useId();
   const [stationId, setStation] = useState(stations[0]?.id ?? '');
   const [search, setSearch] = useState('');
   const [collapsedCities, setCollapsedCities] = useState<ReadonlySet<string>>(() => new Set());
@@ -288,6 +297,8 @@ export function GameCreateScheduleWizard({
   const [preferredStart, setPreferredStart] = useState('');
   const [payer, setPayer] = useState<'split' | 'self'>('split');
   const [visibility, setVisibility] = useState<'PUBLIC' | 'PRIVATE'>('PUBLIC');
+  const [friendSearch, setFriendSearch] = useState('');
+  const [selectedFriends, setSelectedFriends] = useState<ReadonlySet<string>>(() => new Set());
   const [levels, setLevels] = useState<readonly [number, number]>([0, 2]);
   const [quarterRange, setQuarterRange] = useState<QuarterRange>({
     from: 0,
@@ -298,6 +309,7 @@ export function GameCreateScheduleWizard({
   });
   // A checkout can only save the whole-level range supported by the current API.
   const showLevelQuarters = previewLevelQuarters && !checkout;
+  const showFriendPicker = previewFriends !== undefined && !checkout;
   const [title, setTitle] = useState('');
   const [day, setDay] = useState(today);
   const [format, setFormat] = useState<(typeof GAME_FORMATS)[number]['id']>('doubles');
@@ -480,6 +492,10 @@ export function GameCreateScheduleWizard({
 
   const headerTitle = ['Выберите клуб', 'Дата и время', 'Создание игры'][step];
   const query = search.trim().toLocaleLowerCase('ru-RU');
+  const friendQuery = friendSearch.trim().toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
+  const visibleFriends = previewFriends?.filter((friend) =>
+    friend.name.toLocaleLowerCase('ru-RU').replaceAll('ё', 'е').includes(friendQuery),
+  );
   const visibleStations = stations.filter((item) =>
     [item.title, item.city, item.address].some((value) =>
       value?.toLocaleLowerCase('ru-RU').includes(query),
@@ -1176,6 +1192,64 @@ export function GameCreateScheduleWizard({
               <small className="game-schedule-review-note">
                 Автопубликация в сообщества на тестовом стенде отключена.
               </small>
+            </section>
+          ) : null}
+          {showFriendPicker ? (
+            <section
+              className="game-schedule-card game-schedule-stack"
+              aria-labelledby={inviteHeadingId}
+            >
+              <div className="game-schedule-settings-row">
+                <h2 className="game-schedule-settings-heading" id={inviteHeadingId}>
+                  Пригласить друзей
+                </h2>
+                <span aria-live="polite">
+                  {selectedFriends.size > 0 ? `Выбрано ${selectedFriends.size}` : null}
+                </span>
+              </div>
+              <input
+                type="search"
+                className="game-schedule-input"
+                aria-label="Найти друга"
+                placeholder="Найти друга"
+                value={friendSearch}
+                onChange={(event) => setFriendSearch(event.target.value)}
+              />
+              {visibleFriends?.length ? (
+                <div className="game-schedule-friend-list">
+                  {visibleFriends.map((friend) => (
+                    <label className="game-schedule-friend" key={friend.id}>
+                      <span aria-hidden="true">
+                        <PlayerLevelAvatar
+                          alt={friend.name}
+                          src={friend.avatarUrl ?? null}
+                          fallbackSeed={friend.id}
+                          showLevelRing={false}
+                          size={32}
+                        />
+                      </span>
+                      <strong>{friend.name}</strong>
+                      <input
+                        type="checkbox"
+                        checked={selectedFriends.has(friend.id)}
+                        onChange={(event) => {
+                          const checked = event.target.checked;
+                          setSelectedFriends((current) => {
+                            const next = new Set(current);
+                            if (checked) next.add(friend.id);
+                            else next.delete(friend.id);
+                            return next;
+                          });
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="game-schedule-empty" role="status">
+                  {friendQuery ? 'Никого не нашли' : 'Список друзей пуст'}
+                </p>
+              )}
             </section>
           ) : null}
           <section className="game-schedule-card game-schedule-stack">
