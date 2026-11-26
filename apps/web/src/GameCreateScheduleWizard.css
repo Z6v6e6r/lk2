@@ -362,9 +362,34 @@ html:has(.game-schedule-wizard--settings) {
 }
 
 select.game-schedule-month {
-  padding: 0;
+  appearance: none;
+  min-height: 24px;
+  padding: 0 14px 0 0;
   border: 0;
   background: transparent;
+  cursor: pointer;
+}
+
+select.game-schedule-month:focus-visible {
+  outline: 2px solid var(--schedule-accent);
+  outline-offset: 2px;
+}
+
+.game-schedule-settings-row:has(> select.game-schedule-month) {
+  position: relative;
+}
+
+.game-schedule-settings-row:has(> select.game-schedule-month)::after {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-end: 2px;
+  width: 5px;
+  height: 5px;
+  border: solid var(--schedule-muted);
+  border-width: 0 1px 1px 0;
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
+  content: '';
 }
 
 .game-schedule-durations {
@@ -421,13 +446,18 @@ select.game-schedule-month {
   align-content: center;
   gap: 4px;
   padding: 4px;
-  border: 1px solid var(--schedule-line);
+  border: 1px solid color-mix(in srgb, var(--schedule-line) 76%, var(--schedule-paper));
   border-radius: 12px;
   background: var(--schedule-paper);
+  color: var(--schedule-ink);
   font:
-    700 18px/1.2 'Recommendation RF Dewi',
-    'RF Dewi',
+    600 18px/1.2 'Inter Display',
+    Inter,
     sans-serif;
+}
+
+.game-schedule-days button strong {
+  font-weight: inherit;
 }
 
 .game-schedule-days button small {
@@ -445,10 +475,14 @@ select.game-schedule-month {
   cursor: not-allowed;
 }
 
+.game-schedule-days button:disabled small {
+  color: color-mix(in srgb, var(--schedule-muted) 76%, var(--schedule-paper));
+}
+
 .game-schedule-wizard .game-schedule-days button[aria-pressed='true'] {
   border-color: var(--schedule-accent);
   background: var(--schedule-accent);
-  color: #fff;
+  color: var(--schedule-paper);
 }
 
 .game-schedule-days button[aria-pressed='true'] small {
