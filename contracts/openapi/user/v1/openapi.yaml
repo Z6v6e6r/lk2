@@ -6833,6 +6833,10 @@ components:
       properties:
         wholeCourtMinor: { type: [integer, 'null'], minimum: 1 }
         shareMinor: { type: [integer, 'null'], minimum: 1 }
+        subscriptionMinor:
+          type: integer
+          minimum: 0
+          description: Lowest applicable price confirmed by LK1 for an owned non-residency subscription and this exact slot. Omitted when no such price is confirmed.
         currency: { type: string, enum: [RUB] }
         observedAt: { type: string, format: date-time }
         expiresAt: { type: string, format: date-time }

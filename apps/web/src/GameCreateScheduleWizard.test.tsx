@@ -9,10 +9,11 @@ import {
 } from './GameCreateScheduleWizard.js';
 
 const stations = [{ id: 'station', title: 'Селигерская' }];
+const courtName = 'Корт №1 для игры 2 на 2 (панорамик)';
 const slot = {
   id: 'a'.repeat(64),
   courtKey: 'b'.repeat(64),
-  courtName: 'Корт №1',
+  courtName,
   startsAt: '2026-12-06T12:00:00+03:00',
   endsAt: '2026-12-06T13:00:00+03:00',
   amountMinor: null,
@@ -34,6 +35,83 @@ afterEach(() => {
 });
 
 describe('game creation schedule', () => {
+  it('shows court types and opening status from the station catalogue', async () => {
+    const listSlots = vi.fn<GameCreateScheduleSource['listSlots']>().mockResolvedValue([]);
+    const source = { listSlots, readQuote: vi.fn<GameCreateScheduleSource['readQuote']>() };
+    render(
+      <GameCreateScheduleWizard
+        source={source}
+        today="2026-12-06"
+        stations={[
+          {
+            id: 'station',
+            title: 'Селигерская',
+            city: 'Москва',
+            address: 'г. Москва, ул. Ивана Сусанина, 1',
+            panoramicCourtsCount: 3,
+            singleCourtsCount: 1,
+          },
+          { id: 'opening', title: 'Котельники', city: 'Москва', isActive: false },
+          {
+            id: 'total-only',
+            title: 'Сочи',
+            city: 'Сириус',
+            address: 'Краснодарский край, пгт Сириус',
+            courtCount: 4,
+          },
+        ]}
+      />,
+    );
+    const active = screen.getByRole('button', { name: /Селигерская/ });
+    expect(within(active).getByText('ул. Ивана Сусанина, 1')).toBeVisible();
+    expect(within(active).getByText('панорамик: 3 · сингл: 1')).toBeVisible();
+    const sochi = screen.getByRole('button', { name: 'Сочи' });
+    expect(within(sochi).getByText('Краснодарский край, пгт Сириус')).toBeVisible();
+    expect(within(sochi).getByText('4 корта')).toBeVisible();
+    const opening = screen.getByRole('button', { name: /Котельники/ });
+    expect(within(opening).getByText('Скоро открытие')).toBeVisible();
+    expect(opening).toBeDisabled();
+    await userEvent.setup().click(opening);
+    expect(listSlots).not.toHaveBeenCalled();
+  });
+
+  it('collapses each city independently and reveals search matches', async () => {
+    const source = {
+      listSlots: vi.fn<GameCreateScheduleSource['listSlots']>(),
+      readQuote: vi.fn<GameCreateScheduleSource['readQuote']>(),
+    };
+    render(
+      <GameCreateScheduleWizard
+        source={source}
+        stations={[
+          { id: 'moscow', title: 'Селигерская', city: 'Москва' },
+          { id: 'sirius', title: 'Сочи', city: 'Сириус' },
+        ]}
+      />,
+    );
+    const user = userEvent.setup();
+    expect(screen.queryByRole('heading', { name: 'Станции по городам' })).not.toBeInTheDocument();
+    const moscow = screen.getByRole('button', { name: 'Москва' });
+    const sirius = screen.getByRole('button', { name: 'Сириус' });
+    expect(screen.getByRole('button', { name: 'Селигерская' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Сочи' })).toBeVisible();
+    await user.click(moscow);
+    expect(moscow).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Селигерская' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Сочи' })).toBeVisible();
+
+    expect(sirius).toHaveAttribute('aria-expanded', 'true');
+    await user.click(moscow);
+    expect(moscow).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Селигерская' })).toBeVisible();
+
+    await user.click(moscow);
+    await user.type(screen.getByRole('searchbox', { name: 'Найти клуб' }), 'Сели');
+    expect(screen.getByRole('heading', { name: 'Результаты поиска' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Селигерская' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Сочи' })).not.toBeInTheDocument();
+  });
+
   it.each([true, false])(
     'keeps the same flow and preserves a choice on Back (mobile media query %s)',
     async (matches) => {
@@ -54,13 +132,17 @@ describe('game creation schedule', () => {
       });
       renderWizard({ listSlots, readQuote });
       const user = userEvent.setup();
-      expect(screen.getByRole('heading', { name: 'Выберите место' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Выберите клуб' })).toBeTruthy();
       await user.click(screen.getByRole('button', { name: 'Селигерская' }));
       expect(screen.getByRole('heading', { name: 'Дата и время' })).toBeTruthy();
       expect(listSlots).toHaveBeenCalledTimes(1);
       expect(readQuote).toHaveBeenCalledTimes(0);
       await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+      const payers = within(screen.getByRole('group', { name: 'Кто оплачивает корт?' }));
+      expect(payers.getByRole('radio', { name: /Каждый за себя/ })).toBeChecked();
+      expect(await payers.findByText(/700\s*₽/)).toBeTruthy();
+      expect(payers.queryByText('По подписке')).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('С Резидентством')).toBeTruthy();
       expect(screen.getByText(/700\s*₽/)).toBeTruthy();
@@ -84,7 +166,409 @@ describe('game creation schedule', () => {
     },
   );
 
-  it('reports missing residency evidence independently from the base price', async () => {
+  it('previews the selected residency price and restores the choice when going back', async () => {
+    render(
+      <GameCreateScheduleWizard
+        stations={stations}
+        today="2026-12-06"
+        previewPayment
+        source={{
+          listSlots: () => Promise.resolve([slot]),
+          readQuote: () =>
+            Promise.resolve({
+              ...quoteTimes(),
+              wholeCourtMinor: 240000,
+              shareMinor: 60000,
+              residency: { status: 'APPLIED', amountMinor: 42000 },
+            }),
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+
+    const residency = await screen.findByRole('radio', { name: /С резидентством/ });
+    expect(screen.queryByRole('radio', { name: /Запись с подпиской/ })).not.toBeInTheDocument();
+    await user.click(residency);
+    await user.click(screen.getByRole('button', { name: /Записаться за 420/ }));
+    const review = screen.getByRole('region', { name: 'Тестовая запись' });
+    expect(within(review).getByText('С резидентством')).toBeVisible();
+    expect(within(review).getByText(/420\s*₽/)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Назад' }));
+    expect(screen.getByRole('radio', { name: /С резидентством/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: /Записаться за 420/ }));
+    await user.click(screen.getByRole('button', { name: 'Подтвердить тестовую запись' }));
+    expect(screen.getByRole('heading', { name: 'Тестовая запись подтверждена' })).toBeVisible();
+  });
+
+  it('uses the header arrow to go back one step without traversing browser history', async () => {
+    const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+    try {
+      renderWizard({
+        listSlots: () => Promise.resolve([slot]),
+        readQuote: () =>
+          Promise.resolve({
+            ...quoteTimes(),
+            wholeCourtMinor: 240000,
+            shareMinor: 60000,
+            residency: { status: 'NOT_APPLICABLE' },
+          }),
+      });
+      const user = userEvent.setup();
+      const startingUrl = window.location.href;
+      const historyLength = window.history.length;
+      await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+      await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+      await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      expect(screen.getByRole('heading', { name: 'Создание игры', level: 1 })).toBeVisible();
+
+      await user.click(screen.getByRole('button', { name: 'Назад' }));
+      expect(screen.getByRole('heading', { name: 'Дата и время', level: 1 })).toBeVisible();
+      await user.click(screen.getByRole('button', { name: 'Назад' }));
+      expect(screen.getByRole('heading', { name: 'Выберите клуб', level: 1 })).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Назад' })).toHaveAttribute('href', '/games');
+      expect(historyBack).not.toHaveBeenCalled();
+      expect(window.location.href).toBe(startingUrl);
+      expect(window.history.length).toBe(historyLength);
+
+      await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+      expect(screen.getByRole('button', { name: '12:00–13:00' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      expect(screen.getByRole('button', { name: 'Корт №1' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    } finally {
+      historyBack.mockRestore();
+    }
+  });
+
+  it('updates the header summary and displays quoted zero-price subscription', async () => {
+    renderWizard({
+      listSlots: () => Promise.resolve([slot]),
+      readQuote: () =>
+        Promise.resolve({
+          ...quoteTimes(),
+          wholeCourtMinor: 240000,
+          shareMinor: 60000,
+          subscriptionMinor: 0,
+          residency: { status: 'APPLIED', amountMinor: 48000 },
+        }),
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    const summary = () => within(screen.getByRole('region', { name: 'Выбранная игра' }));
+    expect(summary().getByText('Селигерская')).toBeVisible();
+    expect(summary().getByText('6 дек · 60 мин')).toBeVisible();
+    await user.click(await screen.findByRole('button', { name: '12:00–13:00' }));
+    expect(summary().getByText('6 дек · 12:00–13:00')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Корт №1' }));
+    expect(summary().getByText('Селигерская · Корт №1')).toBeVisible();
+    const payers = within(screen.getByRole('group', { name: 'Кто оплачивает корт?' }));
+    expect(await payers.findByText('По подписке')).toHaveTextContent(/По подписке\s+0\s*₽/);
+    expect(payers.getByText('С резидентством')).toHaveTextContent(/С резидентством\s+480\s*₽/);
+    await user.click(payers.getByRole('radio', { name: /^Весь корт/ }));
+    expect(summary().getByText('Я оплачиваю весь корт')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expect(summary().getByText('Приватная')).toBeVisible();
+    expect(summary().getByRole('group', { name: 'Уровень игроков' })).toHaveTextContent('D … C');
+    await user.click(screen.getByRole('button', { name: 'B' }));
+    await user.click(screen.getByRole('radio', { name: /Открытая игра/ }));
+    expect(summary().getByRole('group', { name: 'Уровень игроков' })).toHaveTextContent('D … B');
+    expect(summary().getByText('Открытая')).toBeVisible();
+    await user.click(summary().getByRole('button', { name: 'Изменить' }));
+    expect(await screen.findByRole('heading', { name: 'Дата и время' })).toBeVisible();
+    expect(summary().getByText('Селигерская · Корт №1')).toBeVisible();
+    expect(summary().getByRole('group', { name: 'Уровень игроков' })).toHaveTextContent('D … B');
+    expect(summary().getByText('Открытая')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Сбросить выбранное время' }));
+    expect(summary().getByText('6 дек · 60 мин')).toBeVisible();
+  });
+
+  it('filters courts and times by format and only quotes doubles', async () => {
+    const singles = {
+      ...slot,
+      id: 'c'.repeat(64),
+      courtKey: 'd'.repeat(64),
+      courtName: 'Корт №4 для игры 1 на 1 (сингл)',
+      startsAt: '2026-12-06T16:00:00+03:00',
+      endsAt: '2026-12-06T17:00:00+03:00',
+    };
+    const listSlots = vi
+      .fn<GameCreateScheduleSource['listSlots']>()
+      .mockResolvedValue([slot, singles]);
+    const readQuote = vi.fn<GameCreateScheduleSource['readQuote']>().mockResolvedValue({
+      ...quoteTimes(),
+      wholeCourtMinor: 400000,
+      shareMinor: 100000,
+      residency: { status: 'NOT_APPLICABLE' },
+    });
+    renderWizard({ listSlots, readQuote });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    const formats = within(screen.getByRole('group', { name: 'Формат игры' }));
+    const doublesButton = formats.getByRole('button', { name: '2 на 2' });
+    const singlesButton = formats.getByRole('button', { name: '1 на 1' });
+    expect(doublesButton).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: 'Корт №4' })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    expect(readQuote).toHaveBeenCalledOnce();
+
+    await user.click(singlesButton);
+    expect(singlesButton).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: 'Корт №1' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '12:00–13:00' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Корт №4' }));
+    await user.click(screen.getByRole('button', { name: '16:00–17:00' }));
+    expect(screen.getByRole('button', { name: '16:00–17:00' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByText('Запись на игру 1 на 1 пока недоступна.')).toBeVisible();
+    expect(screen.queryByRole('group', { name: 'Кто оплачивает корт?' })).not.toBeInTheDocument();
+    expect(readQuote).toHaveBeenCalledOnce();
+    expect(listSlots).toHaveBeenCalledOnce();
+
+    await user.click(doublesButton);
+    expect(screen.getByRole('button', { name: 'Продолжить' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Корт №1' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('shows the next 14 days alongside today and allows an overnight slot across the month boundary', async () => {
+    const overnight = {
+      ...slot,
+      startsAt: '2026-12-01T23:00:00+03:00',
+      endsAt: '2026-12-02T01:00:00+03:00',
+    };
+    const listSlots = vi.fn<GameCreateScheduleSource['listSlots']>().mockResolvedValue([overnight]);
+    const readQuote = vi.fn<GameCreateScheduleSource['readQuote']>().mockResolvedValue({
+      ...quoteTimes(),
+      wholeCourtMinor: null,
+      shareMinor: null,
+      residency: { status: 'UNAVAILABLE' },
+    });
+    render(
+      <GameCreateScheduleWizard
+        stations={stations}
+        source={{ listSlots, readQuote }}
+        today="2026-11-26"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    const calendar = within(screen.getByRole('group', { name: 'Дата игры' }));
+    const dates = calendar.getAllByRole('button');
+    expect(dates).toHaveLength(15);
+    expect(dates[0]).toHaveAccessibleName(/26 нояб/);
+    expect(dates.at(-1)).toHaveAccessibleName(/10 дек/);
+    expect(calendar.queryByRole('button', { name: /25 нояб/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Месяц' })).not.toBeInTheDocument();
+    const november = within(calendar.getByRole('group', { name: 'ноябрь' }));
+    expect(november.getByRole('button', { name: /30 нояб/ })).toBeVisible();
+    const december = within(calendar.getByRole('group', { name: 'декабрь' }));
+    expect(listSlots).toHaveBeenCalledOnce();
+    await user.click(december.getByRole('button', { name: /1 дек/ }));
+    expect(listSlots).toHaveBeenLastCalledWith(expect.objectContaining({ day: '2026-12-01' }));
+
+    const time = await screen.findByRole('button', {
+      name: '23:00–01:00, окончание на следующий день',
+    });
+    expect(time).toHaveTextContent(/^23:00$/);
+    await user.click(time);
+    const courtButton = screen.getByRole('button', { name: 'Корт №1' });
+    expect(within(courtButton).getByText('Панорамик')).toBeVisible();
+    await user.click(courtButton);
+    const continueButton = screen.getByRole('button', { name: 'Продолжить' });
+    expect(continueButton).toHaveTextContent('1 дек · 23:00–01:00 (след. день) · Корт №1');
+    await user.click(screen.getByRole('button', { name: 'Сбросить выбранный корт' }));
+    expect(time).toHaveAttribute('aria-pressed', 'true');
+    expect(courtButton).toHaveAttribute('aria-pressed', 'false');
+    await user.click(courtButton);
+    await user.click(screen.getByRole('button', { name: 'Сбросить выбранное время' }));
+    expect(time).toHaveAttribute('aria-pressed', 'false');
+    expect(courtButton).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('adjusts both edges and cycles a single level by clicking the whole segment', async () => {
+    render(
+      <GameCreateScheduleWizard
+        stations={stations}
+        today="2026-12-06"
+        previewLevelQuarters
+        source={{
+          listSlots: () => Promise.resolve([slot]),
+          readQuote: () =>
+            Promise.resolve({
+              ...quoteTimes(),
+              wholeCourtMinor: 240000,
+              shareMinor: 60000,
+              residency: { status: 'NOT_APPLICABLE' },
+            }),
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    const levels = () => within(screen.getByRole('group', { name: 'Уровень игры' }));
+    const summary = () => within(screen.getByRole('region', { name: 'Выбранная игра' }));
+    const from = () => levels().getByRole('button', { name: 'D' });
+    const to = () => levels().getByRole('button', { name: 'C' });
+    const summaryLevel = () => summary().getByRole('group', { name: 'Уровень игроков' });
+    const expectRange = (text: string) => expect(summaryLevel().textContent).toBe(text);
+    expectRange('D … C');
+    for (const edge of ['D2', 'D3', 'D4', 'D3', 'D2', 'D', 'D2']) {
+      await user.click(from());
+      expectRange(`${edge} … C`);
+    }
+    for (const edge of ['C3', 'C2', 'C1', 'C2', 'C3', 'C', 'C3']) {
+      await user.click(to());
+      expectRange(`D2 … ${edge}`);
+    }
+    expect(from()).toHaveAccessibleDescription('D₂');
+    expect(to()).toHaveAccessibleDescription('C₃');
+    await user.click(summary().getByRole('button', { name: 'Изменить' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expectRange('D2 … C3');
+
+    const singleLevel = () => levels().getByRole('button', { name: 'D+' });
+    await user.click(singleLevel());
+    expect(levels().getAllByRole('button')).toHaveLength(7);
+    expectRange('D+');
+    expect(within(summaryLevel()).getByRole('superscript')).toHaveTextContent('+');
+    expect(within(summaryLevel()).queryByRole('subscript')).not.toBeInTheDocument();
+    expect(singleLevel()).toHaveFocus();
+    const selectedRanges = new Set(['D+']);
+    for (const expected of [
+      'D+2 … D+4',
+      'D+3 … D+4',
+      'D+3',
+      'D+2 … D+3',
+      'D+2',
+      'D+1 … D+2',
+      'D+1',
+      'D+1 … D+2',
+      'D+1 … D+3',
+      'D+2 … D+3',
+      'D+2 … D+4',
+      'D+3 … D+4',
+      'D+4',
+      'D+3 … D+4',
+      'D+2 … D+4',
+      'D+',
+    ]) {
+      await user.keyboard(' ');
+      expectRange(expected);
+      selectedRanges.add(expected);
+    }
+    expect(selectedRanges.size).toBe(10);
+
+    await user.click(singleLevel());
+    const mark = within(summaryLevel());
+    expect(mark.getAllByRole('superscript').map((sign) => sign.textContent)).toEqual(['+', '+']);
+    expect(mark.getAllByRole('subscript').map((index) => index.textContent)).toEqual(['2', '4']);
+    expect(singleLevel()).toHaveAccessibleDescription('D+₂ … D+₄');
+    await user.click(summary().getByRole('button', { name: 'Изменить' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expectRange('D+2 … D+4');
+    await user.click(to());
+    expectRange('D+2 … C');
+    await user.click(from());
+    expectRange('D … C');
+    await user.click(singleLevel());
+    expectRange('D+');
+    await user.click(singleLevel());
+    expectRange('D+2 … D+4');
+
+    for (let tap = 0; tap < 6; tap++) await user.click(singleLevel());
+    expectRange('D+1');
+    await user.click(from());
+    expectRange('D … D+1');
+    await user.click(singleLevel());
+    expectRange('D … D+2');
+  });
+
+  it('keeps demo friend selections while filtering, collapsing and revisiting the review step', async () => {
+    render(
+      <GameCreateScheduleWizard
+        stations={stations}
+        today="2026-12-06"
+        previewFriends={[
+          { id: 'anna', name: 'Анна Ветрова' },
+          { id: 'artem', name: 'Артём Соколов' },
+        ]}
+        source={{
+          listSlots: () => Promise.resolve([slot]),
+          readQuote: () =>
+            Promise.resolve({
+              ...quoteTimes(),
+              wholeCourtMinor: 240000,
+              shareMinor: 60000,
+              residency: { status: 'NOT_APPLICABLE' },
+            }),
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+
+    const picker = () => within(screen.getByRole('region', { name: 'Пригласить друзей' }));
+    const search = () => picker().getByRole('searchbox', { name: 'Найти друга' });
+    const friend = (name: string) => picker().getByRole('checkbox', { name });
+    const toggle = picker().getByRole('button', { name: 'Пригласить друзей' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(picker().queryByRole('searchbox')).not.toBeInTheDocument();
+    expect(within(toggle).queryByText(/Выбрано/)).not.toBeInTheDocument();
+    await user.click(toggle);
+    await user.click(friend('Анна Ветрова'));
+    await user.type(search(), 'АРТЕМ');
+    expect(picker().queryByRole('checkbox', { name: 'Анна Ветрова' })).not.toBeInTheDocument();
+    await user.click(friend('Артём Соколов'));
+    expect(picker().getByText('Выбрано 2')).toBeVisible();
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(picker().queryByRole('searchbox')).not.toBeInTheDocument();
+    expect(picker().queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(within(toggle).getByText('Выбрано 2')).toBeVisible();
+    await user.keyboard('{Enter}');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(search()).toHaveValue('АРТЕМ');
+    expect(friend('Артём Соколов')).toBeChecked();
+    await user.clear(search());
+    await user.type(search(), 'пусто');
+    expect(picker().getByRole('status')).toHaveTextContent('Никого не нашли');
+    await user.clear(search());
+
+    await user.click(screen.getByRole('radio', { name: /^Приватная игра/ }));
+    expect(friend('Анна Ветрова')).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Изменить' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expect(friend('Анна Ветрова')).toBeChecked();
+    expect(friend('Артём Соколов')).toBeChecked();
+    await user.click(friend('Анна Ветрова'));
+    expect(friend('Анна Ветрова')).not.toBeChecked();
+    expect(picker().getByText('Выбрано 1')).toBeVisible();
+  });
+
+  it('shows the base price and omits unconfirmed benefits', async () => {
     renderWizard({
       listSlots: () => Promise.resolve([slot]),
       readQuote: () =>
@@ -100,8 +584,31 @@ describe('game creation schedule', () => {
     await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
-    expect(await screen.findByText('ЛК1 не подтвердил условия')).toBeTruthy();
-    expect(screen.queryByText('Не применяется')).toBeNull();
+    expect(await screen.findByText(/^1\s*000\s*₽$/)).toBeVisible();
+    expect(screen.queryByText('С Резидентством')).not.toBeInTheDocument();
+    expect(screen.queryByText('Запись с подпиской')).not.toBeInTheDocument();
+  });
+
+  it('displays a confirmed zero subscription price for the selected slot', async () => {
+    renderWizard({
+      listSlots: () => Promise.resolve([slot]),
+      readQuote: () =>
+        Promise.resolve({
+          ...quoteTimes(),
+          wholeCourtMinor: 240000,
+          shareMinor: 60000,
+          subscriptionMinor: 0,
+          residency: { status: 'NOT_APPLICABLE' },
+        }),
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expect(await screen.findByText('Запись с подпиской')).toBeVisible();
+    expect(screen.getByText(/^0\s*₽$/)).toBeVisible();
+    expect(screen.queryByText('С Резидентством')).not.toBeInTheDocument();
   });
 
   it('keeps an in-flight quote on Continue and Back, then retries the same slot after a rate limit', async () => {
@@ -180,7 +687,7 @@ describe('game creation schedule', () => {
       await user.click(screen.getByRole('button', { name: 'Селигерская' }));
       await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
-      await user.click(screen.getByRole('radio', { name: /Плачу за всех/ }));
+      await user.click(screen.getByRole('radio', { name: /^Весь корт/ }));
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('Оплата выбранного слота сейчас недоступна.')).toBeTruthy();
       if (mismatch === 'price-unavailable') {

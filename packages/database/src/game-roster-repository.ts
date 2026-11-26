@@ -13,6 +13,7 @@ import {
   type GameLifecycleState,
   type GameRosterCommandFacts,
   type GameViewerRelation,
+  type GameVisibility,
 } from '@phub/games';
 import {
   evaluateLevelEligibility,
@@ -35,6 +36,8 @@ import {
   hasGameTestCourtAccess,
   isExactGameTestCourtPair,
   isRestrictedGameTestCourt,
+  lockGameFriendPair,
+  readGameFriendInvitation,
 } from './game-repository.js';
 import type { GamePaymentMode } from './game-repository.js';
 
@@ -350,6 +353,8 @@ interface LockedGameRow extends QueryResultRow {
   readonly court_id: string | null;
   readonly revision: string | number;
   readonly lifecycle_state: GameLifecycleState;
+  readonly visibility: GameVisibility;
+  readonly organizer_user_id: string;
   readonly starts_at: Date | string;
   readonly ends_at: Date | string;
   readonly join_cutoff_at: Date | string | null;
@@ -682,7 +687,7 @@ async function lockGame(
 ): Promise<LockedGameRow | undefined> {
   return queryOne<LockedGameRow>(
     client,
-    `select id, station_id, court_id, revision, lifecycle_state, starts_at, ends_at, join_cutoff_at,
+    `select id, station_id, court_id, revision, lifecycle_state, visibility, organizer_user_id, starts_at, ends_at, join_cutoff_at,
             capacity, waitlist_enabled, payment_mode, sport_code, level_from, level_to,
             min_level_id, max_level_id, now()::text as database_now
        from games.games
@@ -1828,6 +1833,33 @@ async function prepareCommand(
       result: { outcome: 'rejected', code: 'GAME_NOT_FOUND', replayed: false },
     };
   }
+  const facts = await loadRosterFacts(client, input);
+  if (
+    (commandType === 'game.join.v1' || commandType === 'game.waitlist.join.v1') &&
+    game.visibility === 'PRIVATE' &&
+    viewerRelation(facts) === 'NONE'
+  ) {
+    let invitation = await readGameFriendInvitation(
+      client,
+      input.tenantId,
+      input.gameId,
+      input.actorUserId,
+    );
+    if (invitation.invited) {
+      await lockGameFriendPair(client, input.tenantId, game.organizer_user_id, input.actorUserId);
+      invitation = await readGameFriendInvitation(
+        client,
+        input.tenantId,
+        input.gameId,
+        input.actorUserId,
+      );
+    }
+    if (invitation.restricted && !invitation.invited)
+      return {
+        ready: false,
+        result: await storeRejected(client, input, commandType, commandId, 'GAME_NOT_FOUND', false),
+      };
+  }
   if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
     return {
       ready: false,
@@ -1842,7 +1874,7 @@ async function prepareCommand(
       ),
     };
   }
-  return { ready: true, commandId, game, facts: await loadRosterFacts(client, input) };
+  return { ready: true, commandId, game, facts };
 }
 
 async function policyRejection(

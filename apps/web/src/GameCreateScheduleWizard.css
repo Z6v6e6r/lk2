@@ -11,11 +11,12 @@ body:has(.game-schedule-wizard) {
   --schedule-accent: #7253d8;
   --schedule-pale: #f8f6fe;
   --schedule-display: 'RF Dewi', 'Inter Display', sans-serif;
+  --schedule-inline-padding: 16px;
   width: min(100%, 480px);
   max-width: 480px;
   min-height: 100dvh;
   margin: 0 auto;
-  padding: 16px 16px 40px;
+  padding: 16px var(--schedule-inline-padding) 40px;
   background: var(--schedule-ground);
   color: var(--schedule-ink);
   font-synthesis: style;
@@ -34,23 +35,68 @@ body:has(.game-schedule-wizard) {
 }
 
 .game-schedule-header {
+  box-sizing: border-box;
   display: flex;
-  min-height: 36px;
+  height: 64px;
   align-items: center;
-  gap: 16px;
-  margin: 0 0 12px;
+  justify-content: space-between;
+  margin: 0 calc(-1 * var(--schedule-inline-padding)) 12px;
+  padding: 16px 20px;
+  border-bottom: 0.5px solid #ededed;
 }
 
-.game-schedule-header > :first-child {
-  padding: 6px 10px;
-  color: var(--schedule-ink);
+html:has(.game-schedule-summary) {
+  scroll-padding-top: 200px;
+}
+
+html:has(.game-schedule-wizard--settings) {
+  scroll-padding-bottom: 90px;
+}
+
+.game-schedule-top:has(.game-schedule-summary) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin-bottom: 4px;
+  padding-bottom: 8px;
+  background: var(--schedule-ground);
+}
+
+.game-schedule-wizard--settings .game-schedule-top {
+  margin-bottom: 12px;
+}
+
+.game-schedule-header::after {
+  flex: 0 0 32px;
+  content: '';
+}
+
+.game-schedule-header .game-schedule-back {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
   text-decoration: none;
-  font: italic 800 13px/1.4 var(--schedule-display);
+}
+
+.game-schedule-header .game-schedule-back:disabled {
+  cursor: not-allowed;
 }
 
 .game-schedule-header h1 {
-  font: 800 18px/1.25 var(--schedule-display);
-  letter-spacing: -0.25px;
+  flex: 1;
+  min-width: 0;
+  color: #353436;
+  font:
+    600 14px/1.2 'Inter Display',
+    Inter,
+    sans-serif;
+  letter-spacing: 0.01em;
+  text-align: center;
 }
 
 .game-schedule-wizard h2,
@@ -83,14 +129,53 @@ body:has(.game-schedule-wizard) {
 }
 
 .game-schedule-stack,
-.game-schedule-station-list {
+.game-schedule-station-list,
+.game-schedule-station-panel:not([hidden]),
+.game-schedule-invite-panel:not([hidden]) {
   display: grid;
   min-width: 0;
   gap: 12px;
 }
 
-.game-schedule-station-list h3 {
+.game-schedule-wizard :is(.game-schedule-station-heading, .game-schedule-settings-heading) {
+  font:
+    600 16px/1.25 'Recommendation Inter Display',
+    'Inter Display',
+    Inter,
+    sans-serif;
+}
+
+.game-schedule-wizard .game-schedule-city-heading {
+  color: var(--schedule-muted);
+  font:
+    700 12px/1 'Recommendation RF Dewi',
+    'RF Dewi',
+    sans-serif;
+  letter-spacing: 0.12em;
+  text-align: start;
   text-transform: uppercase;
+}
+
+.game-schedule-wizard .game-schedule-disclosure {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px 0 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: start;
+  text-transform: inherit;
+}
+
+.game-schedule-disclosure > img {
+  flex: none;
+}
+
+.game-schedule-disclosure[aria-expanded='true'] > img {
+  transform: rotate(90deg);
 }
 
 .game-schedule-wizard .game-schedule-card,
@@ -106,6 +191,62 @@ body:has(.game-schedule-wizard) {
 .game-schedule-wizard .game-schedule-input {
   min-height: 48px;
   font: inherit;
+}
+
+.game-schedule-club-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.game-schedule-wizard .game-schedule-map-toggle {
+  display: inline-flex;
+  box-sizing: border-box;
+  flex: none;
+  height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--schedule-line);
+  border-radius: 14px;
+  background: var(--schedule-paper);
+  color: #757579;
+  font:
+    400 14px/1 'Inter Display',
+    Inter,
+    sans-serif;
+  white-space: nowrap;
+}
+
+.game-schedule-map-toggle::before {
+  flex: 0 0 13px;
+  height: 13px;
+  background: currentColor;
+  mask: url('./assets/recommendation-cards/location.svg') center / contain no-repeat;
+  content: '';
+}
+
+.game-schedule-wizard .game-schedule-input[type='search'] {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  min-height: 0;
+  padding: 0 16px 0 38px;
+  border: 0.5px solid #ededed;
+  border-radius: 14px;
+  background: #fafafa url('./assets/game-schedule-search.svg') left 16px center / 12px 12px
+    no-repeat;
+  font:
+    500 14px/1 'Inter Display',
+    Inter,
+    sans-serif;
+  letter-spacing: 0.02em;
+}
+
+.game-schedule-wizard .game-schedule-input[type='search']::placeholder {
+  color: #b4b4b4;
+  opacity: 1;
 }
 
 .game-schedule-wizard textarea.game-schedule-input {
@@ -127,13 +268,62 @@ body:has(.game-schedule-wizard) {
   font: italic 800 16px/1.2 var(--schedule-display);
 }
 
+.game-schedule-station-card > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 7px;
+  overflow-wrap: anywhere;
+}
+
+.game-schedule-station-card > img {
+  flex: none;
+}
+
+.game-schedule-wizard .game-schedule-station-card:disabled {
+  border-color: #dfe2e8;
+  background: #eef0f4;
+  color: #606574;
+  cursor: not-allowed;
+}
+
+.game-schedule-station-details {
+  display: grid;
+  min-width: 0;
+}
+
+.game-schedule-station-card strong {
+  font:
+    700 15px/1 'Recommendation RF Dewi',
+    'RF Dewi',
+    sans-serif;
+  letter-spacing: 0.01em;
+}
+
 .game-schedule-link small,
-.game-schedule-option small,
-.game-schedule-quarter small {
+.game-schedule-option small {
   display: block;
   color: var(--schedule-muted);
 }
 
+.game-schedule-station-card small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font:
+    500 12px/1.48 'Inter Display',
+    Inter,
+    sans-serif;
+  letter-spacing: 0.02em;
+}
+
+.game-schedule-station-card .game-schedule-station-meta {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.game-schedule-formats,
 .game-schedule-durations,
 .game-schedule-times,
 .game-schedule-courts,
@@ -144,26 +334,79 @@ body:has(.game-schedule-wizard) {
   gap: 8px;
 }
 
+.game-schedule-formats {
+  --schedule-chip-height: 34px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.game-schedule-settings {
+  gap: 16px;
+}
+
+.game-schedule-settings-section {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.game-schedule-settings-section:has(> .game-schedule-courts) {
+  gap: 12px;
+}
+
+.game-schedule-settings-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.game-schedule-settings-row > span {
+  color: var(--schedule-muted);
+  font: inherit;
+  font-size: 13px;
+}
+
 .game-schedule-durations {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .game-schedule-wizard
-  :is(.game-schedule-durations, .game-schedule-times, .game-schedule-courts)
+  :is(.game-schedule-formats, .game-schedule-durations, .game-schedule-times, .game-schedule-courts)
   button {
-  min-height: 39px;
   border: 1px solid var(--schedule-line);
   border-radius: 12px;
   padding: 6px;
   background: var(--schedule-paper);
-  font: italic 800 13px/1.23 var(--schedule-display);
+  font:
+    500 14px/1.2 'Inter Display',
+    Inter,
+    sans-serif;
 }
 
-.game-schedule-wizard .game-schedule-durations button {
-  border-radius: 999px;
+.game-schedule-wizard
+  :is(.game-schedule-formats, .game-schedule-durations, .game-schedule-times)
+  button {
+  position: relative;
+  min-height: var(--schedule-chip-height, 32px);
+  border-radius: 12px;
+  padding: 4px 14px;
+  white-space: nowrap;
 }
 
-.game-schedule-wizard .game-schedule-durations button[aria-pressed='true'] {
+.game-schedule-wizard
+  :is(.game-schedule-formats, .game-schedule-durations, .game-schedule-times)
+  button::after {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 50%;
+  block-size: var(--schedule-chip-hit-height, 44px);
+  transform: translateY(-50%);
+  content: '';
+}
+
+.game-schedule-wizard
+  :is(.game-schedule-formats, .game-schedule-durations)
+  button[aria-pressed='true'] {
   border-color: var(--schedule-ink);
   background: var(--schedule-ink);
   color: #fff;
@@ -176,67 +419,131 @@ body:has(.game-schedule-wizard) {
 }
 
 .game-schedule-days {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 47px;
-  gap: 9px;
+  display: flex;
+  gap: 8px;
   min-width: 0;
   overflow-x: auto;
-  padding: 2px 2px 7px;
+  margin: -4px;
+  padding: 4px;
 }
 
-.game-schedule-days > div {
-  text-align: center;
+.game-schedule-month-group {
+  display: grid;
+  flex: none;
+  gap: 6px;
 }
 
-.game-schedule-days > div > span {
-  display: block;
+.game-schedule-month {
+  position: sticky;
+  inset-inline-start: 0;
+  justify-self: start;
   color: var(--schedule-muted);
-  font-size: 11px;
-  margin-bottom: 5px;
-  text-transform: uppercase;
+  font-size: 13px;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.game-schedule-month-dates {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 44px;
+  gap: 8px;
 }
 
 .game-schedule-wizard .game-schedule-days button {
   display: grid;
   width: 100%;
-  min-height: 50px;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid var(--schedule-line);
-  border-radius: 8px;
+  min-height: 48px;
+  align-content: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 1px solid color-mix(in srgb, var(--schedule-line) 76%, var(--schedule-paper));
+  border-radius: 9px;
   background: var(--schedule-paper);
-  font: italic 800 18px/1.2 var(--schedule-display);
-}
-
-.game-schedule-days button small {
-  background: var(--schedule-ink);
-  color: #fff;
-  font-size: 11px;
-  text-transform: uppercase;
-  padding: 2px;
+  color: var(--schedule-ink);
+  font:
+    600 18px/1.2 'Inter Display',
+    Inter,
+    sans-serif;
 }
 
 .game-schedule-days button strong {
-  padding: 4px;
+  font-weight: inherit;
+}
+
+.game-schedule-days button small {
+  color: var(--schedule-muted);
+  font:
+    400 13px/18px 'Inter Display',
+    Inter,
+    sans-serif;
+  text-transform: capitalize;
 }
 
 .game-schedule-wizard .game-schedule-days button[aria-pressed='true'] {
   border-color: var(--schedule-accent);
   background: var(--schedule-accent);
-  color: #fff;
+  color: var(--schedule-paper);
+}
+
+.game-schedule-days button[aria-pressed='true'] small {
+  color: inherit;
 }
 
 .game-schedule-times {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.game-schedule-courts {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-bottom: 12px;
+.game-schedule-times:has(> :nth-child(5)) {
+  --schedule-chip-hit-height: 40px;
+}
+
+.game-schedule-wizard .game-schedule-courts .game-schedule-pick > :first-child {
+  border-radius: 16px;
+  min-height: 56px;
+  padding: 8px 16px;
+  font:
+    600 15px/1.2 'Inter Display',
+    Inter,
+    sans-serif;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.game-schedule-courts .game-schedule-pick strong {
+  font-weight: inherit;
+}
+
+.game-schedule-courts .game-schedule-pick small {
+  display: block;
+  margin-top: 2px;
+  color: var(--schedule-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.game-schedule-wizard
+  .game-schedule-courts
+  .game-schedule-pick:has(> button + button)
+  > :first-child {
+  padding-inline-end: 36px;
+}
+
+.game-schedule-wizard .game-schedule-times .game-schedule-pick > button[aria-pressed='true'] {
+  background: var(--schedule-accent);
+  border-color: var(--schedule-accent);
+  color: #fff;
+}
+
+.game-schedule-wizard .game-schedule-courts button[aria-pressed='true'] {
+  background: var(--schedule-paper);
+  box-shadow: inset 0 0 0 0.5px var(--schedule-accent);
+  color: var(--schedule-ink);
 }
 
 .game-schedule-pick {
+  position: relative;
   display: flex;
   min-width: 0;
 }
@@ -246,26 +553,47 @@ body:has(.game-schedule-wizard) {
   min-width: 0;
 }
 
-.game-schedule-wizard .game-schedule-pick:has(> button + button) > :first-child {
-  border-start-end-radius: 0;
-  border-end-end-radius: 0;
+.game-schedule-wizard .game-schedule-pick > button + button {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: 36px;
+  min-height: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--schedule-accent);
+  font-style: normal;
+  z-index: 1;
 }
 
-.game-schedule-wizard .game-schedule-pick > button + button {
-  border-inline-start: 0;
-  border-color: var(--schedule-accent);
-  border-start-start-radius: 0;
-  border-end-start-radius: 0;
-  background: var(--schedule-pale);
-  color: var(--schedule-accent);
+.game-schedule-wizard
+  .game-schedule-times
+  .game-schedule-pick:has(> button + button)
+  > :first-child {
+  padding-inline: 4px 24px;
+}
+
+.game-schedule-wizard .game-schedule-times .game-schedule-pick > button + button {
+  width: 24px;
+  color: #fff;
+}
+
+.game-schedule-wizard .game-schedule-payer-card {
+  padding: 12px 16px 14px;
 }
 
 .game-schedule-payers {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  padding: 10px 0 0;
   border: 0;
+  padding: 0;
+}
+
+.game-schedule-payers legend {
+  padding: 0;
+  margin-bottom: 12px;
 }
 
 .game-schedule-option {
@@ -281,7 +609,7 @@ body:has(.game-schedule-wizard) {
 }
 
 .game-schedule-option:has(input:checked),
-.game-schedule-payment-row:has(.game-schedule-radio:not(.is-empty)) {
+.game-schedule-payment-row--primary {
   border-color: var(--schedule-accent);
   background: var(--schedule-pale);
   box-shadow: inset 0 0 0 0.5px var(--schedule-accent);
@@ -305,24 +633,92 @@ body:has(.game-schedule-wizard) {
   text-align: right;
 }
 
-.game-schedule-quarter {
-  display: grid;
-  grid-column: 2 / -1;
-  gap: 5px;
-  margin-top: 5px;
+.game-schedule-payers .game-schedule-option {
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+  border-radius: 22px;
+  cursor: pointer;
 }
 
-.game-schedule-quarter > span {
+.game-schedule-payers .game-schedule-option:has(input:checked) {
+  background: var(--schedule-paper);
+}
+
+.game-schedule-option:has(input:focus-visible) {
+  outline: 2px solid var(--schedule-accent);
+  outline-offset: 2px;
+}
+
+.game-schedule-payers input {
+  width: 22px;
+  height: 22px;
+}
+
+.game-schedule-payer-line {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px;
-  border-radius: 10px;
-  background: var(--schedule-ground);
 }
 
-.game-schedule-quarter > span > strong {
-  flex-shrink: 0;
+.game-schedule-payer-line > strong:first-child {
+  font:
+    700 15px/1.2 'Recommendation RF Dewi',
+    'RF Dewi',
+    sans-serif;
+}
+
+.game-schedule-payers .game-schedule-payer-copy > small {
+  margin-block-start: 4px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.game-schedule-payers .game-schedule-payer-copy > .game-schedule-payer-benefits {
+  display: grid;
+  gap: 4px;
+  margin-block-start: 12px;
+}
+
+.game-schedule-payer-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-block-start: 10px;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--schedule-line);
+  color: #6145b6;
+  font-size: 12px;
+}
+
+.game-schedule-payers .game-schedule-option:last-child .game-schedule-payer-note {
+  color: #545b69;
+}
+
+.game-schedule-payer-note svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.game-schedule-payer-price,
+.game-schedule-payer-benefits .game-schedule-payer-line > span {
+  text-align: end;
+}
+
+.game-schedule-payer-price {
+  color: var(--schedule-accent);
+  font:
+    600 16px/1.2 'Inter Display',
+    Inter,
+    sans-serif;
+  overflow-wrap: anywhere;
+}
+
+.game-schedule-payer-benefits .game-schedule-payer-line > span {
+  color: var(--schedule-ink);
 }
 
 .game-schedule-primary {
@@ -344,17 +740,26 @@ body:has(.game-schedule-wizard) {
 .game-schedule-continue {
   display: grid;
   width: 100%;
-  min-height: 90px;
-  gap: 2px;
-  justify-items: start;
+  min-height: 64px;
+  gap: 4px;
+  place-content: center;
   border-radius: 16px;
-  text-align: left;
-  font-size: 16px;
+  text-align: center;
+  font:
+    600 16px/1.25 'Inter Display',
+    Inter,
+    sans-serif;
+}
+
+.game-schedule-continue:not(:disabled) {
+  position: sticky;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  z-index: 1;
 }
 
 .game-schedule-continue span {
   font:
-    italic 500 12px/1.3 'Inter Display',
+    400 13px/18px 'Inter Display',
     sans-serif;
 }
 
@@ -363,21 +768,18 @@ body:has(.game-schedule-wizard) {
   color: var(--schedule-muted);
 }
 
-.game-schedule-summary {
+.game-schedule-wizard .game-schedule-summary {
   display: grid;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  min-height: 100px;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  font-size: 12px;
+  letter-spacing: 0.01em;
 }
 
-.game-schedule-summary > div,
-.game-schedule-section-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.game-schedule-summary > span,
-.game-schedule-section-row > small {
+.game-schedule-summary > span {
   color: var(--schedule-muted);
   font-size: 12px;
 }
@@ -385,43 +787,80 @@ body:has(.game-schedule-wizard) {
 .game-schedule-summary > span {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  min-width: 0;
+  gap: 4px;
 }
 
 .game-schedule-summary svg {
-  width: 16px;
-  height: 16px;
+  flex: none;
+  width: 12px;
+  height: 12px;
 }
 
-.game-schedule-summary svg:not([fill]),
-.game-schedule-visibility em svg:not([fill]) {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.game-schedule-summary .game-schedule-level-icon {
+  width: 14px;
 }
 
-.game-schedule-summary-dot {
-  color: #b5afb9;
+.game-schedule-level-range {
+  white-space: nowrap;
+}
+
+.game-schedule-level-mark {
+  display: inline-grid;
+  grid-template:
+    'letter plus' 0.5em
+    'letter step' 0.5em / auto auto;
+  align-items: center;
+  justify-items: center;
+  vertical-align: -0.08em;
+  line-height: 1;
+}
+
+.game-schedule-level-mark > span {
+  grid-area: letter;
+}
+
+.game-schedule-level-mark :is(sup, sub) {
+  font-size: 0.67em;
+  line-height: 1;
+}
+
+.game-schedule-level-mark sup {
+  grid-area: plus;
+  align-self: end;
+  transform: translateY(-0.16em);
+}
+
+.game-schedule-level-mark sub {
+  grid-area: step;
+  align-self: start;
+  transform: translateY(0.16em);
+}
+
+.game-schedule-summary > :nth-child(even) {
+  justify-self: end;
+  text-align: end;
 }
 
 .game-schedule-summary strong {
-  font: 800 15px/1.2 var(--schedule-display);
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .game-schedule-wizard .game-schedule-summary button {
   padding: 0;
   color: var(--schedule-accent);
-  font: italic 800 14px/1.4 var(--schedule-display);
+  font: inherit;
+  font-weight: 600;
 }
 
-.game-schedule-level-panel {
-  padding: 12px 14px;
-  border: 1px solid rgb(115 83 217 / 16%);
-  border-radius: 24px;
-  background: linear-gradient(180deg, #fff, #f4efff);
+.game-schedule-wizard .game-schedule-summary button:disabled {
+  cursor: not-allowed;
+}
+
+.game-schedule-review {
+  gap: 20px;
 }
 
 .game-schedule-levels {
@@ -429,171 +868,207 @@ body:has(.game-schedule-wizard) {
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--schedule-line);
-  border-radius: 18px;
+  border-radius: 14px;
+  background: var(--schedule-paper);
+  box-shadow: 0 0 0 5px var(--schedule-pale);
 }
 
 .game-schedule-wizard .game-schedule-levels button {
-  min-height: 54px;
-  border-inline-end: 1px solid var(--schedule-line);
+  position: relative;
+  min-width: 0;
+  min-height: 42px;
   padding: 0;
-  font: italic 800 16px/1.4 var(--schedule-display);
+  font:
+    italic 700 14px/1.2 'Recommendation RF Dewi',
+    'RF Dewi',
+    sans-serif;
 }
 
-.game-schedule-wizard .game-schedule-levels button:last-child {
-  border-inline-end: 0;
+.game-schedule-wizard .game-schedule-levels button + button {
+  border-inline-start: 1px solid var(--schedule-line);
+}
+
+.game-schedule-levels :is(button, .game-schedule-level-fill)::before,
+.game-schedule-levels :is(button, .game-schedule-level-fill)::after {
+  position: absolute;
+  inset-inline: 0;
+  height: 8px;
+  background:
+    linear-gradient(currentColor, currentColor) 25% 0 / 1px 4px no-repeat,
+    linear-gradient(currentColor, currentColor) 50% 0 / 1px 8px no-repeat,
+    linear-gradient(currentColor, currentColor) 75% 0 / 1px 4px no-repeat;
+  opacity: 0.23;
+  pointer-events: none;
+  content: '';
+}
+
+.game-schedule-levels :is(button, .game-schedule-level-fill)::before {
+  inset-block-start: 0;
+}
+
+.game-schedule-levels :is(button, .game-schedule-level-fill)::after {
+  inset-block-end: 0;
+  transform: scaleY(-1);
 }
 
 .game-schedule-wizard .game-schedule-levels button[aria-pressed='true'] {
-  background: linear-gradient(135deg, #6f4df6, #8a68ef);
-  color: #fff;
+  background: var(--schedule-accent);
+  color: var(--schedule-paper);
 }
 
-.game-schedule-visibility {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+.game-schedule-wizard .game-schedule-levels--quarters button[aria-pressed='true'] {
+  background: transparent;
+  color: var(--schedule-ink);
+}
+
+.game-schedule-level-fill {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--schedule-accent);
+  color: var(--schedule-paper);
+  pointer-events: none;
+}
+
+.game-schedule-wizard .game-schedule-levels button:focus-visible {
+  z-index: 1;
+  outline-offset: -3px;
+}
+
+.game-schedule-wizard .game-schedule-levels button[aria-pressed='true']:focus-visible {
+  outline-color: var(--schedule-paper);
+}
+
+.game-schedule-wizard .game-schedule-levels--quarters button[aria-pressed='true']:focus-visible {
+  outline-color: var(--schedule-ink);
 }
 
 .game-schedule-visibility .game-schedule-option {
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 12px;
-  padding: 16px 16px 18px;
-  border-radius: 24px;
-  background: linear-gradient(180deg, #fff, #faf7ff);
-}
-
-.game-schedule-visibility .game-schedule-option:has(input:checked) {
-  border-color: rgb(115 83 217 / 82%);
-  background: linear-gradient(180deg, #faf7ff, #ede9ff);
-  box-shadow:
-    0 0 0 1px rgb(115 83 217 / 10%),
-    0 14px 28px rgb(115 83 217 / 8%);
+  grid-template-columns: 22px minmax(0, 1fr);
+  min-height: 64px;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  cursor: pointer;
 }
 
 .game-schedule-visibility .game-schedule-option input {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
 }
 
-.game-schedule-visibility strong {
+.game-schedule-review :is(.game-schedule-option > span, .game-schedule-review-field) > strong {
   display: block;
-  color: var(--schedule-ink);
-  font: italic 800 17px/1.05 var(--schedule-display);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
-.game-schedule-visibility small {
-  margin-block-start: 9px;
-  color: #39334d;
-  font-size: 14px;
-  font-style: italic;
-  line-height: 1.5;
+.game-schedule-review .game-schedule-option small,
+.game-schedule-review-note {
+  color: var(--schedule-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
 }
 
-.game-schedule-visibility em {
-  grid-column: 1 / -1;
-  display: flex;
-  min-height: 36px;
-  align-self: end;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 4px 6px;
-  border-radius: 999px;
-  color: var(--schedule-accent);
-  background: linear-gradient(180deg, #7353d91f, #7353d912);
-  font: italic 800 14px/1 var(--schedule-display);
-  text-align: center;
+.game-schedule-review .game-schedule-option small {
+  margin-block-start: 4px;
 }
 
-.game-schedule-visibility em svg {
-  width: 11px;
-  height: 11px;
-  flex: none;
-}
-
-.game-schedule-visibility .game-schedule-option:not(:has(input:checked)) em {
-  color: #a29ab8;
-  background: linear-gradient(180deg, #f3f1f7, #ebe7f2);
-}
-
-@media (max-width: 500px) {
-  .game-schedule-level-panel {
-    padding: 10px;
-  }
-  .game-schedule-wizard .game-schedule-levels button {
-    min-height: 48px;
-    font-size: 15px;
-  }
-  .game-schedule-visibility {
-    gap: 10px;
-  }
-  .game-schedule-visibility .game-schedule-option {
-    grid-template-columns: 24px minmax(0, 1fr);
-    gap: 8px;
-    padding: 14px 12px 16px;
-  }
-  .game-schedule-visibility .game-schedule-option input {
-    width: 24px;
-    height: 24px;
-  }
-  .game-schedule-visibility small {
-    font-size: 13px;
-  }
-  .game-schedule-visibility em {
-    min-height: 32px;
-    font-size: 11px;
-  }
-}
-
-.game-schedule-community {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.game-schedule-community > div {
-  position: relative;
+.game-schedule-community,
+.game-schedule-friend-list {
   display: grid;
-  width: 116px;
-  justify-items: center;
   gap: 8px;
-  padding: 10px;
+}
+
+.game-schedule-community > div,
+.game-schedule-friend {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 8px 12px;
   border: 1px solid var(--schedule-line);
   border-radius: 16px;
   color: var(--schedule-muted);
-  font-size: 11px;
-  text-align: center;
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
-.game-schedule-community > .is-selected {
-  border-color: #d5c8f7;
+.game-schedule-community > .is-selected,
+.game-schedule-friend:has(input:checked) {
+  border-color: var(--schedule-accent);
   background: var(--schedule-pale);
   color: var(--schedule-ink);
+}
+
+.game-schedule-community strong,
+.game-schedule-friend strong {
+  font-weight: 600;
+}
+
+.game-schedule-wizard .game-schedule-invite-toggle {
+  padding-inline-end: 0;
+}
+
+.game-schedule-invite-count {
+  margin-inline-start: auto;
+  color: var(--schedule-muted);
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.game-schedule-friend-list {
+  max-block-size: 184px;
+  padding: 3px;
+  margin: -3px;
+  overflow-y: auto;
+}
+
+.game-schedule-friend {
+  margin: 0;
+  color: var(--schedule-ink);
+  cursor: pointer;
+}
+
+.game-schedule-friend > span {
+  display: flex;
+}
+
+.game-schedule-friend input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--schedule-accent);
+  cursor: inherit;
 }
 
 .game-schedule-community img,
 .game-schedule-community-avatar {
   display: grid;
-  width: 56px;
-  height: 56px;
+  width: 32px;
+  height: 32px;
   place-items: center;
-  border-radius: 16px;
+  border-radius: 8px;
   background: var(--schedule-paper);
 }
 
 .game-schedule-community img {
-  padding: 8px;
+  padding: 4px;
   object-fit: contain;
 }
 
 .game-schedule-community-avatar {
-  border-radius: 50%;
-  background: #e2e0e5;
-  font-weight: 800;
+  background: var(--schedule-ground);
+  font-weight: 600;
 }
 
 .game-schedule-community-check {
-  position: absolute;
-  inset: 8px 8px auto auto;
   width: 16px;
   height: 16px;
   border: 1px solid var(--schedule-line);
@@ -626,25 +1101,66 @@ body:has(.game-schedule-wizard) {
   text-decoration: underline;
 }
 
-.game-schedule-payment {
-  border-radius: 24px;
-  padding: 16px;
+.game-schedule-review-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
 }
 
-.game-schedule-radio {
-  width: 16px;
-  height: 16px;
-  border: 1px solid var(--schedule-line);
-  border-radius: 50%;
+.game-schedule-wizard .game-schedule-review-field .game-schedule-input {
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 14px;
 }
 
-.game-schedule-radio:not(.is-empty) {
-  border: 4px solid var(--schedule-accent);
+.game-schedule-wizard .game-schedule-review-field .game-schedule-input:disabled {
+  background: var(--schedule-ground);
+}
+
+.game-schedule-payment-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px;
+  border-radius: 16px;
+}
+
+.game-schedule-preview-options {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.game-schedule-payment-row.game-schedule-preview-option {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  cursor: pointer;
+}
+
+.game-schedule-preview-option:has(input:disabled) {
+  color: var(--schedule-muted);
+  cursor: default;
+}
+
+.game-schedule-preview-option:has(input:checked) > strong {
+  color: var(--schedule-accent);
+}
+
+.game-schedule-payment-row > strong {
+  overflow-wrap: anywhere;
+}
+
+.game-schedule-review-action {
+  border-radius: 16px;
+  font: inherit;
+  font-weight: 600;
 }
 
 .game-schedule-payment details {
   color: var(--schedule-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .game-schedule-payment summary {
@@ -653,13 +1169,15 @@ body:has(.game-schedule-wizard) {
 }
 
 @media (max-width: 350px) {
-  .games-page.game-schedule-wizard {
-    padding-inline: 12px;
+  .games-page.game-schedule-wizard:not(.game-schedule-wizard--settings) {
+    --schedule-inline-padding: 12px;
   }
-  .game-schedule-visibility strong {
-    font-size: 15px;
+  .game-schedule-wizard .game-schedule-payer-card,
+  .game-schedule-payers .game-schedule-option {
+    padding-inline: 10px;
   }
-  .game-schedule-times {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+
+  .game-schedule-payers .game-schedule-option {
+    gap: 8px;
   }
 }

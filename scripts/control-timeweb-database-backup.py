@@ -192,14 +192,28 @@ CUP_SUPPORT_FRESH_RECEIPT = 'PHUB_TIMEWEB_CUP_SUPPORT_FRESH_DUMP_V1'
 CUP_SUPPORT_FRESH_POLICY = 'CUP_SUPPORT_FRESH_DUMP_INTEGRITY_ONLY_V1'
 CUP_SUPPORT_PREDECESSOR = 'b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61-45606826648-1'
 CUP_SUPPORT_RESTORE_MESSAGE_SHA256 = '40a3494b79bd56a44789a1e662a5f1130fa418d155a84bc316ea3c015f7f05d4'
+GAME_INVITATIONS_0120_FRESH_SCHEMA = 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_FRESH_BACKUP_V1'
+GAME_INVITATIONS_0120_FRESH_RECEIPT = 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_FRESH_DUMP_V1'
+GAME_INVITATIONS_0120_FRESH_POLICY = 'GAME_INVITATIONS_0120_INTEGRITY_ONLY_V1'
+GAME_INVITATIONS_0120_PREDECESSOR = 'dd73c7e02e81ad790f9c8c3ceb9f9ca988ad87a5-45820580791-1'
+GAME_INVITATIONS_0120_LEDGER = '70adb2cea831f5b5ad58a44c6fd0b18324dba914b3eab4a4fd3c7c723c9e70c6'
+GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256 = '68915d6c67cff26463f4145fccaac5bebdfbcacd3125a187c737561ff2b0caf4'
 
 
 def is_cup_support_fresh(op):
     return op.get('schema') == CUP_SUPPORT_FRESH_SCHEMA
 
 
+def is_game_invitations_0120_fresh(op):
+    return op.get('schema') == GAME_INVITATIONS_0120_FRESH_SCHEMA
+
+
+def is_integrity_only_fresh(op):
+    return is_cup_support_fresh(op) or is_game_invitations_0120_fresh(op)
+
+
 def is_app_only_fresh(op):
-    return op.get('schema') == APP_ONLY_FRESH_SCHEMA or is_cup_support_fresh(op)
+    return op.get('schema') == APP_ONLY_FRESH_SCHEMA or is_integrity_only_fresh(op)
 
 
 def is_app_only_checkpoint(op):
@@ -216,11 +230,13 @@ def is_fresh_operation(op):
     return is_app_only_fresh(op) or op.get('schema') in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA)
 
 def fresh_receipt_schema(op):
+    if is_game_invitations_0120_fresh(op): return GAME_INVITATIONS_0120_FRESH_RECEIPT
     if is_cup_support_fresh(op): return CUP_SUPPORT_FRESH_RECEIPT
     if is_app_only_fresh(op): return APP_ONLY_FRESH_RECEIPT
     return CANONICAL_FRESH_RECEIPT if is_canonical_fresh(op) else FRESH_RECEIPT
 
 def fresh_policy(op):
+    if is_game_invitations_0120_fresh(op): return GAME_INVITATIONS_0120_FRESH_POLICY
     if is_cup_support_fresh(op): return CUP_SUPPORT_FRESH_POLICY
     if is_app_only_fresh(op): return APP_ONLY_POLICY
     return CANONICAL_FRESH_POLICY if is_canonical_fresh(op) else FRESH_POLICY
@@ -2182,7 +2198,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         exact(value, common + ['profile','candidateSha','publicationRunId','releaseId','expectedWeb',
                               'expectedLedgerSha256','expectedDatabaseTarget','predecessorAttestationSha256',
                               'expectedSchemaSha256','expectedSecuritySha256']
-              + (['ownerRestoreDecision'] if is_cup_support_fresh(value)
+              + (['ownerRestoreDecision'] if is_integrity_only_fresh(value)
                  else ['priorRestore'] if is_app_only_fresh(value) else []))
         mode, release_id = operation_mode(value)
         need(profile == 'production' and 'controllerPromotion' not in value
@@ -2194,8 +2210,11 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and all(HASH.fullmatch(value[k] or '') for k in
                      ('expectedLedgerSha256','expectedSchemaSha256','expectedSecuritySha256')),
              'APP_ONLY_OPERATION')
-        if is_cup_support_fresh(value):
-            cup_support_restore_reference(value)
+        if is_integrity_only_fresh(value):
+            integrity_only_restore_reference(value)
+            if is_game_invitations_0120_fresh(value):
+                need(utc(value['ownerRestoreDecision']['receivedAt']) <= now,
+                     'GAME_INVITATIONS_0120_RESTORE_WINDOW')
         elif is_app_only_fresh(value):
             ref = value['priorRestore']
             exact(ref,['releaseId','operationSha256','receiptSha256','terminalSha256'])
@@ -3687,7 +3706,7 @@ def plan_mode(path):
         attest_app_only_database(op)
         if is_app_only_fresh(op):
             attest_app_only_source(op)
-            if is_cup_support_fresh(op): attest_cup_support_restore_message()
+            if is_integrity_only_fresh(op): attest_integrity_only_restore_message(op)
             fresh_restore_reference(op)
             need(disk_free()>=CUTOVER_DUMP_LIMIT+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
         else:
@@ -4058,7 +4077,8 @@ def app_only_backup_confirmation(op):
     action = 'FRESH_DUMP' if is_app_only_fresh(op) else 'VERIFY_RESTORE'
     api = op['expectedApi']['releaseId'][:12].upper()
     web = op['expectedWeb']['releaseId'][:12].upper()
-    suffix = '_CUP_SUPPORT_NO_RESTORE' if is_cup_support_fresh(op) else ''
+    suffix = ('_GAME_INVITATIONS_0120_NO_RESTORE' if is_game_invitations_0120_fresh(op)
+              else '_CUP_SUPPORT_NO_RESTORE' if is_cup_support_fresh(op) else '')
     return action + '_APP_ONLY_' + op['candidateSha'][:12].upper() + '_FROM_' + api + '_' + web + suffix
 
 
@@ -4217,52 +4237,83 @@ def validate_app_only_checkpoint(op, as_of=None):
             'postgresImage':data['restoreImage'],'dumpSha256':data['backupSha256']}
 
 
-def cup_support_restore_reference(op):
+def integrity_only_restore_policy(op):
+    if is_game_invitations_0120_fresh(op):
+        return ('GAME_INVITATIONS_0120', GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256,
+                GAME_INVITATIONS_0120_PREDECESSOR, 'game-invitations-0120-restore-waiver.txt')
+    return ('CUP_SUPPORT', CUP_SUPPORT_RESTORE_MESSAGE_SHA256,
+            CUP_SUPPORT_PREDECESSOR, 'cup-support-restore-waiver.txt')
+
+
+def integrity_only_restore_reference(op):
+    name, message_sha, predecessor, _ = integrity_only_restore_policy(op)
     decision = op['ownerRestoreDecision']
-    exact(decision, ['schema', 'authority', 'decision', 'messageSha256', 'reference', 'attestedAt'])
-    need(decision['schema'] == 'PHUB_TIMEWEB_CUP_SUPPORT_RESTORE_DECISION_V1'
+    scoped = is_game_invitations_0120_fresh(op)
+    time_field = 'receivedAt' if scoped else 'attestedAt'
+    exact(decision, ['schema', 'authority', 'decision', 'messageSha256', 'reference', time_field]
+          + (['scopeSha256'] if scoped else []))
+    need(decision['schema'] == 'PHUB_TIMEWEB_' + name + '_RESTORE_DECISION_V1'
          and decision['authority'] == 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1'
          and decision['decision'] == 'FRESH_DUMP_INTEGRITY_ONLY'
-         and decision['messageSha256'] == CUP_SUPPORT_RESTORE_MESSAGE_SHA256
-         and decision['reference'] == 'codex-user-message-sha256:' + CUP_SUPPORT_RESTORE_MESSAGE_SHA256
-         and 0 < utc(op['expiresAt']) - utc(decision['attestedAt']) <= 60 * 60
-         and op['expectedApi']['releaseId'] == op['expectedWeb']['releaseId'] == CUP_SUPPORT_PREDECESSOR,
-         'CUP_SUPPORT_RESTORE_DECISION')
-    return {'schema': 'PHUB_TIMEWEB_CUP_SUPPORT_BACKUP_ADMISSION_V1',
+         and decision['messageSha256'] == message_sha
+         and decision['reference'] == 'codex-user-message-sha256:' + message_sha
+         and 0 < utc(op['expiresAt']) - utc(decision[time_field]) <= 60 * 60
+         and op['expectedApi']['releaseId'] == op['expectedWeb']['releaseId'] == predecessor
+         and (not scoped or (op['expectedLedgerSha256'] == GAME_INVITATIONS_0120_LEDGER
+                             and decision['scopeSha256'] == fresh_owner_scope(op))),
+         name + '_RESTORE_DECISION')
+    return {'schema': 'PHUB_TIMEWEB_' + name + '_BACKUP_ADMISSION_V1',
             'candidateSha': op['candidateSha'], 'candidateTree': op['controllerTree'],
             'apiContainerId': op['expectedApi']['id'], 'webContainerId': op['expectedWeb']['id'],
             'releaseId': op['releaseId'], 'expiresAt': op['expiresAt'],
             'ownerDecisionSha256': digest(encoded(decision)),
-            'attestedAt': decision['attestedAt'], 'restoreVerified': False}
+            'attestedAt': decision[time_field], 'restoreVerified': False}
 
 
 def fresh_restore_reference(op, as_of=None):
-    if is_cup_support_fresh(op): return cup_support_restore_reference(op)
+    if is_integrity_only_fresh(op): return integrity_only_restore_reference(op)
     if is_app_only_fresh(op): return validate_app_only_checkpoint(op, as_of)
     return validate_prior_restore(op)
 
 
-def attest_cup_support_restore_message():
-    message = read_secure(ROOT/'operator/cup-support-restore-waiver.txt')
-    need(digest(message) == CUP_SUPPORT_RESTORE_MESSAGE_SHA256, 'CUP_SUPPORT_RESTORE_MESSAGE')
+def game_invitations_0120_restore_window(op):
+    window = strict(read_secure(ROOT/'operator/game-invitations-0120-restore-window.json'))
+    exact(window, ['schema','messageSha256','candidateSha','controllerTree','releaseId','receivedAt','expiresAt'])
+    need(window['schema']=='PHUB_TIMEWEB_GAME_INVITATIONS_0120_RESTORE_WINDOW_V1'
+         and window['messageSha256']==GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256
+         and window['candidateSha']==op['candidateSha'] and window['controllerTree']==op['controllerTree']
+         and window['releaseId']==op['releaseId']
+         and utc(window['receivedAt'])<utc(window['expiresAt']), 'GAME_INVITATIONS_0120_RESTORE_WINDOW')
+    return window
+
+
+def attest_integrity_only_restore_message(op):
+    name, message_sha, _, filename = integrity_only_restore_policy(op)
+    message = read_secure(ROOT/'operator'/filename)
+    need(digest(message) == message_sha, name + '_RESTORE_MESSAGE')
+    if is_game_invitations_0120_fresh(op) and 'ownerRestoreDecision' in op:
+        window=game_invitations_0120_restore_window(op)
+        need(window['expiresAt']==op['expiresAt']
+             and window['receivedAt']==op['ownerRestoreDecision']['receivedAt'],
+             'GAME_INVITATIONS_0120_RESTORE_WINDOW_DRIFT')
 
 
 def fresh_reference_file(op):
-    return ('restore-admission-reference.json' if is_cup_support_fresh(op)
+    return ('restore-admission-reference.json' if is_integrity_only_fresh(op)
             else 'prior-full-restore-reference.json')
 
 
 def fresh_reference_hash_key(op):
-    return 'admissionReferenceSha256' if is_cup_support_fresh(op) else 'priorReferenceSha256'
+    return 'admissionReferenceSha256' if is_integrity_only_fresh(op) else 'priorReferenceSha256'
 
 
 def fresh_policy_file(op):
-    if is_cup_support_fresh(op): return 'owner-restore-decision.json'
+    if is_integrity_only_fresh(op): return 'owner-restore-decision.json'
     return 'restore-reuse-policy.json' if is_app_only_fresh(op) else 'owner-restore-decision.json'
 
 
 def prepare_app_only_backup(candidate, run, checkpoint):
-    integrity_only = checkpoint == 'cup-support-integrity-only'
+    integrity_only = checkpoint in ('cup-support-integrity-only', 'game-invitations-0120-integrity-only')
     need(SHA.fullmatch(candidate) and re.fullmatch(r'[1-9][0-9]*',run)
          and (checkpoint=='-' or integrity_only or RELEASE.fullmatch(checkpoint)),
          'APP_ONLY_PREPARE_ARGUMENTS')
@@ -4286,7 +4337,8 @@ def prepare_app_only_backup(candidate, run, checkpoint):
     scope_sha=digest(encoded(rows))
     target=strict(source_query(SOURCE_CUTOVER_TARGET,pg['id']))
     need(target=={**LOCATION_PHOTO_DATABASE_TARGET,'inRecovery':False}, 'APP_ONLY_DATABASE_TARGET')
-    op={'schema': (CUP_SUPPORT_FRESH_SCHEMA if integrity_only else
+    op={'schema': (GAME_INVITATIONS_0120_FRESH_SCHEMA if checkpoint == 'game-invitations-0120-integrity-only' else
+                   CUP_SUPPORT_FRESH_SCHEMA if integrity_only else
                    APP_ONLY_RESTORE_SCHEMA if checkpoint=='-' else APP_ONLY_FRESH_SCHEMA),
         'profile':'production','target':TARGET,'controllerSha':candidate,'toolCommit':candidate,
         'controllerTree':tree,'controllerConfigSha256':digest(config),
@@ -4303,13 +4355,14 @@ def prepare_app_only_backup(candidate, run, checkpoint):
         op['expectedSchemaSha256']=snapshot['witness']['schemaSha256']
         op['expectedSecuritySha256']=snapshot['witness']['securitySha256']
     if integrity_only:
-        attest_cup_support_restore_message()
+        attest_integrity_only_restore_message(op)
+        name, message_sha, _, _ = integrity_only_restore_policy(op)
         op['ownerRestoreDecision'] = {
-            'schema': 'PHUB_TIMEWEB_CUP_SUPPORT_RESTORE_DECISION_V1',
+            'schema': 'PHUB_TIMEWEB_' + name + '_RESTORE_DECISION_V1',
             'authority': 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
             'decision': 'FRESH_DUMP_INTEGRITY_ONLY',
-            'messageSha256': CUP_SUPPORT_RESTORE_MESSAGE_SHA256,
-            'reference': 'codex-user-message-sha256:' + CUP_SUPPORT_RESTORE_MESSAGE_SHA256,
+            'messageSha256': message_sha,
+            'reference': 'codex-user-message-sha256:' + message_sha,
             'attestedAt': now_iso(),
         }
     elif checkpoint!='-':
@@ -4321,6 +4374,14 @@ def prepare_app_only_backup(candidate, run, checkpoint):
     minutes = 115 if is_app_only_checkpoint(op) else 55
     op['expiresAt']=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=minutes)).isoformat(timespec='milliseconds').replace('+00:00','Z')
     op['confirmation']=app_only_backup_confirmation(op)
+    if is_game_invitations_0120_fresh(op):
+        window=game_invitations_0120_restore_window(op)
+        op['expiresAt']=window['expiresAt']
+        decision=op['ownerRestoreDecision']
+        del decision['attestedAt']
+        decision['receivedAt']=window['receivedAt']
+        decision['scopeSha256']=fresh_owner_scope(op)
+        attest_integrity_only_restore_message(op)
     validate_operation(op,time.time(),op['toolFileSha256'])
     if is_app_only_fresh(op):
         attest_app_only_source(op)
@@ -4330,7 +4391,7 @@ def prepare_app_only_backup(candidate, run, checkpoint):
 
 
 def fresh_policy_record(op):
-    if is_cup_support_fresh(op): return op['ownerRestoreDecision']
+    if is_integrity_only_fresh(op): return op['ownerRestoreDecision']
     if is_app_only_fresh(op):
         return {'schema':APP_ONLY_POLICY,'controllerSha':op['controllerSha'],
                 'controllerTree':op['controllerTree'],'checkpoint':op['priorRestore']}
@@ -4338,6 +4399,7 @@ def fresh_policy_record(op):
 
 
 def fresh_lineage_phase(op):
+    if is_game_invitations_0120_fresh(op): return 'GAME_INVITATIONS_0120_OWNER_DECISION_SEALED'
     if is_cup_support_fresh(op): return 'CUP_SUPPORT_OWNER_DECISION_SEALED'
     if is_app_only_fresh(op): return 'APP_ONLY_LINEAGE_SEALED'
     if is_canonical_fresh(op): return 'CANONICAL_LINEAGE_SEALED'
@@ -4378,7 +4440,7 @@ def validate_fresh_publication(op, raw, plan, directory):
     # exact before atomic publication; retained validation reads only its sealed files.
     r=strict(read_secure(directory/'database-backup-receipt.json'))
     app_only=is_app_only_fresh(op)
-    integrity_only=is_cup_support_fresh(op)
+    integrity_only=is_integrity_only_fresh(op)
     policy_hash_key='policySha256' if app_only else 'ownerReceiptSha256'
     reference_hash_key=fresh_reference_hash_key(op)
     exact(r,['schema','baselineReleaseId','completedAt','backupFile','backupSha256','operationSha256',
@@ -4478,7 +4540,7 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
         for path in [ROOT,ROOT/'standard',ROOT/'operator',ROOT/'backups']:secure(path,'dir')
         tool_custody(op)
         if app_only: attest_app_only_source(op)
-        if is_cup_support_fresh(op): attest_cup_support_restore_message()
+        if is_integrity_only_fresh(op): attest_integrity_only_restore_message(op)
         prior=fresh_restore_reference(op)
         cutover_disk_reserve()
         need(disk_free()>=CUTOVER_DUMP_LIMIT+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
@@ -4558,7 +4620,7 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
             need(len(strict(ledger_bytes(source_query(SOURCE_LEDGER,op['expectedPostgres']['id']))))==122,'CUTOVER_LEDGER')
         if lineage:
             if app_only:
-                if is_cup_support_fresh(op): attest_cup_support_restore_message()
+                if is_integrity_only_fresh(op): attest_integrity_only_restore_message(op)
                 current_prior=fresh_restore_reference(op)
             else:
                 canonical_live_admission(op)

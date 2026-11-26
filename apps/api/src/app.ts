@@ -351,7 +351,12 @@ export interface BuildAppOptions {
     GameRepository,
     'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
   > &
-    Partial<Pick<GameRepository, 'listRecommendationCardProjections' | 'getCardProjections'>>;
+    Partial<
+      Pick<
+        GameRepository,
+        'listRecommendationCardProjections' | 'getCardProjections' | 'canViewFriendInvitation'
+      >
+    >;
   readonly clientRoutingPlanRepository?: Pick<ClientRoutingPlanRepository, 'get'>;
   readonly notificationRepository?: NotificationInboxRepository;
   readonly notificationPreferenceRepository?: NotificationPreferenceRepository;

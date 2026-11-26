@@ -473,6 +473,46 @@ Until Commerce supplies a verified payment next action and confirmation consumer
 invents a payment URL or marks the reservation paid. Production dependency injection for Games
 remains off at this boundary; registered routes fail closed with `GAMES_RUNTIME_UNAVAILABLE`.
 
+### Slot-specific participation estimates
+
+The game creation wizard reads an estimate for the chosen slot through LK2.
+LK1 calculates residency and subscription prices under the actor's existing
+authorization. The estimate may include the lowest confirmed amount for an
+owned non-residency subscription, including zero. A missing amount or an
+unconfirmed residency price hides that benefit in the wizard. The estimate
+is display data. Recording a booking or charging a subscription requires
+the separate command's own current authorization and eligibility checks.
+
+### Invitations to friends after game creation
+
+The create command accepts a bounded list of LK2 friends for free games and the confirmed
+whole-court flow. Games validates accepted friendship, the active recipient, and blocks in both
+directions in the current tenant. A payment draft reserves only the user's selection. It issues
+invitations after the same operation confirms the game, with a fresh recipient check.
+
+An issued invitation allows its recipient to open the private game until the registration cutoff
+while the friendship is active. Joining still uses the regular eligibility and capacity rules.
+Private games created with this list also check the recipient at the roster command. The game ID
+in a forwarded notification grants no access by itself. Existing games without a friend list retain
+their earlier policy.
+
+In-app delivery uses the recipient's existing game notification preference and the tenant's in-app
+setting. The recipient row, notification, and notification outbox facts commit in the same
+transaction as the scheduled game. The original create command and the recipient key prevent
+duplicate notifications after retry or payment return.
+
+Migration `0120` grants the separately provisioned `phub_runtime` role read
+access to `games.friend_invitations`, initial insertion of the game and
+recipient keys, and updates to `issued_at`. The table forces tenant row-level
+security. The production migration package must admit this specific table and
+verify its effective grants using the actual API role before the new API starts.
+Provision `phub_runtime` before applying `0120`. The final owner is
+`phub_migrator`. On Timeweb, the existing PostgreSQL owner executes the exact
+migration and transfers ownership of the new table in the same transaction.
+The [Timeweb 0120 runbook](../runbooks/timeweb-game-invitations-0120.md) binds this
+operation to the verified production role topology. Image rollback retains the
+table and any recorded invitations.
+
 ### 7.2.1 Card projection and reads
 
 Every Games fact is delivered to the dedicated card projector through a durable bounded quorum

@@ -2,7 +2,7 @@
 // copy of this program or npm scripts on the operator. No PR checkout on the privileged runner.
 import { execFileSync } from 'node:child_process';
 import { runCriticalWeb } from './timeweb-critical-web.js';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   closeSync,
   constants,
@@ -44,7 +44,10 @@ import {
 } from './timeweb-standard-policy.js';
 
 import { parseStrictJson } from './strict-json.js';
-import { createCup0119LockCustody } from './r1-tail-migration-locks.js';
+import {
+  createCup0119LockCustody,
+  createGameInvitations0120LockCustody,
+} from './r1-tail-migration-locks.js';
 import {
   buildCup0119Sql,
   CUP_0119,
@@ -53,6 +56,14 @@ import {
   validateCup0119Request,
   validateCup0119RetainedBackup,
 } from './timeweb-cup-0119-migration.js';
+import {
+  buildGameInvitations0120Sql,
+  GAME_INVITATIONS_0120,
+  GAME_INVITATIONS_0120_TARGET,
+  validateGameInvitations0120Backup,
+  validateGameInvitations0120Request,
+  verifyGameInvitations0120Predecessor,
+} from './timeweb-game-invitations-migration.js';
 
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
@@ -604,7 +615,50 @@ async function main(ciRunId) {
     if (finished) rmSync(lock, { recursive: true });
   }
 }
-const CUP_0119_REQUEST = `${ROOT}/operator/cup-0119-migration.json`;
+const CUP_0119_PROFILE = Object.freeze({
+  name: 'CUP_0119',
+  directory: 'cup-0119',
+  receiptSchema: 'PHUB_TIMEWEB_CUP_0119_RECEIPT_V1',
+  migration: CUP_0119,
+  target: { ...CUP_0119_TARGET, operator: CUP_0119_TARGET.projectionOwner },
+  baselineReleaseId: CUP_0119_BACKUP.releaseId,
+  backupReleaseId: () => CUP_0119_BACKUP.releaseId,
+  validateRequest: validateCup0119Request,
+  validateBackup: validateCup0119RetainedBackup,
+  buildSql: buildCup0119Sql,
+  lockCustody: createCup0119LockCustody,
+});
+
+const GAME_INVITATIONS_0120_PROFILE = Object.freeze({
+  name: 'GAME_INVITATIONS_0120',
+  directory: 'game-invitations-0120',
+  receiptSchema: 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_RECEIPT_V1',
+  migration: GAME_INVITATIONS_0120,
+  target: GAME_INVITATIONS_0120_TARGET,
+  baselineReleaseId: GAME_INVITATIONS_0120.baselineReleaseId,
+  backupReleaseId: (op) => op.backupReleaseId,
+  validateRequest: validateGameInvitations0120Request,
+  validateBackup: validateGameInvitations0120Backup,
+  buildSql: buildGameInvitations0120Sql,
+  lockCustody: createGameInvitations0120LockCustody,
+  restoreDecisionFile: `${ROOT}/operator/game-invitations-0120-restore-waiver.txt`,
+  priorMigrationReceipt: Object.freeze({
+    path: `${ROOT}/operator/cup-0119-96227dc8-fe36-46ed-b4e2-aba4a0a4df9e/receipt.json`,
+    sha256: '4369a9c3f945754e3adfb028fbf066915c5a93d31de3368dd51ce3335a66c3fa',
+  }),
+  applicationIdentity: () =>
+    verifyGameInvitations0120Predecessor({
+      api: inspect('api'),
+      web: inspect('web'),
+      worker: inspect('worker'),
+      realtime: inspect('realtime'),
+    }),
+  runtimeProbe: `begin read only;
+set local statement_timeout='5s';
+set local role phub_runtime;
+select exists(select from games.friend_invitations limit 1);
+rollback;`,
+});
 
 function syncParent(path) {
   const fd = openSync(dirname(path), 'r');
@@ -626,16 +680,16 @@ function writeExclusive(path, bytes) {
   syncParent(path);
 }
 
-function cup0119LockIO(pathCupAttempt) {
+function migrationLockIO(attempt, name) {
   const info = (path) => {
     secure(path, 0o600);
     const st = lstatSync(path);
-    if (!st.isFile() || ![1, 2].includes(st.nlink)) fail('CUP_0119_LOCK_METADATA');
+    if (!st.isFile() || ![1, 2].includes(st.nlink)) fail(`${name}_LOCK_METADATA`);
     return st;
   };
   const read = (path) => {
     const st = info(path);
-    if (st.nlink !== 1) fail('CUP_0119_LOCK_LINK_COUNT');
+    if (st.nlink !== 1) fail(`${name}_LOCK_LINK_COUNT`);
     return readFileSync(path);
   };
   return {
@@ -663,7 +717,7 @@ function cup0119LockIO(pathCupAttempt) {
     // Only used after the shared custody helper verified that the sealed staged name
     // is the second link of this operation's inode.
     normalize: (path) => {
-      const { locks } = parseStrictJson(read(`${pathCupAttempt}/ownership.json`));
+      const { locks } = parseStrictJson(read(`${attempt}/ownership.json`));
       const staged = locks[path].stage;
       unlinkSync(staged);
       syncParent(staged);
@@ -671,7 +725,7 @@ function cup0119LockIO(pathCupAttempt) {
   };
 }
 
-function cup0119ArchiveDigest(path, admitted) {
+function migrationArchiveDigest(path, admitted, name) {
   const same = (info) =>
     info.isFile() &&
     ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'nlink'].every(
@@ -679,30 +733,75 @@ function cup0119ArchiveDigest(path, admitted) {
     );
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    if (!same(fstatSync(fd))) fail('CUP_0119_BACKUP_DRIFT');
+    if (!same(fstatSync(fd))) fail(`${name}_BACKUP_DRIFT`);
     const hash = createHash('sha256');
     const chunk = Buffer.alloc(1024 * 1024);
     for (let remaining = admitted.size; remaining > 0;) {
       const count = readSync(fd, chunk, 0, Math.min(remaining, chunk.length), null);
-      if (count < 1) fail('CUP_0119_BACKUP_DRIFT');
+      if (count < 1) fail(`${name}_BACKUP_DRIFT`);
       hash.update(chunk.subarray(0, count));
       remaining -= count;
     }
-    if (!same(fstatSync(fd)) || !same(lstatSync(path))) fail('CUP_0119_BACKUP_DRIFT');
+    if (!same(fstatSync(fd)) || !same(lstatSync(path))) fail(`${name}_BACKUP_DRIFT`);
     return hash.digest('hex');
   } finally {
     closeSync(fd);
   }
 }
 
-async function runManualCup0119(mode, requestPath) {
+function prepareGameInvitations0120Request(backupReleaseId) {
   if (
-    requestPath !== CUP_0119_REQUEST ||
+    process.getuid?.() !== 0 ||
+    fileURLToPath(import.meta.url) !== `${SOURCE}/scripts/run-timeweb-standard-delivery.js` ||
+    !/^[a-f0-9]{40}-[1-9][0-9]*-1$/.test(backupReleaseId)
+  )
+    fail('GAME_INVITATIONS_0120_ENTRY');
+  secure(SOURCE);
+  secure(`${ROOT}/operator`, 0o700);
+  const enrollment = parseStrictJson(readSecure(CONFIG));
+  if (
+    enrollment.schema !== 1 ||
+    enrollment.enabled !== true ||
+    enrollment.controllerSha !== git(['rev-parse', 'HEAD']) ||
+    git(['status', '--porcelain', '--untracked-files=all']) !== ''
+  )
+    fail('GAME_INVITATIONS_0120_ENROLLMENT');
+  const backup = `${ROOT}/backups/${backupReleaseId}-api-web`;
+  const operation = parseStrictJson(readSecure(`${backup}/backup-operation.json`));
+  const ownerDecision = readSecure(`${backup}/owner-restore-decision.json`);
+  const receipt = readSecure(`${backup}/database-backup-receipt.json`);
+  const request = validateGameInvitations0120Request(
+    {
+      schema: 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_REQUEST_V1',
+      attemptId: randomUUID(),
+      controllerSha: enrollment.controllerSha,
+      migrationSourceSha: operation.candidateSha,
+      postgresContainerId: operation.expectedPostgres?.id,
+      expiresAt: operation.expiresAt,
+      backupReleaseId,
+      retainedBackupReceiptSha256: sha256(receipt),
+      externalRestoreDecision: {
+        status: GAME_INVITATIONS_0120.restoreDecision,
+        owner: enrollment.owner,
+        referenceSha256: operation.ownerRestoreDecision?.messageSha256,
+        backupDecisionSha256: sha256(ownerDecision),
+      },
+    },
+    enrollment,
+    Date.now(),
+  );
+  return request;
+}
+
+async function runManualClosedMigration(mode, requestPath, profile) {
+  const { name, directory, migration: selected, target } = profile;
+  if (
+    requestPath !== `${ROOT}/operator/${directory}-migration.json` ||
     process.getuid?.() !== 0 ||
     fileURLToPath(import.meta.url) !== `${SOURCE}/scripts/run-timeweb-standard-delivery.js` ||
     !['apply', 'reconcile'].includes(mode)
   )
-    fail('CUP_0119_ENTRY');
+    fail(`${name}_ENTRY`);
   secure(SOURCE);
   secure(`${ROOT}/operator`, 0o700);
   const configBytes = readSecure(CONFIG);
@@ -713,27 +812,28 @@ async function runManualCup0119(mode, requestPath) {
     config.controllerSha !== git(['rev-parse', 'HEAD']) ||
     git(['status', '--porcelain', '--untracked-files=no']) !== ''
   )
-    fail('CUP_0119_ENROLLMENT');
+    fail(`${name}_ENROLLMENT`);
 
   const requestBytes = readSecure(requestPath);
-  const op = validateCup0119Request(
+  const op = profile.validateRequest(
     parseStrictJson(requestBytes),
     config,
     mode === 'apply' ? Date.now() : undefined,
   );
   const migration = command(
     '/usr/bin/git',
-    ['show', `${CUP_0119.source}:packages/database/migrations/${CUP_0119.filename}`],
+    ['show', `${op.migrationSourceSha}:packages/database/migrations/${selected.filename}`],
     { encoding: 'buffer' },
   );
-  const readbackSql = buildCup0119Sql(migration, CUP_0119_TARGET, 'readback');
-  const attempt = `${ROOT}/operator/cup-0119-${op.attemptId}`;
+  const readbackSql = profile.buildSql(migration, target, 'readback');
+  const attempt = `${ROOT}/operator/${directory}-${op.attemptId}`;
   const marker = Buffer.from(`${attempt}/intent.json\n`);
   const owner = acquireApiWorkerExecutor(`${ROOT}/standard/api-worker-executor.lock`);
-  const io = cup0119LockIO(attempt);
-  const locks = createCup0119LockCustody(attempt, marker, owner, io);
+  const io = migrationLockIO(attempt, name);
+  const locks = profile.lockCustody(attempt, marker, owner, io);
   const started = `${attempt}/sql-started.json`;
   let postgresStartedAt;
+  let application;
   const bound = () => {
     owner.assertOwned();
     assertNoMigrator();
@@ -743,7 +843,7 @@ async function runManualCup0119(mode, requestPath) {
       !readSecure(CONFIG).equals(configBytes) ||
       !readSecure(requestPath).equals(requestBytes)
     )
-      fail('CUP_0119_OPERATION_DRIFT');
+      fail(`${name}_OPERATION_DRIFT`);
     const postgres = JSON.parse(docker(['inspect', op.postgresContainerId]))[0];
     if (
       postgres.Id !== op.postgresContainerId ||
@@ -752,8 +852,10 @@ async function runManualCup0119(mode, requestPath) {
       postgres.State.Health?.Status !== 'healthy' ||
       (postgresStartedAt && postgres.State.StartedAt !== postgresStartedAt)
     )
-      fail('CUP_0119_DATABASE_CONTAINER');
+      fail(`${name}_DATABASE_CONTAINER`);
     postgresStartedAt ??= postgres.State.StartedAt;
+    if (application && JSON.stringify(profile.applicationIdentity()) !== application)
+      fail(`${name}_APPLICATION_DRIFT`);
   };
   const query = (sql) =>
     command(
@@ -769,9 +871,9 @@ async function runManualCup0119(mode, requestPath) {
         '-h',
         '/var/run/postgresql',
         '-U',
-        CUP_0119_TARGET.projectionOwner,
+        target.operator,
         '-d',
-        CUP_0119_TARGET.database,
+        target.database,
       ],
       { input: sql, stdio: ['pipe', 'pipe', 'pipe'], timeout: 100000, maxBuffer: 8192 },
     ).trim();
@@ -781,24 +883,29 @@ async function runManualCup0119(mode, requestPath) {
       !['PREIMAGE', 'COMMITTED', 'DRIFT'].includes(value.state) ||
       !/^[a-f0-9]{64}$/.test(value.catalogSha256)
     )
-      fail('CUP_0119_READBACK');
+      fail(`${name}_READBACK`);
     return value;
   };
+  const verifyRuntime = (state) => {
+    if (state === 'COMMITTED' && profile.runtimeProbe && query(profile.runtimeProbe) !== 'f')
+      fail(`${name}_RUNTIME_READBACK`);
+  };
   const result = (state, catalogSha256) => ({
-    schema: 'PHUB_TIMEWEB_CUP_0119_RECEIPT_V1',
+    schema: profile.receiptSchema,
     attemptId: op.attemptId,
     requestSha256: sha256(requestBytes),
-    migrationSha256: CUP_0119.checksum,
+    migrationSha256: selected.checksum,
     state,
     catalogSha256,
   });
   const sealReceipt = (state, catalogSha256) => {
     bound();
+    verifyRuntime(state);
     const receipt = result(state, catalogSha256);
     const bytes = Buffer.from(JSON.stringify(receipt) + '\n');
     const path = `${attempt}/receipt.json`;
     if (io.present(path)) {
-      if (!readSecure(path).equals(bytes)) fail('CUP_0119_RECEIPT_CONFLICT');
+      if (!readSecure(path).equals(bytes)) fail(`${name}_RECEIPT_CONFLICT`);
     } else {
       const staged = `${path}.incoming-${randomBytes(12).toString('hex')}`;
       writeExclusive(staged, bytes);
@@ -812,23 +919,55 @@ async function runManualCup0119(mode, requestPath) {
   };
   const assertRetainedBackup = () => {
     const api = inspect('api');
-    if (api.releaseId !== CUP_0119_BACKUP.releaseId) fail('CUP_0119_BASELINE');
-    const backupDir = `${ROOT}/backups/${CUP_0119_BACKUP.releaseId}-api-web`;
+    if (api.releaseId !== profile.baselineReleaseId) fail(`${name}_BASELINE`);
+    const backupDir = `${ROOT}/backups/${profile.backupReleaseId(op)}-api-web`;
     const backupPath = `${backupDir}/database.pgcustom`;
     const receipt = readSecure(`${backupDir}/database-backup-receipt.json`);
     secure(backupPath, 0o600);
-    if (sha256(receipt) !== op.retainedBackupReceiptSha256) fail('CUP_0119_BACKUP_RECEIPT');
+    if (sha256(receipt) !== op.retainedBackupReceiptSha256) fail(`${name}_BACKUP_RECEIPT`);
     const backup = parseStrictJson(receipt);
     const archive = lstatSync(backupPath);
-    validateCup0119RetainedBackup(backup, archive, backupPath);
-    if (cup0119ArchiveDigest(backupPath, archive) !== backup.backupSha256)
-      fail('CUP_0119_BACKUP_CHECKSUM');
+    profile.validateBackup(backup, archive, backupPath, Date.now());
+    if (profile.restoreDecisionFile) {
+      const operationBytes = readSecure(`${backupDir}/backup-operation.json`);
+      const operation = parseStrictJson(operationBytes);
+      const services = profile.applicationIdentity();
+      const sameService = (actual, expected) =>
+        ['id', 'image', 'imageId', 'releaseId', 'restarts', 'startedAt'].every(
+          (field) => actual[field] === expected?.[field],
+        );
+      const terminal = parseStrictJson(
+        readSecure(`${backupDir}/FRESH_DUMP_INTEGRITY_VERIFIED.json`),
+      );
+      if (
+        operation.schema !== 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_FRESH_BACKUP_V1' ||
+        operation.releaseId !== op.backupReleaseId ||
+        operation.controllerSha !== op.controllerSha ||
+        !sameService(services.api, operation.expectedApi) ||
+        !sameService(services.web, operation.expectedWeb) ||
+        operation.expectedPostgres?.id !== op.postgresContainerId ||
+        operation.expectedPostgres?.startedAt !== postgresStartedAt ||
+        operation.ownerRestoreDecision?.messageSha256 !==
+          op.externalRestoreDecision.referenceSha256 ||
+        sha256(operationBytes) !== backup.operationSha256 ||
+        sha256(readSecure(`${backupDir}/snapshot-witness.json`)) !== backup.snapshotWitnessSha256 ||
+        terminal.phase !== 'FRESH_DUMP_INTEGRITY_VERIFIED' ||
+        terminal.operationSha256 !== backup.operationSha256 ||
+        terminal.receiptSha256 !== op.retainedBackupReceiptSha256 ||
+        backup.policySha256 !== op.externalRestoreDecision.backupDecisionSha256 ||
+        sha256(readSecure(`${backupDir}/owner-restore-decision.json`)) !== backup.policySha256 ||
+        operation.expiresAt !== op.expiresAt
+      )
+        fail(`${name}_BACKUP_CUSTODY`);
+    }
+    if (migrationArchiveDigest(backupPath, archive, name) !== backup.backupSha256)
+      fail(`${name}_BACKUP_CHECKSUM`);
     return api;
   };
   try {
     bound();
     if (mode === 'reconcile') {
-      if (!readSecure(`${attempt}/intent.json`).equals(requestBytes)) fail('CUP_0119_INTENT');
+      if (!readSecure(`${attempt}/intent.json`).equals(requestBytes)) fail(`${name}_INTENT`);
       locks.load();
       locks.assert(false);
       const { state, catalogSha256 } = readback();
@@ -843,9 +982,12 @@ async function runManualCup0119(mode, requestPath) {
         witness.catalogSha256 !== catalogSha256 ||
         witness.apiId !== api.id ||
         witness.apiStartedAt !== api.startedAt ||
-        witness.postgresStartedAt !== postgresStartedAt
+        witness.postgresStartedAt !== postgresStartedAt ||
+        (profile.applicationIdentity &&
+          witness.application !== JSON.stringify(profile.applicationIdentity()))
       )
         return result('UNRESOLVED_DRIFT', catalogSha256);
+      if (profile.applicationIdentity) application = witness.application;
       if (state === 'COMMITTED') return sealReceipt(state, catalogSha256);
       if (state === 'PREIMAGE' && io.present(`${attempt}/receipt.json`))
         return sealReceipt('ROLLED_BACK', catalogSha256);
@@ -853,6 +995,34 @@ async function runManualCup0119(mode, requestPath) {
     }
 
     const api = inspect('api');
+    if (profile.applicationIdentity) {
+      application = JSON.stringify(profile.applicationIdentity());
+      if (io.present(attempt)) {
+        if (!readSecure(`${attempt}/intent.json`).equals(requestBytes)) fail(`${name}_INTENT`);
+        const { state, catalogSha256 } = readback();
+        const receipt = result(state, catalogSha256);
+        if (
+          state !== 'COMMITTED' ||
+          !readSecure(`${attempt}/receipt.json`).equals(Buffer.from(JSON.stringify(receipt) + '\n'))
+        )
+          fail(`${name}_RECONCILIATION_REQUIRED`);
+        bound();
+        verifyRuntime(state);
+        return receipt;
+      }
+      if (readback().state !== 'PREIMAGE') fail(`${name}_PREIMAGE`);
+    }
+    if (
+      profile.restoreDecisionFile &&
+      sha256(readSecure(profile.restoreDecisionFile)) !== op.externalRestoreDecision.referenceSha256
+    )
+      fail(`${name}_RESTORE_DECISION`);
+    if (
+      profile.priorMigrationReceipt &&
+      sha256(readSecure(profile.priorMigrationReceipt.path)) !==
+        profile.priorMigrationReceipt.sha256
+    )
+      fail(`${name}_PRIOR_MIGRATION`);
     mkdirSync(attempt, { mode: 0o700 });
     syncParent(attempt);
     writeExclusive(`${attempt}/intent.json`, requestBytes);
@@ -860,11 +1030,11 @@ async function runManualCup0119(mode, requestPath) {
     locks.assert(true);
     bound();
     const preimage = readback();
-    if (preimage.state !== 'PREIMAGE') fail('CUP_0119_PREIMAGE');
+    if (preimage.state !== 'PREIMAGE') fail(`${name}_PREIMAGE`);
     locks.assert(true);
     bound();
-    if (JSON.stringify(assertRetainedBackup()) !== JSON.stringify(api)) fail('CUP_0119_BASELINE');
-    validateCup0119Request(op, config, Date.now());
+    if (JSON.stringify(assertRetainedBackup()) !== JSON.stringify(api)) fail(`${name}_BASELINE`);
+    profile.validateRequest(op, config, Date.now());
     locks.assert(true);
     bound();
     writeExclusive(
@@ -876,11 +1046,12 @@ async function runManualCup0119(mode, requestPath) {
           apiId: api.id,
           apiStartedAt: api.startedAt,
           postgresStartedAt,
+          ...(application ? { application } : {}),
         }) + '\n',
       ),
     );
     try {
-      query(buildCup0119Sql(migration, CUP_0119_TARGET, 'apply', preimage.catalogSha256));
+      query(profile.buildSql(migration, target, 'apply', preimage.catalogSha256));
     } catch (error) {
       // A normal ON_ERROR_STOP exit is a confirmed server error. Transport loss or
       // timeout leaves the markers in place until reconciliation.
@@ -898,7 +1069,7 @@ async function runManualCup0119(mode, requestPath) {
       postimage.catalogSha256 !== preimage.catalogSha256 ||
       JSON.stringify(inspect('api')) !== JSON.stringify(api)
     )
-      fail('CUP_0119_UNCERTAIN');
+      fail(`${name}_UNCERTAIN`);
     return sealReceipt('COMMITTED', postimage.catalogSha256);
   } finally {
     owner.close();
@@ -935,13 +1106,29 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ].includes(args[0]);
   const cup0119 =
     args.length === 2 && ['--critical-cup-0119', '--critical-cup-0119-reconcile'].includes(args[0]);
-  const operation = cup0119
-    ? runManualCup0119(args[0] === '--critical-cup-0119' ? 'apply' : 'reconcile', args[1]).then(
-        (receipt) => {
-          process.stdout.write(JSON.stringify(receipt) + '\n');
-          if (receipt.state !== 'COMMITTED') process.exitCode = 1;
-        },
-      )
+  const gameInvitations0120 =
+    args.length === 2 &&
+    ['--critical-game-invitations-0120', '--critical-game-invitations-0120-reconcile'].includes(
+      args[0],
+    );
+  const prepare0120 = args.length === 2 && args[0] === '--critical-game-invitations-0120-prepare';
+  const closedMigration = cup0119
+    ? CUP_0119_PROFILE
+    : gameInvitations0120 || prepare0120
+      ? GAME_INVITATIONS_0120_PROFILE
+      : null;
+  const operation = closedMigration
+    ? (prepare0120
+        ? Promise.resolve().then(() => prepareGameInvitations0120Request(args[1]))
+        : runManualClosedMigration(
+            args[0].endsWith('-reconcile') ? 'reconcile' : 'apply',
+            args[1],
+            closedMigration,
+          )
+      ).then((receipt) => {
+        process.stdout.write(JSON.stringify(receipt) + '\n');
+        if (!prepare0120 && receipt.state !== 'COMMITTED') process.exitCode = 1;
+      })
     : notificationPrefetch
       ? runManualNotificationMigratorPrefetch(
           args[0] === '--critical-notification-migrator-prefetch' ? 'pull' : 'reconcile',

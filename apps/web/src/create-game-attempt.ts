@@ -133,6 +133,15 @@ function isLevel(value: unknown): value is (typeof LEVELS)[number] {
   return typeof value === 'string' && LEVELS.includes(value as (typeof LEVELS)[number]);
 }
 
+function isInviteeList(value: unknown): value is string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 24) return false;
+  const ids: unknown[] = value;
+  return (
+    ids.every((id): id is string => typeof id === 'string' && UUID_PATTERN.test(id)) &&
+    new Set(ids.map((id) => id.toLowerCase())).size === ids.length
+  );
+}
+
 export function normalizeCreateGamePayload(input: CreateGameRequest): CreateGameRequest {
   return {
     title: input.title.trim(),
@@ -150,6 +159,9 @@ export function normalizeCreateGamePayload(input: CreateGameRequest): CreateGame
         : { from: input.levelRange.from, to: input.levelRange.to },
     paymentMode: input.paymentMode,
     waitlistEnabled: input.waitlistEnabled,
+    ...(input.inviteeUserIds?.length
+      ? { inviteeUserIds: [...input.inviteeUserIds].map((id) => id.toLowerCase()).sort() }
+      : {}),
     ...(input.subscriptionInstanceId === undefined
       ? {}
       : { subscriptionInstanceId: input.subscriptionInstanceId }),
@@ -207,6 +219,7 @@ function parsePayload(value: unknown): CreateGameRequest | null {
       'levelRange',
       'paymentMode',
       'waitlistEnabled',
+      'inviteeUserIds',
       'subscriptionInstanceId',
       'priceConsent',
     ]) ||
@@ -233,6 +246,8 @@ function parsePayload(value: unknown): CreateGameRequest | null {
   }
   const paymentMode = parseManagedPaymentMode(value.paymentMode);
   if (paymentMode === null) return null;
+  const inviteeUserIds = value.inviteeUserIds;
+  if (inviteeUserIds !== undefined && !isInviteeList(inviteeUserIds)) return null;
   if (paymentMode === 'NO_PAYMENT' && value.subscriptionInstanceId !== undefined) return null;
   if (paymentMode === 'NO_PAYMENT' && value.priceConsent !== undefined) return null;
   if (
@@ -280,6 +295,7 @@ function parsePayload(value: unknown): CreateGameRequest | null {
       levelRange,
       paymentMode,
       waitlistEnabled: value.waitlistEnabled,
+      ...(inviteeUserIds === undefined ? {} : { inviteeUserIds }),
       ...(value.subscriptionInstanceId === undefined
         ? {}
         : { subscriptionInstanceId: value.subscriptionInstanceId }),

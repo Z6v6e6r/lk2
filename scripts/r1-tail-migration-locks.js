@@ -31,6 +31,19 @@ export function createCup0119LockCustody(root, marker, owner, io) {
   );
 }
 
+export function createGameInvitations0120LockCustody(root, marker, owner, io) {
+  const pattern =
+    /^\/opt\/phub\/timeweb-beta\/operator\/game-invitations-0120-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+  return createMigrationLockCustody(
+    root,
+    marker,
+    owner,
+    io,
+    pattern,
+    'PHUB_GAME_INVITATIONS_0120_LOCK_CUSTODY_V1',
+  );
+}
+
 function createMigrationLockCustody(root, marker, owner, io, pattern, schema) {
   if (!pattern.test(root) || !Buffer.isBuffer(marker)) r1Stop('LOCK_SCOPE');
   const file = root + '/ownership.json';

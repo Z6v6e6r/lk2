@@ -281,6 +281,7 @@ function parseCreateBody(
     'levelRange',
     'paymentMode',
     'waitlistEnabled',
+    'inviteeUserIds',
   ]);
   // Managed commercial CREATE extends the request additively. With the contour disabled the old
   // allowlist stays exactly as before, so an `OFF` request is rejected byte-identically.
@@ -307,6 +308,14 @@ function parseCreateBody(
       GAME_PLAYER_LEVELS.indexOf(rangeFrom as (typeof GAME_PLAYER_LEVELS)[number]) <=
         GAME_PLAYER_LEVELS.indexOf(rangeTo as (typeof GAME_PLAYER_LEVELS)[number]));
   const title = typeof body.title === 'string' ? body.title.trim() : '';
+  const invitees = body.inviteeUserIds;
+  const inviteeUserIds =
+    Array.isArray(invitees) &&
+    invitees.length >= 1 &&
+    invitees.length <= 24 &&
+    invitees.every((id) => typeof id === 'string' && UUID_PATTERN.test(id))
+      ? [...new Set(invitees.map((id: string) => id.toLowerCase()))].sort()
+      : undefined;
   const startsAt = typeof body.startsAt === 'string' ? body.startsAt : '';
   const endsAt = typeof body.endsAt === 'string' ? body.endsAt : '';
   const startsAtMs = Date.parse(startsAt);
@@ -344,6 +353,8 @@ function parseCreateBody(
     !validTimezone ||
     ![2, 4].includes(Number(body.capacity)) ||
     !validLevelRange ||
+    (invitees !== undefined &&
+      (inviteeUserIds === undefined || inviteeUserIds.length !== (invitees as unknown[]).length)) ||
     !['ORGANIZER_PAYS', 'SPLIT', 'SUBSCRIPTION', 'NO_PAYMENT'].includes(String(body.paymentMode)) ||
     typeof body.waitlistEnabled !== 'boolean' ||
     (managedCreate && body.priceConsent !== undefined && priceConsent === undefined) ||
@@ -367,6 +378,7 @@ function parseCreateBody(
       capacity: Number(body.capacity),
       paymentMode: body.paymentMode as CreateStoredGameInput['paymentMode'],
       waitlistEnabled: body.waitlistEnabled,
+      ...(inviteeUserIds ? { inviteeUserIds } : {}),
       ...(rangeRecord
         ? {
             levelFrom: rangeFrom as NonNullable<CreateStoredGameInput['levelFrom']>,
@@ -439,6 +451,8 @@ function sendCreateRejection(
       return sendApiError(request, reply, 400, code, 'Время начала игры должно быть в будущем.');
     case 'GAME_SLOT_UNAVAILABLE':
       return sendApiError(request, reply, 409, code, 'Выбранное время корта уже занято.');
+    case 'GAME_INVITEE_INELIGIBLE':
+      return sendApiError(request, reply, 409, code, 'Проверьте список приглашённых друзей.');
   }
 }
 
@@ -714,6 +728,18 @@ export function registerGameRoutes(
       );
       if (!parsed) return reply;
       const { payload, commercial } = parsed;
+      if (payload.inviteeUserIds?.length) {
+        if (!request.padlHubClaims?.permissions.includes('profile.read'))
+          return sendApiError(
+            request,
+            reply,
+            403,
+            'PROFILE_FRIENDSHIPS_PERMISSION_REQUIRED',
+            'Нет доступа к друзьям профиля.',
+          );
+        if (payload.paymentMode !== 'NO_PAYMENT' && !wholeCourtRequest)
+          return sendCreateRejection(request, reply, 'GAME_INVITEE_INELIGIBLE');
+      }
       if (options.wholeCourt && payload.paymentMode === 'ORGANIZER_PAYS') {
         const key = idempotencyKey(request);
         reply.header('Referrer-Policy', 'no-referrer');

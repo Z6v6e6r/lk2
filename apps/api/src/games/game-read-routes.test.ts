@@ -37,7 +37,10 @@ const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 
 type CardReadRepository = Pick<
   GameRepository,
-  'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
+  | 'getCardProjection'
+  | 'listPublicCardProjections'
+  | 'listViewerCardProjections'
+  | 'canViewFriendInvitation'
 >;
 
 function snapshot(overrides: Partial<GameCardProjectionInput> = {}): GameCardProjectionInput {
@@ -558,6 +561,34 @@ describe('Games read APIs', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(privateDetail.statusCode).toBe(404);
+    const canViewFriendInvitation = vi.fn().mockResolvedValue(true);
+    const invitedApp = await appWith(
+      repository({
+        getCardProjection: vi.fn().mockResolvedValue(privateProjection),
+        canViewFriendInvitation,
+      }),
+    );
+    const invitedDetail = await invitedApp.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/games/${gameId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(invitedDetail.statusCode).toBe(200);
+    expect(invitedDetail.json()).toMatchObject({
+      game: {
+        id: gameId,
+        surface: 'INVITE',
+        visibility: 'PRIVATE',
+      },
+    });
+    expect(
+      invitedDetail.json<{ game: { allowedActions: string[] } }>().game.allowedActions,
+    ).toContain('JOIN');
+    expect(canViewFriendInvitation).toHaveBeenCalledExactlyOnceWith(tenantId, gameId, outsider);
+    expect((await invitedApp.inject(`/public/api/v1/local-padel/games/${gameId}`)).statusCode).toBe(
+      404,
+    );
+    expect(canViewFriendInvitation).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a public game detail available after start while collapsing private result state', async () => {

@@ -6,12 +6,33 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTenantTransaction } from './connection.js';
 import {
   createGameRepository,
+  createWholeCourtCheckoutRepository,
   type CreateStoredGameInput,
   type CreateStoredGameResult,
 } from './game-repository.js';
 import { createGameRosterRepository } from './game-roster-repository.js';
 
-const connectionString = process.env.GAME_CREATE_RECOVERY_TEST_DATABASE_URL;
+function ciDatabase(): string | undefined {
+  if (
+    process.env.GITHUB_ACTIONS !== 'true' ||
+    process.env.APP_ENV !== 'ci' ||
+    !process.env.DATABASE_URL
+  )
+    return undefined;
+  const url = new URL(process.env.DATABASE_URL);
+  if (
+    !['postgres:', 'postgresql:'].includes(url.protocol) ||
+    !['localhost', '127.0.0.1'].includes(url.hostname) ||
+    url.username !== 'phub' ||
+    url.port !== '5432' ||
+    url.pathname !== '/phub' ||
+    url.search ||
+    url.hash
+  )
+    throw new Error('GAME_CREATE_RECOVERY_DISPOSABLE_CI_DATABASE_REQUIRED');
+  return url.toString();
+}
+const connectionString = process.env.GAME_CREATE_RECOVERY_TEST_DATABASE_URL ?? ciDatabase();
 const describePostgres = connectionString ? describe : describe.skip;
 
 function hash(value: string): string {
@@ -148,6 +169,16 @@ describePostgres('game create durable recovery on real PostgreSQL', () => {
         [tenantId, [actorUserId, ...playerUserIds]],
       );
       await client.query(
+        `insert into profile.friendships (tenant_id, left_user_id, right_user_id, created_by)
+         select $1, least($2::uuid, recipient.id), greatest($2::uuid, recipient.id), $2
+           from unnest($3::uuid[]) recipient(id)`,
+        [tenantId, actorUserId, playerUserIds.slice(0, 2)],
+      );
+      await client.query(
+        'insert into notifications.tenant_runtime_settings (tenant_id, in_app_enabled) values ($1, true)',
+        [tenantId],
+      );
+      await client.query(
         `insert into locations.profiles (
            tenant_id, id, slug, title, publication_status,
            created_by, updated_by, published_at
@@ -225,6 +256,253 @@ describePostgres('game create durable recovery on real PostgreSQL', () => {
       idempotency_commands: '1',
       audit_events: '1',
       outbox_events: '3',
+    });
+  });
+
+  it('issues one recipient-bound inbox invitation on concurrent private creation', async () => {
+    const [friend, unselected, outsider] = playerUserIds;
+    const startsAt = new Date(Date.now() + 60 * 60_000);
+    const invalid = input('invite-nonfriend', startsAt, {
+      visibility: 'PRIVATE',
+      inviteeUserIds: [friend, outsider],
+    });
+    await expect(repository.create(invalid)).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_INVITEE_INELIGIBLE',
+    });
+    expect((await sideEffectCounts(invalid))?.games).toBe('0');
+    const foreign = input('invite-cross-tenant', startsAt, {
+      visibility: 'PRIVATE',
+      inviteeUserIds: [foreignActorUserId],
+    });
+    await expect(repository.create(foreign)).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_INVITEE_INELIGIBLE',
+    });
+    const command = input('invite-friend', startsAt, {
+      visibility: 'PRIVATE',
+      inviteeUserIds: [friend],
+    });
+    const results = await Promise.all([repository.create(command), repository.create(command)]);
+    const [first, second] = results;
+    if (first?.outcome !== 'applied' || second?.outcome !== 'applied')
+      throw new Error('Expected invitation game creation');
+    expect([first.gameId, second.gameId]).toEqual([first.gameId, first.gameId]);
+    expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      const notices = await client.query(
+        'select user_id, title from notifications.inbox_items where tenant_id = $1 and deep_link = $2',
+        [tenantId, `/games/${first.gameId}`],
+      );
+      expect(notices.rows).toEqual([{ user_id: friend, title: 'Приглашение в игру' }]);
+    });
+    await expect(repository.canViewFriendInvitation!(tenantId, first.gameId, friend)).resolves.toBe(
+      true,
+    );
+    await expect(
+      repository.canViewFriendInvitation!(tenantId, first.gameId, unselected),
+    ).resolves.toBe(false);
+    await expect(
+      repository.canViewFriendInvitation!(foreignTenantId, first.gameId, friend),
+    ).resolves.toBe(false);
+    await expect(
+      rosterRepository.join(rosterInput(first.gameId, unselected, 'invite-unselected')),
+    ).resolves.toMatchObject({ outcome: 'rejected', code: 'GAME_NOT_FOUND' });
+    await expect(
+      rosterRepository.join(rosterInput(first.gameId, friend, 'invite-selected')),
+    ).resolves.toMatchObject({ outcome: 'applied' });
+    await expect(
+      rosterRepository.join(rosterInput(first.gameId, friend, 'invite-already-joined')),
+    ).resolves.toMatchObject({ outcome: 'rejected', code: 'GAME_ALREADY_JOINED' });
+  });
+
+  it.skipIf(process.env.GAME_FRIEND_INVITATION_RUNTIME_ACL_TESTS !== '1')(
+    'restricts the provisioned invitation runtime role to its columns and tenant',
+    async () => {
+      const startsAt = new Date(Date.now() + 2 * 60 * 60_000);
+      const game = await repository.create(input('invitation-acl', startsAt));
+      const foreignGame = await repository.create({
+        ...input('invitation-acl-foreign', startsAt),
+        tenantId: foreignTenantId,
+        actorUserId: foreignActorUserId,
+        stationId: foreignStationId,
+      });
+      if (game.outcome !== 'applied' || foreignGame.outcome !== 'applied')
+        throw new Error('GAME_FRIEND_INVITATION_ACL_FIXTURE_FAILED');
+
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        await client.query('set local role phub_runtime');
+        const { rows } = await client.query<{
+          allowed: boolean;
+          forbidden: boolean;
+        }>(`select
+          has_table_privilege('games.friend_invitations', 'SELECT')
+            and has_column_privilege('games.friend_invitations', 'tenant_id', 'INSERT')
+            and has_column_privilege('games.friend_invitations', 'game_id', 'INSERT')
+            and has_column_privilege('games.friend_invitations', 'recipient_user_id', 'INSERT')
+            and has_column_privilege('games.friend_invitations', 'issued_at', 'UPDATE')
+            and has_schema_privilege('games', 'USAGE')
+            and relrowsecurity and relforcerowsecurity as allowed,
+          has_table_privilege('games.friend_invitations', 'DELETE,TRUNCATE,TRIGGER,REFERENCES')
+            or has_column_privilege('games.friend_invitations', 'issued_at', 'INSERT')
+            or has_column_privilege('games.friend_invitations', 'tenant_id', 'UPDATE')
+            or has_column_privilege('games.friend_invitations', 'game_id', 'UPDATE')
+            or has_column_privilege('games.friend_invitations', 'recipient_user_id', 'UPDATE')
+            or has_schema_privilege('games', 'CREATE')
+            or pg_has_role(current_user, relowner, 'MEMBER')
+            or rolsuper or rolbypassrls
+            or exists (
+              select 1 from aclexplode(relacl) acl
+              where acl.grantee not in (relation.relowner, role.oid)
+                or (acl.grantee = role.oid and (acl.is_grantable or acl.grantor <> relation.relowner))
+            )
+            or exists (
+              select 1 from pg_attribute col
+              cross join lateral aclexplode(col.attacl) acl
+              where col.attrelid = relation.oid
+                and (acl.grantee not in (relation.relowner, role.oid)
+                  or (acl.grantee = role.oid and (acl.is_grantable or acl.grantor <> relation.relowner)))
+            ) as forbidden
+          from pg_class relation cross join pg_roles role
+          where relation.oid = 'games.friend_invitations'::regclass and role.rolname = current_user`);
+        expect(rows).toEqual([{ allowed: true, forbidden: false }]);
+
+        const insert = `insert into games.friend_invitations (tenant_id, game_id, recipient_user_id)
+          values ($1, $2, $3)`;
+        await client.query("select set_config('app.tenant_id', $1, true)", [foreignTenantId]);
+        await client.query(insert, [foreignTenantId, foreignGame.gameId, foreignActorUserId]);
+        await client.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
+        await client.query(insert, [tenantId, game.gameId, playerUserIds[0]]);
+        const gameIds = [game.gameId, foreignGame.gameId];
+        const issued = await client.query<{ game_id: string }>(
+          'update games.friend_invitations set issued_at = now() where game_id in ($1, $2) returning game_id',
+          gameIds,
+        );
+        expect(issued.rows).toEqual([{ game_id: game.gameId }]);
+        const visible = await client.query(
+          'select game_id from games.friend_invitations where game_id in ($1, $2)',
+          gameIds,
+        );
+        expect(visible.rows).toEqual([{ game_id: game.gameId }]);
+        await client.query('savepoint before_cross_tenant_insert');
+        await expect(
+          client.query(insert, [foreignTenantId, foreignGame.gameId, foreignActorUserId]),
+        ).rejects.toMatchObject({ code: '42501' });
+        await client.query('rollback to savepoint before_cross_tenant_insert');
+        const forbiddenStatements = [
+          'delete from games.friend_invitations where game_id = $1',
+          'update games.friend_invitations set recipient_user_id = recipient_user_id where game_id = $1',
+          `insert into games.friend_invitations (tenant_id, game_id, recipient_user_id, issued_at)
+             select tenant_id, game_id, recipient_user_id, now()
+             from games.friend_invitations where game_id = $1`,
+        ];
+        for (const statement of forbiddenStatements) {
+          await client.query('savepoint before_forbidden_acl_write');
+          await expect(client.query(statement, [game.gameId])).rejects.toMatchObject({
+            code: '42501',
+          });
+          await client.query('rollback to savepoint before_forbidden_acl_write');
+          await client.query('release savepoint before_forbidden_acl_write');
+        }
+        await client.query("select set_config('app.tenant_id', '', true)");
+        expect((await client.query('select game_id from games.friend_invitations')).rowCount).toBe(
+          0,
+        );
+        await expect(
+          client.query(insert, [tenantId, game.gameId, playerUserIds[1]]),
+        ).rejects.toMatchObject({ code: '42501' });
+      } finally {
+        try {
+          await client.query('rollback');
+        } finally {
+          client.release();
+        }
+      }
+    },
+  );
+
+  it('delivers the paid game invitation only after the original checkout is confirmed', async () => {
+    const [friend, laterBlocked] = playerUserIds;
+    const gameId = randomUUID();
+    const operationId = randomUUID();
+    const binding = {
+      providerClientId: 'test-client',
+      providerStationId: 'test-station',
+      providerRoomId: 'test-room',
+      amountMinor: 120000,
+    };
+    const command = input('invite-original-checkout', new Date(Date.now() + 2 * 60 * 60_000), {
+      courtId,
+      gameId,
+      operationId,
+      visibility: 'PRIVATE',
+      paymentMode: 'ORGANIZER_PAYS',
+      inviteeUserIds: [friend, laterBlocked],
+      wholeCourtCheckout: binding,
+    });
+    expect(await repository.create(command)).toMatchObject({ outcome: 'applied', gameId });
+    const inboxCount = () =>
+      withTenantTransaction(pool, tenantId, async (client) => {
+        const inbox = await client.query(
+          'select id from notifications.inbox_items where tenant_id = $1 and deep_link = $2 and user_id = $3',
+          [tenantId, `/games/${gameId}`, friend],
+        );
+        return inbox.rows.length;
+      });
+    await expect(repository.canViewFriendInvitation!(tenantId, gameId, friend)).resolves.toBe(
+      false,
+    );
+    await expect(inboxCount()).resolves.toBe(0);
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      const [left, right] = [actorUserId, laterBlocked].sort();
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `${tenantId}:${left}:${right}`,
+      ]);
+      await client.query(
+        `insert into messaging.user_blocks (tenant_id, blocker_user_id, blocked_user_id)
+         values ($1, $2, $3)`,
+        [tenantId, laterBlocked, actorUserId],
+      );
+    });
+    const checkout = createWholeCourtCheckoutRepository(pool);
+    const confirmation = {
+      tenantId,
+      userId: actorUserId,
+      operationId,
+      idempotencyKey: command.idempotencyKey,
+      gameId,
+      correlationId: command.correlationId,
+      binding,
+      receipt: {
+        provider: 'VIVA' as const,
+        transactionId: randomUUID(),
+        bookingId: randomUUID(),
+        exerciseId: randomUUID(),
+        amountMinor: 120000,
+        currency: 'RUB' as const,
+        confirmedAt: new Date().toISOString(),
+      },
+    };
+    await Promise.all([checkout.finalize(confirmation), checkout.finalize(confirmation)]);
+    await expect(repository.canViewFriendInvitation!(tenantId, gameId, friend)).resolves.toBe(true);
+    await expect(inboxCount()).resolves.toBe(1);
+    await expect(repository.canViewFriendInvitation!(tenantId, gameId, laterBlocked)).resolves.toBe(
+      false,
+    );
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      const blocked = await client.query(
+        `select issued_at from games.friend_invitations
+          where tenant_id = $1 and game_id = $2 and recipient_user_id = $3`,
+        [tenantId, gameId, laterBlocked],
+      );
+      expect(blocked.rows).toEqual([{ issued_at: null }]);
+      const inbox = await client.query(
+        'select id from notifications.inbox_items where tenant_id = $1 and user_id = $2 and deep_link = $3',
+        [tenantId, laterBlocked, `/games/${gameId}`],
+      );
+      expect(inbox.rows).toEqual([]);
     });
   });
 
