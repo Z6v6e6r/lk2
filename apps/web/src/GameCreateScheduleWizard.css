@@ -367,7 +367,6 @@ html:has(.game-schedule-wizard--settings) {
 .game-schedule-wizard
   :is(.game-schedule-formats, .game-schedule-durations, .game-schedule-times, .game-schedule-courts)
   button {
-  min-height: 44px;
   border: 1px solid var(--schedule-line);
   border-radius: 12px;
   padding: 6px;
@@ -378,8 +377,13 @@ html:has(.game-schedule-wizard--settings) {
     sans-serif;
 }
 
-.game-schedule-wizard :is(.game-schedule-formats, .game-schedule-durations) button {
-  border-radius: 999px;
+.game-schedule-wizard
+  :is(.game-schedule-formats, .game-schedule-durations, .game-schedule-times)
+  button {
+  min-height: 42px;
+  border-radius: 18px;
+  padding: 4px 14px;
+  white-space: nowrap;
 }
 
 .game-schedule-wizard
@@ -398,7 +402,6 @@ html:has(.game-schedule-wizard--settings) {
 
 .game-schedule-days {
   display: flex;
-  container-type: inline-size;
   gap: 8px;
   min-width: 0;
   overflow-x: auto;
@@ -425,7 +428,7 @@ html:has(.game-schedule-wizard--settings) {
 .game-schedule-month-dates {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: max(44px, calc((100cqw - 40px) / 6));
+  grid-auto-columns: 58px;
   gap: 8px;
 }
 
@@ -437,7 +440,7 @@ html:has(.game-schedule-wizard--settings) {
   gap: 4px;
   padding: 4px;
   border: 1px solid color-mix(in srgb, var(--schedule-line) 76%, var(--schedule-paper));
-  border-radius: 12px;
+  border-radius: 16px;
   background: var(--schedule-paper);
   color: var(--schedule-ink);
   font:
@@ -499,7 +502,7 @@ html:has(.game-schedule-wizard--settings) {
 }
 
 .game-schedule-wizard
-  :is(.game-schedule-times, .game-schedule-courts)
+  .game-schedule-courts
   .game-schedule-pick:has(> button + button)
   > :first-child {
   padding-inline-end: 36px;
@@ -546,11 +549,11 @@ html:has(.game-schedule-wizard--settings) {
   .game-schedule-times
   .game-schedule-pick:has(> button + button)
   > :first-child {
-  padding-inline-end: 26px;
+  padding-inline: 4px 24px;
 }
 
 .game-schedule-wizard .game-schedule-times .game-schedule-pick > button + button {
-  width: 26px;
+  width: 24px;
   color: #fff;
 }
 
