@@ -10,6 +10,7 @@ import { jwtVerify } from 'jose';
 import sharp from 'sharp';
 
 import { sendApiError } from '../http-errors.js';
+import { ifNoneMatchMatches } from '../media/conditional-media-get.js';
 import {
   ProfilePhotoMediaNotFoundError,
   type ProfilePhotoMediaStore,
@@ -429,9 +430,17 @@ export function registerProfilePhotoMediaRoutes(
       const object = await options.store.read(objectKey);
       reply.header('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
       reply.header('Cross-Origin-Resource-Policy', 'cross-origin');
+      if (object.etag) reply.header('ETag', object.etag);
+      // An unchanged avatar costs a header-only revalidation instead of the whole WebP body, which
+      // is what a returning app previously paid for every image on every screen.
+      if (ifNoneMatchMatches(request.headers['if-none-match'], object.etag)) {
+        // The stored body was already opened; releasing it keeps the S3 socket and its read
+        // timeout from lingering for every revalidated avatar.
+        object.body.destroy();
+        return reply.status(304).send();
+      }
       reply.type('image/webp');
       if (object.contentLength !== undefined) reply.header('Content-Length', object.contentLength);
-      if (object.etag) reply.header('ETag', object.etag);
       return reply.send(object.body);
     } catch (error) {
       if (error instanceof ProfilePhotoMediaNotFoundError) {

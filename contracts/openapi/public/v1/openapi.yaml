@@ -40,6 +40,15 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: If-None-Match
+        in: header
+        required: false
+        description: >-
+          ETag of the cached copy, or "*" for any current representation. Browsers and WebViews send
+          it automatically when the HTTP cache revalidates; a matching tag or "*" returns a bodyless
+          304 for an existing object, while a missing object keeps its 404.
+        schema:
+          type: string
     get:
       tags: [communities]
       operationId: getPublicCommunityLogo
@@ -50,11 +59,30 @@ paths:
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            ETag:
+              description: Tag of the stored logo; revalidate with If-None-Match.
+              schema:
+                type: string
+            Cache-Control:
+              description: public, max-age=300, stale-while-revalidate=600.
+              schema:
+                type: string
           content:
             image/webp:
               schema:
                 type: string
                 contentEncoding: binary
+        '304':
+          description: The stored logo still matches If-None-Match; no image body is sent.
+          headers:
+            ETag:
+              description: Tag of the unchanged stored object.
+              schema:
+                type: string
+            Cache-Control:
+              description: Same cache policy as the 200 response.
+              schema:
+                type: string
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '503':
@@ -74,6 +102,15 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: If-None-Match
+        in: header
+        required: false
+        description: >-
+          ETag of the cached copy, or "*" for any current representation. Browsers and WebViews send
+          it automatically when the HTTP cache revalidates; a matching tag or "*" returns a bodyless
+          304 for an existing object, while a missing object keeps its 404.
+        schema:
+          type: string
     get:
       tags: [profiles]
       operationId: getPublicProfilePhoto
@@ -84,11 +121,30 @@ paths:
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            ETag:
+              description: Tag of the stored photo; revalidate with If-None-Match.
+              schema:
+                type: string
+            Cache-Control:
+              description: public, max-age=300, stale-while-revalidate=600.
+              schema:
+                type: string
           content:
             image/webp:
               schema:
                 type: string
                 contentEncoding: binary
+        '304':
+          description: The stored photo still matches If-None-Match; no image body is sent.
+          headers:
+            ETag:
+              description: Tag of the unchanged stored object.
+              schema:
+                type: string
+            Cache-Control:
+              description: Same cache policy as the 200 response.
+              schema:
+                type: string
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '503':
