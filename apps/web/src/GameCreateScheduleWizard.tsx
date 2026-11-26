@@ -910,30 +910,28 @@ export function GameCreateScheduleWizard({
       ) : null}
 
       {step === 2 && station && selected ? (
-        <section className="game-schedule-stack" aria-label="Создание игры">
+        <section className="game-schedule-stack game-schedule-review" aria-label="Создание игры">
           <section className="game-schedule-card game-schedule-stack">
-            <div className="game-schedule-section-row">
-              <h2>Уровень игроков</h2>
-              <small>{levelRange}</small>
+            <div className="game-schedule-settings-row">
+              <h2 className="game-schedule-settings-heading">Уровень игроков</h2>
+              <span>{levelRange}</span>
             </div>
-            <div className="game-schedule-level-panel">
-              <div className="game-schedule-levels" role="group" aria-label="Уровень игры">
-                {LEVELS.map((level, index) => (
-                  <button
-                    type="button"
-                    key={level}
-                    aria-pressed={index >= levels[0] && index <= levels[1]}
-                    onClick={() => chooseLevel(index)}
-                  >
-                    {level}
-                  </button>
-                ))}
-              </div>
+            <div className="game-schedule-levels" role="group" aria-label="Уровень игры">
+              {LEVELS.map((level, index) => (
+                <button
+                  type="button"
+                  key={level}
+                  aria-pressed={index >= levels[0] && index <= levels[1]}
+                  onClick={() => chooseLevel(index)}
+                >
+                  {level}
+                </button>
+              ))}
             </div>
           </section>
           <section className="game-schedule-card game-schedule-stack">
-            <h2>Доступность игры</h2>
-            <div className="game-schedule-visibility">
+            <h2 className="game-schedule-settings-heading">Доступность игры</h2>
+            <div className="game-schedule-visibility" role="group" aria-label="Доступность игры">
               <label className="game-schedule-option">
                 <input
                   type="radio"
@@ -943,17 +941,8 @@ export function GameCreateScheduleWizard({
                 />
                 <span>
                   <strong>Открытая игра</strong>
-                  <small>К игре может присоединиться любой игрок подходящего уровня</small>
+                  <small>Любой игрок подходящего уровня может присоединиться.</small>
                 </span>
-                <em>
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path
-                      d="M8.92 1.75L4.7 8.08H7.4L6.63 14.25L10.96 7.92H8.2L8.92 1.75Z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                  Быстрее собрать
-                </em>
               </label>
               <label className="game-schedule-option">
                 <input
@@ -964,43 +953,35 @@ export function GameCreateScheduleWizard({
                 />
                 <span>
                   <strong>Приватная игра</strong>
-                  <small>
-                    Присоединиться можно по ссылке или в сообществе, где игра опубликована
-                  </small>
+                  <small>Вступление по ссылке или через сообщество, где опубликована игра.</small>
                 </span>
-                <em>
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <rect x="4.2" y="7.2" width="7.6" height="5.7" rx="1.7" />
-                    <path d="M5.75 7.2V5.95a2.25 2.25 0 0 1 4.5 0V7.2" />
-                    <circle cx="8" cy="10" r="0.8" fill="currentColor" />
-                  </svg>
-                  Для своих
-                </em>
               </label>
             </div>
           </section>
           {visibility === 'PUBLIC' ? (
             <section className="game-schedule-card game-schedule-stack">
-              <h2>Публикация в сообщества</h2>
+              <h2 className="game-schedule-settings-heading">Публикация в сообщества</h2>
               <div className="game-schedule-community">
                 <div className="is-selected">
-                  <span className="game-schedule-community-check" aria-hidden="true" />
                   <img src={padlHubLogoUrl} alt="" />
                   <strong>Общий список игр</strong>
+                  <span className="game-schedule-community-check" aria-hidden="true" />
                 </div>
                 <div>
-                  <span className="game-schedule-community-check" aria-hidden="true" />
                   <span className="game-schedule-community-avatar" aria-hidden="true">
                     {station.title.slice(0, 1).toLocaleUpperCase('ru-RU')}
                   </span>
                   <strong>{station.title}</strong>
+                  <span className="game-schedule-community-check" aria-hidden="true" />
                 </div>
               </div>
-              <small>Автопубликация в сообщества на тестовом стенде отключена.</small>
+              <small className="game-schedule-review-note">
+                Автопубликация в сообщества на тестовом стенде отключена.
+              </small>
             </section>
           ) : null}
           <section className="game-schedule-card game-schedule-stack">
-            <label className="game-schedule-stack">
+            <label className="game-schedule-review-field">
               <strong>Название игры для публикации</strong>
               <input
                 className="game-schedule-input"
@@ -1010,7 +991,7 @@ export function GameCreateScheduleWizard({
                 placeholder="Например, вечерний матч на счёт"
               />
             </label>
-            <label className="game-schedule-stack">
+            <label className="game-schedule-review-field">
               <strong>Комментарий для участников</strong>
               <textarea
                 className="game-schedule-input"
@@ -1020,22 +1001,20 @@ export function GameCreateScheduleWizard({
             </label>
           </section>
           <section className="game-schedule-card game-schedule-stack game-schedule-payment">
-            <h2>Выберите способ записи</h2>
-            <div className="game-schedule-option game-schedule-payment-row">
-              <span className="game-schedule-radio" aria-hidden="true" />
+            <h2 className="game-schedule-settings-heading">Стоимость участия</h2>
+            <div className="game-schedule-option game-schedule-payment-row game-schedule-payment-row--primary">
               <span>
                 <strong>{payer === 'self' ? 'Оплата всего корта' : 'Разовое участие'}</strong>
                 <small>
                   {payer === 'self' ? 'Полная оплата за 4 игроков' : 'Моя доля 1/4 стоимости'}
                 </small>
               </span>
-              <strong>{price(total)}</strong>
+              <strong className="game-schedule-payer-price">{price(total)}</strong>
             </div>
             {payer === 'split' ? (
               <>
-                <h3>Записаться с дополнительными опциями</h3>
+                <h3>Дополнительные способы записи</h3>
                 <div className="game-schedule-option game-schedule-payment-row">
-                  <span className="game-schedule-radio is-empty" aria-hidden="true" />
                   <span>
                     <strong>С Резидентством</strong>
                     <small>{residenceDetail}</small>
@@ -1043,7 +1022,6 @@ export function GameCreateScheduleWizard({
                   <strong>{residencePrice}</strong>
                 </div>
                 <div className="game-schedule-option game-schedule-payment-row">
-                  <span className="game-schedule-radio is-empty" aria-hidden="true" />
                   <span>
                     <strong>Запись с подпиской</strong>
                     {subscription === undefined ? <small>Условия уточняются в ЛК1</small> : null}
@@ -1061,7 +1039,7 @@ export function GameCreateScheduleWizard({
             {quoteMessage}
             <button
               type="button"
-              className="game-schedule-primary"
+              className="game-schedule-primary game-schedule-review-action"
               disabled={!canPay || checkout?.busy}
               onClick={(event) => {
                 if (!checkout || !checkoutOffer || !canPay) return;
