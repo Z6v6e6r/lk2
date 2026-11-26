@@ -63,6 +63,32 @@ describe('canonical subscription picker', () => {
     expect(onChange).toHaveBeenLastCalledWith(second);
   });
 
+  it('shows remaining visits and validity without changing the canonical id', async () => {
+    render(
+      <GameJoinSubscriptionPicker
+        gateway={{
+          getHomeDashboard: vi.fn().mockResolvedValue(
+            home([
+              {
+                id: first,
+                title: 'Лето · Падел',
+                status: 'active' as const,
+                remainingUnits: 8,
+                validUntil: '2027-01-31T00:00:00.000Z',
+                route: '/subscriptions/' + first,
+              },
+            ]),
+          ),
+        }}
+        onChange={vi.fn()}
+      />,
+    );
+    const option = await screen.findByRole('option', {
+      name: /Лето · Падел · осталось: 8 · до 31\.01\.2027/,
+    });
+    expect(option).toHaveValue(first);
+  });
+
   it('shows an empty state for absent or noncanonical instances', async () => {
     render(
       <GameJoinSubscriptionPicker
@@ -176,8 +202,8 @@ describe('canonical subscription picker', () => {
       responses[1]!(Response.json(home([item(second, 'Подписка текущего игрока')])));
       await Promise.resolve();
     });
-    expect(await screen.findByRole('option', { name: 'Подписка текущего игрока' })).toBeVisible();
-    expect(screen.queryByRole('option', { name: 'Подписка прежнего игрока' })).toBeNull();
+    expect(await screen.findByRole('option', { name: /^Подписка текущего игрока/ })).toBeVisible();
+    expect(screen.queryByRole('option', { name: /^Подписка прежнего игрока/ })).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -211,7 +237,7 @@ describe('canonical subscription picker', () => {
       resolveNew(home([item(second, 'Новая подписка')]));
       await Promise.resolve();
     });
-    expect(await screen.findByRole('option', { name: 'Новая подписка' })).toBeVisible();
-    expect(screen.queryByRole('option', { name: 'Старая подписка' })).toBeNull();
+    expect(await screen.findByRole('option', { name: /^Новая подписка/ })).toBeVisible();
+    expect(screen.queryByRole('option', { name: /^Старая подписка/ })).toBeNull();
   });
 });
