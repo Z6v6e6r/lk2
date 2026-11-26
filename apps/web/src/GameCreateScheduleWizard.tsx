@@ -306,7 +306,7 @@ export function GameCreateScheduleWizard({
   const [previewConfirmed, setPreviewConfirmed] = useState(false);
   const previewPaymentName = useId();
   const [visibility, setVisibility] = useState<'PUBLIC' | 'PRIVATE'>('PUBLIC');
-  const [friendsOpen, setFriendsOpen] = useState(true);
+  const [friendsOpen, setFriendsOpen] = useState(false);
   const [friendSearch, setFriendSearch] = useState('');
   const [selectedFriends, setSelectedFriends] = useState<ReadonlySet<string>>(() => new Set());
   const [friends, setFriends] = useState<readonly ScheduleFriend[] | 'ERROR'>();

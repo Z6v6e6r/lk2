@@ -909,7 +909,11 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
         await user.click(within(slots).getByRole('button'));
         await user.click(screen.getByRole('radio', { name: /^Весь корт/ }));
         await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+        const invite = screen.getByRole('button', { name: 'Пригласить друзей' });
+        await user.click(invite);
         await user.click(await screen.findByRole('checkbox', { name: 'Тестовый друг' }));
+        await user.click(invite);
+        expect(within(invite).getByText('Выбрано 1')).toBeVisible();
         await user.type(screen.getByLabelText('Название игры для публикации'), 'Тестовая игра');
         await user.click(screen.getByRole('button', { name: /^B$/ }));
       }
