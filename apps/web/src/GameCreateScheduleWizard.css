@@ -130,7 +130,8 @@ html:has(.game-schedule-wizard--settings) {
 
 .game-schedule-stack,
 .game-schedule-station-list,
-.game-schedule-station-panel:not([hidden]) {
+.game-schedule-station-panel:not([hidden]),
+.game-schedule-invite-panel:not([hidden]) {
   display: grid;
   min-width: 0;
   gap: 12px;
@@ -1010,11 +1011,23 @@ html:has(.game-schedule-wizard--settings) {
   font-weight: 600;
 }
 
+.game-schedule-wizard .game-schedule-invite-toggle {
+  padding-inline-end: 0;
+}
+
+.game-schedule-invite-count {
+  margin-inline-start: auto;
+  color: var(--schedule-muted);
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
 .game-schedule-friend-list {
-  max-height: 240px;
+  max-block-size: 184px;
   padding: 3px;
   margin: -3px;
-  overflow: auto;
+  overflow-y: auto;
 }
 
 .game-schedule-friend {

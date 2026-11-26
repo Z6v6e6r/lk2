@@ -502,7 +502,7 @@ describe('game creation schedule', () => {
     expectRange('D … D+2');
   });
 
-  it('keeps demo friend selections while filtering and revisiting the review step', async () => {
+  it('keeps demo friend selections while filtering, collapsing and revisiting the review step', async () => {
     render(
       <GameCreateScheduleWizard
         stations={stations}
@@ -537,6 +537,17 @@ describe('game creation schedule', () => {
     expect(picker().queryByRole('checkbox', { name: 'Анна Ветрова' })).not.toBeInTheDocument();
     await user.click(friend('Артём Соколов'));
     expect(picker().getByText('Выбрано 2')).toBeVisible();
+    const toggle = picker().getByRole('button', { name: 'Пригласить друзей' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(picker().queryByRole('searchbox')).not.toBeInTheDocument();
+    expect(picker().queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(picker().getByText('Выбрано 2')).toBeVisible();
+    await user.keyboard('{Enter}');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(search()).toHaveValue('АРТЕМ');
+    expect(friend('Артём Соколов')).toBeChecked();
     await user.clear(search());
     await user.type(search(), 'пусто');
     expect(picker().getByRole('status')).toHaveTextContent('Никого не нашли');

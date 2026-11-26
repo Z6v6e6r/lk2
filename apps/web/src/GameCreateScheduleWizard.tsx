@@ -295,6 +295,7 @@ export function GameCreateScheduleWizard({
   const cityPanelPrefix = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const inviteHeadingId = useId();
+  const invitePanelId = useId();
   const [stationId, setStation] = useState(stations[0]?.id ?? '');
   const [search, setSearch] = useState('');
   const [collapsedCities, setCollapsedCities] = useState<ReadonlySet<string>>(() => new Set());
@@ -305,6 +306,7 @@ export function GameCreateScheduleWizard({
   const [previewConfirmed, setPreviewConfirmed] = useState(false);
   const previewPaymentName = useId();
   const [visibility, setVisibility] = useState<'PUBLIC' | 'PRIVATE'>('PUBLIC');
+  const [friendsOpen, setFriendsOpen] = useState(true);
   const [friendSearch, setFriendSearch] = useState('');
   const [selectedFriends, setSelectedFriends] = useState<ReadonlySet<string>>(() => new Set());
   const [friends, setFriends] = useState<readonly ScheduleFriend[] | 'ERROR'>();
@@ -1257,75 +1259,85 @@ export function GameCreateScheduleWizard({
               className="game-schedule-card game-schedule-stack"
               aria-labelledby={inviteHeadingId}
             >
-              <div className="game-schedule-settings-row">
-                <h2 className="game-schedule-settings-heading" id={inviteHeadingId}>
-                  Пригласить друзей
-                </h2>
-                <span aria-live="polite">
-                  {selectedFriends.size > 0 ? `Выбрано ${selectedFriends.size}` : null}
-                </span>
-              </div>
-              <input
-                type="search"
-                className="game-schedule-input"
-                aria-label="Найти друга"
-                placeholder="Найти друга"
-                value={friendSearch}
-                disabled={friendList === undefined}
-                onChange={(event) => setFriendSearch(event.target.value)}
-              />
-              {loadFriends && friends === 'ERROR' ? (
-                <div className="game-schedule-message">
-                  <p role="alert">Не удалось загрузить список друзей.</p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFriends(undefined);
-                      setFriendsRetry((previous) => previous + 1);
-                    }}
-                  >
-                    Повторить загрузку
-                  </button>
-                </div>
-              ) : loadFriends && friends === undefined ? (
-                <p className="game-schedule-empty" role="status">
-                  Загружаем друзей…
-                </p>
-              ) : visibleFriends?.length ? (
-                <div className="game-schedule-friend-list">
-                  {visibleFriends.map((friend) => (
-                    <label className="game-schedule-friend" key={friend.id}>
-                      <span aria-hidden="true">
-                        <PlayerLevelAvatar
-                          alt={friend.name}
-                          src={friend.avatarUrl ?? null}
-                          fallbackSeed={friend.id}
-                          showLevelRing={false}
-                          size={32}
+              <h2 className="game-schedule-settings-heading">
+                <button
+                  type="button"
+                  className="game-schedule-disclosure game-schedule-invite-toggle"
+                  aria-labelledby={inviteHeadingId}
+                  aria-controls={invitePanelId}
+                  aria-expanded={friendsOpen}
+                  onClick={() => setFriendsOpen((open) => !open)}
+                >
+                  <span id={inviteHeadingId}>Пригласить друзей</span>
+                  <span className="game-schedule-invite-count" aria-live="polite">
+                    {selectedFriends.size > 0 ? `Выбрано ${selectedFriends.size}` : null}
+                  </span>
+                  <img src={stationChevronUrl} width={16} height={28} alt="" />
+                </button>
+              </h2>
+              <div id={invitePanelId} className="game-schedule-invite-panel" hidden={!friendsOpen}>
+                <input
+                  type="search"
+                  className="game-schedule-input"
+                  aria-label="Найти друга"
+                  placeholder="Найти друга"
+                  value={friendSearch}
+                  disabled={friendList === undefined}
+                  onChange={(event) => setFriendSearch(event.target.value)}
+                />
+                {loadFriends && friends === 'ERROR' ? (
+                  <div className="game-schedule-message">
+                    <p role="alert">Не удалось загрузить список друзей.</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFriends(undefined);
+                        setFriendsRetry((previous) => previous + 1);
+                      }}
+                    >
+                      Повторить загрузку
+                    </button>
+                  </div>
+                ) : loadFriends && friends === undefined ? (
+                  <p className="game-schedule-empty" role="status">
+                    Загружаем друзей…
+                  </p>
+                ) : visibleFriends?.length ? (
+                  <div className="game-schedule-friend-list">
+                    {visibleFriends.map((friend) => (
+                      <label className="game-schedule-friend" key={friend.id}>
+                        <span aria-hidden="true">
+                          <PlayerLevelAvatar
+                            alt={friend.name}
+                            src={friend.avatarUrl ?? null}
+                            fallbackSeed={friend.id}
+                            showLevelRing={false}
+                            size={32}
+                          />
+                        </span>
+                        <strong>{friend.name}</strong>
+                        <input
+                          type="checkbox"
+                          checked={selectedFriends.has(friend.id)}
+                          onChange={(event) => {
+                            const checked = event.target.checked;
+                            setSelectedFriends((current) => {
+                              const next = new Set(current);
+                              if (checked) next.add(friend.id);
+                              else next.delete(friend.id);
+                              return next;
+                            });
+                          }}
                         />
-                      </span>
-                      <strong>{friend.name}</strong>
-                      <input
-                        type="checkbox"
-                        checked={selectedFriends.has(friend.id)}
-                        onChange={(event) => {
-                          const checked = event.target.checked;
-                          setSelectedFriends((current) => {
-                            const next = new Set(current);
-                            if (checked) next.add(friend.id);
-                            else next.delete(friend.id);
-                            return next;
-                          });
-                        }}
-                      />
-                    </label>
-                  ))}
-                </div>
-              ) : (
-                <p className="game-schedule-empty" role="status">
-                  {friendQuery ? 'Никого не нашли' : 'Список друзей пуст'}
-                </p>
-              )}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="game-schedule-empty" role="status">
+                    {friendQuery ? 'Никого не нашли' : 'Список друзей пуст'}
+                  </p>
+                )}
+              </div>
             </section>
           ) : null}
           <section className="game-schedule-card game-schedule-stack">
