@@ -40,6 +40,7 @@ const quoteSchema = z
   .object({
     wholeCourtMinor: minor.nullable(),
     shareMinor: minor.nullable(),
+    subscriptionMinor: z.number().int().nonnegative().max(100_000_000).optional(),
     currency: z.literal('RUB'),
     observedAt: z.iso.datetime(),
     expiresAt: z.iso.datetime(),
@@ -211,6 +212,7 @@ export function createGameCreateScheduleRead(input: {
             headers: {
               Authorization: `Bearer ${accessToken}`,
               'X-Correlation-ID': actor.correlationId,
+              ...(query.slotId ? { 'X-LK2-Schedule-Features': 'subscription-quote' } : {}),
               ...(delegation ? { 'X-Subscription-Actor-Delegation': delegation } : {}),
             },
           }),
@@ -231,12 +233,17 @@ export function createGameCreateScheduleRead(input: {
       if (query.slotId) {
         const parsed = quoteSchema.safeParse(raw);
         if (!parsed.success) throw unavailable();
-        const { wholeCourtMinor, shareMinor, residency } = parsed.data;
+        const { wholeCourtMinor, shareMinor, subscriptionMinor, residency } = parsed.data;
         if (
           wholeCourtMinor === null
             ? shareMinor !== null || residency.status === 'APPLIED'
             : shareMinor !== Math.round(wholeCourtMinor / 4) ||
               (residency.status === 'APPLIED' && residency.amountMinor >= shareMinor)
+        )
+          throw unavailable();
+        if (
+          subscriptionMinor !== undefined &&
+          (shareMinor === null || subscriptionMinor >= shareMinor)
         )
           throw unavailable();
         const expires = Date.parse(parsed.data.expiresAt);

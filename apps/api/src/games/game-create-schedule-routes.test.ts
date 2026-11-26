@@ -191,6 +191,33 @@ describe('LK1-owned game creation schedule', () => {
     );
   });
 
+  it.each([0, 25_000, -1, 100_000, null] as const)(
+    'accepts only a valid slot subscription amount (%s)',
+    async (subscriptionMinor) => {
+      const { read, fetchImpl } = setup();
+      fetchImpl.mockResolvedValueOnce(
+        Response.json({
+          wholeCourtMinor: subscriptionMinor === null ? null : 400000,
+          shareMinor: subscriptionMinor === null ? null : 100000,
+          subscriptionMinor: subscriptionMinor ?? 0,
+          currency: 'RUB',
+          observedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 25_000).toISOString(),
+          residency: { status: 'UNAVAILABLE' },
+        }),
+      );
+      const result = read(actor, { ...query, slotId: 'a'.repeat(64) });
+      if (subscriptionMinor === 0 || subscriptionMinor === 25_000) {
+        await expect(result).resolves.toMatchObject({ quote: { subscriptionMinor } });
+      } else {
+        await expect(result).rejects.toThrow('GAME_CREATE_SCHEDULE_UNAVAILABLE');
+      }
+      expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({
+        'X-LK2-Schedule-Features': 'subscription-quote',
+      });
+    },
+  );
+
   it.each(['active', 'half-price', 'unproved-discount'] as const)(
     'accepts only coherent partial quotes (%s)',
     async (mode) => {

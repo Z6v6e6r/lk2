@@ -473,6 +473,16 @@ Until Commerce supplies a verified payment next action and confirmation consumer
 invents a payment URL or marks the reservation paid. Production dependency injection for Games
 remains off at this boundary; registered routes fail closed with `GAMES_RUNTIME_UNAVAILABLE`.
 
+### Slot-specific participation estimates
+
+The game creation wizard reads an estimate for the chosen slot through LK2.
+LK1 calculates residency and subscription prices under the actor's existing
+authorization. The estimate may include the lowest confirmed amount for an
+owned non-residency subscription, including zero. A missing amount or an
+unconfirmed residency price hides that benefit in the wizard. The estimate
+is display data. Recording a booking or charging a subscription requires
+the separate command's own current authorization and eligibility checks.
+
 ### Invitations to friends after game creation
 
 The create command accepts a bounded list of LK2 friends for free games and the confirmed

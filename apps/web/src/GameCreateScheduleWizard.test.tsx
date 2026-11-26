@@ -191,7 +191,7 @@ describe('game creation schedule', () => {
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
 
     const residency = await screen.findByRole('radio', { name: /С резидентством/ });
-    expect(screen.getByRole('radio', { name: /Запись с подпиской/ })).toBeDisabled();
+    expect(screen.queryByRole('radio', { name: /Запись с подпиской/ })).not.toBeInTheDocument();
     await user.click(residency);
     await user.click(screen.getByRole('button', { name: /Записаться за 420/ }));
     const review = screen.getByRole('region', { name: 'Тестовая запись' });
@@ -568,7 +568,7 @@ describe('game creation schedule', () => {
     expect(picker().getByText('Выбрано 1')).toBeVisible();
   });
 
-  it('reports missing residency evidence independently from the base price', async () => {
+  it('shows the base price and omits unconfirmed benefits', async () => {
     renderWizard({
       listSlots: () => Promise.resolve([slot]),
       readQuote: () =>
@@ -584,8 +584,31 @@ describe('game creation schedule', () => {
     await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
-    expect(await screen.findByText('ЛК1 не подтвердил условия')).toBeTruthy();
-    expect(screen.queryByText('Не применяется')).toBeNull();
+    expect(await screen.findByText(/^1\s*000\s*₽$/)).toBeVisible();
+    expect(screen.queryByText('С Резидентством')).not.toBeInTheDocument();
+    expect(screen.queryByText('Запись с подпиской')).not.toBeInTheDocument();
+  });
+
+  it('displays a confirmed zero subscription price for the selected slot', async () => {
+    renderWizard({
+      listSlots: () => Promise.resolve([slot]),
+      readQuote: () =>
+        Promise.resolve({
+          ...quoteTimes(),
+          wholeCourtMinor: 240000,
+          shareMinor: 60000,
+          subscriptionMinor: 0,
+          residency: { status: 'NOT_APPLICABLE' },
+        }),
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expect(await screen.findByText('Запись с подпиской')).toBeVisible();
+    expect(screen.getByText(/^0\s*₽$/)).toBeVisible();
+    expect(screen.queryByText('С Резидентством')).not.toBeInTheDocument();
   });
 
   it('keeps an in-flight quote on Continue and Back, then retries the same slot after a rate limit', async () => {

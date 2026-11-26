@@ -172,10 +172,6 @@ const RUBLES = new Intl.NumberFormat('ru-RU', {
   minimumFractionDigits: 0,
 });
 
-type ScheduleDisplayQuote = GameCreateScheduleQuote & {
-  readonly subscriptionMinor?: number;
-};
-
 export interface GameCreateScheduleSource {
   readonly listSlots: (input: {
     readonly stationId: string;
@@ -189,7 +185,7 @@ export interface GameCreateScheduleSource {
     readonly durationMinutes: 60 | 90 | 120;
     readonly slotId: string;
     readonly signal: AbortSignal;
-  }) => Promise<ScheduleDisplayQuote>;
+  }) => Promise<GameCreateScheduleQuote>;
 }
 
 export interface GameCreateScheduleCheckout {
@@ -332,7 +328,7 @@ export function GameCreateScheduleWizard({
   const [quoteVersion, setQuoteVersion] = useState(0);
   const [expiredQuoteKey, setExpiredQuoteKey] = useState<string>();
   const [slotsRead, setSlotsRead] = useState<ReadResult<readonly GameCreateScheduleSlot[]>>();
-  const [quoteRead, setQuoteRead] = useState<ReadResult<ScheduleDisplayQuote>>();
+  const [quoteRead, setQuoteRead] = useState<ReadResult<GameCreateScheduleQuote>>();
   useEffect(() => {
     if (!loadFriends || step !== 2) return;
     let current = true;
@@ -550,20 +546,7 @@ export function GameCreateScheduleWizard({
   const whole = currentQuote?.wholeCourtMinor ?? null;
   const subscription = currentQuote?.subscriptionMinor;
   const residency = currentQuote?.residency;
-  const residencePrice =
-    residency?.status === 'APPLIED'
-      ? price(residency.amountMinor)
-      : residency?.status === 'NOT_APPLICABLE'
-        ? 'Не применяется'
-        : 'Нужен расчёт';
-  const residenceDetail =
-    residency?.status === 'APPLIED'
-      ? 'Ваша скидка по условиям ЛК1'
-      : residency?.status === 'ACTIVE_UNQUOTED'
-        ? 'Резидентство действует, стоимость участия уточняется'
-        : residency?.status === 'NOT_APPLICABLE'
-          ? 'На выбранное время Резидентство не применяется'
-          : 'ЛК1 не подтвердил условия';
+  const residenceAmount = residency?.status === 'APPLIED' ? residency.amountMinor : null;
   const total = payer === 'self' ? whole : share;
   const canPay = Boolean(payer === 'self' && visibility === 'PRIVATE' && checkoutOffer);
   const showPreviewPayment = previewPayment && !checkout && payer === 'split';
@@ -571,14 +554,12 @@ export function GameCreateScheduleWizard({
     { label: 'Разовое участие', detail: 'Моя доля 1/4 стоимости', amount: share },
     {
       label: 'С резидентством',
-      detail: residenceDetail,
-      amount: residency?.status === 'APPLIED' ? residency.amountMinor : null,
-      unavailableLabel: residencePrice,
+      detail: 'Ваша скидка по условиям ЛК1',
+      amount: residenceAmount,
     },
     {
       label: 'Запись с подпиской',
       amount: subscription ?? null,
-      unavailableLabel: 'Нужен расчёт',
     },
   ];
   const previewIndex = previewChoice?.quoteKey === quoteKey ? previewChoice.index : 0;
@@ -1072,7 +1053,7 @@ export function GameCreateScheduleWizard({
                         ) : null}
                         {residency?.status === 'APPLIED' ? (
                           <span className="game-schedule-payer-line">
-                            С резидентством <span>{residencePrice}</span>
+                            С резидентством <span>{price(residency.amountMinor)}</span>
                           </span>
                         ) : null}
                       </small>
@@ -1364,29 +1345,26 @@ export function GameCreateScheduleWizard({
             <h2 className="game-schedule-settings-heading">Стоимость участия</h2>
             {showPreviewPayment ? (
               <fieldset className="game-schedule-preview-options" aria-label="Способ записи">
-                {previewOptions.map((option, index) => (
-                  <label
-                    className="game-schedule-option game-schedule-payment-row game-schedule-preview-option"
-                    key={option.label}
-                  >
-                    <input
-                      type="radio"
-                      name={previewPaymentName}
-                      checked={index === previewIndex && option.amount !== null}
-                      disabled={option.amount === null}
-                      onChange={() => setPreviewChoice({ quoteKey, index })}
-                    />
-                    <span>
-                      <strong>{option.label}</strong>
-                      {option.detail ? <small>{option.detail}</small> : null}
-                    </span>
-                    <strong>
-                      {option.amount === null
-                        ? (option.unavailableLabel ?? price(null))
-                        : price(option.amount)}
-                    </strong>
-                  </label>
-                ))}
+                {previewOptions.map((option, index) =>
+                  option.amount !== null ? (
+                    <label
+                      className="game-schedule-option game-schedule-payment-row game-schedule-preview-option"
+                      key={option.label}
+                    >
+                      <input
+                        type="radio"
+                        name={previewPaymentName}
+                        checked={index === previewIndex}
+                        onChange={() => setPreviewChoice({ quoteKey, index })}
+                      />
+                      <span>
+                        <strong>{option.label}</strong>
+                        {option.detail ? <small>{option.detail}</small> : null}
+                      </span>
+                      <strong>{price(option.amount)}</strong>
+                    </label>
+                  ) : null,
+                )}
               </fieldset>
             ) : (
               <>
@@ -1399,30 +1377,29 @@ export function GameCreateScheduleWizard({
                   </span>
                   <strong className="game-schedule-payer-price">{price(total)}</strong>
                 </div>
-                {payer === 'split' ? (
+                {payer === 'split' && (residenceAmount !== null || subscription !== undefined) ? (
                   <>
                     <h3>Дополнительные способы записи</h3>
-                    <div className="game-schedule-option game-schedule-payment-row">
-                      <span>
-                        <strong>С Резидентством</strong>
-                        <small>{residenceDetail}</small>
-                      </span>
-                      <strong>{residencePrice}</strong>
-                    </div>
-                    <div className="game-schedule-option game-schedule-payment-row">
-                      <span>
-                        <strong>Запись с подпиской</strong>
-                        {subscription === undefined ? (
-                          <small>Условия уточняются в ЛК1</small>
-                        ) : null}
-                      </span>
-                      <strong>
-                        {subscription === undefined ? 'Нужен расчёт' : price(subscription)}
-                      </strong>
-                    </div>
+                    {residenceAmount !== null ? (
+                      <div className="game-schedule-option game-schedule-payment-row">
+                        <span>
+                          <strong>С Резидентством</strong>
+                          <small>Ваша скидка по условиям ЛК1</small>
+                        </span>
+                        <strong>{price(residenceAmount)}</strong>
+                      </div>
+                    ) : null}
+                    {subscription !== undefined ? (
+                      <div className="game-schedule-option game-schedule-payment-row">
+                        <span>
+                          <strong>Запись с подпиской</strong>
+                        </span>
+                        <strong>{price(subscription)}</strong>
+                      </div>
+                    ) : null}
                     <details>
                       <summary>Применимость льгот</summary>
-                      <p>{residenceDetail}. При оплате всего корта льготы не применяются.</p>
+                      <p>При оплате всего корта льготы не применяются.</p>
                     </details>
                   </>
                 ) : null}
