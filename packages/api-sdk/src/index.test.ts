@@ -69,6 +69,31 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('requests a CUP STAGING proof with the current bearer and without session cookies', async () => {
+    const draft = '67a945d8-a42b-4ae2-935a-327c371ec2e4';
+    const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
+      expect(requestUrl(input)).toBe(
+        'https://api.padlhub.test/user/api/v1/local-padel/auth/cup-support-staging-handoff',
+      );
+      expect(init).toMatchObject({
+        method: 'POST',
+        credentials: 'omit',
+        cache: 'no-store',
+        redirect: 'error',
+        body: JSON.stringify({ draft }),
+      });
+      const headers = new Headers(init?.headers);
+      expect(headers.get('Authorization')).toBe(`Bearer ${authenticatedSession.accessToken}`);
+      expect(headers.has('Idempotency-Key')).toBe(true);
+      return Promise.resolve(jsonResponse({ proof: 'a.b.c' }));
+    });
+    const client = createClient(fetchImplementation);
+    client.setAccessToken(authenticatedSession.accessToken);
+
+    await expect(client.issueCupSupportStagingHandoff(draft)).resolves.toEqual({ proof: 'a.b.c' });
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+  });
+
   it('resolves station card photos for list and assisted completion without losing disabled or missing fields', async () => {
     const mediaPath =
       '/public/api/v1/local-padel/location-media/80000000-0000-4000-8000-000000000001';

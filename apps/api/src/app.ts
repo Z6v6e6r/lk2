@@ -115,6 +115,10 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 
 import { registerAuthRoutes } from './auth/auth-routes.js';
+import {
+  cupSupportHandoffBody,
+  type CupSupportHandoffIssuer,
+} from './auth/cup-support-staging-handoff.js';
 import type { PhoneSubjectLinkService } from './auth/phone-subject-link-service.js';
 import { registerNotificationScenarioRoutes } from './admin/notification-scenario-routes.js';
 import type { NotificationScenarioRepository } from '@phub/database/notification-scenarios';
@@ -293,6 +297,7 @@ export interface BuildAppOptions {
   readonly pool?: Pool;
   readonly authService?: AuthService;
   readonly phoneSubjectLinkService?: PhoneSubjectLinkService;
+  readonly cupSupportHandoffIssuer?: CupSupportHandoffIssuer;
   readonly accessSessionChecker?: (input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -1195,6 +1200,48 @@ export async function buildApp(options: BuildAppOptions) {
           }
         : undefined,
       options.phoneSubjectLinkService,
+    );
+  }
+
+  const issueCupSupportHandoff = options.cupSupportHandoffIssuer;
+  if (issueCupSupportHandoff) {
+    app.post<{ Params: { tenantKey: string } }>(
+      '/user/api/v1/:tenantKey/auth/cup-support-staging-handoff',
+      {
+        bodyLimit: 1024,
+        config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+        preHandler: [authenticate, resolveTenant, requireIdempotencyKey],
+      },
+      async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const claims = request.padlHubClaims;
+        if (
+          request.params.tenantKey !== 'local-padel' ||
+          options.config.JWT_AUDIENCE === options.config.JWT_ADMIN_AUDIENCE ||
+          claims?.aud !== options.config.JWT_AUDIENCE ||
+          !claims.roles.includes('client') ||
+          request.headers.origin !== 'https://lk2.padlhub.su'
+        ) {
+          return sendApiError(request, reply, 403, 'CUP_SUPPORT_HANDOFF_FORBIDDEN', 'Нет доступа.');
+        }
+        const body = cupSupportHandoffBody.safeParse(request.body);
+        if (!body.success) {
+          return sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Черновик не распознан.');
+        }
+        if (typeof claims.exp !== 'number' || !Number.isSafeInteger(claims.exp)) {
+          return sendApiError(request, reply, 401, 'AUTH_TOKEN_INVALID', 'Сессия недействительна.');
+        }
+        const proof = await issueCupSupportHandoff(
+          claims.sub.toLowerCase(),
+          body.data.draft,
+          claims.exp,
+        );
+        if (!proof) {
+          return sendApiError(request, reply, 401, 'AUTH_TOKEN_INVALID', 'Сессия недействительна.');
+        }
+        request.log.info('CUP Support STAGING intake handoff issued');
+        return { proof };
+      },
     );
   }
 

@@ -28,6 +28,7 @@ import { createManagedSelfLeaveRuntime } from './games/game-managed-self-leave.j
 import { createNotificationScenarioRepository } from '@phub/database/notification-scenarios';
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
 import { RedisPasswordLoginLimiter } from './auth/password-login-limiter.js';
+import { loadCupSupportHandoffIssuer } from './auth/cup-support-staging-handoff.js';
 import { loadConfig, runtimeContourTargetFingerprint } from '@phub/config';
 import {
   createAdminNotificationRepository,
@@ -179,6 +180,7 @@ import { S3TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { SubscriptionRuntimeActorDelegationIssuer } from './subscriptions/subscription-runtime-actor-delegation-issuer.js';
 
 const config = loadConfig();
+const cupSupportHandoffIssuer = loadCupSupportHandoffIssuer(process.env);
 const runtimeContourAttestation = config.LOCAL_RUNTIME_CONTOUR_ATTESTATION
   ? {
       database: runtimeContourTargetFingerprint(config.DATABASE_URL),
@@ -1245,6 +1247,7 @@ const app = await buildApp({
   pool,
   ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   authService,
+  ...(cupSupportHandoffIssuer ? { cupSupportHandoffIssuer } : {}),
   phoneSubjectLinkService,
   ...(subscriptionPolicyRegistryClient ? { subscriptionPolicyRegistryClient } : {}),
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),

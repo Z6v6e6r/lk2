@@ -924,6 +924,19 @@ export class PadlHubApiClient {
     });
   }
 
+  public issueCupSupportStagingHandoff(draft: string): Promise<{ readonly proof: string }> {
+    return this.request<{ readonly proof: string }>('/auth/cup-support-staging-handoff', {
+      method: 'POST',
+      auth: 'required',
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'error',
+      retryOnUnauthorized: false,
+      idempotencyKey: createCorrelationId(),
+      body: jsonRequestBody({ draft }),
+    });
+  }
+
   public refreshSession(): Promise<AuthenticatedSession> {
     return this.startSessionRefresh(false);
   }

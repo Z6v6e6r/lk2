@@ -1,3 +1,5 @@
+import { cupSupportHandoffContinuation } from './cup-support-staging-handoff.js';
+
 const AUTH_CONTINUATION_STORAGE_KEY = 'phub.pushOptIn.authContinuation.v1';
 const AUTH_CONTINUATION_TTL_MS = 20 * 60 * 1000;
 const PUSH_OPT_IN_PATH = '/push';
@@ -66,7 +68,7 @@ export function readPushAttribution(search: string): PushAttribution {
 /**
  * The Viva OAuth callback always redirects to the app root, so a deep link to the
  * push opt-in page has to be remembered in the same tab and restored after login.
- * Only the fixed internal opt-in path is accepted.
+ * Only the fixed internal opt-in path or the validated CUP Support draft is accepted.
  */
 export function rememberAuthContinuation(
   href: string,
@@ -76,7 +78,12 @@ export function rememberAuthContinuation(
   if (!session) return;
   try {
     const current = new URL(href);
-    if (current.pathname !== PUSH_OPT_IN_PATH) return;
+    if (
+      current.pathname !== PUSH_OPT_IN_PATH &&
+      (current.origin !== 'https://lk2.padlhub.su' ||
+        !cupSupportHandoffContinuation(current.pathname + current.search))
+    )
+      return;
     session.setItem(
       AUTH_CONTINUATION_STORAGE_KEY,
       JSON.stringify({ path: current.pathname + current.search, at: now }),
@@ -104,7 +111,11 @@ export function takeAuthContinuation(
       record.at > now + 60_000
     )
       return null;
-    if (typeof record.path !== 'string' || !record.path.startsWith(PUSH_OPT_IN_PATH)) return null;
+    if (
+      typeof record.path !== 'string' ||
+      (!record.path.startsWith(PUSH_OPT_IN_PATH) && !cupSupportHandoffContinuation(record.path))
+    )
+      return null;
     if (record.path.startsWith('//') || record.path.includes('\\')) return null;
     return record.path;
   } catch {

@@ -151,3 +151,19 @@ worker stops auto-close and retention work; later forward recovery resumes due-r
 rollback needs support privilege removal, remove only the exact support grants through the separately
 authorized migrator process and exact runtime role, then verify the bounded inventory. No direct
 shared-target SQL, default grant or broad permission rollback is authorized by this development PR.
+
+# CUP Support STAGING entry from LK2
+
+The CUP Support owner can open `https://lk2.padlhub.su/?cupSupportIntake=<draft-uuid>` for the
+PadlHub tenant. The LK2 tenant key `local-padel` maps to `padlhub` in the CUP proof.
+LK2 restores the client's session or uses its normal sign-in. The client
+chooses «Продолжить в поддержку» to return to the fixed
+`https://stg-support.tsup.space/intake#cupProof=…` address. LK2 never writes a ticket through
+this flow. CUP finalizes the draft after validating and consuming the proof.
+
+The LK2 owner enables `CUP_SUPPORT_STAGING_HANDOFF_ENABLED=true` on the API only after CUP
+confirms it accepts the draft-bound proof and both sides pass integrated STAGING tests.
+`CUP_SUPPORT_STAGING_HANDOFF_SECRET` is a distinct, unpadded base64url encoding of at least 32
+random bytes, provisioned separately on the signer and verifier. Keep it separate from LK2
+session keys and other handoff issuers. Keep the switch off on other contours. Disable the API
+switch to stop issuance and remove the key after this pilot ends or the integration is replaced.
