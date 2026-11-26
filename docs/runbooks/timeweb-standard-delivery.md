@@ -1454,7 +1454,7 @@ Home/profile/subscriptions/support; health checks do not prove those authenticat
 
 Use `PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_OPERATION_V1` with the existing `--critical-api-web`
 entry point. Start with the production API/Web request and add `backupOperationSha256`,
-`ownerRestoreDecisionSha256`, `expectedCurrentSecretSetReleaseId`, `candidateSecretHashes`
+`ownerRestoreDecisionSha256`, `ownerAlertDecision`, `expectedCurrentSecretSetReleaseId`, `candidateSecretHashes`
 (all five secret-set files), and `expiresAt` in canonical UTC. Append
 `_CUP_SUPPORT_STAGING` to the confirmation. The published
 candidate and enrolled controller must be the same exact commit. Keep application commit
@@ -1474,8 +1474,26 @@ takes a fresh candidate-bound database dump, validates SHA-256 and the PG16
 table of contents, and records `freshDumpRestored: false`. Use the hash of the resulting sealed
 `owner-restore-decision.json` for `ownerRestoreDecisionSha256`. The fresh dump preflight requires
 11.75 GiB free. Keep the previous API and Web images and the predecessor's sealed release evidence,
-including the Station archive, available for recovery. The normal monitoring, alert,
-observation, and unchanged-component evidence remain required.
+including the Station archive, available for recovery.
+
+For this release the owner replaces the notification delivery and recovery drill with direct HTTP
+observation. Store the exact approval message bytes in the root-owned `0600` file
+`operator/cup-support-alert-waiver.txt` without a trailing newline. The request's
+`ownerAlertDecision` uses `PHUB_TIMEWEB_CUP_SUPPORT_ALERT_DECISION_V1`, authority
+`ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1`, the `messageSha256`, its `codex-user-message-sha256:`
+reference, `receivedAt` in canonical UTC, and `scopeSha256` from
+`cupSupportAlertScopeSha256(operation)`. The operation, current predecessors and published package
+are bound together. Refresh the existing Timeweb monitoring readback before and throughout the
+rollout. A provider capture that reports HTTP 2xx can enter this profile only through the
+existing independently reviewed native capture and trace. Publish the three original JSON
+strings as `captureBundle`, `captureReview`, and `captureTrace` under schema
+`PHUB_TIMEWEB_CUP_SUPPORT_NATIVE_MONITOR_EVIDENCE_V1` in
+`observability/cup-support-native-monitor-input.json`. Refresh this root-owned file atomically;
+when present, a stale or invalid native file fails admission. The native provider evidence
+keeps its HTTP 2xx semantics. The direct application checks require exact HTTP 200.
+The executor records 61 private and public API/Web HTTP samples over at least 900 seconds,
+including both latency series, and applies the existing restart and rollback checks. The terminal
+receipt records the direct HTTP observation and provider readback with the alert replacement status.
 
 Provision one independent 32-byte key for the LK2 API and the CUP Support STAGING verifier.
 Use the same canonical unpadded base64url key on both sides, keeping the Support form behind

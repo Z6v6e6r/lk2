@@ -2,6 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import type * as NativeFs from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
+import { validateCupSupportProviderEvidence } from './timeweb-api-web-upgrade.js';
+import {
+  NOW as NATIVE_CAPTURE_AT,
+  SOURCE as NATIVE_SOURCE,
+  NATIVE_ADAPTER_SHA256,
+  encodedNativeFixture,
+  reviewedNativeBatchFixture,
+} from './timeweb-native-observability-fixtures.js';
 
 function scenario(body: string) {
   const result = spawnSync(
@@ -19,6 +27,23 @@ function scenario(body: string) {
   );
   expect(result.status, result.stderr).toBe(0);
 }
+
+it('allows fresh reviewed native CUP monitoring without asserting a provider exact-200 policy', () => {
+  const fixture = reviewedNativeBatchFixture();
+  const evidence = {
+    schema: 'PHUB_TIMEWEB_CUP_SUPPORT_NATIVE_MONITOR_EVIDENCE_V1',
+    captureBundle: encodedNativeFixture(fixture.f.bundle).toString(),
+    captureReview: encodedNativeFixture(fixture.review).toString(),
+    captureTrace: encodedNativeFixture(fixture.trace).toString(),
+  };
+  const validate = (input: unknown, observedAt = NATIVE_CAPTURE_AT, source = NATIVE_SOURCE) =>
+    validateCupSupportProviderEvidence(input, {}, observedAt, source, NATIVE_ADAPTER_SHA256);
+  expect(() => validate(evidence)).not.toThrow();
+  expect(() => validate(evidence, '2026-11-14T12:00:55.001Z')).toThrow('capture_age');
+  expect(() => validate(evidence, NATIVE_CAPTURE_AT, 'f'.repeat(40))).toThrow();
+  expect(() => validate({ ...evidence, captureTrace: '{}' })).toThrow();
+  expect(() => validate({ ...evidence, alertTestStatus: 'PASSED' })).toThrow();
+});
 const operation = {
   schema: 'PHUB_TIMEWEB_API_WEB_OPERATION_V1',
   target: 'lk2.padlhub.su',
@@ -288,13 +313,14 @@ describe('explicit API/Web upgrade boundary', () => {
       const previousSha='0a4d640965e921e6d06eeb22de6cc6dcae07f0b1';
       const applicationSha='55f38b09d828f81e905f4c3b8709e29dbbba8bac';
       const applicationTree=git('rev-parse',applicationSha+'^{tree}');
+      const scheduleController='e82467c16';
       const identity={previousSha,applicationSha,applicationTree};
       const definition='deploy/timeweb/runtime-environment.contract.json';
       const regular={status:'M',oldMode:'100644',newMode:'100644',oldType:'blob',newType:'blob'};
       const entries=[...parseRuntimeDelta(git('diff','--raw','--no-abbrev','--no-renames','-z',previousSha,applicationSha))
         .filter(row=>row.path!==definition)
         .map(row=>({...row,oldType:row.oldMode==='000000'?null:'blob',newType:'blob'})),
-        {...regular,path:definition,oldOid:git('rev-parse',previousSha+':'+definition),newOid:git('hash-object',definition)}];
+        {...regular,path:definition,oldOid:git('rev-parse',previousSha+':'+definition),newOid:git('rev-parse',scheduleController+':'+definition)}];
       const tail=[definition,'scripts/timeweb-api-web-upgrade.js','scripts/timeweb-api-web-upgrade.test.ts',
         'scripts/timeweb-api-web-upgrade.d.ts','scripts/timeweb-commercial-runtime-contract.js',
         'scripts/provision-timeweb-beta-runtime-secrets.js','scripts/provision-timeweb-beta-runtime-secrets.d.ts',
@@ -664,7 +690,9 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
   it('binds CUP Support operation, backup proof, and secret receipt to the running predecessor', () => {
     scenario(`
       const {createHash}=await import('node:crypto');
+      const {cupSupportAlertScopeSha256,validateCupSupportDirectObservation}=await import('./scripts/timeweb-api-web-upgrade.js');
       const {CUP_SUPPORT_LEGACY_RUNTIME_SET_ID}=await import('./scripts/provision-timeweb-beta-runtime-secrets.js');
+      const sha=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
       const previousId='b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61-45606826648-1';
       const op=${JSON.stringify(operation)};
       Object.assign(op,{schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_OPERATION_V1',profile:'production',controllerSha:op.candidateSha,
@@ -674,6 +702,11 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
         confirmation:'DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_B81A2EC93F38_B81A2EC93F38_CUP_SUPPORT_STAGING'});
       op.expectedApi.releaseId=previousId;
       op.expectedWeb.releaseId=previousId;
+      const messageSha256='a6414dc35154adabb89b9d04b3e446f1ec85746bbaf0f0a74677f7eeb2546446';
+      op.ownerAlertDecision={schema:'PHUB_TIMEWEB_CUP_SUPPORT_ALERT_DECISION_V1',
+        authority:'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',messageSha256,
+        reference:'codex-user-message-sha256:'+messageSha256,receivedAt:'2029-12-31T23:00:00.000Z',
+        scopeSha256:cupSupportAlertScopeSha256(op)};
       validateApiWebOperation(op);
       for(const modify of [
         v=>v.profile='beta',
@@ -684,6 +717,9 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
         v=>v.candidateSecretHashes.extra='e'.repeat(64),
         v=>v.expectedWorker=v.expectedApi,
         v=>v.ownerProviderMonitoringWaiver={},
+        v=>delete v.ownerAlertDecision,
+        v=>v.ownerAlertDecision.messageSha256='e'.repeat(64),
+        v=>v.ownerAlertDecision.scopeSha256='f'.repeat(64),
       ]){
         const changed=structuredClone(op);modify(changed);
         assert.throws(()=>validateApiWebOperation(changed));
@@ -691,14 +727,31 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
       const candidateId=op.candidateSha+'-456-1';
       const plan={schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_PLAN_V1',controllerSha:op.controllerSha,secretSetReleaseId:previousId,
         backup:{operationSha256:op.backupOperationSha256},
+        ownerAlertDecisionSha256:sha(op.ownerAlertDecision),operationSha256:sha(op),createdAt:'2029-12-31T23:15:00.000Z',
         previous:{api:op.expectedApi,web:op.expectedWeb},candidate:{api:op.expectedApi,web:op.expectedWeb},candidateSecrets:{releaseId:candidateId},unchangedServiceImages:{}};
       const bytes=Buffer.from(JSON.stringify(plan));
       const hash=createHash('sha256').update(bytes).digest('hex');
-      const receipt={schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_RECEIPT_V1',status:'SECRET_SWAP_INTENT',planSha256:hash,observedAt:new Date().toISOString()};
+      const receipt={schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_RECEIPT_V1',status:'SECRET_SWAP_INTENT',planSha256:hash,observedAt:new Date().toISOString(),
+        alertTestStatus:'REPLACED_BY_OWNER_APPROVED_DIRECT_HTTP',ownerAlertDecisionSha256:sha(op.ownerAlertDecision)};
       validateUpgradeReceipt(receipt,hash,op,plan,bytes);
       assert.throws(()=>validateUpgradeReceipt({...receipt,schema:'PHUB_TIMEWEB_API_WEB_APP_ONLY_RECEIPT_V1'},hash,op,plan,bytes));
       assert(buildApiWebInstalledDescriptor({PHUB_RELEASE_ID:previousId},plan,candidateId,'/test/receipt').toString()
         .includes('PHUB_RUNTIME_SECRET_SET_RELEASE_ID='+candidateId));
+      const success={...receipt,status:'SUCCESS',installedBaselineSha256:'a'.repeat(64),observationSha256:'b'.repeat(64),providerReadbackSha256:'c'.repeat(64)};
+      validateUpgradeReceipt(success,hash,op,plan,bytes);
+      assert.throws(()=>validateUpgradeReceipt({...success,alertReadbackSha256:'d'.repeat(64)},hash,op,plan,bytes));
+      assert.throws(()=>validateUpgradeReceipt({...success,providerReadbackSha256:undefined},hash,op,plan,bytes));
+      const startedAt='2029-12-31T23:20:00.000Z';
+      const completedAt='2029-12-31T23:35:00.000Z';
+      const sample=()=>({privateMs:Array(61).fill(40),publicMs:Array(61).fill(75),
+        timestamps:Array.from({length:61},(_,i)=>new Date(Date.parse(startedAt)+15000*i).toISOString()),p95PrivateMs:40,p95PublicMs:75});
+      const observation={schema:'PHUB_TIMEWEB_CUP_SUPPORT_DIRECT_OBSERVATION_V1',operationSha256:sha(op),planSha256:hash,
+        candidateSha:op.candidateSha,startedAt,completedAt,elapsedSeconds:900,samples:{api:sample(),web:sample()},serverErrors:0};
+      validateCupSupportDirectObservation(observation,op,plan,hash);
+      for (const change of [v=>v.serverErrors=1,v=>v.samples.api.publicMs.pop(),v=>v.completedAt=startedAt,v=>v.candidateSha='e'.repeat(40)]) {
+        const altered=structuredClone(observation);change(altered);
+        assert.throws(()=>validateCupSupportDirectObservation(altered,op,plan,hash));
+      }
     `);
   });
   it('binds the schedule schemas to production and records the candidate set', () => {

@@ -36,6 +36,11 @@ import { validateInstalledApiWorkerEvidence } from './timeweb-api-worker-contrac
 import { verifySourceCi } from './verify-source-ci.js';
 import { parseStrictJson } from './strict-json.js';
 import {
+  deriveNativeMonitorReadback,
+  NATIVE_MONITOR_BATCH_BUNDLE,
+} from './timeweb-native-observability.js';
+import { verifyNativeCaptureReview } from './timeweb-native-capture-review.js';
+import {
   CUP_SUPPORT_LEGACY_RUNTIME_SET_ID,
   describeTimewebRuntimeSecretSet,
   parseTimewebScheduleRuntimeEnvironment,
@@ -232,6 +237,11 @@ const CUP_SUPPORT_RECEIPT = 'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_RECEIPT_V1';
 const CUP_SUPPORT_BACKUP = 'PHUB_TIMEWEB_CUP_SUPPORT_FRESH_BACKUP_V1';
 const CUP_SUPPORT_BACKUP_RECEIPT = 'PHUB_TIMEWEB_CUP_SUPPORT_FRESH_DUMP_V1';
 const CUP_SUPPORT_BACKUP_POLICY = 'CUP_SUPPORT_FRESH_DUMP_INTEGRITY_ONLY_V1';
+const CUP_SUPPORT_ALERT_MESSAGE =
+  'a6414dc35154adabb89b9d04b3e446f1ec85746bbaf0f0a74677f7eeb2546446';
+const CUP_SUPPORT_ALERT_STATUS = 'REPLACED_BY_OWNER_APPROVED_DIRECT_HTTP';
+const CUP_SUPPORT_DIRECT_OBSERVATION = 'PHUB_TIMEWEB_CUP_SUPPORT_DIRECT_OBSERVATION_V1';
+const CUP_SUPPORT_NATIVE_EVIDENCE = 'PHUB_TIMEWEB_CUP_SUPPORT_NATIVE_MONITOR_EVIDENCE_V1';
 const CUP_SUPPORT_APPLICATION = '62da4b92e65a02488f893b7ebc53d8b86faca9c9';
 const CUP_SUPPORT_APPLICATION_TREE = '08e6eafb72c67065c78ccb1409c46e6d6358bb62';
 const CUP_SUPPORT_PREDECESSOR = 'b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61-45606826648-1';
@@ -298,6 +308,43 @@ function scheduleMonitoringReceipt(op) {
     ownerProviderMonitoringWaiverSha256: hash(JSON.stringify(op.ownerProviderMonitoringWaiver)),
   };
 }
+
+export function cupSupportAlertScopeSha256({ ownerAlertDecision, ...operation }) {
+  return hash(JSON.stringify({ serverId: 8886471, projectId: 262717, ...operation }));
+}
+
+function validateCupSupportAlertDecision(op) {
+  const decision = op.ownerAlertDecision;
+  exact(decision, [
+    'schema',
+    'authority',
+    'messageSha256',
+    'reference',
+    'receivedAt',
+    'scopeSha256',
+  ]);
+  const receivedAt = Date.parse(decision.receivedAt);
+  if (
+    decision.schema !== 'PHUB_TIMEWEB_CUP_SUPPORT_ALERT_DECISION_V1' ||
+    decision.authority !== 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1' ||
+    decision.messageSha256 !== CUP_SUPPORT_ALERT_MESSAGE ||
+    decision.reference !== `codex-user-message-sha256:${CUP_SUPPORT_ALERT_MESSAGE}` ||
+    decision.scopeSha256 !== cupSupportAlertScopeSha256(op) ||
+    !Number.isFinite(receivedAt) ||
+    new Date(receivedAt).toISOString() !== decision.receivedAt ||
+    receivedAt >= Date.parse(op.expiresAt) ||
+    Date.parse(op.expiresAt) - receivedAt > 86_400_000
+  )
+    fail('cup_support_alert_decision');
+}
+
+function cupSupportAlertReceipt(op) {
+  return {
+    alertTestStatus: CUP_SUPPORT_ALERT_STATUS,
+    ownerAlertDecisionSha256: hash(JSON.stringify(op.ownerAlertDecision)),
+  };
+}
+
 function validateScheduleExpiry(value, minimumMs = 0) {
   const remaining = Date.parse(value) - Date.now();
   if (!Number.isFinite(remaining) || remaining <= minimumMs || remaining > 3_600_000)
@@ -506,6 +553,7 @@ export function validateApiWebOperation(value) {
       expectedCurrentSecretSetReleaseId,
       candidateSecretHashes,
       ownerRestoreDecisionSha256,
+      ownerAlertDecision,
       ...operation
     } = fields;
     const base = cupSupport ? operation : fields;
@@ -532,6 +580,7 @@ export function validateApiWebOperation(value) {
       exact(candidateSecretHashes, SECRET_NAMES);
       if (SECRET_NAMES.some((name) => !HASH.test(candidateSecretHashes[name] ?? '')))
         fail('cup_support_secret_hashes');
+      validateCupSupportAlertDecision(value);
     }
     validateApiWebOperation({
       ...base,
@@ -2262,6 +2311,55 @@ export function validateStationMonitoring(provider, contract, observedAt) {
   const monitors = validateTimewebMonitorReadback(provider, contract, observedAt);
   validateTimewebProviderMonitoringEvidence(monitors, contract, observedAt);
 }
+export function validateCupSupportProviderEvidence(
+  evidence,
+  contract,
+  observedAt,
+  sourceSha,
+  adapterSourceSha256,
+) {
+  if (evidence?.schema !== CUP_SUPPORT_NATIVE_EVIDENCE)
+    return validateStationMonitoring(evidence, contract, observedAt);
+  exact(evidence, ['schema', 'captureBundle', 'captureReview', 'captureTrace']);
+  const { captureBundle, captureReview, captureTrace } = evidence;
+  if (
+    ![captureBundle, captureReview, captureTrace].every((value) => typeof value === 'string') ||
+    parseStrictJson(captureBundle).schema !== NATIVE_MONITOR_BATCH_BUNDLE
+  )
+    fail('cup_support_native_monitor_input');
+  verifyNativeCaptureReview(
+    captureReview,
+    captureBundle,
+    captureTrace,
+    sourceSha,
+    adapterSourceSha256,
+    observedAt,
+  );
+  const readback = deriveNativeMonitorReadback(captureBundle, observedAt, sourceSha);
+  assertCutoverReadbackFreshness(readback.readAt, Date.parse(observedAt));
+}
+
+function attestCupSupportProviderBytes(provider, op, observedAt) {
+  const contract = parseStrictJson(
+    read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`, 0o644),
+  );
+  validateCupSupportProviderEvidence(
+    parseStrictJson(provider),
+    contract,
+    observedAt,
+    op.candidateSha,
+    nativeSourceHashes().adapterSourceSha256,
+  );
+}
+
+function readCupSupportProviderEvidence(op) {
+  const root = `${ROOT}/observability`;
+  const native = `${root}/cup-support-native-monitor-input.json`;
+  const provider = read(existsSync(native) ? native : `${root}/timeweb-monitor-readback.json`);
+  const observedAt = new Date().toISOString();
+  attestCupSupportProviderBytes(provider, op, observedAt);
+  return { provider, observedAt };
+}
 function validateMonitoring(
   transaction,
   profile = 'beta',
@@ -2737,6 +2835,7 @@ export function validateUpgradeReceipt(
   if (station) keys.push('databaseAdmissionSha256', 'alertTestStatus');
   if (stationDirect) keys.push('providerMonitoringStatus');
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
+  if (cupSupport) keys.push('alertTestStatus', 'ownerAlertDecisionSha256');
   if (scheduleWaived)
     keys.push(...Object.keys(SCHEDULE_MONITORING_STATUS), 'ownerProviderMonitoringWaiverSha256');
   if (
@@ -2767,7 +2866,10 @@ export function validateUpgradeReceipt(
             ? ['ownerObservationSha256', 'evidencePolicySha256']
             : scheduleWaived || stationDirect
               ? []
-              : ['providerReadbackSha256', ...(!station ? ['alertReadbackSha256'] : [])]),
+              : [
+                  'providerReadbackSha256',
+                  ...(!station && !cupSupport ? ['alertReadbackSha256'] : []),
+                ]),
     );
   if (receipt.status === 'RECONCILED') keys.push('reconciledStatus');
   exact(receipt, keys);
@@ -2792,6 +2894,9 @@ export function validateUpgradeReceipt(
       (!HASH.test(receipt.databaseAdmissionSha256 ?? '') ||
         receipt.alertTestStatus !== STATION_ALERT_STATUS)) ||
     (stationDirect && receipt.providerMonitoringStatus !== STATION_PROVIDER_STATUS) ||
+    (cupSupport &&
+      (receipt.alertTestStatus !== CUP_SUPPORT_ALERT_STATUS ||
+        !HASH.test(receipt.ownerAlertDecisionSha256 ?? ''))) ||
     !Number.isFinite(Date.parse(receipt.observedAt)) ||
     ![
       'PREPARING',
@@ -2858,7 +2963,10 @@ export function validateUpgradeReceipt(
               ? ['ownerObservationSha256', 'evidencePolicySha256']
               : scheduleWaived || stationDirect
                 ? []
-                : ['providerReadbackSha256', ...(!station ? ['alertReadbackSha256'] : [])]),
+                : [
+                    'providerReadbackSha256',
+                    ...(!station && !cupSupport ? ['alertReadbackSha256'] : []),
+                  ]),
       ].some((key) => !HASH.test(receipt[key] ?? '')))
   )
     fail('invalid_receipt');
@@ -2905,6 +3013,17 @@ export function validateUpgradeReceipt(
     )
       fail('receipt_context');
     if (station) validateStationRetainedAdmission(plan.databaseAdmission, op);
+    if (cupSupport) {
+      validateCupSupportAlertDecision(op);
+      const decision = cupSupportAlertReceipt(op);
+      if (
+        plan.ownerAlertDecisionSha256 !== decision.ownerAlertDecisionSha256 ||
+        Date.parse(plan.createdAt) < Date.parse(op.ownerAlertDecision.receivedAt) ||
+        !Number.isFinite(Date.parse(plan.createdAt)) ||
+        !Object.entries(decision).every(([key, value]) => receipt[key] === value)
+      )
+        fail('receipt_cup_support_alert_decision');
+    }
     if (scheduleWaived) {
       validateScheduleMonitoringWaiver(op);
       const expected = scheduleMonitoringReceipt(op);
@@ -2961,6 +3080,31 @@ export function validateScheduleDirectObservation(value, op, plan, planSha256) {
     planSha256,
   );
   return value;
+}
+export function validateCupSupportDirectObservation(value, op, plan, planSha256) {
+  if (!isCupSupportOperation(op) || value?.schema !== CUP_SUPPORT_DIRECT_OBSERVATION)
+    fail('cup_support_observation_identity');
+  validateCupSupportAlertDecision(op);
+  validateJoinObservation(
+    { ...value, schema: 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1' },
+    op,
+    plan,
+    planSha256,
+  );
+  return value;
+}
+function attestCupSupportDirectEvidence(transaction, op, plan, planSha256) {
+  const observation = validateCupSupportDirectObservation(
+    parseStrictJson(read(`${transaction}/observation.json`)),
+    op,
+    plan,
+    planSha256,
+  );
+  attestCupSupportProviderBytes(
+    read(`${transaction}/timeweb-monitor-readback.json`),
+    op,
+    observation.completedAt,
+  );
 }
 export function validateDirectObservation(value, completedAt = undefined) {
   exact(value, [
@@ -3799,6 +3943,13 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           fail('installed_app_only_lineage');
         validateBoundBackupPlan(plan.backup, op, transaction);
         attestBoundBackupFiles(plan.backup);
+        if (isCupSupportOperation(op))
+          validateCupSupportDirectObservation(
+            parseStrictJson(read(`${transaction}/observation.json`)),
+            op,
+            plan,
+            hash(planBytes),
+          );
         if (
           isCupSupportOperation(op) &&
           (plan.candidateSecrets.releaseId !== releaseId ||
@@ -3948,7 +4099,7 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           : [
               ['observation.json', 'observationSha256'],
               ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-              ...(receipt.schema === STATION_RECEIPT
+              ...([STATION_RECEIPT, CUP_SUPPORT_RECEIPT].includes(receipt.schema)
                 ? []
                 : [['alert-test-readback.json', 'alertReadbackSha256']]),
             ])
@@ -4067,6 +4218,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
   const join = isJoinOperation(op);
   const schedule = isScheduleOperation(op);
   const cupSupport = isCupSupportOperation(op);
+  const cupAlert = cupSupport ? cupSupportAlertReceipt(op) : undefined;
   const appOnly = isAppOnlyOperation(op);
   const scheduleWaiver =
     schedule && op.ownerProviderMonitoringWaiver ? scheduleMonitoringReceipt(op) : null;
@@ -4122,6 +4274,13 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
   if (mode === 'deploy' && cutover) validateProductionCutover(op, true);
   const profile = join ? 'production' : (op.profile ?? 'beta');
   if (mode === 'deploy' && (schedule || appOnly)) validateScheduleExpiry(op.expiresAt, 20 * 60_000);
+  if (
+    mode === 'deploy' &&
+    cupSupport &&
+    (Date.parse(op.ownerAlertDecision.receivedAt) > Date.now() ||
+      hash(read(`${ROOT}/operator/cup-support-alert-waiver.txt`)) !== CUP_SUPPORT_ALERT_MESSAGE)
+  )
+    fail('cup_support_alert_authorization');
   if (
     mode === 'deploy' &&
     scheduleWaiver &&
@@ -4518,10 +4677,12 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           ? createOwnerDirectedBinding(op, hash(opBytes))
           : isWaivedRosterCutover(op)
             ? null
-            : validateMonitoring(transaction, profile, {
-                fresh: cutover || schedule || appOnly,
-                station,
-              })
+            : cupSupport
+              ? readCupSupportProviderEvidence(op)
+              : validateMonitoring(transaction, profile, {
+                  fresh: cutover || schedule || appOnly,
+                  station,
+                })
         : null;
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
@@ -4599,6 +4760,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
             ownerProviderMonitoringWaiverSha256: scheduleWaiver.ownerProviderMonitoringWaiverSha256,
           }
         : {}),
+      ...(cupAlert ? { ownerAlertDecisionSha256: cupAlert.ownerAlertDecisionSha256 } : {}),
       ...(direct
         ? {
             evidencePolicy: op.evidencePolicy,
@@ -4650,7 +4812,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     durable(`${transaction}/${admissionMarker}`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)), alertTestStatus: STATION_ALERT_STATUS, ...stationProviderDecision } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)), alertTestStatus: STATION_ALERT_STATUS, ...stationProviderDecision } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, ...cupAlert, observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
@@ -4683,6 +4845,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     ...(swapsSecrets ? ['baselinePath', 'previousSecrets', 'candidateSecrets'] : []),
     ...(join ? ['verifierPublicKeySha256', 'notificationBundleSha256'] : []),
     ...(scheduleWaiver ? ['ownerProviderMonitoringWaiverSha256'] : []),
+    ...(cupAlert ? ['ownerAlertDecisionSha256'] : []),
     ...(isDirectOperation(op)
       ? ['evidencePolicy', 'evidencePolicySha256', 'ownerObservationSha256']
       : []),
@@ -4963,6 +5126,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
             }
           : {}),
         ...scheduleWaiver,
+        ...cupAlert,
         ...(status === 'SUCCESS'
           ? {
               installedBaselineSha256,
@@ -4982,7 +5146,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
                           providerReadbackSha256: hash(
                             read(`${transaction}/timeweb-monitor-readback.json`),
                           ),
-                          ...(!station
+                          ...(!station && !cupSupport
                             ? {
                                 alertReadbackSha256: hash(
                                   read(`${transaction}/alert-test-readback.json`),
@@ -5079,6 +5243,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
               );
             } else if (cupSupport) {
               validateScheduleExpiry(op.expiresAt, 16 * 60_000);
+              readCupSupportProviderEvidence(op);
               validateTimewebCupSupportHandoffSecretDelta(RUNTIME, candidateDir);
             } else {
               validateScheduleExpiry(op.expiresAt, 16 * 60_000);
@@ -5160,6 +5325,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     attest: async () => {
       attest();
       attestRunningEnv();
+      if (cupSupport) attestCupSupportDirectEvidence(transaction, op, plan, planSha256);
       for (const service of Object.keys(active))
         if (!equal(inspect(service), active[service])) fail('candidate_changed_before_success');
     },
@@ -5198,6 +5364,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     activate: async (s) => {
       if (join) validateJoinOperation(op, true);
       if (schedule) validateScheduleExpiry(op.expiresAt);
+      if (cupSupport) readCupSupportProviderEvidence(op);
       if (
         schedule &&
         s === 'api' &&
@@ -5264,7 +5431,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         return;
       }
       const startedAt = new Date().toISOString();
-      const detailedObservation = join || scheduleWaiver;
+      const detailedObservation = join || scheduleWaiver || cupSupport;
       const samples = {
         api: { privateMs: [], publicMs: [], timestamps: [] },
         web: { privateMs: [], publicMs: [], timestamps: [] },
@@ -5288,7 +5455,8 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         attestRunningEnv();
         if (scheduleWaiver) {
           validateScheduleExpiry(op.expiresAt);
-        } else if (!isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
+        } else if (cupSupport) readCupSupportProviderEvidence(op);
+        else if (!isWaivedRosterCutover(op) && !isOwnerDirectedCutover(op))
           validateMonitoring(transaction, profile, { fresh: appOnly });
         if (round < 60) await delay(15000);
       }
@@ -5298,17 +5466,22 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           limit = s === 'api' ? 1500 : 1000;
         if (join ? p95 >= limit : p95 > limit) fail('latency_threshold');
       }
+      let completedAt;
       if (isOwnerDirectedCutover(op))
         validateOwnerDirectedBinding(op, plan.monitoring, hash(opBytes));
       else if (isWaivedRosterCutover(op)) attestSealedNativeMonitoring(op, plan, transaction);
-      else if (!scheduleWaiver) {
+      else if (cupSupport) {
+        const finalMonitoring = readCupSupportProviderEvidence(op);
+        completedAt = finalMonitoring.observedAt;
+        durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
+      } else if (!scheduleWaiver) {
         const finalMonitoring = validateMonitoring(transaction, profile, {
           fresh: schedule || appOnly,
         });
         durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
         durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
       }
-      const completedAt = new Date().toISOString();
+      completedAt ??= new Date().toISOString();
       for (const service of ['api', 'web'])
         for (const [key, source] of [
           ['p95PrivateMs', 'privateMs'],
@@ -5316,11 +5489,17 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         ])
           samples[service][key] = [...samples[service][source]].sort((a, b) => a - b)[57];
       const observation = detailedObservation
-        ? (join ? validateJoinObservation : validateScheduleDirectObservation)(
+        ? (join
+            ? validateJoinObservation
+            : cupSupport
+              ? validateCupSupportDirectObservation
+              : validateScheduleDirectObservation)(
             {
               schema: join
                 ? 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1'
-                : SCHEDULE_DIRECT_OBSERVATION,
+                : cupSupport
+                  ? CUP_SUPPORT_DIRECT_OBSERVATION
+                  : SCHEDULE_DIRECT_OBSERVATION,
               operationSha256: plan.operationSha256,
               planSha256,
               candidateSha: op.candidateSha,
@@ -5427,6 +5606,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
               plan,
               planSha256,
             );
+          if (cupSupport) attestCupSupportDirectEvidence(transaction, op, plan, planSha256);
           if (
             !read(`${directory}/installed-components.env`).equals(expectedDescriptor) ||
             hash(expectedDescriptor) !== receipt.installedBaselineSha256
@@ -5438,7 +5618,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
               ? []
               : [
                   ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-                  ['alert-test-readback.json', 'alertReadbackSha256'],
+                  ...(!cupSupport ? [['alert-test-readback.json', 'alertReadbackSha256']] : []),
                 ]),
           ])
             if (hash(read(`${transaction}/${file}`)) !== receipt[key])
