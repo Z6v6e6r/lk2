@@ -27,10 +27,11 @@ const DATE_CHIP = new Intl.DateTimeFormat('ru-RU', {
   month: 'short',
   day: '2-digit',
 });
+const MONTH_LABEL = new Intl.DateTimeFormat('ru-RU', { timeZone: TIME_ZONE, month: 'long' });
 const LEVELS = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'] as const;
 const GAME_FORMATS = [
-  { id: 'doubles', label: 'Игра 2 на 2' },
-  { id: 'singles', label: 'Игра 1 на 1' },
+  { id: 'doubles', label: '2 на 2' },
+  { id: 'singles', label: '1 на 1' },
 ] as const;
 type Level = (typeof LEVELS)[number];
 export interface GameCreateScheduleDetails {
@@ -132,6 +133,19 @@ function slotTime(slot: GameCreateScheduleSlot) {
   return `${TIME_LABEL.format(new Date(slot.startsAt))}–${TIME_LABEL.format(new Date(slot.endsAt))}`;
 }
 
+function endsNextDay(slot: GameCreateScheduleSlot) {
+  return DAY.format(new Date(slot.startsAt)) !== DAY.format(new Date(slot.endsAt));
+}
+
+function courtDisplay(name: string) {
+  const number = name.match(/корт\s*№\s*(\d+)/iu)?.[1];
+  const type = name.match(/панорамик|сингл|открыт/iu)?.[0].toLocaleLowerCase('ru-RU');
+  return {
+    title: number ? `Корт №${number}` : name,
+    type: type === 'открыт' ? 'Открытый' : type && type[0]!.toUpperCase() + type.slice(1),
+  };
+}
+
 export function GameCreateScheduleWizard({
   stations,
   source,
@@ -159,6 +173,7 @@ export function GameCreateScheduleWizard({
   const [levels, setLevels] = useState<readonly [number, number]>([0, 2]);
   const [title, setTitle] = useState('');
   const [day, setDay] = useState(today);
+  const [browsedMonth, setBrowsedMonth] = useState<string>();
   const [format, setFormat] = useState<(typeof GAME_FORMATS)[number]['id']>('doubles');
   const [duration, setDuration] = useState<60 | 90 | 120>(60);
   const [court, setCourt] = useState('');
@@ -205,13 +220,25 @@ export function GameCreateScheduleWizard({
     currentQuote.currency === offer.currency
       ? { offer, expiresAt: currentQuote.expiresAt }
       : undefined;
-  const days = Array.from({ length: 15 }, (_, offset) => {
-    const date = new Date(Date.parse(today + 'T12:00:00+03:00') + offset * 86_400_000);
+  const days = Array.from({ length: 16 }, (_, offset) => {
+    const date = new Date(Date.parse(today + 'T12:00:00+03:00') + (offset - 1) * 86_400_000);
     const parts = Object.fromEntries(
       DATE_CHIP.formatToParts(date).map((part) => [part.type, part.value]),
     );
-    return { day: DAY.format(date), label: DATE_LABEL.format(date), parts };
+    const dateKey = DAY.format(date);
+    const month = MONTH_LABEL.format(date);
+    return {
+      day: dateKey,
+      monthKey: dateKey.slice(0, 7),
+      monthName: month.charAt(0).toUpperCase() + month.slice(1),
+      label: DATE_LABEL.format(date),
+      parts,
+    };
   });
+  const months = new Map(
+    days.filter((item) => item.day >= today).map((item) => [item.monthKey, item.monthName]),
+  );
+  const calendarMonth = browsedMonth ?? day.slice(0, 7);
 
   useEffect(() => {
     if (!stationId || wizard.step === 0 || currentSchedule) return;
@@ -275,6 +302,11 @@ export function GameCreateScheduleWizard({
     clearTime();
   }
 
+  function clearCourt() {
+    setCourt('');
+    setSlot('');
+  }
+
   function toggleCity(city: string) {
     setCollapsedCities((current) => {
       const next = new Set(current);
@@ -294,11 +326,9 @@ export function GameCreateScheduleWizard({
 
   function chooseCourt(id: string) {
     if (id === court) return;
-    const matching =
-      !court && slots.find((slot) => slot.courtKey === id && slot.startsAt === preferredStart);
+    const matching = slots.find((slot) => slot.courtKey === id && slot.startsAt === preferredStart);
     setCourt(id);
-    setSlot(matching ? matching.id : '');
-    if (court) setPreferredStart('');
+    setSlot(matching?.id ?? '');
   }
 
   function choosePayer(value: 'split' | 'self') {
@@ -355,9 +385,9 @@ export function GameCreateScheduleWizard({
   const summaryDate = days.find((item) => item.day === day)?.parts;
   const summarySlot = chosenSlot ?? times.get(preferredStart);
   const summaryCourt = courts.get(court);
-  const summaryCourtName = summaryCourt?.match(/^корт\s*№\s*\d+/iu)?.[0] ?? summaryCourt;
+  const summaryCourtName = summaryCourt ? courtDisplay(summaryCourt).title : undefined;
   const levelRange = `${LEVELS[levels[0]]} – ${LEVELS[levels[1]]}`;
-  const payerLabel = payer === 'self' ? 'Я оплачиваю весь корт' : 'Каждый платит за себя';
+  const payerLabel = payer === 'self' ? 'Я оплачиваю весь корт' : 'Каждый за себя';
   const chosenTime = selected && slotTime(selected);
   const quoteError = quote && 'error' in quote ? quote.error : undefined;
   const slotChanged = quoteError === 'GAME_CREATE_SCHEDULE_SLOT_CHANGED';
@@ -410,7 +440,9 @@ export function GameCreateScheduleWizard({
   );
 
   return (
-    <main className="games-page game-schedule-wizard">
+    <main
+      className={`games-page game-schedule-wizard${wizard.step === 1 ? ' game-schedule-wizard--settings' : ''}`}
+    >
       <div className="game-schedule-top">
         <header className="game-schedule-header">
           {wizard.step === 0 ? (
@@ -611,131 +643,193 @@ export function GameCreateScheduleWizard({
       ) : null}
 
       {wizard.step === 1 ? (
-        <section className="game-schedule-stack" aria-label="Параметры игры">
-          <h2 className="game-schedule-settings-heading">Формат игры</h2>
-          <div className="game-schedule-formats" role="group" aria-label="Формат игры">
-            {GAME_FORMATS.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                aria-pressed={option.id === format}
-                onClick={() => {
-                  if (option.id === format) return;
-                  setFormat(option.id);
-                  resetSlot();
-                }}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-          <h2 className="game-schedule-settings-heading">Продолжительность</h2>
-          <div className="game-schedule-durations" role="group" aria-label="Продолжительность">
-            {([60, 90, 120] as const).map((minutes) => (
-              <button
-                key={minutes}
-                type="button"
-                aria-pressed={minutes === duration}
-                onClick={() => {
-                  if (minutes === duration) return;
-                  setDuration(minutes);
-                  resetSlot();
-                }}
-              >
-                {minutes} мин
-              </button>
-            ))}
-          </div>
-          <h2 className="game-schedule-settings-heading">Дата и время начала игры</h2>
-          <div className="game-schedule-days" role="group" aria-label="Дата игры">
-            {days.map((item) => (
-              <div key={item.day}>
-                <span aria-hidden="true">{item.parts.weekday?.replace('.', '')}</span>
+        <section className="game-schedule-stack game-schedule-settings" aria-label="Параметры игры">
+          <div className="game-schedule-settings-section">
+            <h2 className="game-schedule-settings-heading">Формат игры</h2>
+            <div className="game-schedule-formats" role="group" aria-label="Формат игры">
+              {GAME_FORMATS.map((option) => (
                 <button
+                  key={option.id}
                   type="button"
-                  aria-label={item.label}
-                  aria-pressed={day === item.day}
+                  aria-pressed={option.id === format}
                   onClick={() => {
-                    if (day === item.day) return;
-                    setDay(item.day);
+                    if (option.id === format) return;
+                    setFormat(option.id);
                     resetSlot();
                   }}
                 >
-                  <small>{item.parts.month?.replace('.', '').slice(0, 3)}</small>
-                  <strong>{item.parts.day}</strong>
+                  {option.label}
                 </button>
-              </div>
-            ))}
-          </div>
-          {!currentSchedule ? (
-            <p className="game-schedule-empty" role="status">
-              Загрузка времени…
-            </p>
-          ) : null}
-          {currentSchedule && 'error' in currentSchedule ? (
-            <div className="game-schedule-message">
-              <p role="alert">
-                {currentSchedule.error === 'GAME_CREATE_SCHEDULE_STATION_UNAVAILABLE'
-                  ? 'Для этого клуба расписание ЛК1 пока недоступно.'
-                  : currentSchedule.error === 'VIVA_REAUTH_REQUIRED'
-                    ? 'Для расписания нужен действующий вход через Viva.'
-                    : currentSchedule.error === 'GAME_PERMISSION_REQUIRED'
-                      ? 'Для просмотра расписания нужен доступ к играм.'
-                      : 'Не удалось загрузить расписание.'}
-              </p>
-              <button type="button" onClick={() => setRetry((value) => value + 1)}>
-                Повторить
-              </button>
-            </div>
-          ) : null}
-          {currentSchedule && 'value' in currentSchedule && !slots.length ? (
-            <p className="game-schedule-empty" role="status">
-              Для этого формата нет свободных слотов. Выберите другую дату или длительность.
-            </p>
-          ) : null}
-          {times.size ? (
-            <div className="game-schedule-times" role="group" aria-label="Свободные слоты">
-              {[...times.values()].map((item) => (
-                <div key={item.startsAt} className="game-schedule-pick">
-                  <button
-                    type="button"
-                    aria-label={slotTime(item)}
-                    aria-pressed={preferredStart === item.startsAt}
-                    onClick={() => {
-                      setPreferredStart(item.startsAt);
-                      setSlot(court ? item.id : '');
-                    }}
-                  >
-                    {TIME_LABEL.format(new Date(item.startsAt))}
-                  </button>
-                  {preferredStart === item.startsAt ? (
-                    <button type="button" aria-label="Сбросить выбранное время" onClick={clearTime}>
-                      ×
-                    </button>
-                  ) : null}
-                </div>
               ))}
             </div>
-          ) : null}
-          <h2 className="game-schedule-settings-heading">Корты</h2>
-          <div className="game-schedule-courts" role="group" aria-label="Корты">
-            {[...courts].map(([id, name]) => (
-              <div key={id} className="game-schedule-pick">
-                <button type="button" aria-pressed={court === id} onClick={() => chooseCourt(id)}>
-                  {name}
+          </div>
+          <div className="game-schedule-settings-section">
+            <h2 className="game-schedule-settings-heading">Продолжительность</h2>
+            <div className="game-schedule-durations" role="group" aria-label="Продолжительность">
+              {([60, 90, 120] as const).map((minutes) => (
+                <button
+                  key={minutes}
+                  type="button"
+                  aria-pressed={minutes === duration}
+                  onClick={() => {
+                    if (minutes === duration) return;
+                    setDuration(minutes);
+                    resetSlot();
+                  }}
+                >
+                  {minutes} мин
                 </button>
-                {court === id ? (
-                  <button type="button" aria-label="Сбросить выбранный корт" onClick={resetSlot}>
-                    ×
+              ))}
+            </div>
+          </div>
+          <div className="game-schedule-settings-section">
+            <div className="game-schedule-settings-row">
+              <h2 className="game-schedule-settings-heading">Дата игры</h2>
+              {months.size > 1 ? (
+                <select
+                  className="game-schedule-month"
+                  aria-label="Месяц"
+                  value={calendarMonth}
+                  onChange={(event) => setBrowsedMonth(event.target.value)}
+                >
+                  {[...months].map(([key, month]) => (
+                    <option key={key} value={key}>
+                      {month}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="game-schedule-month">{months.get(calendarMonth)}</span>
+              )}
+            </div>
+            <div className="game-schedule-days" role="group" aria-label="Дата игры">
+              {days
+                .filter((item) => item.monthKey === calendarMonth)
+                .map((item) => (
+                  <button
+                    key={item.day}
+                    type="button"
+                    aria-label={item.label}
+                    aria-pressed={day === item.day}
+                    disabled={item.day < today}
+                    onClick={() => {
+                      if (day === item.day) return;
+                      setDay(item.day);
+                      setBrowsedMonth(undefined);
+                      resetSlot();
+                    }}
+                  >
+                    <small>{item.parts.weekday?.replace('.', '')}</small>
+                    <strong>{item.parts.day}</strong>
                   </button>
-                ) : null}
-              </div>
-            ))}
+                ))}
+            </div>
+          </div>
+          <div className="game-schedule-settings-section">
+            <h2 className="game-schedule-settings-heading">Время начала</h2>
             {!currentSchedule ? (
               <p className="game-schedule-empty" role="status">
-                Загрузка кортов…
+                Загрузка времени…
               </p>
             ) : null}
+            {currentSchedule && 'error' in currentSchedule ? (
+              <div className="game-schedule-message">
+                <p role="alert">
+                  {currentSchedule.error === 'GAME_CREATE_SCHEDULE_STATION_UNAVAILABLE'
+                    ? 'Для этого клуба расписание ЛК1 пока недоступно.'
+                    : currentSchedule.error === 'VIVA_REAUTH_REQUIRED'
+                      ? 'Для расписания нужен действующий вход через Viva.'
+                      : currentSchedule.error === 'GAME_PERMISSION_REQUIRED'
+                        ? 'Для просмотра расписания нужен доступ к играм.'
+                        : 'Не удалось загрузить расписание.'}
+                </p>
+                <button type="button" onClick={() => setRetry((value) => value + 1)}>
+                  Повторить
+                </button>
+              </div>
+            ) : null}
+            {currentSchedule && 'value' in currentSchedule && !slots.length ? (
+              <p className="game-schedule-empty" role="status">
+                Для этого формата нет свободных слотов. Выберите другую дату или длительность.
+              </p>
+            ) : null}
+            {times.size ? (
+              <div className="game-schedule-times" role="group" aria-label="Свободные слоты">
+                {[...times.values()].map((item) => {
+                  const nextDay = endsNextDay(item);
+                  return (
+                    <div key={item.startsAt} className="game-schedule-pick">
+                      <button
+                        type="button"
+                        aria-label={`${slotTime(item)}${nextDay ? ', окончание на следующий день' : ''}`}
+                        aria-pressed={preferredStart === item.startsAt}
+                        onClick={() => {
+                          setPreferredStart(item.startsAt);
+                          setSlot(court ? item.id : '');
+                        }}
+                      >
+                        {TIME_LABEL.format(new Date(item.startsAt))}
+                        {nextDay ? (
+                          <small>до {TIME_LABEL.format(new Date(item.endsAt))} (след. день)</small>
+                        ) : null}
+                      </button>
+                      {preferredStart === item.startsAt ? (
+                        <button
+                          type="button"
+                          aria-label="Сбросить выбранное время"
+                          onClick={clearTime}
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+          <div className="game-schedule-settings-section">
+            <div className="game-schedule-settings-row">
+              <h2 className="game-schedule-settings-heading">Корты</h2>
+              {courts.size > 0 ? (
+                <span>
+                  {courts.size} {locationCourtLabel(courts.size)}
+                </span>
+              ) : null}
+            </div>
+            <div className="game-schedule-courts" role="group" aria-label="Корты">
+              {[...courts].map(([id, name]) => {
+                const { title: courtTitle, type } = courtDisplay(name);
+                return (
+                  <div key={id} className="game-schedule-pick">
+                    <button
+                      type="button"
+                      aria-label={courtTitle}
+                      aria-description={type}
+                      aria-pressed={court === id}
+                      onClick={() => chooseCourt(id)}
+                    >
+                      <strong>{courtTitle}</strong>
+                      {type ? <small>{type}</small> : null}
+                    </button>
+                    {court === id ? (
+                      <button
+                        type="button"
+                        aria-label="Сбросить выбранный корт"
+                        onClick={clearCourt}
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {!currentSchedule ? (
+                <p className="game-schedule-empty" role="status">
+                  Загрузка кортов…
+                </p>
+              ) : null}
+            </div>
           </div>
           {selected ? (
             <div className="game-schedule-card game-schedule-payer-card">
@@ -808,19 +902,16 @@ export function GameCreateScheduleWizard({
           ) : (
             <button
               className="game-schedule-primary game-schedule-continue"
-              aria-label="Продолжить"
+              aria-label={selected ? 'Показать 1 вариант' : 'Продолжить'}
               type="button"
               disabled={!selected}
               onClick={() => wizard.advance(2)}
             >
-              <strong>Продолжить</strong>
+              <strong>{selected ? 'Показать 1 вариант' : 'Продолжить'}</strong>
               <span>
-                {station && selected
-                  ? `${station.title} · ${selected.courtName}`
-                  : 'Выберите клуб и корт'}
-              </span>
-              <span>
-                {chosenTime ? `${chosenTime} · ${duration} мин` : 'Выберите время начала'}
+                {selected && summaryDate
+                  ? `${Number(summaryDate.day)} ${summaryDate.month?.slice(0, 3)} · ${chosenTime}${endsNextDay(selected) ? ' (след. день)' : ''} · ${summaryCourtName}`
+                  : 'Выберите корт и время начала'}
               </span>
             </button>
           )}

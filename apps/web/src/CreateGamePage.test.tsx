@@ -904,7 +904,7 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
         const slots = screen.getByRole('group', { name: 'Свободные слоты' });
         await user.click(within(slots).getByRole('button'));
         await user.click(screen.getByRole('radio', { name: /^Весь корт/ }));
-        await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+        await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
         await user.type(screen.getByLabelText('Название игры для публикации'), 'Тестовая игра');
         await user.click(screen.getByRole('button', { name: /^B$/ }));
       }

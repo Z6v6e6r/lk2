@@ -49,6 +49,10 @@ html:has(.game-schedule-summary) {
   scroll-padding-top: 200px;
 }
 
+html:has(.game-schedule-wizard--settings) {
+  scroll-padding-bottom: 90px;
+}
+
 .game-schedule-top:has(.game-schedule-summary) {
   position: sticky;
   top: 0;
@@ -56,6 +60,10 @@ html:has(.game-schedule-summary) {
   margin-bottom: 4px;
   padding-bottom: 8px;
   background: var(--schedule-ground);
+}
+
+.game-schedule-wizard--settings .game-schedule-top {
+  margin-bottom: 12px;
 }
 
 .game-schedule-header::after {
@@ -329,6 +337,36 @@ html:has(.game-schedule-summary) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.game-schedule-settings {
+  gap: 20px;
+}
+
+.game-schedule-settings-section {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.game-schedule-settings-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.game-schedule-settings-row > span,
+.game-schedule-month {
+  color: var(--schedule-muted);
+  font: inherit;
+  font-size: 13px;
+}
+
+select.game-schedule-month {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .game-schedule-durations {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -336,7 +374,7 @@ html:has(.game-schedule-summary) {
 .game-schedule-wizard
   :is(.game-schedule-formats, .game-schedule-durations, .game-schedule-times, .game-schedule-courts)
   button {
-  min-height: 39px;
+  min-height: 44px;
   border: 1px solid var(--schedule-line);
   border-radius: 12px;
   padding: 6px;
@@ -368,33 +406,23 @@ html:has(.game-schedule-summary) {
 .game-schedule-days {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 47px;
-  gap: 9px;
+  grid-auto-columns: max(44px, calc((100% - 40px) / 6));
+  gap: 8px;
   min-width: 0;
   overflow-x: auto;
-  padding: 2px 2px 7px;
-}
-
-.game-schedule-days > div {
-  text-align: center;
-}
-
-.game-schedule-days > div > span {
-  display: block;
-  color: var(--schedule-muted);
-  font-size: 11px;
-  margin-bottom: 5px;
-  text-transform: uppercase;
+  margin: -4px;
+  padding: 4px;
 }
 
 .game-schedule-wizard .game-schedule-days button {
   display: grid;
   width: 100%;
-  min-height: 50px;
-  padding: 0;
-  overflow: hidden;
+  min-height: 64px;
+  align-content: center;
+  gap: 4px;
+  padding: 4px;
   border: 1px solid var(--schedule-line);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--schedule-paper);
   font:
     700 18px/1.2 'Recommendation RF Dewi',
@@ -403,15 +431,18 @@ html:has(.game-schedule-summary) {
 }
 
 .game-schedule-days button small {
-  background: var(--schedule-ink);
-  color: #fff;
-  font-size: 11px;
-  text-transform: uppercase;
-  padding: 2px;
+  color: var(--schedule-muted);
+  font:
+    400 13px/18px 'Inter Display',
+    Inter,
+    sans-serif;
+  text-transform: capitalize;
 }
 
-.game-schedule-days button strong {
-  padding: 4px;
+.game-schedule-wizard .game-schedule-days button:disabled {
+  background: var(--schedule-ground);
+  color: var(--schedule-muted);
+  cursor: not-allowed;
 }
 
 .game-schedule-wizard .game-schedule-days button[aria-pressed='true'] {
@@ -420,26 +451,44 @@ html:has(.game-schedule-summary) {
   color: #fff;
 }
 
+.game-schedule-days button[aria-pressed='true'] small {
+  color: inherit;
+}
+
 .game-schedule-times {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.game-schedule-courts {
-  gap: 10px;
-  padding: 0 16px;
-  margin-bottom: 12px;
+.game-schedule-times button small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .game-schedule-wizard .game-schedule-courts .game-schedule-pick > :first-child {
   border-radius: 16px;
-  min-height: 46px;
-  padding: 12px 16px;
+  min-height: 56px;
+  padding: 8px 16px;
   font:
-    700 15px/1.2 'Recommendation RF Dewi',
-    'RF Dewi',
+    600 15px/1.2 'Inter Display',
+    Inter,
     sans-serif;
   text-align: start;
   overflow-wrap: anywhere;
+}
+
+.game-schedule-courts .game-schedule-pick strong {
+  font-weight: inherit;
+}
+
+.game-schedule-courts .game-schedule-pick small {
+  display: block;
+  margin-top: 2px;
+  color: var(--schedule-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
 }
 
 .game-schedule-wizard
@@ -659,15 +708,21 @@ html:has(.game-schedule-summary) {
 .game-schedule-continue {
   display: grid;
   width: 100%;
-  min-height: 90px;
-  gap: 2px;
-  justify-items: start;
+  min-height: 64px;
+  gap: 4px;
+  place-content: center;
   border-radius: 16px;
-  text-align: left;
+  text-align: center;
   font:
     600 16px/1.25 'Inter Display',
     Inter,
     sans-serif;
+}
+
+.game-schedule-continue:not(:disabled) {
+  position: sticky;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  z-index: 1;
 }
 
 .game-schedule-continue span {
@@ -984,16 +1039,12 @@ html:has(.game-schedule-summary) {
 }
 
 @media (max-width: 350px) {
-  .games-page.game-schedule-wizard {
+  .games-page.game-schedule-wizard:not(.game-schedule-wizard--settings) {
     --schedule-inline-padding: 12px;
   }
   .game-schedule-visibility strong {
     font-size: 15px;
   }
-  .game-schedule-times {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .game-schedule-wizard .game-schedule-payer-card,
   .game-schedule-payers .game-schedule-option {
     padding-inline: 10px;

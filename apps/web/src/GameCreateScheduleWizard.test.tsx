@@ -137,13 +137,13 @@ describe('game creation schedule', () => {
       expect(screen.getByRole('heading', { name: 'Дата и время' })).toBeTruthy();
       expect(listSlots).toHaveBeenCalledTimes(1);
       expect(readQuote).toHaveBeenCalledTimes(0);
-      await user.click(await screen.findByRole('button', { name: courtName }));
+      await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
       const payers = within(screen.getByRole('group', { name: 'Кто оплачивает корт?' }));
       expect(payers.getByRole('radio', { name: /Каждый за себя/ })).toBeChecked();
       expect(await payers.findByText(/700\s*₽/)).toBeTruthy();
       expect(payers.queryByText('По подписке')).not.toBeInTheDocument();
-      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
       expect(await screen.findByText('С Резидентством')).toBeTruthy();
       expect(screen.getByText(/700\s*₽/)).toBeTruthy();
       expect(readQuote.mock.calls[0]?.[0]).toMatchObject({
@@ -185,7 +185,7 @@ describe('game creation schedule', () => {
     expect(summary().getByText('6 дек · 60 мин')).toBeVisible();
     await user.click(await screen.findByRole('button', { name: '12:00–13:00' }));
     expect(summary().getByText('6 дек · 12:00–13:00')).toBeVisible();
-    await user.click(screen.getByRole('button', { name: courtName }));
+    await user.click(screen.getByRole('button', { name: 'Корт №1' }));
     expect(summary().getByText('Селигерская · Корт №1')).toBeVisible();
     const payers = within(screen.getByRole('group', { name: 'Кто оплачивает корт?' }));
     expect(await payers.findByText('По подписке')).toHaveTextContent(/По подписке\s+0\s*₽/);
@@ -193,7 +193,7 @@ describe('game creation schedule', () => {
     await user.click(payers.getByRole('radio', { name: /^Весь корт/ }));
     expect(summary().getByText('Я оплачиваю весь корт')).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
     expect(summary().getByText('Приватная')).toBeVisible();
     expect(summary().getByText('D – C')).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'B' }));
@@ -232,19 +232,19 @@ describe('game creation schedule', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
     const formats = within(screen.getByRole('group', { name: 'Формат игры' }));
-    const doublesButton = formats.getByRole('button', { name: 'Игра 2 на 2' });
-    const singlesButton = formats.getByRole('button', { name: 'Игра 1 на 1' });
+    const doublesButton = formats.getByRole('button', { name: '2 на 2' });
+    const singlesButton = formats.getByRole('button', { name: '1 на 1' });
     expect(doublesButton).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.queryByRole('button', { name: singles.courtName })).not.toBeInTheDocument();
-    await user.click(await screen.findByRole('button', { name: courtName }));
+    expect(screen.queryByRole('button', { name: 'Корт №4' })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
     expect(readQuote).toHaveBeenCalledOnce();
 
     await user.click(singlesButton);
     expect(singlesButton).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.queryByRole('button', { name: courtName })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Корт №1' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '12:00–13:00' })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: singles.courtName }));
+    await user.click(screen.getByRole('button', { name: 'Корт №4' }));
     await user.click(screen.getByRole('button', { name: '16:00–17:00' }));
     expect(screen.getByRole('button', { name: '16:00–17:00' })).toHaveAttribute(
       'aria-pressed',
@@ -257,10 +257,61 @@ describe('game creation schedule', () => {
 
     await user.click(doublesButton);
     expect(screen.getByRole('button', { name: 'Продолжить' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: courtName })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Корт №1' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );
+  });
+
+  it('keeps past dates disabled and lets the user browse the next month and select an overnight slot', async () => {
+    const overnight = {
+      ...slot,
+      startsAt: '2026-12-01T23:00:00+03:00',
+      endsAt: '2026-12-02T01:00:00+03:00',
+    };
+    const listSlots = vi.fn<GameCreateScheduleSource['listSlots']>().mockResolvedValue([overnight]);
+    const readQuote = vi.fn<GameCreateScheduleSource['readQuote']>().mockResolvedValue({
+      ...quoteTimes(),
+      wholeCourtMinor: null,
+      shareMinor: null,
+      residency: { status: 'UNAVAILABLE' },
+    });
+    render(
+      <GameCreateScheduleWizard
+        stations={stations}
+        source={{ listSlots, readQuote }}
+        today="2026-11-26"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    const calendar = within(screen.getByRole('group', { name: 'Дата игры' }));
+    const past = calendar.getByRole('button', { name: /25 нояб/ });
+    expect(past).toBeDisabled();
+    await user.click(past);
+    expect(listSlots).toHaveBeenCalledOnce();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Месяц' }), '2026-12');
+    expect(calendar.queryByRole('button', { name: /26 нояб/ })).not.toBeInTheDocument();
+    expect(listSlots).toHaveBeenCalledOnce();
+    await user.click(calendar.getByRole('button', { name: /1 дек/ }));
+    expect(listSlots).toHaveBeenLastCalledWith(expect.objectContaining({ day: '2026-12-01' }));
+
+    const time = await screen.findByRole('button', {
+      name: '23:00–01:00, окончание на следующий день',
+    });
+    await user.click(time);
+    const courtButton = screen.getByRole('button', { name: 'Корт №1' });
+    expect(within(courtButton).getByText('Панорамик')).toBeVisible();
+    await user.click(courtButton);
+    const continueButton = screen.getByRole('button', { name: 'Показать 1 вариант' });
+    expect(continueButton).toHaveTextContent('1 дек · 23:00–01:00 (след. день) · Корт №1');
+    await user.click(screen.getByRole('button', { name: 'Сбросить выбранный корт' }));
+    expect(time).toHaveAttribute('aria-pressed', 'true');
+    expect(courtButton).toHaveAttribute('aria-pressed', 'false');
+    await user.click(courtButton);
+    await user.click(screen.getByRole('button', { name: 'Сбросить выбранное время' }));
+    expect(time).toHaveAttribute('aria-pressed', 'false');
+    expect(courtButton).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('reports missing residency evidence independently from the base price', async () => {
@@ -276,9 +327,9 @@ describe('game creation schedule', () => {
     });
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
-    await user.click(await screen.findByRole('button', { name: courtName }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
-    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
     expect(await screen.findByText('ЛК1 не подтвердил условия')).toBeTruthy();
     expect(screen.queryByText('Не применяется')).toBeNull();
   });
@@ -303,11 +354,11 @@ describe('game creation schedule', () => {
     renderWizard({ listSlots, readQuote });
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
-    await user.click(await screen.findByRole('button', { name: courtName }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
-    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
     await user.click(screen.getByRole('button', { name: 'Изменить' }));
-    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
 
     expect(readQuote).toHaveBeenCalledOnce();
     expect(readQuote.mock.calls[0]?.[0].signal.aborted).toBe(false);
@@ -357,10 +408,10 @@ describe('game creation schedule', () => {
       );
       const user = userEvent.setup();
       await user.click(screen.getByRole('button', { name: 'Селигерская' }));
-      await user.click(await screen.findByRole('button', { name: courtName }));
+      await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
       await user.click(screen.getByRole('radio', { name: /^Весь корт/ }));
-      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
       expect(await screen.findByText('Оплата выбранного слота сейчас недоступна.')).toBeTruthy();
       if (mismatch === 'price-unavailable') {
         expect(screen.getByText('ЛК1 не вернул цену корта для выбранного времени.')).toBeTruthy();
@@ -386,9 +437,9 @@ describe('game creation schedule', () => {
     renderWizard({ listSlots: () => Promise.resolve([slot]), readQuote });
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
-    await user.click(await screen.findByRole('button', { name: courtName }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
-    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await user.click(screen.getByRole('button', { name: 'Показать 1 вариант' }));
     await user.click(await screen.findByRole('button', { name: 'Обновить цену' }));
     expect(await screen.findByText('Разовое участие')).toBeTruthy();
     expect(readQuote.mock.calls.map(([input]) => input.slotId)).toEqual([slot.id, slot.id]);
