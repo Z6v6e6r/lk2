@@ -1151,7 +1151,7 @@ export function GameCreateScheduleWizard({
                 />
                 <span>
                   <strong>Приватная игра</strong>
-                  <small>Вступление по ссылке или через сообщество, где опубликована игра.</small>
+                  <small>Присоединение к игре по ссылке</small>
                 </span>
               </label>
             </div>
