@@ -29,7 +29,10 @@ import {
   validateTimewebCommercialRuntime,
 } from './timeweb-commercial-runtime-contract.js';
 import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
-import { validateTimewebFcmEnvironment } from './verify-timeweb-deployment-contract.js';
+import {
+  validateTimewebCupSupportHandoffEnvironment,
+  validateTimewebFcmEnvironment,
+} from './verify-timeweb-deployment-contract.js';
 import {
   assertExactTimewebFrozenSource,
   requireExactTimewebFrozenSourceAuthority,
@@ -328,6 +331,7 @@ function validateRuntimeEnvironments(environments, { host, tenantKey }, schedule
   }
 
   const { api, worker, realtime, migrator } = environments;
+  validateTimewebCupSupportHandoffEnvironment(api);
   if (
     scheduleLegacy &&
     (api.LOCATION_MEDIA_ENABLED !== 'true' ||
@@ -442,6 +446,12 @@ function readSourceSet(sourceDir, expectedUid, host, tenantKey) {
   const directoryAfter = statSync(sourceDir);
   if (directoryBefore.dev !== directoryAfter.dev || directoryBefore.ino !== directoryAfter.ino)
     fail('source_directory_race');
+  if (
+    [CUP_SUPPORT_HANDOFF_FLAG, CUP_SUPPORT_HANDOFF_SECRET].some((key) =>
+      Object.hasOwn(environments.api, key),
+    )
+  )
+    fail('cup_support_handoff_dedicated_provision_required');
   validateTimewebRuntimeEnvironments(environments, { host, tenantKey });
   const files = Object.fromEntries(
     Object.entries(FILE_BY_SERVICE).map(([service, name]) => [
@@ -1010,6 +1020,134 @@ export function validateTimewebScheduleSecretDelta(
     JSON.stringify(newAfter) !== JSON.stringify(candidate)
   )
     fail('schedule_secret_drift');
+}
+
+const CUP_SUPPORT_HANDOFF_FLAG = 'CUP_SUPPORT_STAGING_HANDOFF_ENABLED';
+const CUP_SUPPORT_HANDOFF_SECRET = 'CUP_SUPPORT_STAGING_HANDOFF_SECRET';
+export const CUP_SUPPORT_LEGACY_RUNTIME_SET_ID =
+  '43d4bd64e5ae2e1d2c64b30b7df48a5fdc67ec34-45551585649-1';
+
+function appendCupSupportHandoff(apiBytes, encoded) {
+  const previous = parseTimewebScheduleRuntimeEnvironment(apiBytes);
+  if (
+    Object.hasOwn(previous, CUP_SUPPORT_HANDOFF_FLAG) ||
+    Object.hasOwn(previous, CUP_SUPPORT_HANDOFF_SECRET)
+  )
+    fail('cup_support_handoff_secret_delta');
+  validateTimewebCupSupportHandoffEnvironment({
+    ...previous,
+    [CUP_SUPPORT_HANDOFF_FLAG]: 'true',
+    [CUP_SUPPORT_HANDOFF_SECRET]: encoded,
+  });
+  return Buffer.concat([
+    apiBytes,
+    Buffer.from(`${CUP_SUPPORT_HANDOFF_FLAG}=true\n${CUP_SUPPORT_HANDOFF_SECRET}=${encoded}\n`),
+  ]);
+}
+
+export function provisionTimewebCupSupportHandoffRuntimeSecrets({
+  releaseId,
+  expectedSourceSha,
+  expectedSourceTree,
+  configurationRoot = dirname(TARGET_DIR),
+}) {
+  assertReleaseId(releaseId);
+  assertAbsoluteNormalizedPath(configurationRoot, 'cup_support_configuration_root');
+  const expectedUid = process.getuid?.() ?? 0;
+  const expectedGid = process.getgid?.() ?? 0;
+  if (expectedUid === 0 && configurationRoot !== dirname(TARGET_DIR))
+    fail('cup_support_configuration_root');
+  const targetParent = join(configurationRoot, 'timeweb-beta-candidates', releaseId);
+  return provisionRuntimeSet(
+    {
+      sourceDir: join(configurationRoot, 'timeweb-beta'),
+      targetDir: join(targetParent, 'timeweb-beta'),
+      backupRoot: join(targetParent, 'backups'),
+      host: 'lk2.padlhub.su',
+      tenantKey: 'local-padel',
+      releaseId,
+      expectedSourceSha,
+      expectedSourceTree,
+      expectedUid,
+      expectedGid,
+    },
+    (sourceDir, uid, host, tenantKey, gid) => {
+      assertDirectory(targetParent, uid);
+      if (realpathSync(targetParent) !== targetParent) fail('cup_support_configuration_root');
+      const key = decodeUtf8(
+        readRegularFile(
+          join(targetParent, 'cup-support-handoff.key'),
+          uid,
+          0o600,
+          'cup_support_handoff_key_file',
+        ),
+      );
+      if (!/^[A-Za-z0-9_-]{43}\n$/u.test(key)) fail('cup_support_handoff_key_file');
+      const describe = () => describeTimewebRuntimeSecretSet(sourceDir, uid, gid);
+      const previous = describe();
+      const files = {};
+      const environments = {};
+      for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
+        const original = readRegularFile(join(sourceDir, name), uid, 0o600, 'swap_file_security');
+        if (createHash('sha256').update(original).digest('hex') !== previous.files[name])
+          fail('cup_support_handoff_secret_drift');
+        files[name] =
+          service === 'api' ? appendCupSupportHandoff(original, key.slice(0, -1)) : original;
+        environments[service] = parseTimewebScheduleRuntimeEnvironment(files[name]);
+      }
+      validateRuntimeEnvironments(
+        environments,
+        { host, tenantKey },
+        previous.releaseId === CUP_SUPPORT_LEGACY_RUNTIME_SET_ID,
+      );
+      if (JSON.stringify(describe()) !== JSON.stringify(previous))
+        fail('cup_support_handoff_secret_drift');
+      const keys = Object.fromEntries(
+        Object.entries(environments).map(([service, env]) => [service, Object.keys(env).sort()]),
+      );
+      return { files, keys };
+    },
+  );
+}
+
+export function validateTimewebCupSupportHandoffSecretDelta(
+  previousDir,
+  candidateDir,
+  expectedUid = 0,
+  expectedGid = 0,
+) {
+  const dirs = [previousDir, candidateDir];
+  const describe = () =>
+    dirs.map((dir) => describeTimewebRuntimeSecretSet(dir, expectedUid, expectedGid));
+  const [previous, candidate] = describe();
+  if (previous.releaseId === candidate.releaseId) fail('cup_support_handoff_secret_identity');
+  const [previousEnv, candidateEnv] = [{}, {}];
+  for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
+    const [oldBytes, newBytes] = dirs.map((dir) =>
+      readRegularFile(join(dir, name), expectedUid, 0o600, 'swap_file_security'),
+    );
+    previousEnv[service] = parseTimewebScheduleRuntimeEnvironment(oldBytes);
+    candidateEnv[service] = parseTimewebScheduleRuntimeEnvironment(newBytes);
+    if (service !== 'api') {
+      if (!oldBytes.equals(newBytes)) fail('cup_support_handoff_secret_delta');
+      continue;
+    }
+    if (
+      !newBytes.equals(
+        appendCupSupportHandoff(oldBytes, candidateEnv.api[CUP_SUPPORT_HANDOFF_SECRET]),
+      )
+    )
+      fail('cup_support_handoff_secret_delta');
+  }
+  const identity = { host: 'lk2.padlhub.su', tenantKey: 'local-padel' };
+  for (const environment of [previousEnv, candidateEnv])
+    validateRuntimeEnvironments(
+      environment,
+      identity,
+      previous.releaseId === CUP_SUPPORT_LEGACY_RUNTIME_SET_ID,
+    );
+  if (JSON.stringify(describe()) !== JSON.stringify([previous, candidate]))
+    fail('cup_support_handoff_secret_drift');
 }
 
 // This validator prepares dormant material only. It never rotates a key, enables a

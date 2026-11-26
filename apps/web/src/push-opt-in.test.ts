@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  cupSupportHandoffDestination,
+  readCupSupportHandoffDraft,
+} from './cup-support-staging-handoff.js';
+import {
   readPushAttribution,
   rememberAuthContinuation,
   safeCommunityReturnTo,
@@ -82,6 +86,36 @@ describe('auth continuation', () => {
     const storage = memoryStorage();
     rememberAuthContinuation('https://lk2.padlhub.su/notifications', storage, 1_000);
     expect(takeAuthContinuation(storage, 2_000)).toBeNull();
+  });
+
+  it('restores a validated CUP draft after sign-in without accepting other origins or query fields', () => {
+    const storage = memoryStorage();
+    const draft = '67a945d8-a42b-4ae2-935a-327c371ec2e4';
+    const path = `/?cupSupportIntake=${draft}`;
+    const exact = new URL(path, 'https://lk2.padlhub.su');
+    expect(readCupSupportHandoffDraft(exact)).toBe(draft);
+    rememberAuthContinuation(exact.href, storage, 1_000);
+    expect(takeAuthContinuation(storage, 2_000)).toBe(path);
+    expect(takeAuthContinuation(storage, 2_000)).toBeNull();
+
+    for (const invalid of [
+      new URL(path, 'https://other.example'),
+      new URL(`${path}&returnTo=https://other.example`, exact),
+      new URL(`${path}&cupSupportIntake=${draft}`, exact),
+      new URL(`/?cupSupportIntake=${draft.toUpperCase()}`, exact),
+    ]) {
+      expect(readCupSupportHandoffDraft(invalid)).toBeUndefined();
+      rememberAuthContinuation(invalid.href, storage, 1_000);
+      expect(takeAuthContinuation(storage, 2_000)).toBeNull();
+    }
+  });
+
+  it('puts the proof only in the fragment of the fixed CUP HTTPS destination', () => {
+    expect(cupSupportHandoffDestination('a.b.c')).toBe(
+      'https://stg-support.tsup.space/intake#cupProof=a.b.c',
+    );
+    expect(() => cupSupportHandoffDestination('https://other.example')).toThrow();
+    expect(() => cupSupportHandoffDestination('a.b.c&redirect=https://other.example')).toThrow();
   });
 
   it('expires stale continuations and ignores malformed records', () => {

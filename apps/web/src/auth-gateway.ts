@@ -524,6 +524,7 @@ export interface AuthGateway {
   }) => Promise<void>;
   readonly getVivaAccessToken: () => string | undefined;
   readonly refreshVivaAccessToken: () => Promise<string>;
+  readonly issueCupSupportStagingHandoff?: (draft: string) => Promise<{ readonly proof: string }>;
   readonly issueRealtimeTicket: () => Promise<RealtimeTicket>;
   readonly getRoutingPlan: (forceRefresh?: boolean) => Promise<ClientRoutingPlan>;
   readonly getSelfProfile: () => Promise<UserProfile>;
@@ -2467,6 +2468,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     async refreshVivaAccessToken() {
       return applyVivaAccess();
+    },
+
+    async issueCupSupportStagingHandoff(draft) {
+      if (options.tenantKey !== 'local-padel' || !currentUserId || !client.getAccessToken()) {
+        throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+      const generation = principalGeneration;
+      const result = await client.issueCupSupportStagingHandoff(draft);
+      if (generation !== principalGeneration) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      return result;
     },
 
     issueRealtimeTicket() {

@@ -1123,6 +1123,60 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/cup-support-staging-handoff:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: issueCupSupportStagingHandoff
+      summary: Issue a proof for an existing CUP Support STAGING draft
+      description: |
+        Available only while enabled for the local-padel client tenant on lk2.padlhub.su.
+        The proof maps this exact client tenant to padlhub on CUP Support STAGING.
+        Requires an active client session. Issues a draft-bound STAGING proof valid for up to
+        90 seconds. Does not create a ticket or return a PadlHub session credential. Repeated
+        calls can issue new proofs. CUP validates and consumes the proof when finalizing the draft.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [draft]
+              properties:
+                draft:
+                  type: string
+                  format: uuid
+                  pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      responses:
+        '200':
+          description: Short-lived CUP Support STAGING proof.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [proof]
+                properties:
+                  proof:
+                    type: string
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/auth/password/login:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey

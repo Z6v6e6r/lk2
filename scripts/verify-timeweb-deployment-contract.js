@@ -1029,6 +1029,27 @@ export function validateTimewebFcmEnvironment(api, worker) {
   return apiEnabled;
 }
 
+export function validateTimewebCupSupportHandoffEnvironment(api) {
+  const enabled = api.CUP_SUPPORT_STAGING_HANDOFF_ENABLED ?? 'false';
+  const encoded = api.CUP_SUPPORT_STAGING_HANDOFF_SECRET;
+  if (enabled === 'false' && encoded === undefined) return false;
+  if (enabled !== 'true' || typeof encoded !== 'string' || encoded.length !== 43)
+    reject('env_cup_support_handoff_configuration');
+
+  const key = Buffer.from(encoded, 'base64url');
+  if (key.length !== 32 || key.toString('base64url') !== encoded)
+    reject('env_cup_support_handoff_configuration');
+  if (
+    Object.entries(api).some(
+      ([name, value]) =>
+        name !== 'CUP_SUPPORT_STAGING_HANDOFF_SECRET' &&
+        (value === encoded || key.equals(Buffer.from(value, 'utf8'))),
+    )
+  )
+    reject('env_cup_support_handoff_key_reused');
+  return true;
+}
+
 export function validateRuntimeEnvironments(environments, contract, target) {
   for (const serviceName of ENV_SERVICES) {
     const values = object(environments[serviceName], 'env_service');
@@ -1057,6 +1078,7 @@ export function validateRuntimeEnvironments(environments, contract, target) {
       if (values[key] !== 'OFF') reject(`env_${serviceName}_mode`);
   }
   validateTimewebFcmEnvironment(environments.api, environments.worker);
+  validateTimewebCupSupportHandoffEnvironment(environments.api);
   validateTimewebCommercialRuntime(environments.api, (reason) => reject(`env_${reason}`));
   for (const name of ['api', 'worker', 'realtime']) {
     if (environments[name].APP_ENV !== 'staging') reject(`env_${name}_app_env`);

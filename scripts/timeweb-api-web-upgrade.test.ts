@@ -2,6 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import type * as NativeFs from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
+import { validateCupSupportProviderEvidence } from './timeweb-api-web-upgrade.js';
+import {
+  NOW as NATIVE_CAPTURE_AT,
+  SOURCE as NATIVE_SOURCE,
+  NATIVE_ADAPTER_SHA256,
+  encodedNativeFixture,
+  reviewedNativeBatchFixture,
+} from './timeweb-native-observability-fixtures.js';
 
 function scenario(body: string) {
   const result = spawnSync(
@@ -19,6 +27,23 @@ function scenario(body: string) {
   );
   expect(result.status, result.stderr).toBe(0);
 }
+
+it('allows fresh reviewed native CUP monitoring without asserting a provider exact-200 policy', () => {
+  const fixture = reviewedNativeBatchFixture();
+  const evidence = {
+    schema: 'PHUB_TIMEWEB_CUP_SUPPORT_NATIVE_MONITOR_EVIDENCE_V1',
+    captureBundle: encodedNativeFixture(fixture.f.bundle).toString(),
+    captureReview: encodedNativeFixture(fixture.review).toString(),
+    captureTrace: encodedNativeFixture(fixture.trace).toString(),
+  };
+  const validate = (input: unknown, observedAt = NATIVE_CAPTURE_AT, source = NATIVE_SOURCE) =>
+    validateCupSupportProviderEvidence(input, {}, observedAt, source, NATIVE_ADAPTER_SHA256);
+  expect(() => validate(evidence)).not.toThrow();
+  expect(() => validate(evidence, '2026-11-14T12:00:55.001Z')).toThrow('capture_age');
+  expect(() => validate(evidence, NATIVE_CAPTURE_AT, 'f'.repeat(40))).toThrow();
+  expect(() => validate({ ...evidence, captureTrace: '{}' })).toThrow();
+  expect(() => validate({ ...evidence, alertTestStatus: 'PASSED' })).toThrow();
+});
 const operation = {
   schema: 'PHUB_TIMEWEB_API_WEB_OPERATION_V1',
   target: 'lk2.padlhub.su',
@@ -288,13 +313,14 @@ describe('explicit API/Web upgrade boundary', () => {
       const previousSha='0a4d640965e921e6d06eeb22de6cc6dcae07f0b1';
       const applicationSha='55f38b09d828f81e905f4c3b8709e29dbbba8bac';
       const applicationTree=git('rev-parse',applicationSha+'^{tree}');
+      const scheduleController='e82467c16';
       const identity={previousSha,applicationSha,applicationTree};
       const definition='deploy/timeweb/runtime-environment.contract.json';
       const regular={status:'M',oldMode:'100644',newMode:'100644',oldType:'blob',newType:'blob'};
       const entries=[...parseRuntimeDelta(git('diff','--raw','--no-abbrev','--no-renames','-z',previousSha,applicationSha))
         .filter(row=>row.path!==definition)
         .map(row=>({...row,oldType:row.oldMode==='000000'?null:'blob',newType:'blob'})),
-        {...regular,path:definition,oldOid:git('rev-parse',previousSha+':'+definition),newOid:git('hash-object',definition)}];
+        {...regular,path:definition,oldOid:git('rev-parse',previousSha+':'+definition),newOid:git('rev-parse',scheduleController+':'+definition)}];
       const tail=[definition,'scripts/timeweb-api-web-upgrade.js','scripts/timeweb-api-web-upgrade.test.ts',
         'scripts/timeweb-api-web-upgrade.d.ts','scripts/timeweb-commercial-runtime-contract.js',
         'scripts/provision-timeweb-beta-runtime-secrets.js','scripts/provision-timeweb-beta-runtime-secrets.d.ts',
@@ -445,6 +471,32 @@ describe('durable exclusion and terminal recovery', () => {
       await assert.rejects(()=>reconcileApiWebPhase({status:'SUCCESS'},ops));assert.equal(unlocked,false);
     }`);
   });
+});
+
+it('admits only the pinned CUP Support application and exact API environment contract', () => {
+  scenario(`
+    const {execFileSync}=await import('node:child_process');
+    const {validateCupSupportRuntimeBridge}=await import('./scripts/timeweb-api-web-upgrade.js');
+    const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim();
+    const previousSha='b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61';
+    const applicationSha='62da4b92e65a02488f893b7ebc53d8b86faca9c9';
+    const identity={previousSha,applicationSha,applicationTree:git('rev-parse',applicationSha+'^{tree}')};
+    const entries=parseRuntimeDelta(git('diff','--raw','--no-abbrev','--no-renames','-z',previousSha,applicationSha))
+      .map(v=>({...v,oldType:v.oldMode==='000000'?null:'blob',newType:'blob'}));
+    const path='deploy/timeweb/runtime-environment.contract.json';
+    const contract={path,status:'M',oldMode:'100644',newMode:'100644',oldType:'blob',newType:'blob',
+      oldOid:git('rev-parse',applicationSha+':'+path),newOid:git('hash-object',path)};
+    const helper={...contract,path:'scripts/timeweb-api-web-upgrade.js'};
+    validateCupSupportRuntimeBridge(identity,entries,[contract,helper]);
+    const openapi=entries.find(entry=>entry.path==='contracts/openapi/user/v1/openapi.yaml');
+    assert.throws(()=>validateCupSupportRuntimeBridge({...identity,previousSha:applicationSha},entries,[contract]),/cup_support_runtime_bridge/);
+    assert.throws(()=>validateCupSupportRuntimeBridge(identity,entries.map(e=>e===openapi?{...openapi,newMode:'120000'}:e),[contract]),/cup_support_runtime_bridge/);
+    assert.throws(()=>validateCupSupportRuntimeBridge(identity,entries,[{...contract,newOid:contract.oldOid}]),/cup_support_runtime_bridge/);
+    assert.throws(()=>validateCupSupportRuntimeBridge(identity,entries,[contract,contract]),/cup_support_runtime_bridge/);
+    for(const path of ['apps/api/src/main.ts','apps/worker/src/main.ts','deploy/timeweb/compose.beta.yaml','packages/database/migrations/0123.sql']){
+      assert.throws(()=>validateCupSupportRuntimeBridge(identity,entries,[contract,{...helper,path}]),/cup_support_runtime_bridge/);
+    }
+  `);
 });
 
 it('recovers writer hardlink custody after child loss and rejects unrelated twins', () => {
@@ -629,6 +681,124 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
       );
     },
   );
+  it('restores the prior CUP Support environment before restoring the API', () => {
+    scenario(
+      `const failure='activate:web';${fixture}ops.secretMode='cup-support-staging';await assert.rejects(()=>runApiWebTransition(ops));assert.deepEqual(calls.slice(calls.indexOf('journal:ROLLBACK_INTENT')),['journal:ROLLBACK_INTENT','restoreSecrets','restore:web','restore:api','removeBaseline','restored','journal:ROLLED_BACK']);assert.equal(secrets,'previous');`,
+    );
+  });
+
+  it('binds CUP Support operation, backup proof, and secret receipt to the running predecessor', () => {
+    scenario(`
+      const {createHash}=await import('node:crypto');
+      const {cupSupportAlertScopeSha256,validateCupSupportDirectObservation}=await import('./scripts/timeweb-api-web-upgrade.js');
+      const {CUP_SUPPORT_LEGACY_RUNTIME_SET_ID}=await import('./scripts/provision-timeweb-beta-runtime-secrets.js');
+      const sha=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+      const previousId='b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61-45606826648-1';
+      const op=${JSON.stringify(operation)};
+      Object.assign(op,{schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_OPERATION_V1',profile:'production',controllerSha:op.candidateSha,
+        backupOperationSha256:'b'.repeat(64),ownerRestoreDecisionSha256:'c'.repeat(64),expiresAt:'2030-01-01T00:00:00.000Z',
+        expectedCurrentSecretSetReleaseId:CUP_SUPPORT_LEGACY_RUNTIME_SET_ID,
+        candidateSecretHashes:Object.fromEntries(['api.env','worker.env','realtime.env','migrator.env','.release-identity.json'].map(key=>[key,'a'.repeat(64)])),
+        confirmation:'DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_B81A2EC93F38_B81A2EC93F38_CUP_SUPPORT_STAGING'});
+      op.expectedApi.releaseId=previousId;
+      op.expectedWeb.releaseId=previousId;
+      const messageSha256='a6414dc35154adabb89b9d04b3e446f1ec85746bbaf0f0a74677f7eeb2546446';
+      op.ownerAlertDecision={schema:'PHUB_TIMEWEB_CUP_SUPPORT_ALERT_DECISION_V1',
+        authority:'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',messageSha256,
+        reference:'codex-user-message-sha256:'+messageSha256,receivedAt:'2029-12-31T23:00:00.000Z',
+        scopeSha256:cupSupportAlertScopeSha256(op)};
+      validateApiWebOperation(op);
+      for(const modify of [
+        v=>v.profile='beta',
+        v=>delete v.backupOperationSha256,
+        v=>delete v.ownerRestoreDecisionSha256,
+        v=>v.expectedApi.releaseId='3'.repeat(40)+'-1-1',
+        v=>v.expectedCurrentSecretSetReleaseId=previousId,
+        v=>v.candidateSecretHashes.extra='e'.repeat(64),
+        v=>v.expectedWorker=v.expectedApi,
+        v=>v.ownerProviderMonitoringWaiver={},
+        v=>delete v.ownerAlertDecision,
+        v=>v.ownerAlertDecision.messageSha256='e'.repeat(64),
+        v=>v.ownerAlertDecision.scopeSha256='f'.repeat(64),
+      ]){
+        const changed=structuredClone(op);modify(changed);
+        assert.throws(()=>validateApiWebOperation(changed));
+      }
+      const candidateId=op.candidateSha+'-456-1';
+      const plan={schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_PLAN_V1',controllerSha:op.controllerSha,secretSetReleaseId:previousId,
+        backup:{operationSha256:op.backupOperationSha256},
+        ownerAlertDecisionSha256:sha(op.ownerAlertDecision),operationSha256:sha(op),createdAt:'2029-12-31T23:15:00.000Z',
+        previous:{api:op.expectedApi,web:op.expectedWeb},candidate:{api:op.expectedApi,web:op.expectedWeb},candidateSecrets:{releaseId:candidateId},unchangedServiceImages:{}};
+      const bytes=Buffer.from(JSON.stringify(plan));
+      const hash=createHash('sha256').update(bytes).digest('hex');
+      const receipt={schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_RECEIPT_V1',status:'SECRET_SWAP_INTENT',planSha256:hash,observedAt:new Date().toISOString(),
+        alertTestStatus:'REPLACED_BY_OWNER_APPROVED_DIRECT_HTTP',ownerAlertDecisionSha256:sha(op.ownerAlertDecision)};
+      validateUpgradeReceipt(receipt,hash,op,plan,bytes);
+      assert.throws(()=>validateUpgradeReceipt({...receipt,schema:'PHUB_TIMEWEB_API_WEB_APP_ONLY_RECEIPT_V1'},hash,op,plan,bytes));
+      assert(buildApiWebInstalledDescriptor({PHUB_RELEASE_ID:previousId},plan,candidateId,'/test/receipt').toString()
+        .includes('PHUB_RUNTIME_SECRET_SET_RELEASE_ID='+candidateId));
+      const success={...receipt,status:'SUCCESS',installedBaselineSha256:'a'.repeat(64),observationSha256:'b'.repeat(64),providerReadbackSha256:'c'.repeat(64)};
+      validateUpgradeReceipt(success,hash,op,plan,bytes);
+      assert.throws(()=>validateUpgradeReceipt({...success,alertReadbackSha256:'d'.repeat(64)},hash,op,plan,bytes));
+      assert.throws(()=>validateUpgradeReceipt({...success,providerReadbackSha256:undefined},hash,op,plan,bytes));
+      const startedAt='2029-12-31T23:20:00.000Z';
+      const completedAt='2029-12-31T23:35:00.000Z';
+      const sample=()=>({privateMs:Array(61).fill(40),publicMs:Array(61).fill(75),
+        timestamps:Array.from({length:61},(_,i)=>new Date(Date.parse(startedAt)+15000*i).toISOString()),p95PrivateMs:40,p95PublicMs:75});
+      const observation={schema:'PHUB_TIMEWEB_CUP_SUPPORT_DIRECT_OBSERVATION_V1',operationSha256:sha(op),planSha256:hash,
+        candidateSha:op.candidateSha,startedAt,completedAt,elapsedSeconds:900,samples:{api:sample(),web:sample()},serverErrors:0};
+      validateCupSupportDirectObservation(observation,op,plan,hash);
+      for (const change of [v=>v.serverErrors=1,v=>v.samples.api.publicMs.pop(),v=>v.completedAt=startedAt,v=>v.candidateSha='e'.repeat(40)]) {
+        const altered=structuredClone(observation);change(altered);
+        assert.throws(()=>validateCupSupportDirectObservation(altered,op,plan,hash));
+      }
+
+      const providerMessageSha256='bdf1377968e3309bdf378c6c9962b5ece2360bddfed3808f7a82fec6d7567ff5';
+      const waivedOp={...op,ownerProviderDecision:{...op.ownerAlertDecision,
+        schema:'PHUB_TIMEWEB_CUP_SUPPORT_PROVIDER_DECISION_V1',
+        messageSha256:providerMessageSha256,reference:'codex-user-message-sha256:'+providerMessageSha256,
+        receivedAt:'2029-12-31T23:05:00.000Z'}};
+      validateApiWebOperation(waivedOp);
+      for (const change of [
+        v=>v.ownerProviderDecision=null,
+        v=>v.ownerProviderDecision=v.ownerAlertDecision,
+        v=>v.ownerProviderDecision.receivedAt=v.expiresAt,
+        v=>v.ownerProviderDecision.scopeSha256='f'.repeat(64),
+        v=>v.publicationRunId='457',
+        v=>delete v.ownerAlertDecision,
+      ]) {
+        const altered=structuredClone(waivedOp);change(altered);
+        assert.throws(()=>validateApiWebOperation(altered));
+      }
+      const genericOp=${JSON.stringify(operation)};
+      assert.throws(()=>validateApiWebOperation({...genericOp,ownerProviderDecision:waivedOp.ownerProviderDecision}));
+
+      const waivedPlan={...plan,operationSha256:sha(waivedOp),ownerProviderDecisionSha256:sha(waivedOp.ownerProviderDecision)};
+      const waivedBytes=Buffer.from(JSON.stringify(waivedPlan));
+      const waivedHash=sha(waivedPlan);
+      const waivedObservation={...observation,operationSha256:sha(waivedOp),planSha256:waivedHash};
+      validateCupSupportDirectObservation(waivedObservation,waivedOp,waivedPlan,waivedHash);
+      const waivedSuccess={...receipt,status:'SUCCESS',planSha256:waivedHash,observedAt:completedAt,
+        installedBaselineSha256:'a'.repeat(64),observationSha256:sha(waivedObservation),
+        providerMonitoringStatus:'NOT_CHECKED_OWNER_APPROVED_DIRECT_HTTP',
+        ownerProviderDecisionSha256:waivedPlan.ownerProviderDecisionSha256};
+      validateUpgradeReceipt(waivedSuccess,waivedHash,waivedOp,waivedPlan,waivedBytes);
+      validateUpgradeReceipt({...waivedSuccess,status:'RECONCILED',reconciledStatus:'SUCCESS'},waivedHash,waivedOp,waivedPlan,waivedBytes);
+      assert.throws(()=>validateUpgradeReceipt(waivedSuccess,waivedHash,op,waivedPlan,waivedBytes));
+      const earlyPlan={...waivedPlan,createdAt:'2029-12-31T23:04:59.000Z'};
+      assert.throws(()=>validateUpgradeReceipt({...waivedSuccess,planSha256:sha(earlyPlan)},sha(earlyPlan),waivedOp,earlyPlan,Buffer.from(JSON.stringify(earlyPlan))));
+      for (const change of [
+        v=>v.providerMonitoringStatus='PASS',
+        v=>delete v.providerMonitoringStatus,
+        v=>v.ownerProviderDecisionSha256='a'.repeat(64),
+        v=>v.providerReadbackSha256='a'.repeat(64),
+        v=>delete v.observationSha256,
+      ]) {
+        const altered=structuredClone(waivedSuccess);change(altered);
+        assert.throws(()=>validateUpgradeReceipt(altered,waivedHash,waivedOp,waivedPlan,waivedBytes));
+      }
+    `);
+  });
   it('binds the schedule schemas to production and records the candidate set', () => {
     scenario(`
       const op=${JSON.stringify(operation)};
