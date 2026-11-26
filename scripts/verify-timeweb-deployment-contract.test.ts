@@ -825,6 +825,67 @@ describe('Timeweb deployment contract', () => {
     );
   });
 
+  const cupSupportHandoffKey = Buffer.alloc(32, 133).toString('base64url');
+
+  it('allows the CUP Support handoff settings only in the API runtime', () => {
+    const input = syntheticEnvironments();
+    expect(() => validateRuntimeEnvironments(input, runtime, target)).not.toThrow();
+    const settings = {
+      CUP_SUPPORT_STAGING_HANDOFF_ENABLED: 'true',
+      CUP_SUPPORT_STAGING_HANDOFF_SECRET: cupSupportHandoffKey,
+    };
+    Object.assign(input.api!, settings);
+    expect(() => validateRuntimeEnvironments(input, runtime, target)).not.toThrow();
+    for (const service of ['worker', 'realtime', 'migrator']) {
+      for (const [key, value] of Object.entries(settings)) {
+        expect(() =>
+          validateRuntimeEnvironments(
+            { ...input, [service]: { ...input[service], [key]: value } },
+            runtime,
+            target,
+          ),
+        ).toThrow(`env_${service}_unknown`);
+      }
+    }
+  });
+
+  it.each([
+    { CUP_SUPPORT_STAGING_HANDOFF_ENABLED: 'true' },
+    { CUP_SUPPORT_STAGING_HANDOFF_ENABLED: 'yes' },
+    { CUP_SUPPORT_STAGING_HANDOFF_SECRET: cupSupportHandoffKey },
+    {
+      CUP_SUPPORT_STAGING_HANDOFF_ENABLED: 'false',
+      CUP_SUPPORT_STAGING_HANDOFF_SECRET: cupSupportHandoffKey,
+    },
+    {
+      CUP_SUPPORT_STAGING_HANDOFF_ENABLED: 'true',
+      CUP_SUPPORT_STAGING_HANDOFF_SECRET: cupSupportHandoffKey + '=',
+    },
+    {
+      CUP_SUPPORT_STAGING_HANDOFF_ENABLED: 'true',
+      CUP_SUPPORT_STAGING_HANDOFF_SECRET: Buffer.alloc(31, 133).toString('base64url'),
+    },
+  ])('rejects invalid CUP Support handoff provisioning %#', (settings) => {
+    const input = syntheticEnvironments();
+    Object.assign(input.api!, settings);
+    expect(() => validateRuntimeEnvironments(input, runtime, target)).toThrow(
+      'env_cup_support_handoff_configuration',
+    );
+  });
+
+  it('rejects reusing active key bytes for the CUP Support handoff', () => {
+    const input = syntheticEnvironments();
+    const access = 'x'.repeat(32);
+    Object.assign(input.api!, {
+      JWT_ACCESS_SECRET: access,
+      CUP_SUPPORT_STAGING_HANDOFF_ENABLED: 'true',
+      CUP_SUPPORT_STAGING_HANDOFF_SECRET: Buffer.from(access).toString('base64url'),
+    });
+    expect(() => validateRuntimeEnvironments(input, runtime, target)).toThrow(
+      'env_cup_support_handoff_key_reused',
+    );
+  });
+
   function fcmEnvironments() {
     const input = syntheticEnvironments();
     for (const service of ['api', 'worker']) {

@@ -19,6 +19,7 @@ export function validateScheduleRuntimeBridge(
   entries: Array<Record<string, string | null>>,
   tail: Array<Record<string, string | null>>,
 ): void;
+export const validateCupSupportRuntimeBridge: typeof validateScheduleRuntimeBridge;
 export function attestCanonicalBaseline(baseline: unknown): {
   path: string;
   bytes: Buffer;

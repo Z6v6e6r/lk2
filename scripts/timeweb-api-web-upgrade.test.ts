@@ -447,6 +447,32 @@ describe('durable exclusion and terminal recovery', () => {
   });
 });
 
+it('admits only the pinned CUP Support application and exact API environment contract', () => {
+  scenario(`
+    const {execFileSync}=await import('node:child_process');
+    const {validateCupSupportRuntimeBridge}=await import('./scripts/timeweb-api-web-upgrade.js');
+    const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim();
+    const previousSha='b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61';
+    const applicationSha='62da4b92e65a02488f893b7ebc53d8b86faca9c9';
+    const identity={previousSha,applicationSha,applicationTree:git('rev-parse',applicationSha+'^{tree}')};
+    const entries=parseRuntimeDelta(git('diff','--raw','--no-abbrev','--no-renames','-z',previousSha,applicationSha))
+      .map(v=>({...v,oldType:v.oldMode==='000000'?null:'blob',newType:'blob'}));
+    const path='deploy/timeweb/runtime-environment.contract.json';
+    const contract={path,status:'M',oldMode:'100644',newMode:'100644',oldType:'blob',newType:'blob',
+      oldOid:git('rev-parse',applicationSha+':'+path),newOid:git('hash-object',path)};
+    const helper={...contract,path:'scripts/timeweb-api-web-upgrade.js'};
+    validateCupSupportRuntimeBridge(identity,entries,[contract,helper]);
+    const openapi=entries.find(entry=>entry.path==='contracts/openapi/user/v1/openapi.yaml');
+    assert.throws(()=>validateCupSupportRuntimeBridge({...identity,previousSha:applicationSha},entries,[contract]),/cup_support_runtime_bridge/);
+    assert.throws(()=>validateCupSupportRuntimeBridge(identity,entries.map(e=>e===openapi?{...openapi,newMode:'120000'}:e),[contract]),/cup_support_runtime_bridge/);
+    assert.throws(()=>validateCupSupportRuntimeBridge(identity,entries,[{...contract,newOid:contract.oldOid}]),/cup_support_runtime_bridge/);
+    assert.throws(()=>validateCupSupportRuntimeBridge(identity,entries,[contract,contract]),/cup_support_runtime_bridge/);
+    for(const path of ['apps/api/src/main.ts','apps/worker/src/main.ts','deploy/timeweb/compose.beta.yaml','packages/database/migrations/0123.sql']){
+      assert.throws(()=>validateCupSupportRuntimeBridge(identity,entries,[contract,{...helper,path}]),/cup_support_runtime_bridge/);
+    }
+  `);
+});
+
 it('recovers writer hardlink custody after child loss and rejects unrelated twins', () => {
   scenario(`const {mkdtempSync,openSync,writeFileSync,closeSync,linkSync,readFileSync,lstatSync,existsSync,rmSync,chmodSync}=await import('node:fs');const {spawnSync}=await import('node:child_process');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
     const root=mkdtempSync(join(tmpdir(),'phub-hardlink-crash-'));const path=join(root,'active');const twin=path+'.incoming-'+'a'.repeat(24);
@@ -629,6 +655,52 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
       );
     },
   );
+  it('restores the prior CUP Support environment before restoring the API', () => {
+    scenario(
+      `const failure='activate:web';${fixture}ops.secretMode='cup-support-staging';await assert.rejects(()=>runApiWebTransition(ops));assert.deepEqual(calls.slice(calls.indexOf('journal:ROLLBACK_INTENT')),['journal:ROLLBACK_INTENT','restoreSecrets','restore:web','restore:api','removeBaseline','restored','journal:ROLLED_BACK']);assert.equal(secrets,'previous');`,
+    );
+  });
+
+  it('binds CUP Support operation, backup proof, and secret receipt to the running predecessor', () => {
+    scenario(`
+      const {createHash}=await import('node:crypto');
+      const {CUP_SUPPORT_LEGACY_RUNTIME_SET_ID}=await import('./scripts/provision-timeweb-beta-runtime-secrets.js');
+      const previousId='b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61-45606826648-1';
+      const op=${JSON.stringify(operation)};
+      Object.assign(op,{schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_OPERATION_V1',profile:'production',controllerSha:op.candidateSha,
+        backupOperationSha256:'b'.repeat(64),ownerRestoreDecisionSha256:'c'.repeat(64),expiresAt:'2030-01-01T00:00:00.000Z',
+        expectedCurrentSecretSetReleaseId:CUP_SUPPORT_LEGACY_RUNTIME_SET_ID,
+        candidateSecretHashes:Object.fromEntries(['api.env','worker.env','realtime.env','migrator.env','.release-identity.json'].map(key=>[key,'a'.repeat(64)])),
+        confirmation:'DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_B81A2EC93F38_B81A2EC93F38_CUP_SUPPORT_STAGING'});
+      op.expectedApi.releaseId=previousId;
+      op.expectedWeb.releaseId=previousId;
+      validateApiWebOperation(op);
+      for(const modify of [
+        v=>v.profile='beta',
+        v=>delete v.backupOperationSha256,
+        v=>delete v.ownerRestoreDecisionSha256,
+        v=>v.expectedApi.releaseId='3'.repeat(40)+'-1-1',
+        v=>v.expectedCurrentSecretSetReleaseId=previousId,
+        v=>v.candidateSecretHashes.extra='e'.repeat(64),
+        v=>v.expectedWorker=v.expectedApi,
+        v=>v.ownerProviderMonitoringWaiver={},
+      ]){
+        const changed=structuredClone(op);modify(changed);
+        assert.throws(()=>validateApiWebOperation(changed));
+      }
+      const candidateId=op.candidateSha+'-456-1';
+      const plan={schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_PLAN_V1',controllerSha:op.controllerSha,secretSetReleaseId:previousId,
+        backup:{operationSha256:op.backupOperationSha256},
+        previous:{api:op.expectedApi,web:op.expectedWeb},candidate:{api:op.expectedApi,web:op.expectedWeb},candidateSecrets:{releaseId:candidateId},unchangedServiceImages:{}};
+      const bytes=Buffer.from(JSON.stringify(plan));
+      const hash=createHash('sha256').update(bytes).digest('hex');
+      const receipt={schema:'PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_RECEIPT_V1',status:'SECRET_SWAP_INTENT',planSha256:hash,observedAt:new Date().toISOString()};
+      validateUpgradeReceipt(receipt,hash,op,plan,bytes);
+      assert.throws(()=>validateUpgradeReceipt({...receipt,schema:'PHUB_TIMEWEB_API_WEB_APP_ONLY_RECEIPT_V1'},hash,op,plan,bytes));
+      assert(buildApiWebInstalledDescriptor({PHUB_RELEASE_ID:previousId},plan,candidateId,'/test/receipt').toString()
+        .includes('PHUB_RUNTIME_SECRET_SET_RELEASE_ID='+candidateId));
+    `);
+  });
   it('binds the schedule schemas to production and records the candidate set', () => {
     scenario(`
       const op=${JSON.stringify(operation)};

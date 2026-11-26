@@ -1450,6 +1450,53 @@ and existing FCM credential source. Pull/smoke/up remain Web-only; `up -d --no-d
 rendered backend labels/images. Retain the exact prior Web digest for rollback. Product QA includes
 Home/profile/subscriptions/support; health checks do not prove those authenticated journeys.
 
+## CUP Support STAGING from the current LK2 session
+
+Use `PHUB_TIMEWEB_API_WEB_CUP_SUPPORT_OPERATION_V1` with the existing `--critical-api-web`
+entry point. Start with the production API/Web request and add `backupOperationSha256`,
+`ownerRestoreDecisionSha256`, `expectedCurrentSecretSetReleaseId`, `candidateSecretHashes`
+(all five secret-set files), and `expiresAt` in canonical UTC. Append
+`_CUP_SUPPORT_STAGING` to the confirmation. The published
+candidate and enrolled controller must be the same exact commit. Keep application commit
+`62da4b92e65a02488f893b7ebc53d8b86faca9c9` in its history through a merge that preserves the
+commit. The profile admits the pinned OpenAPI and runtime environment contract blobs and the
+reviewed controller files. It accepts only the installed API/Web predecessor
+`b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61-45606826648-1` and its known runtime secret set.
+
+The owner waived physical database restoration for this specific release. Use the existing
+backup controller with `--prepare-app-only <candidateSha> <publicationRunId> cup-support-integrity-only`.
+Place the exact UTF-8 owner message bytes in the root-owned `0600` file
+`operator/cup-support-restore-waiver.txt` without adding a newline. This input is required for
+plan and dump creation. The resulting request must name the pinned predecessor and uses
+`PHUB_TIMEWEB_CUP_SUPPORT_FRESH_BACKUP_V1`. Run the existing backup plan, execute, and terminal
+readback before the rollout adds its plan and receipt to the same backup directory. The helper
+takes a fresh candidate-bound database dump, validates SHA-256 and the PG16
+table of contents, and records `freshDumpRestored: false`. Use the hash of the resulting sealed
+`owner-restore-decision.json` for `ownerRestoreDecisionSha256`. The fresh dump preflight requires
+11.75 GiB free. Keep the previous API and Web images and the predecessor's sealed release evidence,
+including the Station archive, available for recovery. The normal monitoring, alert,
+observation, and unchanged-component evidence remain required.
+
+Provision one independent 32-byte key for the LK2 API and the CUP Support STAGING verifier.
+Use the same canonical unpadded base64url key on both sides, keeping the Support form behind
+its existing access gate. Place the key with one trailing LF in the root-only `0600` file
+`/etc/phub/timeweb-beta-candidates/<releaseId>/cup-support-handoff.key` under a root-owned
+`0700` directory. From the enrolled clean source, call
+`provisionTimewebCupSupportHandoffRuntimeSecrets({ releaseId, expectedSourceSha, expectedSourceTree })`.
+The helper stages the original files byte for byte and appends only the handoff flag and key to
+`api.env`. It changes no active settings. Seal the staged file hashes from
+`describeTimewebRuntimeSecretSet` before execution. Key material stays out of command arguments,
+receipts and logs. Remove the temporary key input after verifying custody of both staged copies.
+
+The executor journals the configuration swap, starts API then Web, and checks the complete running
+API environment against the exact image defaults and configuration. Worker, Realtime, migrator,
+database and ingress remain outside the transition. Use the normal `--critical-api-web-recover`
+for an interrupted or failed rollout and `--critical-api-web-reconcile` for terminal evidence.
+Recovery restores the original environment before restoring the old API image. A proof already
+issued may remain valid for up to 90 seconds, so keep or return the Support ingress to its closed
+state during recovery. Confirm the test account can create exactly one request through its current
+LK2 session and see the request in Staff before opening the Support form.
+
 ## Dormant JOIN Web/env transition after notification 0105
 
 This is a bounded profile of the existing `--critical-api-web` executor. Source preparation

@@ -18,7 +18,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadConfig, loadRealtimeConfig, loadWorkerConfig } from '../packages/config/src/index.js';
 import {
+  CUP_SUPPORT_LEGACY_RUNTIME_SET_ID,
   describeTimewebRuntimeSecretSet,
+  validateTimewebCupSupportHandoffSecretDelta,
   validateTimewebFcmSecretDelta,
   validateTimewebDormantJoinSecretDelta,
   validateTimewebScheduleRunningEnvironment,
@@ -224,6 +226,22 @@ describe('Timeweb beta runtime secret provisioner', () => {
       schema: 'PHUB_TIMEWEB_SECRET_SET_V1',
       releaseId,
     });
+  });
+
+  it('requires dedicated provisioning for the signed support configuration', () => {
+    const value = fixture();
+    const api = join(value.sourceDir, 'api.env');
+    const original = readFileSync(api, 'utf8');
+    const syntheticKey = Buffer.alloc(32, 133).toString('base64url');
+    writeFileSync(
+      api,
+      original +
+        `CUP_SUPPORT_STAGING_HANDOFF_ENABLED=true\nCUP_SUPPORT_STAGING_HANDOFF_SECRET=${syntheticKey}\n`,
+    );
+    expect(() => provisionTimewebBetaRuntimeSecrets({ ...options(value), dryRun: true })).toThrow(
+      'cup_support_handoff_dedicated_provision_required',
+    );
+    expect(existsSync(value.targetParent)).toBe(false);
   });
 
   it('prepares the documented isolated candidate with an explicit private sibling backupRoot', () => {
@@ -883,6 +901,112 @@ describe('commercial JOIN API environment contract', () => {
     expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
       'unknown_key',
     );
+  });
+});
+
+describe('CUP Support STAGING runtime set', () => {
+  it('admits only the appended API pair and restores the exact prior set', () => {
+    const f = fixture();
+    const priorRelease = CUP_SUPPORT_LEGACY_RUNTIME_SET_ID;
+    const candidateRelease = releaseId.replace(/-\d+-1$/, '-987654321-1');
+    const candidateDir = join(
+      f.targetParent,
+      'timeweb-beta-candidates',
+      candidateRelease,
+      'timeweb-beta',
+    );
+    const backupDir = join(f.backupRoot, `${priorRelease}--replaced-by--${candidateRelease}`);
+    mkdirSync(candidateDir, { mode: 0o700, recursive: true });
+    mkdirSync(f.targetDir, { mode: 0o700 });
+    mkdirSync(f.backupRoot, { mode: 0o700 });
+    const apiPath = join(candidateDir, 'api.env');
+    const workerPath = join(candidateDir, 'worker.env');
+    const settings = safeRuntimeEnvironments();
+    Object.assign(settings.api!, {
+      LOCATION_MEDIA_ENABLED: 'true',
+      GAMES_TEST_COURTS_ENABLED: 'true',
+    });
+    delete settings.api!.AUTH_PHONE_SUBJECT_LINK_ENABLED;
+    Object.assign(settings.worker!, {
+      GAMES_COMMANDS_ENABLED: 'true',
+      GAMES_TEST_COURTS_ENABLED: 'true',
+      LK1_RESULT_BRIDGE_ENABLED: 'true',
+      LK1_RESULT_BRIDGE_URL: 'https://padlhub.su/',
+      LK1_RESULT_BRIDGE_TOKEN: Buffer.alloc(32, 17).toString('hex'),
+      GAME_RESULT_AUTO_CONFIRM_ENABLED: 'true',
+      GAME_RESULT_AUTO_CONFIRM_WINDOW_HOURS: '12',
+      GAME_RESULT_AUTO_CONFIRM_POLL_INTERVAL_MS: '300000',
+      GAME_RESULT_AUTO_CONFIRM_BATCH_SIZE: '20',
+    });
+    for (const [path, id] of [
+      [f.targetDir, priorRelease],
+      [candidateDir, candidateRelease],
+    ] as const) {
+      for (const [service, values] of Object.entries(settings))
+        writeFileSync(
+          join(path, service + '.env'),
+          '# Retained setting\n' + encodeEnvironment(values),
+          {
+            mode: 0o600,
+          },
+        );
+      writeFileSync(
+        join(path, '.release-identity.json'),
+        JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId: id }) + '\n',
+        { mode: 0o600 },
+      );
+    }
+    const previousApi = readFileSync(apiPath, 'utf8');
+    const key = Buffer.alloc(32, 133).toString('base64url');
+    const approvedSuffix = `CUP_SUPPORT_STAGING_HANDOFF_ENABLED=true\nCUP_SUPPORT_STAGING_HANDOFF_SECRET=${key}\n`;
+    writeFileSync(apiPath, previousApi + approvedSuffix);
+    const validate = () =>
+      validateTimewebCupSupportHandoffSecretDelta(f.targetDir, candidateDir, uid, gid);
+    expect(validate).not.toThrow();
+    const identityPath = join(f.targetDir, '.release-identity.json');
+    const previousIdentity = readFileSync(identityPath, 'utf8');
+    writeFileSync(identityPath, previousIdentity.replace(priorRelease, releaseId));
+    expect(validate).toThrow('unknown_key');
+    writeFileSync(identityPath, previousIdentity);
+
+    const worker = readFileSync(workerPath);
+    writeFileSync(workerPath, Buffer.concat([worker, Buffer.from('# unrelated change\n')]));
+    expect(validate).toThrow('cup_support_handoff_secret_delta');
+    writeFileSync(workerPath, worker);
+    writeFileSync(apiPath, '# changed predecessor\n' + previousApi + approvedSuffix);
+    expect(validate).toThrow('cup_support_handoff_secret_delta');
+    writeFileSync(apiPath, previousApi + approvedSuffix);
+
+    const previous = describeTimewebRuntimeSecretSet(f.targetDir, uid, gid);
+    const candidate = describeTimewebRuntimeSecretSet(candidateDir, uid, gid);
+    const swap = {
+      targetDir: f.targetDir,
+      candidateDir,
+      backupDir,
+      previous,
+      candidate,
+      planSha256: '2'.repeat(64),
+      expectedUid: uid,
+      expectedGid: gid,
+    };
+    writeFileSync(
+      join(f.targetParent, '.timeweb-beta.provision.lock'),
+      JSON.stringify({
+        schema: 'PHUB_TIMEWEB_RUNTIME_SWAP_LOCK_V1',
+        planSha256: swap.planSha256,
+        targetDir: f.targetDir,
+        candidateDir,
+        backupDir,
+        previous,
+        candidate,
+      }) + '\n',
+      { mode: 0o600 },
+    );
+    transitionPreparedTimewebRuntimeSecrets({ ...swap, direction: 'install' });
+    expect(describeTimewebRuntimeSecretSet(f.targetDir, uid, gid)).toEqual(candidate);
+    transitionPreparedTimewebRuntimeSecrets({ ...swap, direction: 'restore' });
+    expect(describeTimewebRuntimeSecretSet(f.targetDir, uid, gid)).toEqual(previous);
+    expect(readFileSync(join(f.targetDir, 'api.env'), 'utf8')).toBe(previousApi);
   });
 });
 
