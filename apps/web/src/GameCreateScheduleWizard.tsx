@@ -4,7 +4,7 @@ import type {
   GameCreateScheduleSlot,
   WholeCourtCheckoutOffer,
 } from '@phub/api-sdk';
-import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
+import { EventCalendarIcon, EventLevelIcon } from './ActivityCardIcons.js';
 import backIconUrl from './assets/game-schedule-back.svg';
 import stationChevronUrl from './assets/game-schedule-station-chevron.svg';
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
@@ -20,11 +20,6 @@ const DATE_LABEL = new Intl.DateTimeFormat('ru-RU', {
   weekday: 'short',
   day: 'numeric',
   month: 'short',
-});
-const DATE_FULL = new Intl.DateTimeFormat('ru-RU', {
-  timeZone: TIME_ZONE,
-  day: 'numeric',
-  month: 'long',
 });
 const DATE_CHIP = new Intl.DateTimeFormat('ru-RU', {
   timeZone: TIME_ZONE,
@@ -53,6 +48,10 @@ const RUBLES = new Intl.NumberFormat('ru-RU', {
   minimumFractionDigits: 0,
 });
 
+type ScheduleDisplayQuote = GameCreateScheduleQuote & {
+  readonly subscriptionMinor?: number;
+};
+
 export interface GameCreateScheduleSource {
   readonly listSlots: (input: {
     readonly stationId: string;
@@ -66,7 +65,7 @@ export interface GameCreateScheduleSource {
     readonly durationMinutes: 60 | 90 | 120;
     readonly slotId: string;
     readonly signal: AbortSignal;
-  }) => Promise<GameCreateScheduleQuote>;
+  }) => Promise<ScheduleDisplayQuote>;
 }
 
 export interface GameCreateScheduleCheckout {
@@ -168,7 +167,7 @@ export function GameCreateScheduleWizard({
   const [quoteVersion, setQuoteVersion] = useState(0);
   const [expiredQuoteKey, setExpiredQuoteKey] = useState<string>();
   const [slotsRead, setSlotsRead] = useState<ReadResult<readonly GameCreateScheduleSlot[]>>();
-  const [quoteRead, setQuoteRead] = useState<ReadResult<GameCreateScheduleQuote>>();
+  const [quoteRead, setQuoteRead] = useState<ReadResult<ScheduleDisplayQuote>>();
   const scheduleOpen = wizard.step !== 0;
   const station = stations.find((item) => item.id === stationId);
   const scheduleKey = JSON.stringify([stationId, day, duration, retry]);
@@ -185,10 +184,8 @@ export function GameCreateScheduleWizard({
       .filter((slot) => !preferredStart || slot.startsAt === preferredStart)
       .map(({ courtKey, courtName }) => [courtKey, courtName]),
   );
-  const selected =
-    format === 'doubles'
-      ? slots.find((slot) => slot.id === slotId && slot.courtKey === court)
-      : undefined;
+  const chosenSlot = slots.find((slot) => slot.id === slotId && slot.courtKey === court);
+  const selected = format === 'doubles' ? chosenSlot : undefined;
   const quoteKey = JSON.stringify([scheduleKey, selected?.id, quoteVersion]);
   const quote = quoteRead?.key === quoteKey ? quoteRead : undefined;
   const quoteExpired = expiredQuoteKey === quoteKey;
@@ -337,6 +334,7 @@ export function GameCreateScheduleWizard({
     : [];
   const share = currentQuote?.shareMinor ?? null;
   const whole = currentQuote?.wholeCourtMinor ?? null;
+  const subscription = currentQuote?.subscriptionMinor;
   const residency = currentQuote?.residency;
   const residencePrice =
     residency?.status === 'APPLIED'
@@ -354,7 +352,12 @@ export function GameCreateScheduleWizard({
           : 'ЛК1 не подтвердил условия';
   const total = payer === 'self' ? whole : share;
   const canPay = Boolean(payer === 'self' && visibility === 'PRIVATE' && checkoutOffer);
-  const selectedDate = selected && DATE_FULL.format(new Date(selected.startsAt));
+  const summaryDate = days.find((item) => item.day === day)?.parts;
+  const summarySlot = chosenSlot ?? times.get(preferredStart);
+  const summaryCourt = courts.get(court);
+  const summaryCourtName = summaryCourt?.match(/^корт\s*№\s*\d+/iu)?.[0] ?? summaryCourt;
+  const levelRange = `${LEVELS[levels[0]]} – ${LEVELS[levels[1]]}`;
+  const payerLabel = payer === 'self' ? 'Я оплачиваю весь корт' : 'Каждый платит за себя';
   const chosenTime = selected && slotTime(selected);
   const quoteError = quote && 'error' in quote ? quote.error : undefined;
   const slotChanged = quoteError === 'GAME_CREATE_SCHEDULE_SLOT_CHANGED';
@@ -408,26 +411,86 @@ export function GameCreateScheduleWizard({
 
   return (
     <main className="games-page game-schedule-wizard">
-      <header className="game-schedule-header">
-        {wizard.step === 0 ? (
-          <a className="game-schedule-back" href={gamesHref} aria-label="Назад">
-            <img src={backIconUrl} width={32} height={32} alt="" />
-          </a>
-        ) : (
-          <button
-            className="game-schedule-back"
-            type="button"
-            aria-label={wizard.step === 2 ? 'Закрыть' : 'Назад'}
-            disabled={checkout?.busy}
-            onClick={wizard.back}
-          >
-            <img src={backIconUrl} width={32} height={32} alt="" />
-          </button>
-        )}
-        <h1 ref={heading} tabIndex={-1}>
-          {headerTitle}
-        </h1>
-      </header>
+      <div className="game-schedule-top">
+        <header className="game-schedule-header">
+          {wizard.step === 0 ? (
+            <a className="game-schedule-back" href={gamesHref} aria-label="Назад">
+              <img src={backIconUrl} width={32} height={32} alt="" />
+            </a>
+          ) : (
+            <button
+              className="game-schedule-back"
+              type="button"
+              aria-label={wizard.step === 2 ? 'Закрыть' : 'Назад'}
+              disabled={checkout?.busy}
+              onClick={wizard.back}
+            >
+              <img src={backIconUrl} width={32} height={32} alt="" />
+            </button>
+          )}
+          <h1 ref={heading} tabIndex={-1}>
+            {headerTitle}
+          </h1>
+        </header>
+        {scheduleOpen && station ? (
+          <section className="game-schedule-card game-schedule-summary" aria-label="Выбранная игра">
+            <strong title={summaryCourt}>
+              {station.title}
+              {summaryCourtName ? ` · ${summaryCourtName}` : ''}
+            </strong>
+            <button
+              type="button"
+              aria-label={wizard.step === 1 ? 'Изменить клуб' : undefined}
+              disabled={checkout?.busy}
+              onClick={wizard.back}
+            >
+              Изменить
+            </button>
+            <span>
+              <EventCalendarIcon />
+              <span>
+                {summaryDate
+                  ? `${Number(summaryDate.day)} ${summaryDate.month?.slice(0, 3)} · `
+                  : ''}
+                {summarySlot ? slotTime(summarySlot) : `${duration} мин`}
+              </span>
+            </span>
+            <span>
+              {selected ? (
+                <>
+                  <EventLevelIcon />
+                  {levelRange}
+                </>
+              ) : null}
+            </span>
+            <span>
+              <TrainingPeopleIcon />
+              {selected ? payerLabel : GAME_FORMATS.find((option) => option.id === format)?.label}
+            </span>
+            <span>
+              {selected ? (
+                <>
+                  <svg
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.2"
+                    aria-hidden="true"
+                  >
+                    <rect x="2.5" y="7" width="11" height="7" rx="1.5" />
+                    {visibility === 'PUBLIC' ? (
+                      <path d="M5 7V5a3 3 0 0 1 5.5-1.7" />
+                    ) : (
+                      <path d="M5 7V5a3 3 0 0 1 6 0v2M8 9.5v2" />
+                    )}
+                  </svg>
+                  {visibility === 'PUBLIC' ? 'Открытая' : 'Приватная'}
+                </>
+              ) : null}
+            </span>
+          </section>
+        ) : null}
+      </div>
 
       {wizard.step === 0 ? (
         <section className="game-schedule-stack" aria-label="Клубы">
@@ -549,21 +612,6 @@ export function GameCreateScheduleWizard({
 
       {wizard.step === 1 ? (
         <section className="game-schedule-stack" aria-label="Параметры игры">
-          <button
-            className="game-schedule-card game-schedule-link game-schedule-station-card"
-            type="button"
-            onClick={wizard.back}
-          >
-            <span>
-              <strong>{station?.title}</strong>
-              {station?.address ? (
-                <small className="game-schedule-station-meta">
-                  {stationAddressWithoutCity(station)}
-                </small>
-              ) : null}
-            </span>
-            <img src={stationChevronUrl} width={16} height={28} alt="" />
-          </button>
           <h2 className="game-schedule-settings-heading">Формат игры</h2>
           <div className="game-schedule-formats" role="group" aria-label="Формат игры">
             {GAME_FORMATS.map((option) => (
@@ -712,6 +760,11 @@ export function GameCreateScheduleWizard({
                   </span>
                   <span className="game-schedule-payer-price">
                     <strong>{price(share)}</strong>
+                    {subscription !== undefined ? (
+                      <small>
+                        Подписка <span>{price(subscription)}</span>
+                      </small>
+                    ) : null}
                     {residency?.status === 'APPLIED' ? (
                       <small>
                         Резидентство <span>{residencePrice}</span>
@@ -774,52 +827,10 @@ export function GameCreateScheduleWizard({
 
       {wizard.step === 2 && station && selected ? (
         <section className="game-schedule-stack" aria-label="Создание игры">
-          <section className="game-schedule-card game-schedule-summary" aria-label="Выбранная игра">
-            <div>
-              <strong>{station.title}</strong>
-              <button type="button" onClick={wizard.back}>
-                Изменить
-              </button>
-            </div>
-            <span>
-              <EventLocationIcon /> {selected.courtName}
-              <span className="game-schedule-summary-dot" aria-hidden="true">
-                •
-              </span>
-              <EventCalendarIcon />
-              {selectedDate}
-            </span>
-            <span>
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <circle cx="10" cy="10" r="6.9" />
-                <path d="M10 6.6V10L12.55 11.55" />
-              </svg>
-              {chosenTime}
-              <span className="game-schedule-summary-dot" aria-hidden="true">
-                •
-              </span>
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <circle cx="10" cy="11" r="5.9" />
-                <path d="M10 8.3V11L12.05 12.35M7.1 3.75H12.9M6 5.2L4.9 4.1M14 5.2L15.1 4.1" />
-              </svg>
-              {duration} мин
-            </span>
-            <span>
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <circle cx="7.1" cy="7.15" r="2.2" />
-                <path d="M3.9 14.6C4.1 12.6 5.43 11.25 7.1 11.25S10.1 12.6 10.3 14.6" />
-                <circle cx="13.55" cy="8.05" r="1.8" />
-                <path d="M11.55 14.25C11.78 12.82 12.78 11.85 13.97 11.85S16.16 12.82 16.39 14.25" />
-              </svg>
-              {payer === 'self' ? 'Я оплачиваю весь корт' : 'Каждый платит за себя'}
-            </span>
-          </section>
           <section className="game-schedule-card game-schedule-stack">
             <div className="game-schedule-section-row">
               <h2>Уровень игроков</h2>
-              <small>
-                {LEVELS[levels[0]]} - {LEVELS[levels[1]]}
-              </small>
+              <small>{levelRange}</small>
             </div>
             <div className="game-schedule-level-panel">
               <div className="game-schedule-levels" role="group" aria-label="Уровень игры">
@@ -951,9 +962,11 @@ export function GameCreateScheduleWizard({
                   <span className="game-schedule-radio is-empty" aria-hidden="true" />
                   <span>
                     <strong>Запись с подпиской</strong>
-                    <small>Условия уточняются в ЛК1</small>
+                    {subscription === undefined ? <small>Условия уточняются в ЛК1</small> : null}
                   </span>
-                  <strong>Нужен расчёт</strong>
+                  <strong>
+                    {subscription === undefined ? 'Нужен расчёт' : price(subscription)}
+                  </strong>
                 </div>
                 <details>
                   <summary>Применимость льгот</summary>

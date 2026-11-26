@@ -45,6 +45,19 @@ body:has(.game-schedule-wizard) {
   border-bottom: 0.5px solid #ededed;
 }
 
+html:has(.game-schedule-summary) {
+  scroll-padding-top: 200px;
+}
+
+.game-schedule-top:has(.game-schedule-summary) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin-bottom: 4px;
+  padding-bottom: 8px;
+  background: var(--schedule-ground);
+}
+
 .game-schedule-header::after {
   flex: 0 0 32px;
   content: '';
@@ -659,12 +672,17 @@ body:has(.game-schedule-wizard) {
   color: var(--schedule-muted);
 }
 
-.game-schedule-summary {
+.game-schedule-wizard .game-schedule-summary {
   display: grid;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  min-height: 100px;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  font-size: 12px;
+  letter-spacing: 0.01em;
 }
 
-.game-schedule-summary > div,
 .game-schedule-section-row {
   display: flex;
   justify-content: space-between;
@@ -681,16 +699,16 @@ body:has(.game-schedule-wizard) {
 .game-schedule-summary > span {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  min-width: 0;
+  gap: 4px;
 }
 
 .game-schedule-summary svg {
-  width: 16px;
-  height: 16px;
+  flex: none;
+  width: 12px;
+  height: 12px;
 }
 
-.game-schedule-summary svg:not([fill]),
 .game-schedule-visibility em svg:not([fill]) {
   fill: none;
   stroke: currentColor;
@@ -699,18 +717,26 @@ body:has(.game-schedule-wizard) {
   stroke-linejoin: round;
 }
 
-.game-schedule-summary-dot {
-  color: #b5afb9;
+.game-schedule-summary > :nth-child(even) {
+  justify-self: end;
+  text-align: end;
 }
 
 .game-schedule-summary strong {
-  font: 800 15px/1.2 var(--schedule-display);
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .game-schedule-wizard .game-schedule-summary button {
   padding: 0;
   color: var(--schedule-accent);
-  font: italic 800 14px/1.4 var(--schedule-display);
+  font: inherit;
+  font-weight: 600;
+}
+
+.game-schedule-wizard .game-schedule-summary button:disabled {
+  cursor: not-allowed;
 }
 
 .game-schedule-level-panel {

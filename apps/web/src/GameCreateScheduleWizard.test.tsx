@@ -142,6 +142,7 @@ describe('game creation schedule', () => {
       const payers = within(screen.getByRole('group', { name: 'Кто оплачивает корт?' }));
       expect(payers.getByRole('radio', { name: /Каждый платит за себя/ })).toBeChecked();
       expect(await payers.findByText(/700\s*₽/)).toBeTruthy();
+      expect(payers.queryByText('Подписка', { exact: false })).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('С Резидентством')).toBeTruthy();
       expect(screen.getByText(/700\s*₽/)).toBeTruthy();
@@ -164,6 +165,49 @@ describe('game creation schedule', () => {
       expect(readQuote).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('updates the header summary and displays quoted zero-price subscription', async () => {
+    renderWizard({
+      listSlots: () => Promise.resolve([slot]),
+      readQuote: () =>
+        Promise.resolve({
+          ...quoteTimes(),
+          wholeCourtMinor: 240000,
+          shareMinor: 60000,
+          subscriptionMinor: 0,
+          residency: { status: 'APPLIED', amountMinor: 48000 },
+        }),
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    const summary = () => within(screen.getByRole('region', { name: 'Выбранная игра' }));
+    expect(summary().getByText('Селигерская')).toBeVisible();
+    expect(summary().getByText('6 дек · 60 мин')).toBeVisible();
+    await user.click(await screen.findByRole('button', { name: '12:00–13:00' }));
+    expect(summary().getByText('6 дек · 12:00–13:00')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: courtName }));
+    expect(summary().getByText('Селигерская · Корт №1')).toBeVisible();
+    const payers = within(screen.getByRole('group', { name: 'Кто оплачивает корт?' }));
+    expect(await payers.findByText('Подписка')).toHaveTextContent(/Подписка\s+0\s*₽/);
+    expect(payers.getByText('Резидентство')).toHaveTextContent(/Резидентство\s+480\s*₽/);
+    await user.click(payers.getByRole('radio', { name: /Я оплачиваю весь корт/ }));
+    expect(summary().getByText('Я оплачиваю весь корт')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expect(summary().getByText('Приватная')).toBeVisible();
+    expect(summary().getByText('D – C')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'B' }));
+    await user.click(screen.getByRole('radio', { name: /Открытая игра/ }));
+    expect(summary().getByText('D – B')).toBeVisible();
+    expect(summary().getByText('Открытая')).toBeVisible();
+    await user.click(summary().getByRole('button', { name: 'Изменить' }));
+    expect(await screen.findByRole('heading', { name: 'Дата и время' })).toBeVisible();
+    expect(summary().getByText('Селигерская · Корт №1')).toBeVisible();
+    expect(summary().getByText('D – B')).toBeVisible();
+    expect(summary().getByText('Открытая')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Сбросить выбранное время' }));
+    expect(summary().getByText('6 дек · 60 мин')).toBeVisible();
+  });
 
   it('filters courts and times by format and only quotes doubles', async () => {
     const singles = {
