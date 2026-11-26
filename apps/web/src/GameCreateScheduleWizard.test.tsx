@@ -292,8 +292,11 @@ describe('game creation schedule', () => {
     expect(dates.at(-1)).toHaveAccessibleName(/10 дек/);
     expect(calendar.queryByRole('button', { name: /25 нояб/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Месяц' })).not.toBeInTheDocument();
+    const november = within(calendar.getByRole('group', { name: 'ноябрь' }));
+    expect(november.getByRole('button', { name: /30 нояб/ })).toBeVisible();
+    const december = within(calendar.getByRole('group', { name: 'декабрь' }));
     expect(listSlots).toHaveBeenCalledOnce();
-    await user.click(calendar.getByRole('button', { name: /1 дек/ }));
+    await user.click(december.getByRole('button', { name: /1 дек/ }));
     expect(listSlots).toHaveBeenLastCalledWith(expect.objectContaining({ day: '2026-12-01' }));
 
     const time = await screen.findByRole('button', {

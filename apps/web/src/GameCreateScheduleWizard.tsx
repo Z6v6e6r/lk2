@@ -227,9 +227,16 @@ export function GameCreateScheduleWizard({
     return {
       day: DAY.format(date),
       label: DATE_LABEL.format(date),
+      month: MONTH_LABEL.format(date),
       parts,
     };
   });
+  const months = new Map<string, typeof days>();
+  for (const item of days) {
+    const monthDays = months.get(item.month);
+    if (monthDays) monthDays.push(item);
+    else months.set(item.month, [item]);
+  }
 
   useEffect(() => {
     if (!stationId || wizard.step === 0 || currentSchedule) return;
@@ -674,28 +681,37 @@ export function GameCreateScheduleWizard({
             </div>
           </div>
           <div className="game-schedule-settings-section">
-            <div className="game-schedule-settings-row">
-              <h2 className="game-schedule-settings-heading">Дата игры</h2>
-              <span className="game-schedule-month">
-                {MONTH_LABEL.format(new Date(day + 'T12:00:00+03:00'))}
-              </span>
-            </div>
+            <h2 className="game-schedule-settings-heading">Дата игры</h2>
             <div className="game-schedule-days" role="group" aria-label="Дата игры">
-              {days.map((item) => (
-                <button
-                  key={item.day}
-                  type="button"
-                  aria-label={item.label}
-                  aria-pressed={day === item.day}
-                  onClick={() => {
-                    if (day === item.day) return;
-                    setDay(item.day);
-                    resetSlot();
-                  }}
+              {[...months].map(([month, monthDays]) => (
+                <div
+                  key={month}
+                  className="game-schedule-month-group"
+                  role="group"
+                  aria-label={month}
                 >
-                  <small>{item.parts.weekday?.replace('.', '')}</small>
-                  <strong>{item.parts.day}</strong>
-                </button>
+                  <span className="game-schedule-month" aria-hidden="true">
+                    {month}
+                  </span>
+                  <div className="game-schedule-month-dates">
+                    {monthDays.map((item) => (
+                      <button
+                        key={item.day}
+                        type="button"
+                        aria-label={item.label}
+                        aria-pressed={day === item.day}
+                        onClick={() => {
+                          if (day === item.day) return;
+                          setDay(item.day);
+                          resetSlot();
+                        }}
+                      >
+                        <small>{item.parts.weekday?.replace('.', '')}</small>
+                        <strong>{item.parts.day}</strong>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
