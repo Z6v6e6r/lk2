@@ -159,6 +159,7 @@ export function validateTimewebFcmEnvironment(
   api: Record<string, string>,
   worker: Record<string, string>,
 ): boolean;
+export function validateTimewebCupSupportHandoffEnvironment(api: Record<string, string>): boolean;
 export function validateRunbook(contents: string, target: TimewebTargetContract): void;
 export function validateRuntimeEnvironmentRoot(
   target: TimewebTargetContract,

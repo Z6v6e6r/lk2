@@ -83,6 +83,14 @@ export function validateTimewebScheduleSecretDelta(
   expectedUid?: number,
   expectedGid?: number,
 ): void;
+export function validateTimewebCupSupportHandoffSecretDelta(
+  previousDir: string,
+  candidateDir: string,
+  expectedUid?: number,
+  expectedGid?: number,
+): void;
+export const provisionTimewebCupSupportHandoffRuntimeSecrets: typeof provisionTimewebScheduleRuntimeSecrets;
+export const CUP_SUPPORT_LEGACY_RUNTIME_SET_ID: string;
 export function transitionPreparedTimewebRuntimeSecrets(options: {
   direction: 'install' | 'restore';
   targetDir: string;

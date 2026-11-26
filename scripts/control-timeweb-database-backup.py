@@ -187,10 +187,19 @@ APP_ONLY_RESTORE_RECEIPT = 'PHUB_TIMEWEB_APP_ONLY_RESTORE_CHECKPOINT_RECEIPT_V1'
 APP_ONLY_POLICY = 'APP_ONLY_WITH_VERIFIED_PRIOR_RESTORE_V1'
 APP_ONLY_CHECKPOINT_MAX_AGE = 30 * 86400
 APP_ONLY_CHECKPOINT_MAX_WINDOW = 2 * 3600
+CUP_SUPPORT_FRESH_SCHEMA = 'PHUB_TIMEWEB_CUP_SUPPORT_FRESH_BACKUP_V1'
+CUP_SUPPORT_FRESH_RECEIPT = 'PHUB_TIMEWEB_CUP_SUPPORT_FRESH_DUMP_V1'
+CUP_SUPPORT_FRESH_POLICY = 'CUP_SUPPORT_FRESH_DUMP_INTEGRITY_ONLY_V1'
+CUP_SUPPORT_PREDECESSOR = 'b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61-45606826648-1'
+CUP_SUPPORT_RESTORE_MESSAGE_SHA256 = '40a3494b79bd56a44789a1e662a5f1130fa418d155a84bc316ea3c015f7f05d4'
+
+
+def is_cup_support_fresh(op):
+    return op.get('schema') == CUP_SUPPORT_FRESH_SCHEMA
 
 
 def is_app_only_fresh(op):
-    return op.get('schema') == APP_ONLY_FRESH_SCHEMA
+    return op.get('schema') == APP_ONLY_FRESH_SCHEMA or is_cup_support_fresh(op)
 
 
 def is_app_only_checkpoint(op):
@@ -207,10 +216,12 @@ def is_fresh_operation(op):
     return is_app_only_fresh(op) or op.get('schema') in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA)
 
 def fresh_receipt_schema(op):
+    if is_cup_support_fresh(op): return CUP_SUPPORT_FRESH_RECEIPT
     if is_app_only_fresh(op): return APP_ONLY_FRESH_RECEIPT
     return CANONICAL_FRESH_RECEIPT if is_canonical_fresh(op) else FRESH_RECEIPT
 
 def fresh_policy(op):
+    if is_cup_support_fresh(op): return CUP_SUPPORT_FRESH_POLICY
     if is_app_only_fresh(op): return APP_ONLY_POLICY
     return CANONICAL_FRESH_POLICY if is_canonical_fresh(op) else FRESH_POLICY
 RESTORE_OWNER_MESSAGE = 'Пропусти повторное пробное восстановление базы — оно уже прошло. Исправь блокер Docker Hub и продолжай выкладку, сохранив данные, учётки, настройки и передачу результатов в ЛК1.\n'
@@ -2171,7 +2182,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         exact(value, common + ['profile','candidateSha','publicationRunId','releaseId','expectedWeb',
                               'expectedLedgerSha256','expectedDatabaseTarget','predecessorAttestationSha256',
                               'expectedSchemaSha256','expectedSecuritySha256']
-              + (['priorRestore'] if is_app_only_fresh(value) else []))
+              + (['ownerRestoreDecision'] if is_cup_support_fresh(value)
+                 else ['priorRestore'] if is_app_only_fresh(value) else []))
         mode, release_id = operation_mode(value)
         need(profile == 'production' and 'controllerPromotion' not in value
              and value['candidateSha'] == value['controllerSha'] == value['toolCommit']
@@ -2182,7 +2194,9 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and all(HASH.fullmatch(value[k] or '') for k in
                      ('expectedLedgerSha256','expectedSchemaSha256','expectedSecuritySha256')),
              'APP_ONLY_OPERATION')
-        if is_app_only_fresh(value):
+        if is_cup_support_fresh(value):
+            cup_support_restore_reference(value)
+        elif is_app_only_fresh(value):
             ref = value['priorRestore']
             exact(ref,['releaseId','operationSha256','receiptSha256','terminalSha256'])
             need(RELEASE.fullmatch(ref['releaseId'] or '')
@@ -3673,7 +3687,8 @@ def plan_mode(path):
         attest_app_only_database(op)
         if is_app_only_fresh(op):
             attest_app_only_source(op)
-            validate_app_only_checkpoint(op)
+            if is_cup_support_fresh(op): attest_cup_support_restore_message()
+            fresh_restore_reference(op)
             need(disk_free()>=CUTOVER_DUMP_LIMIT+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
         else:
             size=int(source_query(SOURCE_SIZE,op['expectedPostgres']['id']))
@@ -4043,7 +4058,8 @@ def app_only_backup_confirmation(op):
     action = 'FRESH_DUMP' if is_app_only_fresh(op) else 'VERIFY_RESTORE'
     api = op['expectedApi']['releaseId'][:12].upper()
     web = op['expectedWeb']['releaseId'][:12].upper()
-    return action + '_APP_ONLY_' + op['candidateSha'][:12].upper() + '_FROM_' + api + '_' + web
+    suffix = '_CUP_SUPPORT_NO_RESTORE' if is_cup_support_fresh(op) else ''
+    return action + '_APP_ONLY_' + op['candidateSha'][:12].upper() + '_FROM_' + api + '_' + web + suffix
 
 
 def app_only_schema_fingerprint(raw):
@@ -4201,13 +4217,55 @@ def validate_app_only_checkpoint(op, as_of=None):
             'postgresImage':data['restoreImage'],'dumpSha256':data['backupSha256']}
 
 
+def cup_support_restore_reference(op):
+    decision = op['ownerRestoreDecision']
+    exact(decision, ['schema', 'authority', 'decision', 'messageSha256', 'reference', 'attestedAt'])
+    need(decision['schema'] == 'PHUB_TIMEWEB_CUP_SUPPORT_RESTORE_DECISION_V1'
+         and decision['authority'] == 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1'
+         and decision['decision'] == 'FRESH_DUMP_INTEGRITY_ONLY'
+         and decision['messageSha256'] == CUP_SUPPORT_RESTORE_MESSAGE_SHA256
+         and decision['reference'] == 'codex-user-message-sha256:' + CUP_SUPPORT_RESTORE_MESSAGE_SHA256
+         and 0 < utc(op['expiresAt']) - utc(decision['attestedAt']) <= 60 * 60
+         and op['expectedApi']['releaseId'] == op['expectedWeb']['releaseId'] == CUP_SUPPORT_PREDECESSOR,
+         'CUP_SUPPORT_RESTORE_DECISION')
+    return {'schema': 'PHUB_TIMEWEB_CUP_SUPPORT_BACKUP_ADMISSION_V1',
+            'candidateSha': op['candidateSha'], 'candidateTree': op['controllerTree'],
+            'apiContainerId': op['expectedApi']['id'], 'webContainerId': op['expectedWeb']['id'],
+            'releaseId': op['releaseId'], 'expiresAt': op['expiresAt'],
+            'ownerDecisionSha256': digest(encoded(decision)),
+            'attestedAt': decision['attestedAt'], 'restoreVerified': False}
+
+
+def fresh_restore_reference(op, as_of=None):
+    if is_cup_support_fresh(op): return cup_support_restore_reference(op)
+    if is_app_only_fresh(op): return validate_app_only_checkpoint(op, as_of)
+    return validate_prior_restore(op)
+
+
+def attest_cup_support_restore_message():
+    message = read_secure(ROOT/'operator/cup-support-restore-waiver.txt')
+    need(digest(message) == CUP_SUPPORT_RESTORE_MESSAGE_SHA256, 'CUP_SUPPORT_RESTORE_MESSAGE')
+
+
+def fresh_reference_file(op):
+    return ('restore-admission-reference.json' if is_cup_support_fresh(op)
+            else 'prior-full-restore-reference.json')
+
+
+def fresh_reference_hash_key(op):
+    return 'admissionReferenceSha256' if is_cup_support_fresh(op) else 'priorReferenceSha256'
+
+
 def fresh_policy_file(op):
+    if is_cup_support_fresh(op): return 'owner-restore-decision.json'
     return 'restore-reuse-policy.json' if is_app_only_fresh(op) else 'owner-restore-decision.json'
 
 
 def prepare_app_only_backup(candidate, run, checkpoint):
+    integrity_only = checkpoint == 'cup-support-integrity-only'
     need(SHA.fullmatch(candidate) and re.fullmatch(r'[1-9][0-9]*',run)
-         and (checkpoint=='-' or RELEASE.fullmatch(checkpoint)), 'APP_ONLY_PREPARE_ARGUMENTS')
+         and (checkpoint=='-' or integrity_only or RELEASE.fullmatch(checkpoint)),
+         'APP_ONLY_PREPARE_ARGUMENTS')
     need(os.getuid()==os.getgid()==0 and sys.flags.isolated and sys.flags.dont_write_bytecode
          and sys.flags.optimize==0 and os.uname().nodename=='msk-1-vm-z8ks'
          and os.uname().machine=='x86_64', 'APP_ONLY_PREPARE_HOST')
@@ -4228,7 +4286,8 @@ def prepare_app_only_backup(candidate, run, checkpoint):
     scope_sha=digest(encoded(rows))
     target=strict(source_query(SOURCE_CUTOVER_TARGET,pg['id']))
     need(target=={**LOCATION_PHOTO_DATABASE_TARGET,'inRecovery':False}, 'APP_ONLY_DATABASE_TARGET')
-    op={'schema': APP_ONLY_RESTORE_SCHEMA if checkpoint=='-' else APP_ONLY_FRESH_SCHEMA,
+    op={'schema': (CUP_SUPPORT_FRESH_SCHEMA if integrity_only else
+                   APP_ONLY_RESTORE_SCHEMA if checkpoint=='-' else APP_ONLY_FRESH_SCHEMA),
         'profile':'production','target':TARGET,'controllerSha':candidate,'toolCommit':candidate,
         'controllerTree':tree,'controllerConfigSha256':digest(config),
         'toolFileSha256':digest(read_secure(file,0o755)),
@@ -4243,7 +4302,17 @@ def prepare_app_only_backup(candidate, run, checkpoint):
     with cutover_source_snapshot(op,digest(encoded(op)),derive_catalog=True,capture_accounts=False) as snapshot:
         op['expectedSchemaSha256']=snapshot['witness']['schemaSha256']
         op['expectedSecuritySha256']=snapshot['witness']['securitySha256']
-    if checkpoint!='-':
+    if integrity_only:
+        attest_cup_support_restore_message()
+        op['ownerRestoreDecision'] = {
+            'schema': 'PHUB_TIMEWEB_CUP_SUPPORT_RESTORE_DECISION_V1',
+            'authority': 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
+            'decision': 'FRESH_DUMP_INTEGRITY_ONLY',
+            'messageSha256': CUP_SUPPORT_RESTORE_MESSAGE_SHA256,
+            'reference': 'codex-user-message-sha256:' + CUP_SUPPORT_RESTORE_MESSAGE_SHA256,
+            'attestedAt': now_iso(),
+        }
+    elif checkpoint!='-':
         path=ROOT/'backups'/(checkpoint+'-app-restore')
         op['priorRestore']={'releaseId':checkpoint,**{
             key:digest(read_secure(path/name)) for key,name in
@@ -4255,12 +4324,13 @@ def prepare_app_only_backup(candidate, run, checkpoint):
     validate_operation(op,time.time(),op['toolFileSha256'])
     if is_app_only_fresh(op):
         attest_app_only_source(op)
-        validate_app_only_checkpoint(op)
+        fresh_restore_reference(op)
     need(not os.path.lexists(LOCK),'EXISTING_STATE')
     sys.stdout.buffer.write(encoded(op))
 
 
 def fresh_policy_record(op):
+    if is_cup_support_fresh(op): return op['ownerRestoreDecision']
     if is_app_only_fresh(op):
         return {'schema':APP_ONLY_POLICY,'controllerSha':op['controllerSha'],
                 'controllerTree':op['controllerTree'],'checkpoint':op['priorRestore']}
@@ -4268,6 +4338,7 @@ def fresh_policy_record(op):
 
 
 def fresh_lineage_phase(op):
+    if is_cup_support_fresh(op): return 'CUP_SUPPORT_OWNER_DECISION_SEALED'
     if is_app_only_fresh(op): return 'APP_ONLY_LINEAGE_SEALED'
     if is_canonical_fresh(op): return 'CANONICAL_LINEAGE_SEALED'
     return None
@@ -4290,7 +4361,9 @@ def fresh_plan(op, raw, database_bytes):
 
 def fresh_files(op):
     if is_app_only_fresh(op):
-        return [fresh_policy_file(op) if path=='owner-restore-decision.json' else path for path in FRESH_FILES]
+        return [fresh_policy_file(op) if path=='owner-restore-decision.json'
+                else fresh_reference_file(op) if path=='prior-full-restore-reference.json'
+                else path for path in FRESH_FILES]
     return FRESH_FILES
 
 
@@ -4305,32 +4378,34 @@ def validate_fresh_publication(op, raw, plan, directory):
     # exact before atomic publication; retained validation reads only its sealed files.
     r=strict(read_secure(directory/'database-backup-receipt.json'))
     app_only=is_app_only_fresh(op)
+    integrity_only=is_cup_support_fresh(op)
     policy_hash_key='policySha256' if app_only else 'ownerReceiptSha256'
+    reference_hash_key=fresh_reference_hash_key(op)
     exact(r,['schema','baselineReleaseId','completedAt','backupFile','backupSha256','operationSha256',
              'predecessorAttestationSha256','databaseTarget','sourceLedgerSha256','sourceAccountsSha256',
              'snapshotWitnessSha256','dumpBytes','dumpLimitBytes','dumpCompression','postgresImage',
-             'freshDumpRestored','freshDumpIntegrityStatus','restoreAdmissionPolicy','priorReferenceSha256',policy_hash_key])
+             'freshDumpRestored','freshDumpIntegrityStatus','restoreAdmissionPolicy',reference_hash_key,policy_hash_key])
     witness_raw=read_secure(directory/'snapshot-witness.json');w=strict(witness_raw)
     exact(w,['schema','operationSha256','sourcePostgres','capturedAt','snapshotIdSha256','databaseTarget','ledgerSha256','accountsSha256']
           + (['schemaSha256','securitySha256','securityCatalogSha256'] if app_only else []))
-    prior_raw=read_secure(directory/'prior-full-restore-reference.json')
-    prior=validate_app_only_checkpoint(op,utc(w['capturedAt'])) if app_only else validate_prior_restore(op)
+    prior_raw=read_secure(directory/fresh_reference_file(op))
+    prior=fresh_restore_reference(op,utc(w['capturedAt']))
     policy_raw=read_secure(directory/fresh_policy_file(op))
     need(read_secure(directory/'backup-operation.json')==raw and prior_raw==encoded(prior)
          and policy_raw==encoded(fresh_policy_record(op)), 'FRESH_CAPSULE')
     if app_only:
         need(w['schemaSha256']==op['expectedSchemaSha256'] and w['securitySha256']==op['expectedSecuritySha256']
              and HASH.fullmatch(w['securityCatalogSha256'] or '')
-             and w['securityCatalogSha256']==prior['restoredSecurityCatalogSha256'],
+             and (integrity_only or w['securityCatalogSha256']==prior['restoredSecurityCatalogSha256']),
              'APP_ONLY_FRESH_WITNESS')
-    history_time=(prior['terminalAt'] if app_only else
+    history_time=(prior['attestedAt'] if integrity_only else prior['terminalAt'] if app_only else
                   prior['priorRolloutObservedAt'] if is_canonical_fresh(op) else prior['laterPreparationAbortAt'])
     need(r['schema']==fresh_receipt_schema(op) and r['baselineReleaseId']==op['expectedApi']['releaseId']
          and r['operationSha256']==digest(raw) and r['predecessorAttestationSha256']==op['predecessorAttestationSha256']
          and r['databaseTarget']==op['expectedDatabaseTarget'] and r['sourceLedgerSha256']==op['expectedLedgerSha256']
          and r['backupFile']==str(Path(plan['canonical'])/'database.pgcustom') and r['postgresImage']==PG_IMAGE
          and r['freshDumpRestored'] is False and r['freshDumpIntegrityStatus']=='PG16_TOC_PARSE_VERIFIED'
-         and r['restoreAdmissionPolicy']==fresh_policy(op) and r['priorReferenceSha256']==digest(prior_raw)
+         and r['restoreAdmissionPolicy']==fresh_policy(op) and r[reference_hash_key]==digest(prior_raw)
          and r[policy_hash_key]==digest(policy_raw) and r['snapshotWitnessSha256']==digest(witness_raw)
          and type(r['dumpBytes']) is int and 0<r['dumpBytes']<=CUTOVER_DUMP_LIMIT
          and r['dumpLimitBytes']==CUTOVER_DUMP_LIMIT and r['dumpCompression']=='zstd:3', 'FRESH_RECEIPT')
@@ -4380,7 +4455,7 @@ def validate_fresh_terminal(op, raw):
     sha=validate_fresh_seal(op,raw,canonical,r)
     if lineage:
         prior_raw=read_secure(work/'canonical-prior-lineage.json')
-        need(prior_raw==read_secure(canonical/'prior-full-restore-reference.json')
+        need(prior_raw==read_secure(canonical/fresh_reference_file(op))
              and journal.find(lineage)==fresh_lineage_fields(op,prior_raw),'CANONICAL_LINEAGE_SEAL')
     need(journal.find('PUBLISH_READY')=={'receiptSha256':sha}
          and journal.find('PUBLISHED')=={'receiptSha256':sha}
@@ -4403,7 +4478,8 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
         for path in [ROOT,ROOT/'standard',ROOT/'operator',ROOT/'backups']:secure(path,'dir')
         tool_custody(op)
         if app_only: attest_app_only_source(op)
-        prior=validate_app_only_checkpoint(op) if app_only else validate_prior_restore(op)
+        if is_cup_support_fresh(op): attest_cup_support_restore_message()
+        prior=fresh_restore_reference(op)
         cutover_disk_reserve()
         need(disk_free()>=CUTOVER_DUMP_LIMIT+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
         size=source_query(SOURCE_SIZE,op['expectedPostgres']['id']).decode().strip()
@@ -4482,7 +4558,8 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
             need(len(strict(ledger_bytes(source_query(SOURCE_LEDGER,op['expectedPostgres']['id']))))==122,'CUTOVER_LEDGER')
         if lineage:
             if app_only:
-                current_prior=validate_app_only_checkpoint(op)
+                if is_cup_support_fresh(op): attest_cup_support_restore_message()
+                current_prior=fresh_restore_reference(op)
             else:
                 canonical_live_admission(op)
                 current_prior=validate_canonical_prior_restore(op)
@@ -4506,12 +4583,12 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
             cutover_blocking_docker(['exec','-i',op['expectedPostgres']['id'],'pg_restore','--list'],
                                     'FRESH_DUMP_TOC',stdin=stream,timeout=120)
         journal.add('TOC_VERIFIED',dumpSha256=dump_sha)
-        current_prior=validate_app_only_checkpoint(op) if app_only else validate_prior_restore(op)
+        current_prior=fresh_restore_reference(op)
         need(prior==current_prior,'FRESH_PRIOR_DRIFT');guard()
         publication=Path(plan['publication']);publication.mkdir(mode=0o700);sync_directory(work)
         rename_noreplace(incoming,publication/'database.pgcustom')
         for name,data in [('backup-operation.json',raw),('snapshot-witness.json',read_secure(work/'snapshot-witness.json')),
-                          ('prior-full-restore-reference.json',encoded(prior)),(fresh_policy_file(op),encoded(fresh_policy_record(op)))]:
+                          (fresh_reference_file(op),encoded(prior)),(fresh_policy_file(op),encoded(fresh_policy_record(op)))]:
             atomic_exclusive(publication/name,data)
         receipt={'schema':fresh_receipt_schema(op),'baselineReleaseId':op['expectedApi']['releaseId'],'completedAt':now_iso(),
                  'backupFile':str(Path(plan['canonical'])/'database.pgcustom'),'backupSha256':dump_sha,'operationSha256':sha,
@@ -4521,7 +4598,7 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
                  'dumpBytes':secure(publication/'database.pgcustom',mode=0o600).st_size,'dumpLimitBytes':CUTOVER_DUMP_LIMIT,
                  'dumpCompression':'zstd:3','postgresImage':PG_IMAGE,'freshDumpRestored':False,
                  'freshDumpIntegrityStatus':'PG16_TOC_PARSE_VERIFIED','restoreAdmissionPolicy':fresh_policy(op),
-                 'priorReferenceSha256':digest(encoded(prior)),
+                 fresh_reference_hash_key(op):digest(encoded(prior)),
                  ('policySha256' if app_only else 'ownerReceiptSha256'):digest(encoded(fresh_policy_record(op)))}
         atomic_exclusive(publication/'database-backup-receipt.json',encoded(receipt))
         validate_fresh_publication(op,raw,plan,publication)

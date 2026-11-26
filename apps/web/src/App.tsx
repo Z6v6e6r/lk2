@@ -25,6 +25,8 @@ import { connectChatRealtime } from './chat-realtime-client.js';
 import type { ChatRealtimeConnectionState } from './chat-realtime-client.js';
 import type { ChatRealtimeUiState, ChatUiError, PendingChatMessage } from './ChatsPage.js';
 import { consumeCommunityInviteToken } from './community-invite-token.js';
+import { CupSupportHandoffPage } from './CupSupportHandoffPage.js';
+import { readCupSupportHandoffDraft } from './cup-support-staging-handoff.js';
 import {
   clearGameChatNavigation,
   consumeGameChatNavigation,
@@ -1411,9 +1413,8 @@ export function App({
     };
   }, [entryView, gateway, publicGiftRoute]);
 
-  // Viva OAuth returns to the app root, so the push opt-in deep link is restored after login
-  // instead of dropping the visitor on the home screen. The stored target is a fixed internal
-  // /push path with a short TTL (see push-opt-in.ts).
+  // Viva OAuth returns to the app root. Restore a validated internal push or CUP Support
+  // continuation after login while its short TTL is active (see push-opt-in.ts).
   const [, forceRouteRender] = useReducer((value: number) => value + 1, 0);
   useEffect(() => {
     if (state.view !== 'home' || !state.session) return;
@@ -3046,6 +3047,15 @@ export function App({
 
   if (state.view === 'home' && state.session) {
     const { context } = state.session;
+    const cupDraft =
+      tenantKey === 'local-padel' && typeof window !== 'undefined'
+        ? readCupSupportHandoffDraft(window.location)
+        : undefined;
+    if (cupDraft && gateway.issueCupSupportStagingHandoff) {
+      return (
+        <CupSupportHandoffPage draft={cupDraft} issue={gateway.issueCupSupportStagingHandoff} />
+      );
+    }
     if (protectedRoute.kind === 'profile-level-history') {
       return (
         <ProfileLevelHistoryPage history={profileLevelHistory} error={profileLevelHistoryError} />
