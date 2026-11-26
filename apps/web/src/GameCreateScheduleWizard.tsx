@@ -274,6 +274,7 @@ export function GameCreateScheduleWizard({
   source,
   checkout,
   previewLevelQuarters = false,
+  previewPayment = false,
   previewFriends,
   loadFriends,
   gamesHref = '/games',
@@ -283,12 +284,13 @@ export function GameCreateScheduleWizard({
   readonly source: GameCreateScheduleSource;
   readonly checkout?: GameCreateScheduleCheckout;
   readonly previewLevelQuarters?: boolean;
+  readonly previewPayment?: boolean;
   readonly previewFriends?: readonly ScheduleFriend[];
   readonly loadFriends?: () => Promise<readonly ScheduleFriend[]>;
   readonly gamesHref?: string;
   readonly today?: string;
 }) {
-  const [step, setStep] = useState<GameCreateStep>(0);
+  const [step, setStep] = useState<GameCreateStep | 3>(0);
   const stationDetailsPrefix = useId();
   const cityPanelPrefix = useId();
   const heading = useRef<HTMLHeadingElement>(null);
@@ -299,6 +301,9 @@ export function GameCreateScheduleWizard({
   const [showLocations, setShowLocations] = useState(false);
   const [preferredStart, setPreferredStart] = useState('');
   const [payer, setPayer] = useState<'split' | 'self'>('split');
+  const [previewChoice, setPreviewChoice] = useState<{ quoteKey: string; index: number }>();
+  const [previewConfirmed, setPreviewConfirmed] = useState(false);
+  const previewPaymentName = useId();
   const [visibility, setVisibility] = useState<'PUBLIC' | 'PRIVATE'>('PUBLIC');
   const [friendSearch, setFriendSearch] = useState('');
   const [selectedFriends, setSelectedFriends] = useState<ReadonlySet<string>>(() => new Set());
@@ -479,7 +484,7 @@ export function GameCreateScheduleWizard({
   }
 
   function goBack() {
-    setStep((current) => (current === 2 ? 1 : 0));
+    setStep((current) => (current === 3 ? 2 : current === 2 ? 1 : 0));
   }
 
   function chooseStation(id: string) {
@@ -515,7 +520,9 @@ export function GameCreateScheduleWizard({
     else setLevels([from, index]);
   }
 
-  const headerTitle = ['Выберите клуб', 'Дата и время', 'Создание игры'][step];
+  const headerTitle = ['Выберите клуб', 'Дата и время', 'Создание игры', 'Подтверждение записи'][
+    step
+  ];
   const query = search.trim().toLocaleLowerCase('ru-RU');
   const friendQuery = friendSearch.trim().toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
   const friendList = loadFriends && friends !== 'ERROR' ? friends : previewFriends;
@@ -557,6 +564,31 @@ export function GameCreateScheduleWizard({
           : 'ЛК1 не подтвердил условия';
   const total = payer === 'self' ? whole : share;
   const canPay = Boolean(payer === 'self' && visibility === 'PRIVATE' && checkoutOffer);
+  const showPreviewPayment = previewPayment && !checkout && payer === 'split';
+  const previewOptions = [
+    { label: 'Разовое участие', detail: 'Моя доля 1/4 стоимости', amount: share },
+    {
+      label: 'С резидентством',
+      detail: residenceDetail,
+      amount: residency?.status === 'APPLIED' ? residency.amountMinor : null,
+      unavailableLabel: residencePrice,
+    },
+    {
+      label: 'Запись с подпиской',
+      amount: subscription ?? null,
+      unavailableLabel: 'Нужен расчёт',
+    },
+  ];
+  const previewIndex = previewChoice?.quoteKey === quoteKey ? previewChoice.index : 0;
+  const previewOption = previewOptions[previewIndex]!;
+  const canPreviewPay = showPreviewPayment && selected && previewOption.amount !== null;
+  const reviewTotal = showPreviewPayment ? previewOption.amount : total;
+
+  function isPreviewQuoteCurrent() {
+    if (currentQuote && Date.parse(currentQuote.expiresAt) > Date.now()) return true;
+    setExpiredQuoteKey(quoteKey);
+    return false;
+  }
   const summaryDate = days.find((item) => item.day === day)?.parts;
   const summarySlot = chosenSlot ?? times.get(preferredStart);
   const summaryCourt = courts.get(court);
@@ -1318,46 +1350,85 @@ export function GameCreateScheduleWizard({
           </section>
           <section className="game-schedule-card game-schedule-stack game-schedule-payment">
             <h2 className="game-schedule-settings-heading">Стоимость участия</h2>
-            <div className="game-schedule-option game-schedule-payment-row game-schedule-payment-row--primary">
-              <span>
-                <strong>{payer === 'self' ? 'Оплата всего корта' : 'Разовое участие'}</strong>
-                <small>
-                  {payer === 'self' ? 'Полная оплата за 4 игроков' : 'Моя доля 1/4 стоимости'}
-                </small>
-              </span>
-              <strong className="game-schedule-payer-price">{price(total)}</strong>
-            </div>
-            {payer === 'split' ? (
+            {showPreviewPayment ? (
+              <fieldset className="game-schedule-preview-options" aria-label="Способ записи">
+                {previewOptions.map((option, index) => (
+                  <label
+                    className="game-schedule-option game-schedule-payment-row game-schedule-preview-option"
+                    key={option.label}
+                  >
+                    <input
+                      type="radio"
+                      name={previewPaymentName}
+                      checked={index === previewIndex && option.amount !== null}
+                      disabled={option.amount === null}
+                      onChange={() => setPreviewChoice({ quoteKey, index })}
+                    />
+                    <span>
+                      <strong>{option.label}</strong>
+                      {option.detail ? <small>{option.detail}</small> : null}
+                    </span>
+                    <strong>
+                      {option.amount === null
+                        ? (option.unavailableLabel ?? price(null))
+                        : price(option.amount)}
+                    </strong>
+                  </label>
+                ))}
+              </fieldset>
+            ) : (
               <>
-                <h3>Дополнительные способы записи</h3>
-                <div className="game-schedule-option game-schedule-payment-row">
+                <div className="game-schedule-option game-schedule-payment-row game-schedule-payment-row--primary">
                   <span>
-                    <strong>С Резидентством</strong>
-                    <small>{residenceDetail}</small>
+                    <strong>{payer === 'self' ? 'Оплата всего корта' : 'Разовое участие'}</strong>
+                    <small>
+                      {payer === 'self' ? 'Полная оплата за 4 игроков' : 'Моя доля 1/4 стоимости'}
+                    </small>
                   </span>
-                  <strong>{residencePrice}</strong>
+                  <strong className="game-schedule-payer-price">{price(total)}</strong>
                 </div>
-                <div className="game-schedule-option game-schedule-payment-row">
-                  <span>
-                    <strong>Запись с подпиской</strong>
-                    {subscription === undefined ? <small>Условия уточняются в ЛК1</small> : null}
-                  </span>
-                  <strong>
-                    {subscription === undefined ? 'Нужен расчёт' : price(subscription)}
-                  </strong>
-                </div>
-                <details>
-                  <summary>Применимость льгот</summary>
-                  <p>{residenceDetail}. При оплате всего корта льготы не применяются.</p>
-                </details>
+                {payer === 'split' ? (
+                  <>
+                    <h3>Дополнительные способы записи</h3>
+                    <div className="game-schedule-option game-schedule-payment-row">
+                      <span>
+                        <strong>С Резидентством</strong>
+                        <small>{residenceDetail}</small>
+                      </span>
+                      <strong>{residencePrice}</strong>
+                    </div>
+                    <div className="game-schedule-option game-schedule-payment-row">
+                      <span>
+                        <strong>Запись с подпиской</strong>
+                        {subscription === undefined ? (
+                          <small>Условия уточняются в ЛК1</small>
+                        ) : null}
+                      </span>
+                      <strong>
+                        {subscription === undefined ? 'Нужен расчёт' : price(subscription)}
+                      </strong>
+                    </div>
+                    <details>
+                      <summary>Применимость льгот</summary>
+                      <p>{residenceDetail}. При оплате всего корта льготы не применяются.</p>
+                    </details>
+                  </>
+                ) : null}
               </>
-            ) : null}
+            )}
             {quoteMessage}
             <button
               type="button"
               className="game-schedule-primary game-schedule-review-action"
-              disabled={!canPay || checkout?.busy}
+              disabled={showPreviewPayment ? !canPreviewPay : !canPay || checkout?.busy}
               onClick={(event) => {
+                if (showPreviewPayment) {
+                  if (canPreviewPay && isPreviewQuoteCurrent()) {
+                    setPreviewConfirmed(false);
+                    setStep(3);
+                  }
+                  return;
+                }
                 if (!checkout || !checkoutOffer || !canPay) return;
                 if (Date.parse(checkoutOffer.expiresAt) <= Date.now()) {
                   setExpiredQuoteKey(quoteKey);
@@ -1374,9 +1445,9 @@ export function GameCreateScheduleWizard({
             >
               {checkout?.busy
                 ? 'Открываем оплату…'
-                : total === null
+                : reviewTotal === null
                   ? 'Записаться'
-                  : `Записаться за ${price(total)}`}
+                  : `Записаться за ${price(reviewTotal)}`}
             </button>
             {checkout && !canPay ? (
               <p className="game-schedule-empty" role="status">
@@ -1388,6 +1459,35 @@ export function GameCreateScheduleWizard({
               <summary>Условия записи</summary>
               <p>ЛК1 подтверждает цену и доступность при оформлении.</p>
             </details>
+          </section>
+        </section>
+      ) : null}
+      {step === 3 && showPreviewPayment ? (
+        <section className="game-schedule-stack game-schedule-review" aria-label="Тестовая запись">
+          <section className="game-schedule-card game-schedule-stack game-schedule-payment">
+            <h2 className="game-schedule-settings-heading" aria-live="polite">
+              {previewConfirmed ? 'Тестовая запись подтверждена' : 'Тестовая оплата'}
+            </h2>
+            <p className="game-schedule-review-note">Предпросмотр без списания.</p>
+            {previewOption.amount !== null ? (
+              <div className="game-schedule-option game-schedule-payment-row">
+                <strong>{previewOption.label}</strong>
+                <strong className="game-schedule-payer-price">{price(previewOption.amount)}</strong>
+              </div>
+            ) : null}
+            {quoteMessage}
+            {!previewConfirmed ? (
+              <button
+                className="game-schedule-primary game-schedule-review-action"
+                type="button"
+                disabled={!canPreviewPay}
+                onClick={() => {
+                  if (canPreviewPay && isPreviewQuoteCurrent()) setPreviewConfirmed(true);
+                }}
+              >
+                Подтвердить тестовую запись
+              </button>
+            ) : null}
           </section>
         </section>
       ) : null}

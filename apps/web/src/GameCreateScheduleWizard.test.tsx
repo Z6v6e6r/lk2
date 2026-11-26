@@ -166,6 +166,44 @@ describe('game creation schedule', () => {
     },
   );
 
+  it('previews the selected residency price and restores the choice when going back', async () => {
+    render(
+      <GameCreateScheduleWizard
+        stations={stations}
+        today="2026-12-06"
+        previewPayment
+        source={{
+          listSlots: () => Promise.resolve([slot]),
+          readQuote: () =>
+            Promise.resolve({
+              ...quoteTimes(),
+              wholeCourtMinor: 240000,
+              shareMinor: 60000,
+              residency: { status: 'APPLIED', amountMinor: 42000 },
+            }),
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+
+    const residency = await screen.findByRole('radio', { name: /С резидентством/ });
+    expect(screen.getByRole('radio', { name: /Запись с подпиской/ })).toBeDisabled();
+    await user.click(residency);
+    await user.click(screen.getByRole('button', { name: /Записаться за 420/ }));
+    const review = screen.getByRole('region', { name: 'Тестовая запись' });
+    expect(within(review).getByText('С резидентством')).toBeVisible();
+    expect(within(review).getByText(/420\s*₽/)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Назад' }));
+    expect(screen.getByRole('radio', { name: /С резидентством/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: /Записаться за 420/ }));
+    await user.click(screen.getByRole('button', { name: 'Подтвердить тестовую запись' }));
+    expect(screen.getByRole('heading', { name: 'Тестовая запись подтверждена' })).toBeVisible();
+  });
+
   it('uses the header arrow to go back one step without traversing browser history', async () => {
     const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
     try {

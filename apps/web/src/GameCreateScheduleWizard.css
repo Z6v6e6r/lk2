@@ -1111,6 +1111,30 @@ html:has(.game-schedule-wizard--settings) {
   border-radius: 16px;
 }
 
+.game-schedule-preview-options {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.game-schedule-payment-row.game-schedule-preview-option {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  cursor: pointer;
+}
+
+.game-schedule-preview-option:has(input:disabled) {
+  color: var(--schedule-muted);
+  cursor: default;
+}
+
+.game-schedule-preview-option:has(input:checked) > strong {
+  color: var(--schedule-accent);
+}
+
 .game-schedule-payment-row > strong {
   overflow-wrap: anywhere;
 }
