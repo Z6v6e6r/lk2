@@ -1,5 +1,4 @@
 import { fenceStationMarker } from './station-membership-repository.js';
-import { lockGameFriendPair, readGameFriendInvitation } from './game-friend-invitations.js';
 import { parseStationMarker, type StationMarker } from '@phub/subscription-runtime-adapter';
 import { randomUUID } from 'node:crypto';
 
@@ -37,6 +36,8 @@ import {
   hasGameTestCourtAccess,
   isExactGameTestCourtPair,
   isRestrictedGameTestCourt,
+  lockGameFriendPair,
+  readGameFriendInvitation,
 } from './game-repository.js';
 import type { GamePaymentMode } from './game-repository.js';
 
