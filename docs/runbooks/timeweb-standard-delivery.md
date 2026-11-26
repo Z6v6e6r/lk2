@@ -1483,8 +1483,19 @@ observation. Store the exact approval message bytes in the root-owned `0600` fil
 `ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1`, the `messageSha256`, its `codex-user-message-sha256:`
 reference, `receivedAt` in canonical UTC, and `scopeSha256` from
 `cupSupportAlertScopeSha256(operation)`. The operation, current predecessors and published package
-are bound together. Refresh the existing Timeweb monitoring readback before and throughout the
-rollout. A provider capture that reports HTTP 2xx can enter this profile only through the
+are bound together.
+
+The owner separately authorized substituting the Timeweb monitoring readback with the same
+direct HTTP observation for this release. For this option, store the exact second approval in
+root-owned `0600` `operator/cup-support-provider-waiver.txt` without a trailing newline. Add
+`ownerProviderDecision` with schema `PHUB_TIMEWEB_CUP_SUPPORT_PROVIDER_DECISION_V1` and the same
+authority and scope format, using the second approval's digest and timestamp. The controller
+verifies both messages separately and includes both decision digests in the release evidence.
+It leaves provider monitoring settings enabled and records
+`NOT_CHECKED_OWNER_APPROVED_DIRECT_HTTP` without a provider readback hash.
+
+Operations using only the alert decision refresh the existing Timeweb monitoring readback before
+and throughout the rollout. A provider capture that reports HTTP 2xx can enter this profile only through the
 existing independently reviewed native capture and trace. Publish the three original JSON
 strings as `captureBundle`, `captureReview`, and `captureTrace` under schema
 `PHUB_TIMEWEB_CUP_SUPPORT_NATIVE_MONITOR_EVIDENCE_V1` in
@@ -1492,8 +1503,9 @@ strings as `captureBundle`, `captureReview`, and `captureTrace` under schema
 when present, a stale or invalid native file fails admission. The native provider evidence
 keeps its HTTP 2xx semantics. The direct application checks require exact HTTP 200.
 The executor records 61 private and public API/Web HTTP samples over at least 900 seconds,
-including both latency series, and applies the existing restart and rollback checks. The terminal
-receipt records the direct HTTP observation and provider readback with the alert replacement status.
+including both latency series, and rolls back on a failed HTTP probe or another rollout guard
+failure. The terminal receipt binds the direct HTTP observation and records the applicable
+provider and alert evidence status.
 
 Provision one independent 32-byte key for the LK2 API and the CUP Support STAGING verifier.
 Use the same canonical unpadded base64url key on both sides, keeping the Support form behind

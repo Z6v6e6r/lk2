@@ -752,6 +752,51 @@ describe('dormant JOIN hooks in the existing API/Web transition', () => {
         const altered=structuredClone(observation);change(altered);
         assert.throws(()=>validateCupSupportDirectObservation(altered,op,plan,hash));
       }
+
+      const providerMessageSha256='bdf1377968e3309bdf378c6c9962b5ece2360bddfed3808f7a82fec6d7567ff5';
+      const waivedOp={...op,ownerProviderDecision:{...op.ownerAlertDecision,
+        schema:'PHUB_TIMEWEB_CUP_SUPPORT_PROVIDER_DECISION_V1',
+        messageSha256:providerMessageSha256,reference:'codex-user-message-sha256:'+providerMessageSha256,
+        receivedAt:'2029-12-31T23:05:00.000Z'}};
+      validateApiWebOperation(waivedOp);
+      for (const change of [
+        v=>v.ownerProviderDecision=null,
+        v=>v.ownerProviderDecision=v.ownerAlertDecision,
+        v=>v.ownerProviderDecision.receivedAt=v.expiresAt,
+        v=>v.ownerProviderDecision.scopeSha256='f'.repeat(64),
+        v=>v.publicationRunId='457',
+        v=>delete v.ownerAlertDecision,
+      ]) {
+        const altered=structuredClone(waivedOp);change(altered);
+        assert.throws(()=>validateApiWebOperation(altered));
+      }
+      const genericOp=${JSON.stringify(operation)};
+      assert.throws(()=>validateApiWebOperation({...genericOp,ownerProviderDecision:waivedOp.ownerProviderDecision}));
+
+      const waivedPlan={...plan,operationSha256:sha(waivedOp),ownerProviderDecisionSha256:sha(waivedOp.ownerProviderDecision)};
+      const waivedBytes=Buffer.from(JSON.stringify(waivedPlan));
+      const waivedHash=sha(waivedPlan);
+      const waivedObservation={...observation,operationSha256:sha(waivedOp),planSha256:waivedHash};
+      validateCupSupportDirectObservation(waivedObservation,waivedOp,waivedPlan,waivedHash);
+      const waivedSuccess={...receipt,status:'SUCCESS',planSha256:waivedHash,observedAt:completedAt,
+        installedBaselineSha256:'a'.repeat(64),observationSha256:sha(waivedObservation),
+        providerMonitoringStatus:'NOT_CHECKED_OWNER_APPROVED_DIRECT_HTTP',
+        ownerProviderDecisionSha256:waivedPlan.ownerProviderDecisionSha256};
+      validateUpgradeReceipt(waivedSuccess,waivedHash,waivedOp,waivedPlan,waivedBytes);
+      validateUpgradeReceipt({...waivedSuccess,status:'RECONCILED',reconciledStatus:'SUCCESS'},waivedHash,waivedOp,waivedPlan,waivedBytes);
+      assert.throws(()=>validateUpgradeReceipt(waivedSuccess,waivedHash,op,waivedPlan,waivedBytes));
+      const earlyPlan={...waivedPlan,createdAt:'2029-12-31T23:04:59.000Z'};
+      assert.throws(()=>validateUpgradeReceipt({...waivedSuccess,planSha256:sha(earlyPlan)},sha(earlyPlan),waivedOp,earlyPlan,Buffer.from(JSON.stringify(earlyPlan))));
+      for (const change of [
+        v=>v.providerMonitoringStatus='PASS',
+        v=>delete v.providerMonitoringStatus,
+        v=>v.ownerProviderDecisionSha256='a'.repeat(64),
+        v=>v.providerReadbackSha256='a'.repeat(64),
+        v=>delete v.observationSha256,
+      ]) {
+        const altered=structuredClone(waivedSuccess);change(altered);
+        assert.throws(()=>validateUpgradeReceipt(altered,waivedHash,waivedOp,waivedPlan,waivedBytes));
+      }
     `);
   });
   it('binds the schedule schemas to production and records the candidate set', () => {
