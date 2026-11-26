@@ -178,7 +178,19 @@ import {
   validateStationObservation,
 } from './timeweb-station-rollout.js';
 import { CUP_0119, CUP_0119_TARGET, buildCup0119Sql } from './timeweb-cup-0119-migration.js';
-import { GAME_INVITATIONS_0120 } from './timeweb-game-invitations-migration.js';
+import {
+  GAME_INVITATIONS_0120,
+  GAME_INVITATIONS_0120_TARGET,
+  buildGameInvitations0120Sql,
+} from './timeweb-game-invitations-migration.js';
+import {
+  GAME_INVITATIONS_ACTIVATION,
+  GAME_INVITATIONS_MONITORING_STATUS,
+  validateGameInvitationsActivationInputs,
+  validateGameInvitationsActivationMigration,
+  validateGameInvitationsActivationReadback,
+  validateGameInvitationsActivationTail,
+} from './timeweb-game-invitations-activation.js';
 
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
@@ -250,8 +262,11 @@ const CUP_SUPPORT_APPLICATION = '62da4b92e65a02488f893b7ebc53d8b86faca9c9';
 const CUP_SUPPORT_APPLICATION_TREE = '08e6eafb72c67065c78ccb1409c46e6d6358bb62';
 const CUP_SUPPORT_PREDECESSOR = 'b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61-45606826648-1';
 const isCupSupportOperation = (value) => value?.schema === CUP_SUPPORT_OPERATION;
+const isGameInvitationsActivation = (value) => value?.schema === GAME_INVITATIONS_ACTIVATION.schema;
 const isAppOnlyOperation = (value) =>
-  value?.schema === APP_ONLY_OPERATION || isCupSupportOperation(value);
+  value?.schema === APP_ONLY_OPERATION ||
+  isCupSupportOperation(value) ||
+  isGameInvitationsActivation(value);
 
 // These root-owned controller modules and their tests are not runtime inputs.
 const APP_ONLY_CONTROLLER_POLICY_FILES = new Set([
@@ -578,6 +593,9 @@ export function validateApiWebOperation(value) {
   if (isAppOnlyOperation(value)) {
     const { backupOperationSha256, expiresAt, ...fields } = value;
     const cupSupport = isCupSupportOperation(value);
+    const invitations = isGameInvitationsActivation(value);
+    const { migrationAttemptId, migrationReceiptSha256, ownerMessageSha256, ...activationBase } =
+      fields;
     const {
       expectedCurrentSecretSetReleaseId,
       candidateSecretHashes,
@@ -586,8 +604,12 @@ export function validateApiWebOperation(value) {
       ownerProviderDecision,
       ...operation
     } = fields;
-    const base = cupSupport ? operation : fields;
-    const suffix = cupSupport ? '_CUP_SUPPORT_STAGING' : '_APP_ONLY_PRIOR_RESTORE';
+    const base = invitations ? activationBase : cupSupport ? operation : fields;
+    const suffix = invitations
+      ? GAME_INVITATIONS_ACTIVATION.suffix
+      : cupSupport
+        ? '_CUP_SUPPORT_STAGING'
+        : '_APP_ONLY_PRIOR_RESTORE';
     if (
       value.profile !== 'production' ||
       value.controllerSha !== value.candidateSha ||
@@ -598,6 +620,13 @@ export function validateApiWebOperation(value) {
       !base.confirmation.endsWith(suffix)
     )
       fail('app_only_operation');
+    if (invitations)
+      validateGameInvitationsActivationInputs({
+        ...value,
+        migrationAttemptId,
+        migrationReceiptSha256,
+        ownerMessageSha256,
+      });
     if (cupSupport) {
       if (
         expectedCurrentSecretSetReleaseId !== CUP_SUPPORT_LEGACY_RUNTIME_SET_ID ||
@@ -903,6 +932,7 @@ export async function runApiWebTransition(ops) {
       await ops.journal('SECRETS_ACTIVE');
     }
     await ops.journal('API_INTENT');
+    await ops.attestGameInvitationsTransition?.('api');
     await ops.activate('api');
     await ops.journal('API_ACTIVE');
     if (ops.workerMode === 'legacy-roster-cutover') {
@@ -911,12 +941,14 @@ export async function runApiWebTransition(ops) {
       await ops.journal('WORKER_ACTIVE');
     }
     await ops.journal('WEB_INTENT');
+    await ops.attestGameInvitationsTransition?.('web');
     await ops.activate('web');
     await ops.journal('OBSERVING');
     await ops.observe();
     await ops.attest();
     if (swapsSecrets || ops.workerMode === 'legacy-roster-cutover' || ops.backupMode === 'app-only')
       await ops.journal('BASELINE_INTENT');
+    await ops.attestGameInvitationsTransition?.('baseline');
     await ops.installBaseline();
     await ops.journal('SUCCESS');
   } catch (error) {
@@ -964,6 +996,7 @@ export async function recoverApiWebTransition(ops) {
     if (swapsSecrets || ops.workerMode === 'legacy-roster-cutover' || ops.backupMode === 'app-only')
       await ops.removeCandidateBaseline();
     await (ops.attestRestored ?? ops.attest)();
+    await ops.attestGameInvitationsTransition?.('rollback');
     await ops.journal('ROLLED_BACK');
   } catch {
     await ops.journal('ROLLBACK_FAILED');
@@ -1914,7 +1947,9 @@ function attestBoundBackupFiles(backup) {
     fail('schedule_backup_drift');
   const receipt = parseStrictJson(receiptBytes);
   if (
-    receipt.schema === CUP_SUPPORT_BACKUP_RECEIPT &&
+    [CUP_SUPPORT_BACKUP_RECEIPT, GAME_INVITATIONS_ACTIVATION.backupReceipt].includes(
+      receipt.schema,
+    ) &&
     (hash(read(`${dirname(backup.path)}/owner-restore-decision.json`)) !== receipt.policySha256 ||
       hash(read(`${dirname(backup.path)}/restore-admission-reference.json`)) !==
         receipt.admissionReferenceSha256)
@@ -1931,13 +1966,21 @@ function validateBoundApiWebBackupProof(directory, releaseId, op, api) {
   const disk = backup.schema === SCHEDULE_DISK_BACKUP_SCHEMA;
   const appOnly = isAppOnlyOperation(op);
   const cupSupport = isCupSupportOperation(op);
-  const requiredAppOnlySchema = cupSupport ? CUP_SUPPORT_BACKUP : APP_ONLY_BACKUP;
-  const fresh = [CANONICAL_FRESH_OPERATION, APP_ONLY_BACKUP, CUP_SUPPORT_BACKUP].includes(
-    backup.schema,
-  );
+  const invitations = isGameInvitationsActivation(op);
+  const appOnlySchemas = [
+    APP_ONLY_BACKUP,
+    CUP_SUPPORT_BACKUP,
+    GAME_INVITATIONS_ACTIVATION.backupSchema,
+  ];
+  const requiredAppOnlySchema = invitations
+    ? GAME_INVITATIONS_ACTIVATION.backupSchema
+    : cupSupport
+      ? CUP_SUPPORT_BACKUP
+      : APP_ONLY_BACKUP;
+  const fresh = [CANONICAL_FRESH_OPERATION, ...appOnlySchemas].includes(backup.schema);
   if (
     (appOnly && backup.schema !== requiredAppOnlySchema) ||
-    (!appOnly && [APP_ONLY_BACKUP, CUP_SUPPORT_BACKUP].includes(backup.schema))
+    (!appOnly && appOnlySchemas.includes(backup.schema))
   )
     fail('app_only_backup_schema');
   const receiptPath = `${directory}/database-backup-receipt.json`;
@@ -1960,17 +2003,21 @@ function validateBoundApiWebBackupProof(directory, releaseId, op, api) {
         backup.confirmation !==
           `FRESH_DUMP_SCHEDULE_${op.candidateSha.slice(0, 12).toUpperCase()}_KEEP_API_0A4D640965E9`) ||
         receipt.schema !==
-          (cupSupport
-            ? CUP_SUPPORT_BACKUP_RECEIPT
-            : appOnly
-              ? APP_ONLY_BACKUP_RECEIPT
-              : CANONICAL_FRESH_RECEIPT) ||
+          (invitations
+            ? GAME_INVITATIONS_ACTIVATION.backupReceipt
+            : cupSupport
+              ? CUP_SUPPORT_BACKUP_RECEIPT
+              : appOnly
+                ? APP_ONLY_BACKUP_RECEIPT
+                : CANONICAL_FRESH_RECEIPT) ||
         receipt.restoreAdmissionPolicy !==
-          (cupSupport
-            ? CUP_SUPPORT_BACKUP_POLICY
-            : appOnly
-              ? APP_ONLY_BACKUP_POLICY
-              : CANONICAL_PRIOR_RESTORE_POLICY) ||
+          (invitations
+            ? GAME_INVITATIONS_ACTIVATION.backupPolicy
+            : cupSupport
+              ? CUP_SUPPORT_BACKUP_POLICY
+              : appOnly
+                ? APP_ONLY_BACKUP_POLICY
+                : CANONICAL_PRIOR_RESTORE_POLICY) ||
         (cupSupport && receipt.policySha256 !== op.ownerRestoreDecisionSha256) ||
         receipt.freshDumpRestored !== false ||
         receipt.freshDumpIntegrityStatus !== 'PG16_TOC_PARSE_VERIFIED' ||
@@ -2718,6 +2765,65 @@ export function parseRuntimeDelta(raw) {
     };
   });
 }
+function attestGameInvitationsSource(candidateSha) {
+  const anchor = GAME_INVITATIONS_ACTIVATION.application;
+  git(['merge-base', '--is-ancestor', anchor, candidateSha]);
+  validateGameInvitationsActivationTail(
+    git(['rev-parse', `${anchor}^{tree}`]),
+    inspectRuntimeDelta(anchor, candidateSha),
+  );
+}
+
+function attestGameInvitationsDatabase(op, backup, owner, { expectEmpty = false } = {}) {
+  const path = `${ROOT}/operator/game-invitations-0120-${op.migrationAttemptId}`;
+  const postgres = inspect('postgres', 'phub-timeweb-beta-dependencies');
+  const catalogSha256 = validateGameInvitationsActivationMigration(op, {
+    receiptBytes: read(`${path}/receipt.json`),
+    requestBytes: read(`${path}/intent.json`),
+    backupOperationBytes: read(backup.operationPath),
+    backupReceiptBytes: read(backup.path),
+    postgresId: postgres.id,
+    postgresStartedAt: postgres.startedAt,
+    owner,
+  });
+  const migration = read(
+    `${SOURCE}/packages/database/migrations/${GAME_INVITATIONS_0120.filename}`,
+    0o644,
+  );
+  const input =
+    buildGameInvitations0120Sql(migration, GAME_INVITATIONS_0120_TARGET, 'readback') +
+    (expectEmpty
+      ? `begin read only;
+set local statement_timeout='5s';
+set local row_security=off;
+select not exists(select 1 from games.friend_invitations);
+rollback;
+`
+      : '');
+  const result = docker(
+    [
+      'exec',
+      '-i',
+      postgres.id,
+      '/usr/local/bin/psql',
+      '-XqAt',
+      '-v',
+      'ON_ERROR_STOP=1',
+      '-h',
+      '/var/run/postgresql',
+      '-U',
+      GAME_INVITATIONS_0120_TARGET.operator,
+      '-d',
+      GAME_INVITATIONS_0120_TARGET.database,
+    ],
+    { input, stdio: ['pipe', 'pipe', 'pipe'], timeout: 45_000, maxBuffer: 8192 },
+  );
+  const [readback, empty, ...extra] = result.trim().split('\n');
+  validateGameInvitationsActivationReadback(parseStrictJson(readback), catalogSha256);
+  if (extra.length || (expectEmpty ? empty !== 't' : empty !== undefined))
+    fail('game_invitations_activation_preexistence');
+}
+
 function attestAppOnlyDatabase(backup) {
   const proof = `import importlib.util,sys
 spec=importlib.util.spec_from_file_location('backup',sys.argv[1])
@@ -2867,7 +2973,8 @@ export function validateUpgradeReceipt(
   const schedule = receipt.schema === SCHEDULE_RECEIPT;
   const cupSupport = receipt.schema === CUP_SUPPORT_RECEIPT;
   const cupProviderWaived = cupSupport && Object.hasOwn(receipt, 'providerMonitoringStatus');
-  const appOnly = receipt.schema === APP_ONLY_RECEIPT || cupSupport;
+  const invitations = receipt.schema === GAME_INVITATIONS_ACTIVATION.rolloutReceipt;
+  const appOnly = receipt.schema === APP_ONLY_RECEIPT || cupSupport || invitations;
   const station = receipt.schema === STATION_RECEIPT;
   const stationDirect = station && Object.hasOwn(receipt, 'providerMonitoringStatus');
   const scheduleWaived = schedule && Object.hasOwn(receipt, 'ownerProviderMonitoringWaiverSha256');
@@ -2893,6 +3000,7 @@ export function validateUpgradeReceipt(
   if (stationDirect) keys.push('providerMonitoringStatus');
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
   if (cupSupport) keys.push('alertTestStatus', 'ownerAlertDecisionSha256');
+  if (invitations) keys.push(...Object.keys(GAME_INVITATIONS_MONITORING_STATUS));
   if (cupProviderWaived) keys.push('providerMonitoringStatus', 'ownerProviderDecisionSha256');
   if (scheduleWaived)
     keys.push(...Object.keys(SCHEDULE_MONITORING_STATUS), 'ownerProviderMonitoringWaiverSha256');
@@ -2922,7 +3030,7 @@ export function validateUpgradeReceipt(
             ]
           : direct
             ? ['ownerObservationSha256', 'evidencePolicySha256']
-            : scheduleWaived || stationDirect || cupProviderWaived
+            : scheduleWaived || stationDirect || cupProviderWaived || invitations
               ? []
               : [
                   'providerReadbackSha256',
@@ -2937,6 +3045,7 @@ export function validateUpgradeReceipt(
       'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
       SCHEDULE_RECEIPT,
       APP_ONLY_RECEIPT,
+      GAME_INVITATIONS_ACTIVATION.rolloutReceipt,
       CUP_SUPPORT_RECEIPT,
       STATION_RECEIPT,
       CUTOVER_RECEIPT,
@@ -2952,6 +3061,10 @@ export function validateUpgradeReceipt(
       (!HASH.test(receipt.databaseAdmissionSha256 ?? '') ||
         receipt.alertTestStatus !== STATION_ALERT_STATUS)) ||
     (stationDirect && receipt.providerMonitoringStatus !== STATION_PROVIDER_STATUS) ||
+    (invitations &&
+      Object.entries(GAME_INVITATIONS_MONITORING_STATUS).some(
+        ([key, value]) => receipt[key] !== value,
+      )) ||
     (cupSupport &&
       (receipt.alertTestStatus !== CUP_SUPPORT_ALERT_STATUS ||
         !HASH.test(receipt.ownerAlertDecisionSha256 ?? ''))) ||
@@ -3022,7 +3135,7 @@ export function validateUpgradeReceipt(
               ]
             : direct
               ? ['ownerObservationSha256', 'evidencePolicySha256']
-              : scheduleWaived || stationDirect || cupProviderWaived
+              : scheduleWaived || stationDirect || cupProviderWaived || invitations
                 ? []
                 : [
                     'providerReadbackSha256',
@@ -3040,6 +3153,7 @@ export function validateUpgradeReceipt(
       isCupSupportOperation(op) !== cupSupport ||
       (cupSupport && cupProviderWaived !== Object.hasOwn(op, 'ownerProviderDecision')) ||
       isAppOnlyOperation(op) !== appOnly ||
+      isGameInvitationsActivation(op) !== invitations ||
       isStationRollout(op) !== station ||
       isStationDirectOperation(op) !== stationDirect ||
       (station &&
@@ -3150,6 +3264,18 @@ export function validateCupSupportDirectObservation(value, op, plan, planSha256)
   if (!isCupSupportOperation(op) || value?.schema !== CUP_SUPPORT_DIRECT_OBSERVATION)
     fail('cup_support_observation_identity');
   validateCupSupportAlertDecision(op);
+  validateJoinObservation(
+    { ...value, schema: 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1' },
+    op,
+    plan,
+    planSha256,
+  );
+  return value;
+}
+export function validateGameInvitationsDirectObservation(value, op, plan, planSha256) {
+  if (!isGameInvitationsActivation(op) || value?.schema !== GAME_INVITATIONS_ACTIVATION.observation)
+    fail('game_invitations_observation_identity');
+  validateGameInvitationsActivationInputs(op);
   validateJoinObservation(
     { ...value, schema: 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1' },
     op,
@@ -3366,7 +3492,11 @@ export function validateInstalledCutoverKind(kind, receiptSchema) {
     if (kind !== STATION_KIND || receiptSchema !== STATION_RECEIPT) fail('installed_station_kind');
     return;
   }
-  if ([APP_ONLY_RECEIPT, CUP_SUPPORT_RECEIPT].includes(receiptSchema)) {
+  if (
+    [APP_ONLY_RECEIPT, CUP_SUPPORT_RECEIPT, GAME_INVITATIONS_ACTIVATION.rolloutReceipt].includes(
+      receiptSchema,
+    )
+  ) {
     if (kind !== 'API_WEB') fail('installed_app_only_kind');
     return;
   }
@@ -3995,7 +4125,13 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
       validateUpgradeReceipt(receipt, hash(planBytes));
       const transaction = `${ROOT}/backups/${releaseId}-api-web`;
       const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
-      if ([APP_ONLY_RECEIPT, CUP_SUPPORT_RECEIPT].includes(receipt.schema)) {
+      if (
+        [
+          APP_ONLY_RECEIPT,
+          CUP_SUPPORT_RECEIPT,
+          GAME_INVITATIONS_ACTIVATION.rolloutReceipt,
+        ].includes(receipt.schema)
+      ) {
         const opBytes = read(`${transaction}/operation.json`);
         const op = validateApiWebOperation(parseStrictJson(opBytes));
         validateUpgradeReceipt(receipt, hash(planBytes), op, plan, planBytes);
@@ -4009,6 +4145,13 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           fail('installed_app_only_lineage');
         validateBoundBackupPlan(plan.backup, op, transaction);
         attestBoundBackupFiles(plan.backup);
+        if (isGameInvitationsActivation(op))
+          validateGameInvitationsDirectObservation(
+            parseStrictJson(read(`${transaction}/observation.json`)),
+            op,
+            plan,
+            hash(planBytes),
+          );
         if (isCupSupportOperation(op))
           validateCupSupportDirectObservation(
             parseStrictJson(read(`${transaction}/observation.json`)),
@@ -4155,7 +4298,12 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
         receipt.ownerProviderMonitoringWaiverSha256) ||
       (receipt.schema === CUP_SUPPORT_RECEIPT &&
         receipt.providerMonitoringStatus === CUP_SUPPORT_PROVIDER_STATUS) ||
-      [WAIVER_RECEIPT, OWNER_RECEIPT, CANONICAL_RECEIPT].includes(receipt.schema) ||
+      [
+        WAIVER_RECEIPT,
+        OWNER_RECEIPT,
+        CANONICAL_RECEIPT,
+        GAME_INVITATIONS_ACTIVATION.rolloutReceipt,
+      ].includes(receipt.schema) ||
       (receipt.schema === STATION_RECEIPT &&
         receipt.providerMonitoringStatus === STATION_PROVIDER_STATUS)
         ? [['observation.json', 'observationSha256']]
@@ -4191,6 +4339,7 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
           'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',
           SCHEDULE_RECEIPT,
           APP_ONLY_RECEIPT,
+          GAME_INVITATIONS_ACTIVATION.rolloutReceipt,
           CUP_SUPPORT_RECEIPT,
           STATION_RECEIPT,
           CUTOVER_RECEIPT,
@@ -4224,6 +4373,87 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
     secretSetReleaseId: values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID ?? releaseId,
   };
 }
+export function attestGameInvitationsOwnerDecision() {
+  if (
+    hash(read(`${ROOT}/operator/game-invitations-0120-restore-waiver.txt`)) !==
+    GAME_INVITATIONS_MONITORING_STATUS.ownerMessageSha256
+  )
+    fail('game_invitations_owner_decision');
+  return GAME_INVITATIONS_MONITORING_STATUS;
+}
+
+export async function prepareGameInvitationsActivation(sourceCiRunId, publicationRunId) {
+  if (
+    process.getuid?.() !== 0 ||
+    ![sourceCiRunId, publicationRunId].every((id) => /^[1-9][0-9]*$/.test(id))
+  )
+    fail('game_invitations_activation_prepare');
+  secure(SOURCE);
+  secure(`${SOURCE}/.git`);
+  const config = parseStrictJson(read(CONFIG));
+  const candidateSha = git(['rev-parse', 'HEAD']);
+  const candidateTree = git(['rev-parse', 'HEAD^{tree}']);
+  if (
+    config.schema !== 1 ||
+    config.enabled !== true ||
+    config.controllerSha !== candidateSha ||
+    git(['status', '--porcelain', '--untracked-files=all']) !== '' ||
+    existsSync(LOCK)
+  )
+    fail('game_invitations_activation_controller');
+  attestGameInvitationsSource(candidateSha);
+  attestGameInvitationsOwnerDecision();
+  const releaseId = `${candidateSha}-${publicationRunId}-1`;
+  const directory = `${ROOT}/releases/${releaseId}`;
+  const transaction = `${ROOT}/backups/${releaseId}-api-web`;
+  const digest = hash(read(`${directory}/artifact/canonical-artifact.zip`));
+  const manifest = extractCanonicalPredecessorArtifactPair(
+    read(`${directory}/artifact/canonical-artifact.zip`),
+  ).get('release-manifest.json');
+  const name = `timeweb-amd64-canonical-release-${releaseId}`;
+  const list = await githubPublic(`actions/runs/${publicationRunId}/artifacts?per_page=100`);
+  const matching = list.artifacts?.filter((artifact) => artifact.name === name) ?? [];
+  if (!manifest || list.total_count !== list.artifacts?.length || matching.length !== 1)
+    fail('artifact_identity');
+  const request = parseStrictJson(read(`${ROOT}/operator/game-invitations-0120-migration.json`));
+  if (
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+      request.attemptId ?? '',
+    )
+  )
+    fail('game_invitations_activation_input');
+  const receipt = read(`${ROOT}/operator/game-invitations-0120-${request.attemptId}/receipt.json`);
+  const { id: apiId, releaseId: apiRelease, image: apiImage } = inspect('api');
+  const { id: webId, releaseId: webRelease, image: webImage } = inspect('web');
+  const op = validateApiWebOperation({
+    schema: GAME_INVITATIONS_ACTIVATION.schema,
+    profile: 'production',
+    target: 'lk2.padlhub.su',
+    candidateSha,
+    candidateTree,
+    controllerSha: candidateSha,
+    sourceCiRunId,
+    publicationRunId,
+    artifactId: String(matching[0].id),
+    artifactDigest: 'sha256:' + digest,
+    manifestSha256: hash(manifest),
+    expectedApi: { id: apiId, releaseId: apiRelease, image: apiImage },
+    expectedWeb: { id: webId, releaseId: webRelease, image: webImage },
+    expiresAt: request.expiresAt,
+    backupOperationSha256: hash(read(`${transaction}/backup-operation.json`)),
+    migrationAttemptId: request.attemptId,
+    migrationReceiptSha256: hash(receipt),
+    ownerMessageSha256: GAME_INVITATIONS_MONITORING_STATUS.ownerMessageSha256,
+    confirmation: `DEPLOY_API_WEB_${candidateSha.slice(0, 12).toUpperCase()}_FROM_${apiRelease.slice(0, 12).toUpperCase()}_${webRelease.slice(0, 12).toUpperCase()}${GAME_INVITATIONS_ACTIVATION.suffix}`,
+  });
+  validateScheduleExpiry(op.expiresAt, 20 * 60_000);
+  await verifyCi(op.sourceCiRunId, op.candidateSha);
+  await candidateAuthority(op, directory);
+  const backup = validateBoundApiWebBackupProof(transaction, releaseId, op, inspect('api'));
+  attestGameInvitationsDatabase(op, backup, config.owner, { expectEmpty: true });
+  return op;
+}
+
 export async function runManualApiWebUpgrade(mode, requestPath) {
   if (
     !['deploy', 'recover', 'reconcile'].includes(mode) ||
@@ -4272,7 +4502,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       : parsedOperation,
   );
   const options = { mode, op, opBytes, config, terminalWithoutLock };
-  if (!isStationRollout(op)) return runApiWebOperation(options);
+  if (!isStationRollout(op) && !isGameInvitationsActivation(op)) return runApiWebOperation(options);
   const { acquireApiWorkerExecutor } = await import('./timeweb-api-worker-upgrade.js');
   secure(`${ROOT}/standard`);
   const owner = acquireApiWorkerExecutor(`${ROOT}/standard/api-worker-executor.lock`);
@@ -4286,6 +4516,12 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
   const join = isJoinOperation(op);
   const schedule = isScheduleOperation(op);
   const cupSupport = isCupSupportOperation(op);
+  const invitations = isGameInvitationsActivation(op);
+  const invitationDecision = invitations ? GAME_INVITATIONS_MONITORING_STATUS : {};
+  const attestDatabase = (backup) => {
+    if (invitations) attestGameInvitationsDatabase(op, backup, config.owner);
+    else attestAppOnlyDatabase(backup);
+  };
   const cupAlert = cupSupport ? cupSupportAlertReceipt(op) : undefined;
   const cupProviderWaived = cupSupport && Object.hasOwn(op, 'ownerProviderDecision');
   const appOnly = isAppOnlyOperation(op);
@@ -4331,9 +4567,11 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         : direct
           ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
           : appOnly
-            ? cupSupport
-              ? CUP_SUPPORT_RECEIPT
-              : APP_ONLY_RECEIPT
+            ? invitations
+              ? GAME_INVITATIONS_ACTIVATION.rolloutReceipt
+              : cupSupport
+                ? CUP_SUPPORT_RECEIPT
+                : APP_ONLY_RECEIPT
             : station
               ? STATION_RECEIPT
               : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1';
@@ -4343,6 +4581,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
   if (mode === 'deploy' && cutover) validateProductionCutover(op, true);
   const profile = join ? 'production' : (op.profile ?? 'beta');
   if (mode === 'deploy' && (schedule || appOnly)) validateScheduleExpiry(op.expiresAt, 20 * 60_000);
+  if (mode === 'deploy' && invitations) attestGameInvitationsOwnerDecision();
   if (
     mode === 'deploy' &&
     cupSupport &&
@@ -4654,6 +4893,8 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         );
       } else if (cupSupport) {
         attestCupSupportSource(previousSource, op.candidateSha);
+      } else if (invitations) {
+        attestGameInvitationsSource(op.candidateSha);
       } else if (appOnly) {
         validateAppOnlyRuntimeDelta(entries);
       } else if (!join) {
@@ -4747,9 +4988,10 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         : schedule || appOnly
           ? validateBoundApiWebBackupProof(transaction, id, op, api)
           : validateBackupProof(transaction, previousApi, profile, cutover ? op : undefined);
+    if (invitations) attestGameInvitationsDatabase(op, backup, config.owner, { expectEmpty: true });
     let ownerBytes;
     const monitoring =
-      !direct && !scheduleWaiver && !stationDirect && !cupProviderWaived
+      !direct && !scheduleWaiver && !stationDirect && !cupProviderWaived && !invitations
         ? isOwnerDirectedCutover(op)
           ? createOwnerDirectedBinding(op, hash(opBytes))
           : isWaivedRosterCutover(op)
@@ -4892,7 +5134,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     durable(`${transaction}/${admissionMarker}`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)), alertTestStatus: STATION_ALERT_STATUS, ...stationProviderDecision } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, ...cupAlert, observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)), alertTestStatus: STATION_ALERT_STATUS, ...stationProviderDecision } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, ...cupAlert, ...invitationDecision, observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
@@ -5062,7 +5304,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     if (mode === 'deploy' && (full || database)) validateStationWindow(op, Date.now(), minimumMs);
   };
   const attest = (recovering = false) => {
-    if (station) assertOwned();
+    if (station || invitations) assertOwned();
     if (!recovering) attestStationForward();
     if ((schedule || appOnly) && !recovering) {
       if (schedule) attestScheduleSidecarArchive(op, plan.previousSecrets.files);
@@ -5208,6 +5450,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           : {}),
         ...scheduleWaiver,
         ...cupAlert,
+        ...invitationDecision,
         ...(status === 'SUCCESS'
           ? {
               installedBaselineSha256,
@@ -5221,7 +5464,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
                         ownerObservationSha256: plan.ownerObservationSha256,
                         evidencePolicySha256: plan.evidencePolicySha256,
                       }
-                    : scheduleWaiver || stationDirect || cupProviderWaived
+                    : scheduleWaiver || stationDirect || cupProviderWaived || invitations
                       ? {}
                       : {
                           providerReadbackSha256: hash(
@@ -5373,6 +5616,22 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           },
         }
       : {}),
+    ...(invitations
+      ? {
+          attestGameInvitationsTransition: async (phase) => {
+            if (phase !== 'rollback') {
+              attest();
+              validateScheduleExpiry(op.expiresAt);
+              attestGameInvitationsOwnerDecision();
+            }
+            if (phase === 'api' && hashBackupFile(plan.backup.dumpPath) !== plan.backup.dumpSha256)
+              fail('game_invitations_activation_backup_drift');
+            attestGameInvitationsDatabase(op, plan.backup, config.owner, {
+              expectEmpty: phase === 'api',
+            });
+          },
+        }
+      : {}),
     attestRestored: async () => {
       await attestApiWebTerminal('ROLLED_BACK', attest);
       attestRunningEnv(true);
@@ -5381,15 +5640,16 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     abort: async () => {
       if (swapsSecrets) expectedSecrets = plan.previousSecrets;
       await attestApiWebTerminal('ABORTED', attest);
+      if (invitations) attestDatabase(plan.backup);
       for (const service of targets)
         if (!equal(inspect(service), plan.previous[service])) fail('abort_baseline_changed');
     },
     installBaseline: async () => {
       attestStationForward({ full: true, database: true });
       if (schedule) validateScheduleExpiry(op.expiresAt);
-      if (appOnly) {
+      if (appOnly && !invitations) {
         attest();
-        attestAppOnlyDatabase(plan.backup);
+        attestDatabase(plan.backup);
         attest();
       }
       if (swapsSecrets) {
@@ -5414,7 +5674,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       attestStationForward({ database: true });
       attest();
       attestJoinBackup();
-      if (appOnly) attestAppOnlyDatabase(plan.backup);
+      if (appOnly) attestDatabase(plan.backup);
       for (const s of targets) {
         if (!equal(inspect(s), plan.previous[s])) fail('baseline_drift');
         imagePresent(
@@ -5512,7 +5772,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         return;
       }
       const startedAt = new Date().toISOString();
-      const detailedObservation = join || scheduleWaiver || cupSupport;
+      const detailedObservation = join || scheduleWaiver || cupSupport || invitations;
       const samples = {
         api: { privateMs: [], publicMs: [], timestamps: [] },
         web: { privateMs: [], publicMs: [], timestamps: [] },
@@ -5534,7 +5794,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         if (join) validateJoinOperation(op, true);
         attest();
         attestRunningEnv();
-        if (scheduleWaiver) {
+        if (scheduleWaiver || invitations) {
           validateScheduleExpiry(op.expiresAt);
         } else if (cupSupport) {
           validateScheduleExpiry(op.expiresAt);
@@ -5559,7 +5819,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           completedAt = finalMonitoring.observedAt;
           durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
         }
-      } else if (!scheduleWaiver) {
+      } else if (!scheduleWaiver && !invitations) {
         const finalMonitoring = validateMonitoring(transaction, profile, {
           fresh: schedule || appOnly,
         });
@@ -5576,15 +5836,19 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       const observation = detailedObservation
         ? (join
             ? validateJoinObservation
-            : cupSupport
-              ? validateCupSupportDirectObservation
-              : validateScheduleDirectObservation)(
+            : invitations
+              ? validateGameInvitationsDirectObservation
+              : cupSupport
+                ? validateCupSupportDirectObservation
+                : validateScheduleDirectObservation)(
             {
               schema: join
                 ? 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1'
-                : cupSupport
-                  ? CUP_SUPPORT_DIRECT_OBSERVATION
-                  : SCHEDULE_DIRECT_OBSERVATION,
+                : invitations
+                  ? GAME_INVITATIONS_ACTIVATION.observation
+                  : cupSupport
+                    ? CUP_SUPPORT_DIRECT_OBSERVATION
+                    : SCHEDULE_DIRECT_OBSERVATION,
               operationSha256: plan.operationSha256,
               planSha256,
               candidateSha: op.candidateSha,
@@ -5676,6 +5940,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
             terminal === 'SUCCESS' ? plan.candidate[service] : plan.previous[service],
           );
         attestRunningEnv(terminal !== 'SUCCESS');
+        if (invitations) attestDatabase(plan.backup);
         if (terminal === 'SUCCESS' && swapsSecrets) {
           if (join)
             validateJoinObservation(
@@ -5721,6 +5986,13 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           )
             fail('installed_baseline_drift');
           if (appOnly || station) {
+            if (invitations)
+              validateGameInvitationsDirectObservation(
+                parseStrictJson(read(`${transaction}/observation.json`)),
+                op,
+                plan,
+                planSha256,
+              );
             if (station) {
               attestStationForward({ full: true, database: true });
               validateStationObservation(
@@ -5732,10 +6004,12 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
             }
             for (const [file, key] of [
               ['observation.json', 'observationSha256'],
-              ...(!stationDirect
+              ...(!stationDirect && !invitations
                 ? [['timeweb-monitor-readback.json', 'providerReadbackSha256']]
                 : []),
-              ...(!station ? [['alert-test-readback.json', 'alertReadbackSha256']] : []),
+              ...(!station && !invitations
+                ? [['alert-test-readback.json', 'alertReadbackSha256']]
+                : []),
             ])
               if (hash(read(`${transaction}/${file}`)) !== receipt[key])
                 fail('installed_app_only_evidence');

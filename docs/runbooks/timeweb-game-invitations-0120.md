@@ -25,9 +25,12 @@ application release after the migration receipt is sealed.
   Seal the companion `game-invitations-0120-restore-window.json` as
   `PHUB_TIMEWEB_GAME_INVITATIONS_0120_RESTORE_WINDOW_V1` with
   `messageSha256`, exact `candidateSha`, `controllerTree`, `releaseId`,
-  actual user message `receivedAt`, and the approved UTC `expiresAt`.
-  The request records a hash of the exact backup scope and uses this same
-  deadline through the migration. Preparing another attempt cannot extend it.
+  actual user message `receivedAt`, operation window `openedAt` after exact source
+  CI and immutable publication, and UTC `expiresAt` within one hour of
+  `openedAt`. The request records a hash of the exact backup scope and uses this
+  same deadline through migration and activation. Preparing another attempt
+  cannot extend the window. The user message timestamp is recorded separately
+  from the opening of the operational window.
   The backup producer's existing `--prepare-app-only` entry takes the new
   `game-invitations-0120-integrity-only` selector after the exact source SHA and
   publication run ID. Use its existing plan, execute, and reconciliation stages.
@@ -72,3 +75,44 @@ Reconciliation never executes the migration. Keep locks on ambiguous results
 until the enrolled procedure can resolve them. Application rollback uses prior
 images and retains the expanded schema and history. Database restoration is a
 separate recovery operation.
+
+## Activate the application from PR 709
+
+The activation schema is `PHUB_TIMEWEB_API_WEB_GAME_INVITATIONS_0120_DIRECT_V2`.
+It admits only the product tree from merge `53af9f2e114de228a9b26fcbcf7ef7e284bd85f4`
+with the reviewed controller-only additions. Publish the exact final main
+commit after first-attempt main CI. The app operation uses the published API
+and Web digests. The current Worker already handles the established in-app
+notification contract. This profile continues to verify the excluded Worker,
+Realtime, and Migrator states.
+
+Before the backup and migration, verify the exact retained owner message with
+`--critical-game-invitations-activation-authority`. The decision applies to
+this product tree and the named predecessor only. For this release the
+controller records `providerMonitoringStatus: NOT_COLLECTED_EXPLICIT_OVERRIDE`
+and `alertTestStatus: NOT_TESTED_EXPLICIT_OVERRIDE`. The controller probes the
+public and private API and Web URLs in 61 rounds over at least 15 minutes. A probe
+failure, a container replacement or restart, or a latency breach invokes the
+existing image rollback. The receipt binds the observation to the operation
+and exact plan. The migration requires more than 25 minutes remaining in the
+shared operation window.
+
+After a COMMITTED migration, use
+`--critical-game-invitations-activation-prepare <sourceCiRunId> <publicationRunId>`
+on the enrolled controller. This reads the canonical artifact, the original
+pre-migration backup and its terminal integrity evidence, and the sealed
+migration request and receipt. It checks the 124-row ledger and ACL/RLS
+postimage on the same PostgreSQL instance. It prints the validated operation
+for exclusive installation as root-owned 0600 at
+`/opt/phub/timeweb-beta/operator/api-web-upgrade.json`. Use the existing
+`--critical-api-web`, recover and reconcile commands with that request path.
+The operation requires sufficient time in the same backup window for the
+standard observation.
+
+Before the first API change, the controller rehashes the dump and verifies that
+the invitations table is empty using the database operator without RLS
+filtering. It verifies the 0120 postimage before API and Web start, before
+sealing the installed baseline, and after a binary rollback. A rollback retains
+the table and any invitation rows. If private invitations were issued, users
+may temporarily lose access to those games while the previous API is installed.
+A later forward release can recover that access using the retained rows.

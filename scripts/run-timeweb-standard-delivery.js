@@ -32,7 +32,12 @@ import {
   runManualApiWorkerMigration,
   runManualNotificationMigratorPrefetch,
 } from './timeweb-api-worker-migration.js';
-import { readInstalledApiBaseline, runManualApiWebUpgrade } from './timeweb-api-web-upgrade.js';
+import {
+  attestGameInvitationsOwnerDecision,
+  prepareGameInvitationsActivation,
+  readInstalledApiBaseline,
+  runManualApiWebUpgrade,
+} from './timeweb-api-web-upgrade.js';
 import {
   createStandardDeliveryDiagnostic,
   standardDeliveryGuardError,
@@ -820,6 +825,12 @@ async function runManualClosedMigration(mode, requestPath, profile) {
     config,
     mode === 'apply' ? Date.now() : undefined,
   );
+  if (
+    mode === 'apply' &&
+    profile === GAME_INVITATIONS_0120_PROFILE &&
+    Date.parse(op.expiresAt) - Date.now() <= 25 * 60_000
+  )
+    fail('GAME_INVITATIONS_0120_ACTIVATION_WINDOW');
   const migration = command(
     '/usr/bin/git',
     ['show', `${op.migrationSourceSha}:packages/database/migrations/${selected.filename}`],
@@ -1117,68 +1128,80 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     : gameInvitations0120 || prepare0120
       ? GAME_INVITATIONS_0120_PROFILE
       : null;
-  const operation = closedMigration
-    ? (prepare0120
-        ? Promise.resolve().then(() => prepareGameInvitations0120Request(args[1]))
-        : runManualClosedMigration(
-            args[0].endsWith('-reconcile') ? 'reconcile' : 'apply',
-            args[1],
-            closedMigration,
-          )
-      ).then((receipt) => {
-        process.stdout.write(JSON.stringify(receipt) + '\n');
-        if (!prepare0120 && receipt.state !== 'COMMITTED') process.exitCode = 1;
-      })
-    : notificationPrefetch
-      ? runManualNotificationMigratorPrefetch(
-          args[0] === '--critical-notification-migrator-prefetch' ? 'pull' : 'reconcile',
-          args[1],
-        ).then((receipt) => {
-          process.stdout.write(JSON.stringify(receipt) + '\n');
-        })
-      : apiWorkerMigration
-        ? runManualApiWorkerMigration(
-            args[0] === '--critical-api-worker-migration' ? 'deploy' : 'reconcile',
+  const prepareActivation =
+    args.length === 3 && args[0] === '--critical-game-invitations-activation-prepare';
+  const attestActivation =
+    args.length === 1 && args[0] === '--critical-game-invitations-activation-authority';
+  const operation =
+    closedMigration || prepareActivation || attestActivation
+      ? Promise.resolve()
+          .then(() => {
+            if (prepareActivation) return prepareGameInvitationsActivation(args[1], args[2]);
+            if (attestActivation) return attestGameInvitationsOwnerDecision();
+            if (prepare0120) return prepareGameInvitations0120Request(args[1]);
+            if (gameInvitations0120 && !args[0].endsWith('-reconcile'))
+              attestGameInvitationsOwnerDecision();
+            return runManualClosedMigration(
+              args[0].endsWith('-reconcile') ? 'reconcile' : 'apply',
+              args[1],
+              closedMigration,
+            );
+          })
+          .then((receipt) => {
+            process.stdout.write(JSON.stringify(receipt) + '\n');
+            if (closedMigration && !prepare0120 && receipt.state !== 'COMMITTED')
+              process.exitCode = 1;
+          })
+      : notificationPrefetch
+        ? runManualNotificationMigratorPrefetch(
+            args[0] === '--critical-notification-migrator-prefetch' ? 'pull' : 'reconcile',
             args[1],
           ).then((receipt) => {
             process.stdout.write(JSON.stringify(receipt) + '\n');
           })
-        : apiWorker
-          ? runManualApiWorkerUpgrade(
-              args[0] === '--critical-api-worker'
-                ? 'deploy'
-                : args[0] === '--critical-api-worker-recover'
-                  ? 'recover'
-                  : 'reconcile',
+        : apiWorkerMigration
+          ? runManualApiWorkerMigration(
+              args[0] === '--critical-api-worker-migration' ? 'deploy' : 'reconcile',
               args[1],
             ).then((receipt) => {
               process.stdout.write(JSON.stringify(receipt) + '\n');
             })
-          : criticalWeb
-            ? runCriticalWeb(
-                args[0] === '--critical-web'
+          : apiWorker
+            ? runManualApiWorkerUpgrade(
+                args[0] === '--critical-api-worker'
                   ? 'deploy'
-                  : args[0] === '--critical-web-recover'
+                  : args[0] === '--critical-api-worker-recover'
                     ? 'recover'
                     : 'reconcile',
                 args[1],
               ).then((receipt) => {
                 process.stdout.write(JSON.stringify(receipt) + '\n');
               })
-            : manual
-              ? runManualApiWebUpgrade(
-                  args[0] === '--critical-api-web'
+            : criticalWeb
+              ? runCriticalWeb(
+                  args[0] === '--critical-web'
                     ? 'deploy'
-                    : args[0] === '--critical-api-web-recover'
+                    : args[0] === '--critical-web-recover'
                       ? 'recover'
                       : 'reconcile',
                   args[1],
                 ).then((receipt) => {
                   process.stdout.write(JSON.stringify(receipt) + '\n');
                 })
-              : args.length === 1
-                ? main(args[0])
-                : Promise.reject(new Error('Invalid controller arguments'));
+              : manual
+                ? runManualApiWebUpgrade(
+                    args[0] === '--critical-api-web'
+                      ? 'deploy'
+                      : args[0] === '--critical-api-web-recover'
+                        ? 'recover'
+                        : 'reconcile',
+                    args[1],
+                  ).then((receipt) => {
+                    process.stdout.write(JSON.stringify(receipt) + '\n');
+                  })
+                : args.length === 1
+                  ? main(args[0])
+                  : Promise.reject(new Error('Invalid controller arguments'));
   operation.catch((error) => {
     // External command errors may contain runtime environment; never print raw error/stdout.
     let pointer = 'unavailable';
