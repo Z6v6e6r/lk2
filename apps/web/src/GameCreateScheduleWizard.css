@@ -334,16 +334,21 @@ html:has(.game-schedule-wizard--settings) {
 }
 
 .game-schedule-formats {
+  --schedule-chip-height: 34px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .game-schedule-settings {
-  gap: 20px;
+  gap: 16px;
 }
 
 .game-schedule-settings-section {
   display: grid;
   min-width: 0;
+  gap: 8px;
+}
+
+.game-schedule-settings-section:has(> .game-schedule-courts) {
   gap: 12px;
 }
 
@@ -380,10 +385,22 @@ html:has(.game-schedule-wizard--settings) {
 .game-schedule-wizard
   :is(.game-schedule-formats, .game-schedule-durations, .game-schedule-times)
   button {
-  min-height: 42px;
-  border-radius: 18px;
+  position: relative;
+  min-height: var(--schedule-chip-height, 32px);
+  border-radius: 12px;
   padding: 4px 14px;
   white-space: nowrap;
+}
+
+.game-schedule-wizard
+  :is(.game-schedule-formats, .game-schedule-durations, .game-schedule-times)
+  button::after {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 50%;
+  block-size: var(--schedule-chip-hit-height, 44px);
+  transform: translateY(-50%);
+  content: '';
 }
 
 .game-schedule-wizard
@@ -428,19 +445,19 @@ html:has(.game-schedule-wizard--settings) {
 .game-schedule-month-dates {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 58px;
+  grid-auto-columns: 44px;
   gap: 8px;
 }
 
 .game-schedule-wizard .game-schedule-days button {
   display: grid;
   width: 100%;
-  min-height: 64px;
+  min-height: 48px;
   align-content: center;
-  gap: 4px;
-  padding: 4px;
+  gap: 2px;
+  padding: 2px 4px;
   border: 1px solid color-mix(in srgb, var(--schedule-line) 76%, var(--schedule-paper));
-  border-radius: 16px;
+  border-radius: 9px;
   background: var(--schedule-paper);
   color: var(--schedule-ink);
   font:
@@ -474,6 +491,10 @@ html:has(.game-schedule-wizard--settings) {
 
 .game-schedule-times {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.game-schedule-times:has(> :nth-child(5)) {
+  --schedule-chip-hit-height: 40px;
 }
 
 .game-schedule-wizard .game-schedule-courts .game-schedule-pick > :first-child {
