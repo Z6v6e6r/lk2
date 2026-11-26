@@ -140,9 +140,9 @@ describe('game creation schedule', () => {
       await user.click(await screen.findByRole('button', { name: courtName }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
       const payers = within(screen.getByRole('group', { name: 'Кто оплачивает корт?' }));
-      expect(payers.getByRole('radio', { name: /Каждый платит за себя/ })).toBeChecked();
+      expect(payers.getByRole('radio', { name: /Каждый за себя/ })).toBeChecked();
       expect(await payers.findByText(/700\s*₽/)).toBeTruthy();
-      expect(payers.queryByText('Подписка', { exact: false })).not.toBeInTheDocument();
+      expect(payers.queryByText('По подписке')).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('С Резидентством')).toBeTruthy();
       expect(screen.getByText(/700\s*₽/)).toBeTruthy();
@@ -188,9 +188,9 @@ describe('game creation schedule', () => {
     await user.click(screen.getByRole('button', { name: courtName }));
     expect(summary().getByText('Селигерская · Корт №1')).toBeVisible();
     const payers = within(screen.getByRole('group', { name: 'Кто оплачивает корт?' }));
-    expect(await payers.findByText('Подписка')).toHaveTextContent(/Подписка\s+0\s*₽/);
-    expect(payers.getByText('Резидентство')).toHaveTextContent(/Резидентство\s+480\s*₽/);
-    await user.click(payers.getByRole('radio', { name: /Я оплачиваю весь корт/ }));
+    expect(await payers.findByText('По подписке')).toHaveTextContent(/По подписке\s+0\s*₽/);
+    expect(payers.getByText('С резидентством')).toHaveTextContent(/С резидентством\s+480\s*₽/);
+    await user.click(payers.getByRole('radio', { name: /^Весь корт/ }));
     expect(summary().getByText('Я оплачиваю весь корт')).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
@@ -359,7 +359,7 @@ describe('game creation schedule', () => {
       await user.click(screen.getByRole('button', { name: 'Селигерская' }));
       await user.click(await screen.findByRole('button', { name: courtName }));
       await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
-      await user.click(screen.getByRole('radio', { name: /Я оплачиваю весь корт/ }));
+      await user.click(screen.getByRole('radio', { name: /^Весь корт/ }));
       await user.click(screen.getByRole('button', { name: 'Продолжить' }));
       expect(await screen.findByText('Оплата выбранного слота сейчас недоступна.')).toBeTruthy();
       if (mismatch === 'price-unavailable') {

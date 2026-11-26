@@ -749,29 +749,33 @@ export function GameCreateScheduleWizard({
                     onChange={() => choosePayer('split')}
                   />
                   <span className="game-schedule-payer-copy">
-                    <strong>Каждый платит за себя</strong>
-                    <small>
-                      Вы оплачиваете только своё участие. Остальные игроки оплачивают свою часть.
-                    </small>
-                    <span className="game-schedule-payer-tag">
+                    <span className="game-schedule-payer-line">
+                      <strong>Каждый за себя</strong>
+                      <strong className="game-schedule-payer-price">{price(share)}</strong>
+                    </span>
+                    <small>Вы оплачиваете только своё участие</small>
+                    {subscription !== undefined || residency?.status === 'APPLIED' ? (
+                      <small className="game-schedule-payer-benefits">
+                        {subscription !== undefined ? (
+                          <span className="game-schedule-payer-line">
+                            По подписке <span>{price(subscription)}</span>
+                          </span>
+                        ) : null}
+                        {residency?.status === 'APPLIED' ? (
+                          <span className="game-schedule-payer-line">
+                            С резидентством <span>{residencePrice}</span>
+                          </span>
+                        ) : null}
+                      </small>
+                    ) : !quote ? (
+                      <small className="game-schedule-payer-benefits">
+                        Проверяем цену и условия…
+                      </small>
+                    ) : null}
+                    <span className="game-schedule-payer-note">
                       <TrainingPeopleIcon />
                       <span>3 игрока смогут присоединиться</span>
                     </span>
-                  </span>
-                  <span className="game-schedule-payer-price">
-                    <strong>{price(share)}</strong>
-                    {subscription !== undefined ? (
-                      <small>
-                        Подписка <span>{price(subscription)}</span>
-                      </small>
-                    ) : null}
-                    {residency?.status === 'APPLIED' ? (
-                      <small>
-                        Резидентство <span>{residencePrice}</span>
-                      </small>
-                    ) : !quote ? (
-                      <small>Проверяем цену и условия…</small>
-                    ) : null}
                   </span>
                 </label>
                 <label className="game-schedule-option">
@@ -782,17 +786,15 @@ export function GameCreateScheduleWizard({
                     onChange={() => choosePayer('self')}
                   />
                   <span className="game-schedule-payer-copy">
-                    <strong>Я оплачиваю весь корт</strong>
-                    <small>
-                      Вы оплачиваете весь корт сами. Доступность игры выбирается на следующем шаге.
-                    </small>
-                    <span className="game-schedule-payer-tag">
+                    <span className="game-schedule-payer-line">
+                      <strong>Весь корт</strong>
+                      <strong className="game-schedule-payer-price">{price(whole)}</strong>
+                    </span>
+                    <small>Остальным игрокам платить не нужно</small>
+                    <span className="game-schedule-payer-note">
                       <TrainingPeopleIcon />
                       Соберу игроков сам
                     </span>
-                  </span>
-                  <span className="game-schedule-payer-price">
-                    <strong>{price(whole)}</strong>
                   </span>
                 </label>
               </fieldset>

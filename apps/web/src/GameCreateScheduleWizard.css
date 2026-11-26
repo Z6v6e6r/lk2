@@ -553,9 +553,9 @@ html:has(.game-schedule-summary) {
 }
 
 .game-schedule-payers .game-schedule-option {
-  grid-template-columns: 26px minmax(0, 1fr) minmax(76px, max-content);
-  gap: 12px;
-  padding: 16px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
   border-radius: 22px;
   cursor: pointer;
 }
@@ -570,50 +570,64 @@ html:has(.game-schedule-summary) {
 }
 
 .game-schedule-payers input {
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
 }
 
-.game-schedule-payer-copy > strong {
-  display: block;
+.game-schedule-payer-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.game-schedule-payer-line > strong:first-child {
   font:
     700 15px/1.2 'Recommendation RF Dewi',
     'RF Dewi',
     sans-serif;
 }
 
-.game-schedule-payer-copy small {
-  margin-block-start: 8px;
+.game-schedule-payers .game-schedule-payer-copy > small {
+  margin-block-start: 4px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
 }
 
-.game-schedule-payer-tag {
-  display: inline-flex;
+.game-schedule-payers .game-schedule-payer-copy > .game-schedule-payer-benefits {
+  display: grid;
+  gap: 4px;
+  margin-block-start: 12px;
+}
+
+.game-schedule-payer-note {
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-block-start: 10px;
-  border-radius: 12px;
-  padding: 7px 10px;
-  background: #ede8fb;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--schedule-line);
   color: #6145b6;
   font-size: 12px;
 }
 
-.game-schedule-payers .game-schedule-option:last-child .game-schedule-payer-tag {
-  background: #eceef2;
+.game-schedule-payers .game-schedule-option:last-child .game-schedule-payer-note {
   color: #545b69;
 }
 
-.game-schedule-payer-tag svg {
+.game-schedule-payer-note svg {
   flex: none;
+  width: 14px;
+  height: 14px;
 }
 
-.game-schedule-payer-price {
-  max-width: 92px;
+.game-schedule-payer-price,
+.game-schedule-payer-benefits .game-schedule-payer-line > span {
   text-align: end;
 }
 
-.game-schedule-payer-price > strong {
-  display: block;
+.game-schedule-payer-price {
   color: var(--schedule-accent);
   font:
     600 16px/1.2 'Inter Display',
@@ -622,13 +636,8 @@ html:has(.game-schedule-summary) {
   overflow-wrap: anywhere;
 }
 
-.game-schedule-payer-price small {
-  margin-block-start: 4px;
-  overflow-wrap: anywhere;
-}
-
-.game-schedule-payer-price small > span {
-  display: block;
+.game-schedule-payer-benefits .game-schedule-payer-line > span {
+  color: var(--schedule-ink);
 }
 
 .game-schedule-primary {
