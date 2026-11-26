@@ -363,6 +363,49 @@ describe('game creation schedule', () => {
     expect(courtButton).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('narrows and restores both ends one quarter at a time in the local level preview', async () => {
+    render(
+      <GameCreateScheduleWizard
+        stations={stations}
+        today="2026-12-06"
+        previewLevelQuarters
+        source={{
+          listSlots: () => Promise.resolve([slot]),
+          readQuote: () =>
+            Promise.resolve({
+              ...quoteTimes(),
+              wholeCourtMinor: 240000,
+              shareMinor: 60000,
+              residency: { status: 'NOT_APPLICABLE' },
+            }),
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+    await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+    await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    const levels = within(screen.getByRole('group', { name: 'Уровень игры' }));
+    const summary = within(screen.getByRole('region', { name: 'Выбранная игра' }));
+    const from = levels.getByRole('button', { name: 'D' });
+    const to = levels.getByRole('button', { name: 'C' });
+    expect(summary.getByText('D₁ – C₄')).toBeVisible();
+    for (const edge of ['D₂', 'D₃', 'D₄', 'D₃', 'D₂', 'D₁', 'D₂']) {
+      await user.click(from);
+      expect(summary.getByText(`${edge} – C₄`)).toBeVisible();
+      expect(from).toHaveAccessibleDescription(edge);
+    }
+    for (const edge of ['C₃', 'C₂', 'C₁', 'C₂', 'C₃', 'C₄', 'C₃']) {
+      await user.click(to);
+      expect(summary.getByText(`D₂ – ${edge}`)).toBeVisible();
+      expect(to).toHaveAccessibleDescription(edge);
+    }
+    await user.click(summary.getByRole('button', { name: 'Изменить' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expect(summary.getByText('D₂ – C₃')).toBeVisible();
+  });
+
   it('reports missing residency evidence independently from the base price', async () => {
     renderWizard({
       listSlots: () => Promise.resolve([slot]),

@@ -847,8 +847,8 @@ html:has(.game-schedule-wizard--settings) {
   border-inline-start: 1px solid var(--schedule-line);
 }
 
-.game-schedule-levels button::before,
-.game-schedule-levels button::after {
+.game-schedule-levels :is(button, .game-schedule-level-fill)::before,
+.game-schedule-levels :is(button, .game-schedule-level-fill)::after {
   position: absolute;
   inset-inline: 0;
   height: 8px;
@@ -861,11 +861,11 @@ html:has(.game-schedule-wizard--settings) {
   content: '';
 }
 
-.game-schedule-levels button::before {
+.game-schedule-levels :is(button, .game-schedule-level-fill)::before {
   inset-block-start: 0;
 }
 
-.game-schedule-levels button::after {
+.game-schedule-levels :is(button, .game-schedule-level-fill)::after {
   inset-block-end: 0;
   transform: scaleY(-1);
 }
@@ -875,6 +875,22 @@ html:has(.game-schedule-wizard--settings) {
   color: var(--schedule-paper);
 }
 
+.game-schedule-wizard .game-schedule-levels--quarters button[aria-pressed='true'] {
+  background: transparent;
+  color: var(--schedule-ink);
+}
+
+.game-schedule-level-fill {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--schedule-accent);
+  color: var(--schedule-paper);
+  pointer-events: none;
+}
+
 .game-schedule-wizard .game-schedule-levels button:focus-visible {
   z-index: 1;
   outline-offset: -3px;
@@ -882,6 +898,10 @@ html:has(.game-schedule-wizard--settings) {
 
 .game-schedule-wizard .game-schedule-levels button[aria-pressed='true']:focus-visible {
   outline-color: var(--schedule-paper);
+}
+
+.game-schedule-wizard .game-schedule-levels--quarters button[aria-pressed='true']:focus-visible {
+  outline-color: var(--schedule-ink);
 }
 
 .game-schedule-visibility .game-schedule-option {
