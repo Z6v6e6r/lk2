@@ -9,7 +9,7 @@ import backIconUrl from './assets/game-schedule-back.svg';
 import stationChevronUrl from './assets/game-schedule-station-chevron.svg';
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import { locationCourtLabel } from './location-court-label.js';
-import { useGameCreateWizard } from './use-game-create-wizard.js';
+import type { GameCreateStep } from './use-game-create-wizard.js';
 import { TrainingPeopleIcon } from './TrainingPeopleIcon.js';
 import './GameCreateScheduleWizard.css';
 
@@ -159,7 +159,7 @@ export function GameCreateScheduleWizard({
   readonly gamesHref?: string;
   readonly today?: string;
 }) {
-  const wizard = useGameCreateWizard();
+  const [step, setStep] = useState<GameCreateStep>(0);
   const stationDetailsPrefix = useId();
   const cityPanelPrefix = useId();
   const heading = useRef<HTMLHeadingElement>(null);
@@ -182,7 +182,7 @@ export function GameCreateScheduleWizard({
   const [expiredQuoteKey, setExpiredQuoteKey] = useState<string>();
   const [slotsRead, setSlotsRead] = useState<ReadResult<readonly GameCreateScheduleSlot[]>>();
   const [quoteRead, setQuoteRead] = useState<ReadResult<ScheduleDisplayQuote>>();
-  const scheduleOpen = wizard.step !== 0;
+  const scheduleOpen = step !== 0;
   const station = stations.find((item) => item.id === stationId);
   const scheduleKey = JSON.stringify([stationId, day, duration, retry]);
   const currentSchedule = slotsRead?.key === scheduleKey ? slotsRead : undefined;
@@ -239,7 +239,7 @@ export function GameCreateScheduleWizard({
   }
 
   useEffect(() => {
-    if (!stationId || wizard.step === 0 || currentSchedule) return;
+    if (!stationId || step === 0 || currentSchedule) return;
     const controller = new AbortController();
     void source
       .listSlots({ stationId, day, durationMinutes: duration, signal: controller.signal })
@@ -253,7 +253,7 @@ export function GameCreateScheduleWizard({
         },
       );
     return () => controller.abort();
-  }, [source, stationId, day, duration, scheduleKey, currentSchedule, wizard.step]);
+  }, [source, stationId, day, duration, scheduleKey, currentSchedule, step]);
 
   useEffect(() => {
     if (!selected || !scheduleOpen || quote) return;
@@ -288,7 +288,7 @@ export function GameCreateScheduleWizard({
   useEffect(() => {
     heading.current?.focus({ preventScroll: true });
     if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
-  }, [wizard.step]);
+  }, [step]);
 
   function clearTime() {
     setSlot('');
@@ -314,12 +314,16 @@ export function GameCreateScheduleWizard({
     });
   }
 
+  function goBack() {
+    setStep((current) => (current === 2 ? 1 : 0));
+  }
+
   function chooseStation(id: string) {
     if (id !== stationId) {
       setStation(id);
       resetSlot();
     }
-    wizard.advance(1);
+    setStep(1);
   }
 
   function chooseCourt(id: string) {
@@ -343,7 +347,7 @@ export function GameCreateScheduleWizard({
     else setLevels([from, index]);
   }
 
-  const headerTitle = ['Выберите клуб', 'Дата и время', 'Создание игры'][wizard.step];
+  const headerTitle = ['Выберите клуб', 'Дата и время', 'Создание игры'][step];
   const query = search.trim().toLocaleLowerCase('ru-RU');
   const visibleStations = stations.filter((item) =>
     [item.title, item.city, item.address].some((value) =>
@@ -411,7 +415,7 @@ export function GameCreateScheduleWizard({
               if (slotChanged) {
                 resetSlot();
                 setRetry((value) => value + 1);
-                if (wizard.step === 2) wizard.back();
+                if (step === 2) setStep(1);
               } else {
                 setQuoteVersion((value) => value + 1);
               }
@@ -439,11 +443,11 @@ export function GameCreateScheduleWizard({
 
   return (
     <main
-      className={`games-page game-schedule-wizard${wizard.step === 1 ? ' game-schedule-wizard--settings' : ''}`}
+      className={`games-page game-schedule-wizard${step === 1 ? ' game-schedule-wizard--settings' : ''}`}
     >
       <div className="game-schedule-top">
         <header className="game-schedule-header">
-          {wizard.step === 0 ? (
+          {step === 0 ? (
             <a className="game-schedule-back" href={gamesHref} aria-label="Назад">
               <img src={backIconUrl} width={32} height={32} alt="" />
             </a>
@@ -451,9 +455,9 @@ export function GameCreateScheduleWizard({
             <button
               className="game-schedule-back"
               type="button"
-              aria-label={wizard.step === 2 ? 'Закрыть' : 'Назад'}
+              aria-label="Назад"
               disabled={checkout?.busy}
-              onClick={wizard.back}
+              onClick={goBack}
             >
               <img src={backIconUrl} width={32} height={32} alt="" />
             </button>
@@ -470,9 +474,9 @@ export function GameCreateScheduleWizard({
             </strong>
             <button
               type="button"
-              aria-label={wizard.step === 1 ? 'Изменить клуб' : undefined}
+              aria-label={step === 1 ? 'Изменить клуб' : undefined}
               disabled={checkout?.busy}
-              onClick={wizard.back}
+              onClick={goBack}
             >
               Изменить
             </button>
@@ -522,7 +526,7 @@ export function GameCreateScheduleWizard({
         ) : null}
       </div>
 
-      {wizard.step === 0 ? (
+      {step === 0 ? (
         <section className="game-schedule-stack" aria-label="Клубы">
           <div className="game-schedule-club-tools">
             <input
@@ -640,7 +644,7 @@ export function GameCreateScheduleWizard({
         </section>
       ) : null}
 
-      {wizard.step === 1 ? (
+      {step === 1 ? (
         <section className="game-schedule-stack game-schedule-settings" aria-label="Параметры игры">
           <div className="game-schedule-settings-section">
             <h2 className="game-schedule-settings-heading">Формат игры</h2>
@@ -892,7 +896,7 @@ export function GameCreateScheduleWizard({
               aria-label="Продолжить"
               type="button"
               disabled={!selected}
-              onClick={() => wizard.advance(2)}
+              onClick={() => setStep(2)}
             >
               <strong>Продолжить</strong>
               <span>
@@ -905,7 +909,7 @@ export function GameCreateScheduleWizard({
         </section>
       ) : null}
 
-      {wizard.step === 2 && station && selected ? (
+      {step === 2 && station && selected ? (
         <section className="game-schedule-stack" aria-label="Создание игры">
           <section className="game-schedule-card game-schedule-stack">
             <div className="game-schedule-section-row">

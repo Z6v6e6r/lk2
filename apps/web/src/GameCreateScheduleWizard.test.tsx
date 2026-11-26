@@ -166,6 +166,51 @@ describe('game creation schedule', () => {
     },
   );
 
+  it('uses the header arrow to go back one step without traversing browser history', async () => {
+    const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+    try {
+      renderWizard({
+        listSlots: () => Promise.resolve([slot]),
+        readQuote: () =>
+          Promise.resolve({
+            ...quoteTimes(),
+            wholeCourtMinor: 240000,
+            shareMinor: 60000,
+            residency: { status: 'NOT_APPLICABLE' },
+          }),
+      });
+      const user = userEvent.setup();
+      const startingUrl = window.location.href;
+      const historyLength = window.history.length;
+      await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+      await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
+      await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
+      await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+      expect(screen.getByRole('heading', { name: 'Создание игры', level: 1 })).toBeVisible();
+
+      await user.click(screen.getByRole('button', { name: 'Назад' }));
+      expect(screen.getByRole('heading', { name: 'Дата и время', level: 1 })).toBeVisible();
+      await user.click(screen.getByRole('button', { name: 'Назад' }));
+      expect(screen.getByRole('heading', { name: 'Выберите клуб', level: 1 })).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Назад' })).toHaveAttribute('href', '/games');
+      expect(historyBack).not.toHaveBeenCalled();
+      expect(window.location.href).toBe(startingUrl);
+      expect(window.history.length).toBe(historyLength);
+
+      await user.click(screen.getByRole('button', { name: 'Селигерская' }));
+      expect(screen.getByRole('button', { name: '12:00–13:00' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      expect(screen.getByRole('button', { name: 'Корт №1' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    } finally {
+      historyBack.mockRestore();
+    }
+  });
+
   it('updates the header summary and displays quoted zero-price subscription', async () => {
     renderWizard({
       listSlots: () => Promise.resolve([slot]),
