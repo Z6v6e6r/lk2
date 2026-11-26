@@ -73,6 +73,19 @@ export function runManualApiWebUpgrade(
 ): Promise<{ status: string; candidate: string; receipt: string }>;
 
 export function validateApiWebOperation<T>(value: T): T;
+export function validateGameInvitationsDirectObservation<T>(
+  value: T,
+  op: unknown,
+  plan: unknown,
+  planSha256: string,
+): T;
+export function validateUpgradeReceipt<T>(
+  value: T,
+  planSha256: string,
+  op?: unknown,
+  plan?: unknown,
+  planBytes?: Buffer,
+): T;
 
 export function readNativeOperatorSnapshot(path: string): Buffer;
 export function admitNativeWaiverMonitoring(

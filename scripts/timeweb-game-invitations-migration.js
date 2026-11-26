@@ -15,7 +15,7 @@ export const GAME_INVITATIONS_0120 = Object.freeze({
   after: '8a7b6bef43397c8347ea1800e35ed223a33ae8032e362eb8e92c1a94b4811668',
   backupLedger: '70adb2cea831f5b5ad58a44c6fd0b18324dba914b3eab4a4fd3c7c723c9e70c6',
   baselineReleaseId: 'dd73c7e02e81ad790f9c8c3ceb9f9ca988ad87a5-45820580791-1',
-  restoreMessageSha256: 'a1d31967a5a9da85a81764580b9f545defb47f83977a7555101017d13e8ea5fc',
+  restoreMessageSha256: '9970fdafc12b7fbcf7b02869c63642db3a34e47d47defded3373a36a316a5104',
   restoreDecision: 'OWNER_WAIVED_EXTERNAL_RESTORE_FOR_GAME_INVITATIONS_0120',
 });
 

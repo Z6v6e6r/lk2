@@ -6,14 +6,22 @@ import {
 import { parseStrictJson } from './strict-json.js';
 
 export const GAME_INVITATIONS_ACTIVATION = Object.freeze({
-  schema: 'PHUB_TIMEWEB_API_WEB_GAME_INVITATIONS_0120_V1',
+  schema: 'PHUB_TIMEWEB_API_WEB_GAME_INVITATIONS_0120_DIRECT_V2',
   application: '53af9f2e114de228a9b26fcbcf7ef7e284bd85f4',
   tree: 'e9504e533b4ec4c7b444ff197e1ddc128ca0553a',
-  suffix: '_GAME_INVITATIONS_0120',
+  suffix: '_GAME_INVITATIONS_0120_DIRECT',
+  rolloutReceipt: 'PHUB_TIMEWEB_API_WEB_GAME_INVITATIONS_0120_DIRECT_RECEIPT_V2',
+  observation: 'PHUB_TIMEWEB_API_WEB_GAME_INVITATIONS_0120_DIRECT_OBSERVATION_V2',
   backupSchema: 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_FRESH_BACKUP_V1',
   backupReceipt: 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_FRESH_DUMP_V1',
   backupPolicy: 'GAME_INVITATIONS_0120_INTEGRITY_ONLY_V1',
   migrationReceipt: 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_RECEIPT_V1',
+});
+
+export const GAME_INVITATIONS_MONITORING_STATUS = Object.freeze({
+  providerMonitoringStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE',
+  alertTestStatus: 'NOT_TESTED_EXPLICIT_OVERRIDE',
+  ownerMessageSha256: GAME_INVITATIONS_0120.restoreMessageSha256,
 });
 
 const tailFiles = new Map([
@@ -62,6 +70,7 @@ export function validateGameInvitationsActivationTail(anchorTree, entries) {
 export function validateGameInvitationsActivationInputs(op) {
   if (
     op.schema !== GAME_INVITATIONS_ACTIVATION.schema ||
+    op.ownerMessageSha256 !== GAME_INVITATIONS_MONITORING_STATUS.ownerMessageSha256 ||
     !uuid.test(op.migrationAttemptId ?? '') ||
     !digest.test(op.migrationReceiptSha256 ?? '') ||
     [op.expectedApi, op.expectedWeb].some(

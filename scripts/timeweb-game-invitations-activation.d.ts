@@ -3,10 +3,17 @@ export const GAME_INVITATIONS_ACTIVATION: Readonly<{
   application: string;
   tree: string;
   suffix: string;
+  rolloutReceipt: string;
+  observation: string;
   backupSchema: string;
   backupReceipt: string;
   backupPolicy: string;
   migrationReceipt: string;
+}>;
+export const GAME_INVITATIONS_MONITORING_STATUS: Readonly<{
+  providerMonitoringStatus: string;
+  alertTestStatus: string;
+  ownerMessageSha256: string;
 }>;
 export function validateGameInvitationsActivationTail(
   anchorTree: string,
@@ -14,6 +21,7 @@ export function validateGameInvitationsActivationTail(
 ): void;
 export function validateGameInvitationsActivationInputs(op: {
   schema: string;
+  ownerMessageSha256: string;
   migrationAttemptId: string;
   migrationReceiptSha256: string;
   expectedApi: { releaseId: string };

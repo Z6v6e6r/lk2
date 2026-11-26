@@ -1,8 +1,13 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { validateApiWebOperation } from './timeweb-api-web-upgrade.js';
+import {
+  validateApiWebOperation,
+  validateGameInvitationsDirectObservation,
+  validateUpgradeReceipt,
+} from './timeweb-api-web-upgrade.js';
 import {
   GAME_INVITATIONS_ACTIVATION as profile,
+  GAME_INVITATIONS_MONITORING_STATUS as monitoring,
   validateGameInvitationsActivationMigration as verify,
   validateGameInvitationsActivationReadback,
   validateGameInvitationsActivationTail,
@@ -88,7 +93,9 @@ const operation = {
   expectedApi: previous('api'),
   expectedWeb: previous('web'),
   expiresAt,
-  confirmation: 'DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_DD73C7E02E81_DD73C7E02E81_GAME_INVITATIONS_0120',
+  ownerMessageSha256: monitoring.ownerMessageSha256,
+  confirmation:
+    'DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_DD73C7E02E81_DD73C7E02E81_GAME_INVITATIONS_0120_DIRECT',
 };
 
 it('binds only the reviewed product tree and regular controller changes', () => {
@@ -141,17 +148,84 @@ it('binds only the reviewed product tree and regular controller changes', () => 
   expect(() => validateGameInvitationsActivationTail(candidate, closure)).toThrow('source');
 });
 
-it('admits an exact production API/Web operation without a monitoring waiver field', () => {
+it('admits only the exact owner decision and production API/Web predecessor', () => {
   expect(validateApiWebOperation(operation)).toEqual(operation);
   for (const bad of [
     { ...operation, profile: 'beta' },
     { ...operation, controllerSha: 'd'.repeat(40) },
     { ...operation, migrationAttemptId: '../previous' },
+    { ...operation, ownerMessageSha256: h('3') },
     { ...operation, expectedWeb: { ...operation.expectedWeb, releaseId: candidate + '-99-1' } },
     { ...operation, monitoringWaiver: true },
     { ...operation, confirmation: operation.confirmation.replace(profile.suffix, '') },
   ])
     expect(() => validateApiWebOperation(bad)).toThrow();
+});
+
+it('requires all direct private and public checks and preserves unverified monitoring in the receipt', () => {
+  const plan = {
+    operationSha256: sha(bytes(operation)),
+    createdAt: '2026-11-26T16:11:00.000Z',
+  };
+  const planSha256 = sha(bytes(plan));
+  const startedAt = '2026-11-26T16:12:00.000Z';
+  const sample = {
+    privateMs: Array<number>(61).fill(10),
+    publicMs: Array<number>(61).fill(15),
+    timestamps: Array.from({ length: 61 }, (_, i) =>
+      new Date(Date.parse(startedAt) + i * 15000).toISOString(),
+    ),
+    p95PrivateMs: 10,
+    p95PublicMs: 15,
+  };
+  const observation = {
+    schema: profile.observation,
+    operationSha256: plan.operationSha256,
+    planSha256,
+    candidateSha: operation.candidateSha,
+    startedAt,
+    completedAt: '2026-11-26T16:27:00.000Z',
+    elapsedSeconds: 900,
+    serverErrors: 0,
+    samples: { api: sample, web: sample },
+  };
+  expect(
+    validateGameInvitationsDirectObservation(observation, operation, plan, planSha256),
+  ).toEqual(observation);
+  for (const invalid of [
+    { ...observation, operationSha256: h('3') },
+    { ...observation, serverErrors: 1 },
+    { ...observation, elapsedSeconds: 899 },
+    { ...observation, completedAt: '2026-11-26T17:00:00.000Z' },
+    {
+      ...observation,
+      samples: { ...observation.samples, api: { ...sample, publicMs: sample.publicMs.slice(1) } },
+    },
+  ])
+    expect(() =>
+      validateGameInvitationsDirectObservation(invalid, operation, plan, planSha256),
+    ).toThrow();
+  expect(() =>
+    validateGameInvitationsDirectObservation(observation, operation, plan, h('3')),
+  ).toThrow();
+
+  const trace = {
+    schema: profile.rolloutReceipt,
+    status: 'SUCCESS',
+    observedAt: observation.completedAt,
+    planSha256,
+    observationSha256: sha(bytes(observation)),
+    installedBaselineSha256: h('9'),
+    ...monitoring,
+  };
+  expect(validateUpgradeReceipt(trace, planSha256)).toEqual(trace);
+  for (const invalid of [
+    { ...trace, providerReadbackSha256: h('1') },
+    { ...trace, providerMonitoringStatus: 'PASSED' },
+    { ...trace, alertTestStatus: 'PASSED' },
+    { ...trace, ownerMessageSha256: h('2') },
+  ])
+    expect(() => validateUpgradeReceipt(invalid, planSha256)).toThrow();
 });
 
 it('requires the committed migration and original backup on the same PostgreSQL target', () => {

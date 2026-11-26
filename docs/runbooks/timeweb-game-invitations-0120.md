@@ -78,7 +78,7 @@ separate recovery operation.
 
 ## Activate the application from PR 709
 
-The activation schema is `PHUB_TIMEWEB_API_WEB_GAME_INVITATIONS_0120_V1`.
+The activation schema is `PHUB_TIMEWEB_API_WEB_GAME_INVITATIONS_0120_DIRECT_V2`.
 It admits only the product tree from merge `53af9f2e114de228a9b26fcbcf7ef7e284bd85f4`
 with the reviewed controller-only additions. Publish the exact final main
 commit after first-attempt main CI. The app operation uses the published API
@@ -86,10 +86,16 @@ and Web digests. The current Worker already handles the established in-app
 notification contract. This profile continues to verify the excluded Worker,
 Realtime, and Migrator states.
 
-Before starting the backup or migration, verify the normal production provider
-and alert evidence with `--critical-game-invitations-activation-monitoring`.
-The restore decision applies to the backup only. The ordinary 15-minute
-monitoring checks still run.
+Before the backup and migration, verify the exact retained owner message with
+`--critical-game-invitations-activation-authority`. The decision applies to
+this product tree and the named predecessor only. For this release the
+controller records `providerMonitoringStatus: NOT_COLLECTED_EXPLICIT_OVERRIDE`
+and `alertTestStatus: NOT_TESTED_EXPLICIT_OVERRIDE`. The controller probes the
+public and private API and Web URLs in 61 rounds over at least 15 minutes. A probe
+failure, a container replacement or restart, or a latency breach invokes the
+existing image rollback. The receipt binds the observation to the operation
+and exact plan. The migration requires more than 25 minutes remaining in the
+shared operation window.
 
 After a COMMITTED migration, use
 `--critical-game-invitations-activation-prepare <sourceCiRunId> <publicationRunId>`

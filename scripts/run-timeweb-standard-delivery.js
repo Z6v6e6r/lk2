@@ -33,7 +33,7 @@ import {
   runManualNotificationMigratorPrefetch,
 } from './timeweb-api-worker-migration.js';
 import {
-  checkGameInvitationsMonitoring,
+  attestGameInvitationsOwnerDecision,
   prepareGameInvitationsActivation,
   readInstalledApiBaseline,
   runManualApiWebUpgrade,
@@ -825,6 +825,12 @@ async function runManualClosedMigration(mode, requestPath, profile) {
     config,
     mode === 'apply' ? Date.now() : undefined,
   );
+  if (
+    mode === 'apply' &&
+    profile === GAME_INVITATIONS_0120_PROFILE &&
+    Date.parse(op.expiresAt) - Date.now() <= 25 * 60_000
+  )
+    fail('GAME_INVITATIONS_0120_ACTIVATION_WINDOW');
   const migration = command(
     '/usr/bin/git',
     ['show', `${op.migrationSourceSha}:packages/database/migrations/${selected.filename}`],
@@ -1124,17 +1130,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       : null;
   const prepareActivation =
     args.length === 3 && args[0] === '--critical-game-invitations-activation-prepare';
-  const monitorActivation =
-    args.length === 1 && args[0] === '--critical-game-invitations-activation-monitoring';
+  const attestActivation =
+    args.length === 1 && args[0] === '--critical-game-invitations-activation-authority';
   const operation =
-    closedMigration || prepareActivation || monitorActivation
+    closedMigration || prepareActivation || attestActivation
       ? Promise.resolve()
           .then(() => {
             if (prepareActivation) return prepareGameInvitationsActivation(args[1], args[2]);
-            if (monitorActivation) return checkGameInvitationsMonitoring();
+            if (attestActivation) return attestGameInvitationsOwnerDecision();
             if (prepare0120) return prepareGameInvitations0120Request(args[1]);
             if (gameInvitations0120 && !args[0].endsWith('-reconcile'))
-              checkGameInvitationsMonitoring();
+              attestGameInvitationsOwnerDecision();
             return runManualClosedMigration(
               args[0].endsWith('-reconcile') ? 'reconcile' : 'apply',
               args[1],
