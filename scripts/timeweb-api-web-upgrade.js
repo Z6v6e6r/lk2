@@ -178,6 +178,7 @@ import {
   validateStationObservation,
 } from './timeweb-station-rollout.js';
 import { CUP_0119, CUP_0119_TARGET, buildCup0119Sql } from './timeweb-cup-0119-migration.js';
+import { GAME_INVITATIONS_0120 } from './timeweb-game-invitations-migration.js';
 
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
@@ -2776,8 +2777,9 @@ function attestAppOnlySourceDelta(from, to) {
 
 export function attestAppOnlyBackupScope(op) {
   const cupSupport = op?.schema === CUP_SUPPORT_BACKUP;
+  const invitations0120 = op?.schema === 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_FRESH_BACKUP_V1';
   if (
-    (!cupSupport && op?.schema !== APP_ONLY_BACKUP) ||
+    (!cupSupport && !invitations0120 && op?.schema !== APP_ONLY_BACKUP) ||
     op.candidateSha !== op.controllerSha ||
     !SHA.test(op.candidateSha ?? '') ||
     git(['rev-parse', 'HEAD']) !== op.controllerSha ||
@@ -2789,8 +2791,33 @@ export function attestAppOnlyBackupScope(op) {
     const actual = inspect(svc);
     const expected = svc === 'api' ? op.expectedApi : op.expectedWeb;
     if (!ID.test(actual.releaseId ?? '') || !equal(actual, expected)) fail('app_only_predecessor');
-    if (cupSupport) attestCupSupportSource(actual.releaseId.slice(0, 40), op.candidateSha);
+    if (invitations0120) {
+      if (
+        actual.releaseId !== GAME_INVITATIONS_0120.baselineReleaseId ||
+        op.expectedLedgerSha256 !== GAME_INVITATIONS_0120.backupLedger
+      )
+        fail('game_invitations_0120_backup_predecessor');
+    } else if (cupSupport) attestCupSupportSource(actual.releaseId.slice(0, 40), op.candidateSha);
     else attestAppOnlySourceDelta(actual.releaseId.slice(0, 40), op.candidateSha);
+  }
+  if (invitations0120) {
+    const from = GAME_INVITATIONS_0120.baselineReleaseId.slice(0, 40);
+    git(['merge-base', '--is-ancestor', from, op.candidateSha]);
+    const path = `packages/database/migrations/${GAME_INVITATIONS_0120.filename}`;
+    const migrationChanges = git([
+      'diff',
+      '--name-status',
+      '--no-renames',
+      from,
+      op.candidateSha,
+      '--',
+      'packages/database/migrations',
+    ]);
+    if (
+      migrationChanges !== `A\t${path}` ||
+      hash(read(`${SOURCE}/${path}`, 0o644)) !== GAME_INVITATIONS_0120.checksum
+    )
+      fail('game_invitations_0120_backup_migration_source');
   }
   return 'APP_ONLY_BACKUP_SCOPE_VERIFIED';
 }

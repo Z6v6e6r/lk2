@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createCup0119LockCustody,
+  createGameInvitations0120LockCustody,
   createR1TailLockCustody,
   R1_TAIL_LOCKS,
 } from './r1-tail-migration-locks.js';
@@ -191,5 +192,25 @@ describe('CUP 0119 host lock custody', () => {
   it('cannot use an R1 attempt directory', () => {
     const f = fixture(root, createCup0119LockCustody);
     expect(() => f.instance()).toThrow('R1_TAIL_LOCK_SCOPE');
+  });
+});
+
+describe('game invitations 0120 host lock custody', () => {
+  const operation =
+    '/opt/phub/timeweb-beta/operator/game-invitations-0120-00000000-0000-4000-8000-000000000001';
+
+  it('recovers its own publish ACK loss and preserves the historical scope', () => {
+    const f = fixture(operation, createGameInvitations0120LockCustody);
+    f.crash(4);
+    expect(() => f.instance().claim(() => {})).toThrow('SYNTHETIC_ACK_LOST');
+    f.clear();
+    expect(f.instance().load()).toMatchObject({
+      schema: 'PHUB_GAME_INVITATIONS_0120_LOCK_CUSTODY_V1',
+    });
+    f.instance().release();
+    expect(R1_TAIL_LOCKS.some((path) => f.files.has(path))).toBe(false);
+    expect(() => fixture(operation, createCup0119LockCustody).instance()).toThrow(
+      'R1_TAIL_LOCK_SCOPE',
+    );
   });
 });

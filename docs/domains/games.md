@@ -506,11 +506,12 @@ access to `games.friend_invitations`, initial insertion of the game and
 recipient keys, and updates to `issued_at`. The table forces tenant row-level
 security. The production migration package must admit this specific table and
 verify its effective grants using the actual API role before the new API starts.
-Provision `phub_runtime` before applying `0120`. The migration must execute
-as `phub_migrator`, which needs create access in the games schema and references
-access to the exact composite keys in `games.games` and `identity.users`. Verify
-that `phub_migrator` owns the new table. Image rollback can leave the additive
-table in place. Already delivered invitations remain recorded.
+Provision `phub_runtime` before applying `0120`. The final owner is
+`phub_migrator`. On Timeweb, the existing PostgreSQL owner executes the exact
+migration and transfers ownership of the new table in the same transaction.
+The [Timeweb 0120 runbook](../runbooks/timeweb-game-invitations-0120.md) binds this
+operation to the verified production role topology. Image rollback retains the
+table and any recorded invitations.
 
 ### 7.2.1 Card projection and reads
 

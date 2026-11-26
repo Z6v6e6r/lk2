@@ -1898,6 +1898,57 @@ class AppOnlyBackupTests(unittest.TestCase):
                 self.assertTrue(all('--list' in args for args in scenario.calls if 'pg_restore' in args))
                 self.assertEqual(scenario.invoke(attest=True)['receiptSha256'],result['receiptSha256'])
 
+    def test_game_invitations_0120_uses_its_own_exact_predecessor_ledger_and_waiver(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scenario=self.scenario(directory)
+            op=scenario.op
+            del op['priorRestore']
+            op['schema']=m.GAME_INVITATIONS_0120_FRESH_SCHEMA
+            for service in ('expectedApi','expectedWeb'):
+                op[service]['releaseId']=m.GAME_INVITATIONS_0120_PREDECESSOR
+                op[service]['revision']=m.GAME_INVITATIONS_0120_PREDECESSOR[:40]
+            scenario.runtime_api=copy.deepcopy(op['expectedApi'])
+            boundary=[scenario.service_row(i==scenario.runtime_api['id'])
+                      for i in sorted([scenario.runtime_api['id'],scenario.runtime_pg['id']])]
+            op['expectedBoundarySha256']=op['predecessorAttestationSha256']=m.digest(m.encoded(boundary))
+            message=b'synthetic invitation migration owner reply'
+            message_hash=m.digest(message)
+            op['ownerRestoreDecision']={
+                'schema':'PHUB_TIMEWEB_GAME_INVITATIONS_0120_RESTORE_DECISION_V1',
+                'authority':'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
+                'decision':'FRESH_DUMP_INTEGRITY_ONLY','messageSha256':message_hash,
+                'reference':'codex-user-message-sha256:'+message_hash,'receivedAt':'2026-11-15T20:09:00.000Z'}
+            op['confirmation']=m.app_only_backup_confirmation(op)
+            op['ownerRestoreDecision']['scopeSha256']=m.fresh_owner_scope(op)
+            (scenario.root/'operator/game-invitations-0120-restore-waiver.txt').write_bytes(message)
+            (scenario.root/'operator/game-invitations-0120-restore-window.json').write_bytes(m.encoded({
+                'schema':'PHUB_TIMEWEB_GAME_INVITATIONS_0120_RESTORE_WINDOW_V1','messageSha256':message_hash,
+                'candidateSha':op['candidateSha'],'controllerTree':op['controllerTree'],
+                'releaseId':op['releaseId'],'receivedAt':op['ownerRestoreDecision']['receivedAt'],
+                'expiresAt':op['expiresAt']}))
+            scenario.request.write_bytes(m.encoded(op))
+            with patch.object(m,'ROOT',scenario.root):
+                scenario.plan=m.fresh_plan(op,m.encoded(op),1024)
+            with patch.object(m,'GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256',message_hash), \
+                 patch.object(m,'GAME_INVITATIONS_0120_LEDGER',op['expectedLedgerSha256']):
+                now=m.utc(scenario.clockAt)
+                self.assertEqual(m.validate_operation(op,now,op['toolFileSha256']),op)
+                for diff in ({'expectedLedgerSha256':'f'*64},
+                             {'expectedSchemaSha256':'d'*64},
+                             {'expectedApi':{**op['expectedApi'],'releaseId':m.CUP_SUPPORT_PREDECESSOR}},
+                             {'ownerRestoreDecision':{**op['ownerRestoreDecision'],
+                                'schema':'PHUB_TIMEWEB_CUP_SUPPORT_RESTORE_DECISION_V1'}}):
+                    with self.subTest(diff=diff), self.assertRaises(m.Stop):
+                        m.validate_operation({**op,**diff},now,op['toolFileSha256'])
+                result=scenario.invoke()
+                path=Path(scenario.plan['canonical'])
+                receipt=m.strict((path/'database-backup-receipt.json').read_bytes())
+                self.assertEqual(receipt['schema'],m.GAME_INVITATIONS_0120_FRESH_RECEIPT)
+                self.assertEqual(receipt['restoreAdmissionPolicy'],m.GAME_INVITATIONS_0120_FRESH_POLICY)
+                self.assertIs(receipt['freshDumpRestored'],False)
+                self.assertTrue(all('--list' in args for args in scenario.calls if 'pg_restore' in args))
+                self.assertEqual(scenario.invoke(attest=True)['receiptSha256'],result['receiptSha256'])
+
     def test_ambiguous_publish_reconciles_without_a_second_dump(self):
         with tempfile.TemporaryDirectory() as directory:
             scenario=self.scenario(directory,'after:PHASE_PUBLISHED')

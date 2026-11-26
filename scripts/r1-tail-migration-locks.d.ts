@@ -24,3 +24,4 @@ export function createR1TailLockCustody(
   io: R1LockIO,
 ): R1LockCustody;
 export const createCup0119LockCustody: typeof createR1TailLockCustody;
+export const createGameInvitations0120LockCustody: typeof createR1TailLockCustody;
