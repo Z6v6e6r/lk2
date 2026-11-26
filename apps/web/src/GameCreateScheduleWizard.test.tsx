@@ -363,7 +363,7 @@ describe('game creation schedule', () => {
     expect(courtButton).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('selects every contiguous range within one level using the existing scale', async () => {
+  it('adjusts both edges and cycles a single level by clicking the whole segment', async () => {
     render(
       <GameCreateScheduleWizard
         stations={stations}
@@ -386,55 +386,75 @@ describe('game creation schedule', () => {
     await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
     await user.click(screen.getByRole('button', { name: '12:00–13:00' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
-    const levels = within(screen.getByRole('group', { name: 'Уровень игры' }));
-    const summary = within(screen.getByRole('region', { name: 'Выбранная игра' }));
-    const quarter = (name: string) => levels.getByRole('button', { name });
-    expect(summary.getByText('D₁ – C₄')).toBeVisible();
-    expect(quarter('D₂')).toHaveAttribute('aria-disabled', 'true');
-    await user.click(quarter('D₂'));
-    expect(summary.getByText('D₁ – C₄')).toBeVisible();
-    for (const edge of ['C₄', 'C₃', 'C₂', 'C₁', 'D+₄', 'D+₃', 'D+₂', 'D+₁']) {
-      await user.click(quarter(edge));
+    const levels = () => within(screen.getByRole('group', { name: 'Уровень игры' }));
+    const summary = () => within(screen.getByRole('region', { name: 'Выбранная игра' }));
+    const from = () => levels().getByRole('button', { name: 'D' });
+    const to = () => levels().getByRole('button', { name: 'C' });
+    expect(summary().getByText('D₁ – C₄')).toBeVisible();
+    for (const edge of ['D₂', 'D₃', 'D₄', 'D₃', 'D₂', 'D₁', 'D₂']) {
+      await user.click(from());
+      expect(summary().getByText(`${edge} – C₄`)).toBeVisible();
+      expect(from()).toHaveAccessibleDescription(edge);
     }
-    expect(summary.getByText('D₁ – D₄')).toBeVisible();
-    for (const [clicked, expected] of [
-      ['D₁', 'D₂ – D₄'],
-      ['D₂', 'D₃ – D₄'],
-      ['D₄', 'D₃'],
-      ['D₂', 'D₂ – D₃'],
-      ['D₃', 'D₂'],
-      ['D₃', 'D₂ – D₃'],
-      ['D₁', 'D₁ – D₃'],
-      ['D₃', 'D₁ – D₂'],
-      ['D₂', 'D₁'],
-      ['D₂', 'D₁ – D₂'],
-      ['D₃', 'D₁ – D₃'],
-      ['D₄', 'D₁ – D₄'],
-      ['D₁', 'D₂ – D₄'],
-      ['D₂', 'D₃ – D₄'],
-      ['D₃', 'D₄'],
-    ] as const) {
-      await user.click(quarter(clicked));
-      expect(summary.getByText(expected)).toBeVisible();
+    for (const edge of ['C₃', 'C₂', 'C₁', 'C₂', 'C₃', 'C₄', 'C₃']) {
+      await user.click(to());
+      expect(summary().getByText(`D₂ – ${edge}`)).toBeVisible();
+      expect(to()).toHaveAccessibleDescription(edge);
     }
-    expect(quarter('D₄')).toHaveAttribute('aria-disabled', 'true');
-    await user.click(quarter('D₄'));
-    expect(summary.getByText('D₄', { exact: true })).toBeVisible();
-    await user.keyboard('{ArrowRight}');
-    expect(quarter('D+₁')).toHaveFocus();
-    await user.keyboard(' ');
-    expect(summary.getByText('D₄ – D+₁')).toBeVisible();
-    for (const edge of ['D₄', 'D+₂', 'D+₁', 'D+₃']) {
-      await user.click(quarter(edge));
-    }
-    expect(summary.getByText('D+₂ – D+₃')).toBeVisible();
-    expect(quarter('D+₁')).toHaveAttribute('aria-pressed', 'false');
-    expect(quarter('D+₂')).toHaveAttribute('aria-pressed', 'true');
-    expect(quarter('D+₃')).toHaveAttribute('aria-pressed', 'true');
-    expect(quarter('D+₄')).toHaveAttribute('aria-pressed', 'false');
-    await user.click(summary.getByRole('button', { name: 'Изменить' }));
+    await user.click(summary().getByRole('button', { name: 'Изменить' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
-    expect(summary.getByText('D+₂ – D+₃')).toBeVisible();
+    expect(summary().getByText('D₂ – C₃')).toBeVisible();
+
+    const singleLevel = () => levels().getByRole('button', { name: 'D+' });
+    await user.click(singleLevel());
+    expect(levels().getAllByRole('button')).toHaveLength(7);
+    expect(summary().getByText('D+₁ – D+₄')).toBeVisible();
+    expect(singleLevel()).toHaveFocus();
+    const selectedRanges = new Set(['D+₁ – D+₄']);
+    for (const expected of [
+      'D+₂ – D+₄',
+      'D+₃ – D+₄',
+      'D+₃',
+      'D+₂ – D+₃',
+      'D+₂',
+      'D+₁ – D+₂',
+      'D+₁',
+      'D+₁ – D+₂',
+      'D+₁ – D+₃',
+      'D+₂ – D+₃',
+      'D+₂ – D+₄',
+      'D+₃ – D+₄',
+      'D+₄',
+      'D+₃ – D+₄',
+      'D+₂ – D+₄',
+      'D+₁ – D+₄',
+    ]) {
+      await user.keyboard(' ');
+      expect(summary().getByText(expected, { exact: true })).toBeVisible();
+      expect(singleLevel()).toHaveAccessibleDescription(expected);
+      selectedRanges.add(expected);
+    }
+    expect(selectedRanges.size).toBe(10);
+
+    await user.click(singleLevel());
+    await user.click(summary().getByRole('button', { name: 'Изменить' }));
+    await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+    expect(summary().getByText('D+₂ – D+₄')).toBeVisible();
+    await user.click(to());
+    expect(summary().getByText('D+₂ – C₄')).toBeVisible();
+    await user.click(from());
+    expect(summary().getByText('D₁ – C₄')).toBeVisible();
+    await user.click(singleLevel());
+    expect(summary().getByText('D+₁ – D+₄')).toBeVisible();
+    await user.click(singleLevel());
+    expect(summary().getByText('D+₂ – D+₄')).toBeVisible();
+
+    for (let tap = 0; tap < 6; tap++) await user.click(singleLevel());
+    expect(summary().getByText('D+₁')).toBeVisible();
+    await user.click(from());
+    expect(summary().getByText('D₁ – D+₁')).toBeVisible();
+    await user.click(singleLevel());
+    expect(summary().getByText('D₁ – D+₂')).toBeVisible();
   });
 
   it('reports missing residency evidence independently from the base price', async () => {
