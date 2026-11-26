@@ -1017,7 +1017,7 @@ export function GameCreateScheduleWizard({
             </div>
             {showLevelQuarters ? (
               <small className="game-schedule-review-note">
-                Нажимайте на край диапазона, чтобы менять его по четвертям.
+                Нажимайте на край диапазона, чтобы менять его по ступеням.
               </small>
             ) : null}
           </section>
