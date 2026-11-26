@@ -58,10 +58,10 @@ const GAME_FORMATS = [
 type Level = (typeof LEVELS)[number];
 type LevelDisplay = { readonly level: Level; readonly step?: number };
 type LevelRangeDisplay = readonly [LevelDisplay] | readonly [LevelDisplay, LevelDisplay];
-type PreviewFriend = {
+type ScheduleFriend = {
   readonly id: string;
   readonly name: string;
-  readonly avatarUrl?: string;
+  readonly avatarUrl?: string | null;
 };
 type QuarterRange = {
   readonly from: number;
@@ -159,6 +159,7 @@ function changeQuarterRange(range: QuarterRange, index: number): QuarterRange {
 export interface GameCreateScheduleDetails {
   readonly title: string;
   readonly levelRange: { readonly from: Level; readonly to: Level };
+  readonly inviteeUserIds?: readonly string[];
 }
 const TIME_LABEL = new Intl.DateTimeFormat('ru-RU', {
   timeZone: TIME_ZONE,
@@ -274,6 +275,7 @@ export function GameCreateScheduleWizard({
   checkout,
   previewLevelQuarters = false,
   previewFriends,
+  loadFriends,
   gamesHref = '/games',
   today = DAY.format(new Date()),
 }: {
@@ -281,7 +283,8 @@ export function GameCreateScheduleWizard({
   readonly source: GameCreateScheduleSource;
   readonly checkout?: GameCreateScheduleCheckout;
   readonly previewLevelQuarters?: boolean;
-  readonly previewFriends?: readonly PreviewFriend[];
+  readonly previewFriends?: readonly ScheduleFriend[];
+  readonly loadFriends?: () => Promise<readonly ScheduleFriend[]>;
   readonly gamesHref?: string;
   readonly today?: string;
 }) {
@@ -299,6 +302,8 @@ export function GameCreateScheduleWizard({
   const [visibility, setVisibility] = useState<'PUBLIC' | 'PRIVATE'>('PUBLIC');
   const [friendSearch, setFriendSearch] = useState('');
   const [selectedFriends, setSelectedFriends] = useState<ReadonlySet<string>>(() => new Set());
+  const [friends, setFriends] = useState<readonly ScheduleFriend[] | 'ERROR'>();
+  const [friendsRetry, setFriendsRetry] = useState(0);
   const [levels, setLevels] = useState<readonly [number, number]>([0, 2]);
   const [quarterRange, setQuarterRange] = useState<QuarterRange>({
     from: 0,
@@ -309,7 +314,7 @@ export function GameCreateScheduleWizard({
   });
   // A checkout can only save the whole-level range supported by the current API.
   const showLevelQuarters = previewLevelQuarters && !checkout;
-  const showFriendPicker = previewFriends !== undefined && !checkout;
+  const showFriendPicker = loadFriends !== undefined || (previewFriends !== undefined && !checkout);
   const [title, setTitle] = useState('');
   const [day, setDay] = useState(today);
   const [format, setFormat] = useState<(typeof GAME_FORMATS)[number]['id']>('doubles');
@@ -321,6 +326,26 @@ export function GameCreateScheduleWizard({
   const [expiredQuoteKey, setExpiredQuoteKey] = useState<string>();
   const [slotsRead, setSlotsRead] = useState<ReadResult<readonly GameCreateScheduleSlot[]>>();
   const [quoteRead, setQuoteRead] = useState<ReadResult<ScheduleDisplayQuote>>();
+  useEffect(() => {
+    if (!loadFriends || step !== 2) return;
+    let current = true;
+    void loadFriends().then(
+      (items) => {
+        if (!current) return;
+        setFriends(items);
+        setSelectedFriends(
+          (selected) =>
+            new Set(items.filter((item) => selected.has(item.id)).map((item) => item.id)),
+        );
+      },
+      () => {
+        if (current) setFriends('ERROR');
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [loadFriends, step, friendsRetry]);
   const scheduleOpen = step !== 0;
   const station = stations.find((item) => item.id === stationId);
   const scheduleKey = JSON.stringify([stationId, day, duration, retry]);
@@ -493,7 +518,8 @@ export function GameCreateScheduleWizard({
   const headerTitle = ['Выберите клуб', 'Дата и время', 'Создание игры'][step];
   const query = search.trim().toLocaleLowerCase('ru-RU');
   const friendQuery = friendSearch.trim().toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
-  const visibleFriends = previewFriends?.filter((friend) =>
+  const friendList = loadFriends && friends !== 'ERROR' ? friends : previewFriends;
+  const visibleFriends = friendList?.filter((friend) =>
     friend.name.toLocaleLowerCase('ru-RU').replaceAll('ё', 'е').includes(friendQuery),
   );
   const visibleStations = stations.filter((item) =>
@@ -1213,9 +1239,27 @@ export function GameCreateScheduleWizard({
                 aria-label="Найти друга"
                 placeholder="Найти друга"
                 value={friendSearch}
+                disabled={friendList === undefined}
                 onChange={(event) => setFriendSearch(event.target.value)}
               />
-              {visibleFriends?.length ? (
+              {loadFriends && friends === 'ERROR' ? (
+                <div className="game-schedule-message">
+                  <p role="alert">Не удалось загрузить список друзей.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFriends(undefined);
+                      setFriendsRetry((previous) => previous + 1);
+                    }}
+                  >
+                    Повторить загрузку
+                  </button>
+                </div>
+              ) : loadFriends && friends === undefined ? (
+                <p className="game-schedule-empty" role="status">
+                  Загружаем друзей…
+                </p>
+              ) : visibleFriends?.length ? (
                 <div className="game-schedule-friend-list">
                   {visibleFriends.map((friend) => (
                     <label className="game-schedule-friend" key={friend.id}>
@@ -1322,6 +1366,9 @@ export function GameCreateScheduleWizard({
                 checkout.start(event, checkoutOffer.offer, {
                   title: title.trim(),
                   levelRange: { from: LEVELS[levels[0]]!, to: LEVELS[levels[1]]! },
+                  ...(loadFriends && selectedFriends.size
+                    ? { inviteeUserIds: [...selectedFriends] }
+                    : {}),
                 });
               }}
             >

@@ -267,6 +267,51 @@ describe('Games management User API', () => {
     expect(input?.requestHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('accepts only a bounded friend list from an organizer with profile access', async () => {
+    const create = vi.fn().mockResolvedValue({
+      outcome: 'applied',
+      gameId,
+      operationId: commandId,
+      revision: 1,
+      committedAt,
+      replayed: false,
+    });
+    const app = await appWith(repository(), managementRepository({ create }));
+    const friendId = '52acff22-beb9-4b6f-a867-66733dac8421';
+    async function submit(recipients: string[], permissions: string[]) {
+      return app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/games',
+        headers: {
+          authorization: `Bearer ${await accessToken(permissions)}`,
+          'idempotency-key': 'games-api-friend-invites-0001',
+        },
+        payload: {
+          title: 'Тест приглашений',
+          kind: 'FRIENDLY',
+          visibility: 'PRIVATE',
+          stationId: '11111111-1111-4111-8111-111111111111',
+          startsAt: '2027-08-15T15:00:00.000Z',
+          endsAt: '2027-08-15T16:30:00.000Z',
+          timezone: 'Europe/Moscow',
+          capacity: 4,
+          paymentMode: 'NO_PAYMENT',
+          waitlistEnabled: true,
+          inviteeUserIds: recipients,
+        },
+      });
+    }
+    expect((await submit([friendId], ['games.play'])).statusCode).toBe(403);
+    expect(
+      (await submit([friendId, friendId.toUpperCase()], ['games.play', 'profile.read'])).statusCode,
+    ).toBe(400);
+    expect(create).not.toHaveBeenCalled();
+    expect((await submit([friendId], ['games.play', 'profile.read'])).statusCode).toBe(202);
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ tenantId, actorUserId: userId, inviteeUserIds: [friendId] }),
+    );
+  });
+
   it('reaches durable replay for a past start and returns the original game', async () => {
     const create = vi.fn().mockResolvedValue({
       outcome: 'applied',

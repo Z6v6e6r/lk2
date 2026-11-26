@@ -17,6 +17,15 @@ export function GameCreateSchedulePage({
     Awaited<ReturnType<AuthGateway['listLocations']>>['items'] | null
   >(null);
   const [unavailable, setUnavailable] = useState(false);
+  const loadFriends = useMemo(
+    () => async () =>
+      (await gateway.listProfileFriends(24)).items.map((friend) => ({
+        id: friend.userId,
+        name: friend.displayName,
+        avatarUrl: friend.avatarUrl,
+      })),
+    [gateway],
+  );
   const source = useMemo<GameCreateScheduleSource | null>(() => {
     if (!gateway.listGameCreateSlots || !gateway.getGameCreateScheduleQuote) return null;
     return {
@@ -61,7 +70,7 @@ export function GameCreateSchedulePage({
     <GameCreateScheduleWizard
       stations={locations}
       source={source}
-      {...(checkout ? { checkout } : {})}
+      {...(checkout ? { checkout, loadFriends } : {})}
     />
   );
 }

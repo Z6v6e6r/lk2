@@ -13,6 +13,11 @@ import {
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
+import {
+  issueGameFriendInvitations,
+  lockInviteableGameFriends,
+  readGameFriendInvitation,
+} from './game-friend-invitations.js';
 
 export const GAME_TEST_COURTS_PERMISSION = 'games.test-courts';
 
@@ -328,6 +333,7 @@ export interface CreateStoredGameInput {
   readonly gameId?: string;
   readonly operationId?: string;
   readonly wholeCourtCheckout?: WholeCourtCheckoutBinding;
+  readonly inviteeUserIds?: readonly string[];
 }
 
 export interface WholeCourtCheckoutBinding {
@@ -372,7 +378,11 @@ export type CreateStoredGameResult =
     }
   | {
       readonly outcome: 'rejected';
-      readonly code: 'GAME_START_TIME_PASSED' | 'GAME_LOCATION_INVALID' | 'GAME_SLOT_UNAVAILABLE';
+      readonly code:
+        | 'GAME_START_TIME_PASSED'
+        | 'GAME_LOCATION_INVALID'
+        | 'GAME_SLOT_UNAVAILABLE'
+        | 'GAME_INVITEE_INELIGIBLE';
     }
   | { readonly outcome: 'idempotency_conflict' };
 
@@ -438,6 +448,7 @@ type StoredCreateAppliedResult = Omit<
 export interface GameRepository {
   get(tenantId: string, gameId: string): Promise<StoredGame | undefined>;
   create(input: CreateStoredGameInput): Promise<CreateStoredGameResult>;
+  canViewFriendInvitation?(tenantId: string, gameId: string, viewerId: string): Promise<boolean>;
   cancel(input: CancelStoredGameInput): Promise<CancelStoredGameResult>;
   getManagementOperation(input: {
     readonly tenantId: string;
@@ -960,6 +971,19 @@ export function createGameRepository(
         ]);
         const replay = replayCreate(await existingCommand(client, input), input.requestHash);
         if (replay) return replay;
+        const recipients = input.inviteeUserIds ?? [];
+        if (recipients.length > 0) {
+          if (input.paymentMode !== 'NO_PAYMENT' && !input.wholeCourtCheckout)
+            return { outcome: 'rejected', code: 'GAME_INVITEE_INELIGIBLE' };
+          const allowed = await lockInviteableGameFriends(
+            client,
+            input.tenantId,
+            input.actorUserId,
+            recipients,
+          );
+          if (allowed.length !== recipients.length)
+            return { outcome: 'rejected', code: 'GAME_INVITEE_INELIGIBLE' };
+        }
 
         if (input.wholeCourtCheckout) {
           await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
@@ -1240,8 +1264,35 @@ export function createGameRepository(
             payload: { ...payloadBase, operationId },
           });
         }
+        if (recipients.length > 0) {
+          await client.query(
+            `insert into games.friend_invitations (tenant_id, game_id, recipient_user_id)
+             select $1, $2, unnest($3::uuid[])`,
+            [input.tenantId, game.id, recipients],
+          );
+          if (immediateSchedule)
+            await issueGameFriendInvitations(
+              client,
+              {
+                tenantId: input.tenantId,
+                gameId: game.id,
+                organizerId: input.actorUserId,
+                correlationId: input.correlationId,
+              },
+              recipients,
+            );
+        }
         return { ...result, replayed: false };
       });
+    },
+
+    canViewFriendInvitation(tenantId, gameId, viewerId) {
+      return withTenantTransaction(
+        pool,
+        tenantId,
+        async (client) =>
+          (await readGameFriendInvitation(client, tenantId, gameId, viewerId)).invited,
+      );
     },
 
     cancel(input) {
@@ -2575,6 +2626,29 @@ export function createWholeCourtCheckoutRepository(pool: Pool) {
             organizerUserId: input.userId,
           },
         });
+        const recipients = await client.query<{ recipient_user_id: string }>(
+          `select recipient_user_id from games.friend_invitations
+            where tenant_id = $1 and game_id = $2 and issued_at is null`,
+          [input.tenantId, input.gameId],
+        );
+        if (recipients.rows.length) {
+          const allowed = await lockInviteableGameFriends(
+            client,
+            input.tenantId,
+            input.userId,
+            recipients.rows.map((invite) => invite.recipient_user_id),
+          );
+          await issueGameFriendInvitations(
+            client,
+            {
+              tenantId: input.tenantId,
+              gameId: input.gameId,
+              organizerId: input.userId,
+              correlationId: input.correlationId,
+            },
+            allowed,
+          );
+        }
       });
     },
   };

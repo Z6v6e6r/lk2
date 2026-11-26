@@ -473,6 +473,24 @@ Until Commerce supplies a verified payment next action and confirmation consumer
 invents a payment URL or marks the reservation paid. Production dependency injection for Games
 remains off at this boundary; registered routes fail closed with `GAMES_RUNTIME_UNAVAILABLE`.
 
+### Invitations to friends after game creation
+
+The create command accepts a bounded list of LK2 friends for free games and the confirmed
+whole-court flow. Games validates accepted friendship, the active recipient, and blocks in both
+directions in the current tenant. A payment draft reserves only the user's selection. It issues
+invitations after the same operation confirms the game, with a fresh recipient check.
+
+An issued invitation allows its recipient to open the private game until the registration cutoff
+while the friendship is active. Joining still uses the regular eligibility and capacity rules.
+Private games created with this list also check the recipient at the roster command. The game ID
+in a forwarded notification grants no access by itself. Existing games without a friend list retain
+their earlier policy.
+
+In-app delivery uses the recipient's existing game notification preference and the tenant's in-app
+setting. The recipient row, notification, and notification outbox facts commit in the same
+transaction as the scheduled game. The original create command and the recipient key prevent
+duplicate notifications after retry or payment return.
+
 ### 7.2.1 Card projection and reads
 
 Every Games fact is delivered to the dedicated card projector through a durable bounded quorum

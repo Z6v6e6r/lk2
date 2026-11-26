@@ -75,6 +75,8 @@ function commandError(error: unknown): string {
     if (code === 'GAME_START_TIME_PASSED') return 'Время начала уже прошло.';
     if (code === 'GAME_SLOT_UNAVAILABLE' || code === 'GAME_LOCATION_INVALID')
       return 'Выбранный корт недоступен для этой игры.';
+    if (code === 'GAME_INVITEE_INELIGIBLE')
+      return 'Один из выбранных друзей сейчас недоступен для приглашения. Проверьте список.';
     if (code === 'IDEMPOTENCY_KEY_REUSED') {
       return 'Ключ незавершённой попытки уже связан с другими параметрами. Новая команда не отправлена; обратитесь в поддержку.';
     }
@@ -98,6 +100,7 @@ const TERMINAL_CREATE_REFUSALS: ReadonlySet<unknown> = new Set([
   'GAME_START_TIME_PASSED',
   'GAME_SLOT_UNAVAILABLE',
   'GAME_LOCATION_INVALID',
+  'GAME_INVITEE_INELIGIBLE',
   'GAME_PAYMENT_REQUIRED',
   'GAME_PAYMENT_MODE_MISMATCH',
   'GAME_PRICE_CONFIRMATION_REQUIRED',
@@ -373,6 +376,9 @@ function LegacyCreateGamePage({
             paymentMode: 'ORGANIZER_PAYS',
             waitlistEnabled,
             levelRange: schedule?.levelRange ?? null,
+            ...(schedule?.inviteeUserIds?.length
+              ? { inviteeUserIds: [...schedule.inviteeUserIds] }
+              : {}),
             priceConsent: { amountMinor: offer.amountMinor, currency: offer.currency },
           }
         : null);

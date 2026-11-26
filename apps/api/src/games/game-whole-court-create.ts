@@ -92,6 +92,7 @@ export class WholeCourtCreateError extends Error {
       | 'GAME_LOCATION_INVALID'
       | 'GAME_START_TIME_PASSED'
       | 'GAME_SLOT_UNAVAILABLE'
+      | 'GAME_INVITEE_INELIGIBLE'
       | 'IDEMPOTENCY_KEY_REUSED'
       | 'GAME_OPERATION_NOT_FOUND'
       | 'GAME_OWNER_UNAVAILABLE',

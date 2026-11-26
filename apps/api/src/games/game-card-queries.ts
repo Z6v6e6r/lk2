@@ -29,7 +29,10 @@ import {
 
 type CardReadRepository = Pick<
   GameRepository,
-  'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
+  | 'getCardProjection'
+  | 'listPublicCardProjections'
+  | 'listViewerCardProjections'
+  | 'canViewFriendInvitation'
 >;
 type CardProfileRepository = Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'> &
   Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getCupProjectedLevels'>>;
@@ -442,10 +445,20 @@ export async function getViewerGameCard(input: {
     now: input.now,
     viewerUserId: input.viewerUserId,
   }).viewerRelation;
+  const invited =
+    relation === 'NONE' &&
+    !restricted &&
+    projection.visibility === 'PRIVATE' &&
+    projection.lifecycleState === 'SCHEDULED' &&
+    (await input.repository.canViewFriendInvitation?.(
+      input.tenantId,
+      projection.gameId,
+      input.viewerUserId,
+    ));
   if (
     relation === 'ANONYMOUS' ||
     (relation === 'NONE' &&
-      ((!restricted && projection.visibility !== 'PUBLIC') ||
+      ((!restricted && !invited && projection.visibility !== 'PUBLIC') ||
         projection.lifecycleState !== 'SCHEDULED'))
   ) {
     return undefined;
@@ -453,7 +466,7 @@ export async function getViewerGameCard(input: {
   const surface = history
     ? 'HISTORY'
     : relation === 'NONE'
-      ? restricted
+      ? restricted || invited
         ? 'INVITE'
         : 'DISCOVER'
       : 'MY_UPCOMING';

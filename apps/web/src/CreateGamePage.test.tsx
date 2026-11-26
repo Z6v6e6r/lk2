@@ -858,8 +858,12 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
         .fn<NonNullable<AuthGateway['advanceWholeCourtCheckout']>>()
         .mockResolvedValue(managedResult('SUCCEEDED'));
       const getGameOperation = vi.fn();
+      const invitedFriendId = '60000000-0000-4000-8000-000000000001';
       const api: AuthGateway = {
         ...paidApi({ createPaidGame, getGameOperation }),
+        listProfileFriends: vi.fn().mockResolvedValue({
+          items: [{ userId: invitedFriendId, displayName: 'Тестовый друг', avatarUrl: null }],
+        }),
         advanceWholeCourtCheckout,
         getWholeCourtCheckoutOffer: vi.fn().mockResolvedValue({
           offer: {
@@ -905,6 +909,7 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
         await user.click(within(slots).getByRole('button'));
         await user.click(screen.getByRole('radio', { name: /^Весь корт/ }));
         await user.click(screen.getByRole('button', { name: 'Продолжить' }));
+        await user.click(await screen.findByRole('checkbox', { name: 'Тестовый друг' }));
         await user.type(screen.getByLabelText('Название игры для публикации'), 'Тестовая игра');
         await user.click(screen.getByRole('button', { name: /^B$/ }));
       }
@@ -926,6 +931,7 @@ describe('CreateGamePage managed commercial CREATE (WARN)', () => {
         expect(payload).toMatchObject({
           title: 'Тестовая игра',
           levelRange: { from: 'D', to: 'B' },
+          inviteeUserIds: [invitedFriendId],
         });
       }
       expect(
