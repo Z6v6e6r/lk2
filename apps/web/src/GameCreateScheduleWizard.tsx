@@ -4,7 +4,7 @@ import type {
   GameCreateScheduleSlot,
   WholeCourtCheckoutOffer,
 } from '@phub/api-sdk';
-import { EventCalendarIcon, EventLevelIcon } from './ActivityCardIcons.js';
+import { EventCalendarIcon } from './ActivityCardIcons.js';
 import backIconUrl from './assets/game-schedule-back.svg';
 import stationChevronUrl from './assets/game-schedule-station-chevron.svg';
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
@@ -55,6 +55,8 @@ const GAME_FORMATS = [
   { id: 'singles', label: '1 на 1' },
 ] as const;
 type Level = (typeof LEVELS)[number];
+type LevelDisplay = { readonly level: Level; readonly step?: number };
+type LevelRangeDisplay = readonly [LevelDisplay] | readonly [LevelDisplay, LevelDisplay];
 type QuarterRange = {
   readonly from: number;
   readonly to: number;
@@ -63,9 +65,54 @@ type QuarterRange = {
   readonly singleLevelStep: number;
 };
 
-function levelQuarterLabel(quarter: number) {
-  const level = LEVELS[Math.floor(quarter / QUARTERS_PER_LEVEL)];
-  return `${level}${LEVEL_QUARTERS[quarter % QUARTERS_PER_LEVEL]}`;
+function quarterDisplay(quarter: number): LevelDisplay {
+  return {
+    level: LEVELS[Math.floor(quarter / QUARTERS_PER_LEVEL)]!,
+    step: (quarter % QUARTERS_PER_LEVEL) + 1,
+  };
+}
+
+function quarterRangeDisplay({ from, to }: QuarterRange): LevelRangeDisplay {
+  const lower = quarterDisplay(from);
+  const upper = quarterDisplay(to);
+  if (from === to) return [lower];
+  const startsAtFirstStep = lower.step === 1;
+  const endsAtLastStep = upper.step === QUARTERS_PER_LEVEL;
+  if (lower.level === upper.level) {
+    return startsAtFirstStep && endsAtLastStep ? [{ level: lower.level }] : [lower, upper];
+  }
+  return [
+    startsAtFirstStep ? { level: lower.level } : lower,
+    endsAtLastStep ? { level: upper.level } : upper,
+  ];
+}
+
+function levelDisplayText({ level, step }: LevelDisplay) {
+  return step === undefined ? level : `${level}${LEVEL_QUARTERS[step - 1]}`;
+}
+
+function LevelMark({ level, step }: LevelDisplay) {
+  return (
+    <span className="game-schedule-level-mark">
+      <span>{level[0]}</span>
+      {level.endsWith('+') ? <sup>+</sup> : null}
+      {step === undefined ? null : <sub>{step}</sub>}
+    </span>
+  );
+}
+
+function LevelRange({ range: [lower, upper] }: { range: LevelRangeDisplay }) {
+  return (
+    <span className="game-schedule-level-range">
+      <LevelMark {...lower} />
+      {upper ? (
+        <>
+          {' … '}
+          <LevelMark {...upper} />
+        </>
+      ) : null}
+    </span>
+  );
 }
 
 function changeQuarterRange(range: QuarterRange, index: number): QuarterRange {
@@ -472,11 +519,11 @@ export function GameCreateScheduleWizard({
   const summarySlot = chosenSlot ?? times.get(preferredStart);
   const summaryCourt = courts.get(court);
   const summaryCourtName = summaryCourt ? courtDisplay(summaryCourt).title : undefined;
-  const levelRange = showLevelQuarters
-    ? quarterRange.from === quarterRange.to
-      ? levelQuarterLabel(quarterRange.from)
-      : `${levelQuarterLabel(quarterRange.from)} – ${levelQuarterLabel(quarterRange.to)}`
-    : `${LEVELS[levels[0]]} – ${LEVELS[levels[1]]}`;
+  const levelRange: LevelRangeDisplay = showLevelQuarters
+    ? quarterRangeDisplay(quarterRange)
+    : levels[0] === levels[1]
+      ? [{ level: LEVELS[levels[0]]! }]
+      : [{ level: LEVELS[levels[0]]! }, { level: LEVELS[levels[1]]! }];
   const payerLabel = payer === 'self' ? 'Я оплачиваю весь корт' : 'Каждый за себя';
   const chosenTime = selected && slotTime(selected);
   const quoteError = quote && 'error' in quote ? quote.error : undefined;
@@ -577,11 +624,24 @@ export function GameCreateScheduleWizard({
                 {summarySlot ? slotTime(summarySlot) : `${duration} мин`}
               </span>
             </span>
-            <span>
+            <span
+              role={selected ? 'group' : undefined}
+              aria-label={selected ? 'Уровень игроков' : undefined}
+            >
               {selected ? (
                 <>
-                  <EventLevelIcon />
-                  {levelRange}
+                  <svg
+                    className="game-schedule-level-icon"
+                    viewBox="0 0 16 12"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <rect x="0" y="1.5" width="3.2" height="9" rx="0.65" />
+                    <rect x="4.25" y="1.5" width="3.2" height="9" rx="0.65" opacity=".8" />
+                    <rect x="8.5" y="1.5" width="3.2" height="9" rx="0.65" opacity=".5" />
+                    <rect x="12.75" y="1.5" width="3.2" height="9" rx="0.65" opacity=".35" />
+                  </svg>
+                  <LevelRange range={levelRange} />
                 </>
               ) : null}
             </span>
@@ -1002,7 +1062,9 @@ export function GameCreateScheduleWizard({
           <section className="game-schedule-card game-schedule-stack">
             <div className="game-schedule-settings-row">
               <h2 className="game-schedule-settings-heading">Уровень игроков</h2>
-              <span aria-live={showLevelQuarters ? 'polite' : undefined}>{levelRange}</span>
+              <span aria-live={showLevelQuarters ? 'polite' : undefined}>
+                <LevelRange range={levelRange} />
+              </span>
             </div>
             <div
               className={`game-schedule-levels${showLevelQuarters ? ' game-schedule-levels--quarters' : ''}`}
@@ -1019,11 +1081,12 @@ export function GameCreateScheduleWizard({
                   : index >= levels[0] && index <= levels[1];
                 const lower = showLevelQuarters && from === quarterRange.from && selected;
                 const upper = showLevelQuarters && to === quarterRange.to && selected;
-                const quarterLabel = lower
-                  ? levelQuarterLabel(from)
-                  : upper
-                    ? levelQuarterLabel(to)
-                    : level;
+                const mark: LevelDisplay =
+                  lower && (from > first || to < last)
+                    ? quarterDisplay(from)
+                    : upper && to < last
+                      ? quarterDisplay(to)
+                      : { level };
                 const fillLeft = (from - first) * 25;
                 const fillRight = (last - to) * 25;
                 return (
@@ -1033,22 +1096,22 @@ export function GameCreateScheduleWizard({
                     aria-label={level}
                     aria-description={
                       lower && upper
-                        ? levelRange
-                        : quarterLabel !== level
-                          ? quarterLabel
+                        ? levelRange.map(levelDisplayText).join(' … ')
+                        : mark.step !== undefined
+                          ? levelDisplayText(mark)
                           : undefined
                     }
                     aria-pressed={selected}
                     onClick={() => chooseLevel(index)}
                   >
-                    {quarterLabel}
+                    <LevelMark {...mark} />
                     {showLevelQuarters && selected ? (
                       <span
                         className="game-schedule-level-fill"
                         style={{ clipPath: `inset(0 ${fillRight}% 0 ${fillLeft}%)` }}
                         aria-hidden="true"
                       >
-                        {quarterLabel}
+                        <LevelMark {...mark} />
                       </span>
                     ) : null}
                   </button>

@@ -796,6 +796,46 @@ html:has(.game-schedule-wizard--settings) {
   height: 12px;
 }
 
+.game-schedule-summary .game-schedule-level-icon {
+  width: 14px;
+}
+
+.game-schedule-level-range {
+  white-space: nowrap;
+}
+
+.game-schedule-level-mark {
+  display: inline-grid;
+  grid-template:
+    'letter plus' 0.5em
+    'letter step' 0.5em / auto auto;
+  align-items: center;
+  justify-items: center;
+  vertical-align: -0.08em;
+  line-height: 1;
+}
+
+.game-schedule-level-mark > span {
+  grid-area: letter;
+}
+
+.game-schedule-level-mark :is(sup, sub) {
+  font-size: 0.67em;
+  line-height: 1;
+}
+
+.game-schedule-level-mark sup {
+  grid-area: plus;
+  align-self: end;
+  transform: translateY(-0.16em);
+}
+
+.game-schedule-level-mark sub {
+  grid-area: step;
+  align-self: start;
+  transform: translateY(0.16em);
+}
+
 .game-schedule-summary > :nth-child(even) {
   justify-self: end;
   text-align: end;

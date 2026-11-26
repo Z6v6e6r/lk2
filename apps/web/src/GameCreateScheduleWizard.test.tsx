@@ -240,15 +240,15 @@ describe('game creation schedule', () => {
 
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
     expect(summary().getByText('Приватная')).toBeVisible();
-    expect(summary().getByText('D – C')).toBeVisible();
+    expect(summary().getByRole('group', { name: 'Уровень игроков' })).toHaveTextContent('D … C');
     await user.click(screen.getByRole('button', { name: 'B' }));
     await user.click(screen.getByRole('radio', { name: /Открытая игра/ }));
-    expect(summary().getByText('D – B')).toBeVisible();
+    expect(summary().getByRole('group', { name: 'Уровень игроков' })).toHaveTextContent('D … B');
     expect(summary().getByText('Открытая')).toBeVisible();
     await user.click(summary().getByRole('button', { name: 'Изменить' }));
     expect(await screen.findByRole('heading', { name: 'Дата и время' })).toBeVisible();
     expect(summary().getByText('Селигерская · Корт №1')).toBeVisible();
-    expect(summary().getByText('D – B')).toBeVisible();
+    expect(summary().getByRole('group', { name: 'Уровень игроков' })).toHaveTextContent('D … B');
     expect(summary().getByText('Открытая')).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Сбросить выбранное время' }));
     expect(summary().getByText('6 дек · 60 мин')).toBeVisible();
@@ -390,71 +390,78 @@ describe('game creation schedule', () => {
     const summary = () => within(screen.getByRole('region', { name: 'Выбранная игра' }));
     const from = () => levels().getByRole('button', { name: 'D' });
     const to = () => levels().getByRole('button', { name: 'C' });
-    expect(summary().getByText('D₁ – C₄')).toBeVisible();
-    for (const edge of ['D₂', 'D₃', 'D₄', 'D₃', 'D₂', 'D₁', 'D₂']) {
+    const summaryLevel = () => summary().getByRole('group', { name: 'Уровень игроков' });
+    const expectRange = (text: string) => expect(summaryLevel().textContent).toBe(text);
+    expectRange('D … C');
+    for (const edge of ['D2', 'D3', 'D4', 'D3', 'D2', 'D', 'D2']) {
       await user.click(from());
-      expect(summary().getByText(`${edge} – C₄`)).toBeVisible();
-      expect(from()).toHaveAccessibleDescription(edge);
+      expectRange(`${edge} … C`);
     }
-    for (const edge of ['C₃', 'C₂', 'C₁', 'C₂', 'C₃', 'C₄', 'C₃']) {
+    for (const edge of ['C3', 'C2', 'C1', 'C2', 'C3', 'C', 'C3']) {
       await user.click(to());
-      expect(summary().getByText(`D₂ – ${edge}`)).toBeVisible();
-      expect(to()).toHaveAccessibleDescription(edge);
+      expectRange(`D2 … ${edge}`);
     }
+    expect(from()).toHaveAccessibleDescription('D₂');
+    expect(to()).toHaveAccessibleDescription('C₃');
     await user.click(summary().getByRole('button', { name: 'Изменить' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
-    expect(summary().getByText('D₂ – C₃')).toBeVisible();
+    expectRange('D2 … C3');
 
     const singleLevel = () => levels().getByRole('button', { name: 'D+' });
     await user.click(singleLevel());
     expect(levels().getAllByRole('button')).toHaveLength(7);
-    expect(summary().getByText('D+₁ – D+₄')).toBeVisible();
+    expectRange('D+');
+    expect(within(summaryLevel()).getByRole('superscript')).toHaveTextContent('+');
+    expect(within(summaryLevel()).queryByRole('subscript')).not.toBeInTheDocument();
     expect(singleLevel()).toHaveFocus();
-    const selectedRanges = new Set(['D+₁ – D+₄']);
+    const selectedRanges = new Set(['D+']);
     for (const expected of [
-      'D+₂ – D+₄',
-      'D+₃ – D+₄',
-      'D+₃',
-      'D+₂ – D+₃',
-      'D+₂',
-      'D+₁ – D+₂',
-      'D+₁',
-      'D+₁ – D+₂',
-      'D+₁ – D+₃',
-      'D+₂ – D+₃',
-      'D+₂ – D+₄',
-      'D+₃ – D+₄',
-      'D+₄',
-      'D+₃ – D+₄',
-      'D+₂ – D+₄',
-      'D+₁ – D+₄',
+      'D+2 … D+4',
+      'D+3 … D+4',
+      'D+3',
+      'D+2 … D+3',
+      'D+2',
+      'D+1 … D+2',
+      'D+1',
+      'D+1 … D+2',
+      'D+1 … D+3',
+      'D+2 … D+3',
+      'D+2 … D+4',
+      'D+3 … D+4',
+      'D+4',
+      'D+3 … D+4',
+      'D+2 … D+4',
+      'D+',
     ]) {
       await user.keyboard(' ');
-      expect(summary().getByText(expected, { exact: true })).toBeVisible();
-      expect(singleLevel()).toHaveAccessibleDescription(expected);
+      expectRange(expected);
       selectedRanges.add(expected);
     }
     expect(selectedRanges.size).toBe(10);
 
     await user.click(singleLevel());
+    const mark = within(summaryLevel());
+    expect(mark.getAllByRole('superscript').map((sign) => sign.textContent)).toEqual(['+', '+']);
+    expect(mark.getAllByRole('subscript').map((index) => index.textContent)).toEqual(['2', '4']);
+    expect(singleLevel()).toHaveAccessibleDescription('D+₂ … D+₄');
     await user.click(summary().getByRole('button', { name: 'Изменить' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));
-    expect(summary().getByText('D+₂ – D+₄')).toBeVisible();
+    expectRange('D+2 … D+4');
     await user.click(to());
-    expect(summary().getByText('D+₂ – C₄')).toBeVisible();
+    expectRange('D+2 … C');
     await user.click(from());
-    expect(summary().getByText('D₁ – C₄')).toBeVisible();
+    expectRange('D … C');
     await user.click(singleLevel());
-    expect(summary().getByText('D+₁ – D+₄')).toBeVisible();
+    expectRange('D+');
     await user.click(singleLevel());
-    expect(summary().getByText('D+₂ – D+₄')).toBeVisible();
+    expectRange('D+2 … D+4');
 
     for (let tap = 0; tap < 6; tap++) await user.click(singleLevel());
-    expect(summary().getByText('D+₁')).toBeVisible();
+    expectRange('D+1');
     await user.click(from());
-    expect(summary().getByText('D₁ – D+₁')).toBeVisible();
+    expectRange('D … D+1');
     await user.click(singleLevel());
-    expect(summary().getByText('D₁ – D+₂')).toBeVisible();
+    expectRange('D … D+2');
   });
 
   it('reports missing residency evidence independently from the base price', async () => {
