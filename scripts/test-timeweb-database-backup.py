@@ -1898,6 +1898,66 @@ class AppOnlyBackupTests(unittest.TestCase):
                 self.assertTrue(all('--list' in args for args in scenario.calls if 'pg_restore' in args))
                 self.assertEqual(scenario.invoke(attest=True)['receiptSha256'],result['receiptSha256'])
 
+    def test_web_712_fresh_dump_is_scoped_and_retains_the_full_reserve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scenario = self.scenario(directory)
+            op = scenario.op
+            del op['priorRestore']
+            op['schema'] = m.WEB712_FRESH_SCHEMA
+            for service in ('expectedApi', 'expectedWeb'):
+                op[service]['releaseId'] = m.WEB712_PREDECESSOR
+                op[service]['revision'] = m.WEB712_PREDECESSOR[:40]
+            scenario.runtime_api = copy.deepcopy(op['expectedApi'])
+            boundary = [scenario.service_row(i == scenario.runtime_api['id'])
+                        for i in sorted([scenario.runtime_api['id'], scenario.runtime_pg['id']])]
+            op['expectedBoundarySha256'] = op['predecessorAttestationSha256'] = m.digest(m.encoded(boundary))
+            op['confirmation'] = m.app_only_backup_confirmation(op)
+            message = b'synthetic Web restore authorization'
+            message_sha = m.digest(message)
+            op['ownerRestoreDecision'] = {
+                'schema': 'PHUB_TIMEWEB_WEB_712_RESTORE_DECISION_V1',
+                'authority': 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
+                'decision': 'FRESH_DUMP_INTEGRITY_ONLY',
+                'messageSha256': message_sha,
+                'reference': 'codex-user-message-sha256:' + message_sha,
+                'attestedAt': '2026-11-15T20:09:00.000Z',
+                'scopeSha256': m.fresh_owner_scope(op),
+            }
+            waiver = scenario.root / 'operator/web-712-restore-waiver.txt'
+            waiver.write_bytes(message)
+            scenario.request.write_bytes(m.encoded(op))
+            with patch.object(m, 'ROOT', scenario.root):
+                scenario.plan = m.fresh_plan(op, m.encoded(op), 1024)
+            self.assertEqual(scenario.plan['dumpLimitBytes'], 4 * 1024**3)
+            self.assertEqual(scenario.plan['diskReserveBytes'], m.DISK_HEADROOM + m.CUTOVER_CONTROL_BYTES)
+            self.assertEqual(m.fresh_dump_limit({'schema': m.GAME_INVITATIONS_0120_FRESH_SCHEMA}),
+                             m.CUTOVER_DUMP_LIMIT)
+            now = m.utc(scenario.clockAt)
+            with patch.object(m, 'WEB712_RESTORE_MESSAGE_SHA256', message_sha), \
+                 patch.object(m, 'WEB712_LEDGER', op['expectedLedgerSha256']):
+                m.validate_operation(op, now, op['toolFileSha256'])
+                for change in (
+                    {'expectedLedgerSha256': 'e'*64},
+                    {'expectedWeb': {**op['expectedWeb'], 'releaseId': m.GAME_INVITATIONS_0120_PREDECESSOR}},
+                    {'ownerRestoreDecision': {**op['ownerRestoreDecision'], 'scopeSha256': '0'*64}},
+                    {'ownerRestoreDecision': {**op['ownerRestoreDecision'], 'messageSha256': m.GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256}},
+                    {'ownerRestoreDecision': {**op['ownerRestoreDecision'], 'attestedAt': '2026-11-15T19:00:00.000Z'}},
+                ):
+                    with self.subTest(change=change), self.assertRaises(m.Stop):
+                        m.validate_operation({**op, **change}, now, op['toolFileSha256'])
+                waiver.write_bytes(b'different authorization')
+                with self.assertRaisesRegex(m.Stop, 'WEB_712_RESTORE_MESSAGE'):
+                    scenario.invoke()
+                waiver.write_bytes(message)
+                result = scenario.invoke()
+                receipt = m.strict((Path(scenario.plan['canonical']) / 'database-backup-receipt.json').read_bytes())
+                self.assertEqual(receipt['schema'], m.WEB712_FRESH_RECEIPT)
+                self.assertEqual(receipt['freshDumpIntegrityStatus'], 'PG16_TOC_PARSE_VERIFIED')
+                self.assertEqual(receipt['dumpLimitBytes'], m.WEB712_DUMP_LIMIT)
+                self.assertIs(receipt['freshDumpRestored'], False)
+                self.assertTrue(all('--list' in args for args in scenario.calls if 'pg_restore' in args))
+                self.assertEqual(scenario.invoke(attest=True)['receiptSha256'], result['receiptSha256'])
+
     def test_game_invitations_0120_uses_its_own_exact_predecessor_ledger_and_waiver(self):
         with tempfile.TemporaryDirectory() as directory:
             scenario=self.scenario(directory)

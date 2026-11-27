@@ -1326,6 +1326,44 @@ error brand distinguishes that rejection from generic errors, missing errors or 
 Both paths require the exact newly recreated owned running `sleep 60` fixture with `starting` or
 `unhealthy` health. Unexpected exit/status/identity/command/health fails with bounded diagnostics. A failed first-attempt main CI remains ineligible; rerunning it does not grant delivery.
 
+## Closed Web rollout for the game creation wizard in PR #712
+
+Use schema `PHUB_TIMEWEB_CRITICAL_WEB_712_DIRECT_OPERATION_V1` with the existing
+`--critical-web`, `--critical-web-recover`, and `--critical-web-reconcile` entry points.
+The request remains at `/opt/phub/timeweb-beta/operator/web-upgrade.json`. This profile
+binds the serving API and Web to the known `492937113c0f…-45892594868-1` release and
+its exact immutable image references. Read the current container IDs before minting the request.
+
+The application anchor is `323afc7c83cf43764940c7562c54c5ad21fc20c0` and only its six
+reviewed Web changes may differ from the installed source. The controller successor may
+modify only `scripts/timeweb-critical-web.js`, the backup producer
+`scripts/control-timeweb-database-backup.py`, their tests, and this runbook. It must be the
+exact current `main` with full first-attempt CI. Publish that same successor through the
+canonical V2 publisher so the controller, candidate, source CI, and manifest agree.
+
+Retain the exact owner messages as UTF-8 without a trailing newline in root-only `0600`
+`operator/web-712-restore-waiver.txt` and `operator/web-712-direct-observation.txt` under
+the Timeweb root. The source pins both messages separately. The backup waiver applies to
+control restoration only and is scoped to the exact operation, predecessor, and post-0120 ledger.
+
+Use the existing production backup tool's
+`--prepare-app-only <candidateSha> <publicationRunId> web-712-integrity-only`.
+Its plan, execution, and terminal reconciliation must prove a fresh dump with its SHA-256,
+PG16 table-of-contents check, and source schema/security/account evidence. The dump ceiling is
+4 GiB and the disk reserve remains 5.25 GiB. Pass the resulting `backupOperationSha256` in
+the Web request and set the Web deadline no later than the backup operation deadline.
+The receipt records `freshDumpRestored: false`. The controller verifies the terminal journal,
+dump hash, and live ledger before acquiring the Web lease. While holding that lease it
+rechecks the sealed evidence and database identity before activation. The backup and Web
+transaction directories use the same release ID with suffixes `-api-web` and `-web`.
+
+Set the confirmation to
+`UPGRADE_WEB_712_DIRECT_<CANDIDATE_FIRST_12_UPPERCASE>_FROM_<PREVIOUS_WEB_DIGEST_LAST_12_UPPERCASE>_KEEP_API_492937113C0F`.
+The profile runs the existing Web image smoke and 61 rounds of direct private/public API and Web
+checks over 15 minutes. Failure triggers rollback to the exact previous Web image. Receipts
+record Timeweb monitoring and Email/Telegram alert delivery as unverified with the owner's
+explicit exception. The activation scope is Web only.
+
 ## Closed Web-only release over installed API 8158
 
 This source preparation does not enroll a controller/helper, publish images, produce a live backup,
