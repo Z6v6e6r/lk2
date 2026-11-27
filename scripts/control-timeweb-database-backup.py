@@ -198,6 +198,14 @@ GAME_INVITATIONS_0120_FRESH_POLICY = 'GAME_INVITATIONS_0120_INTEGRITY_ONLY_V1'
 GAME_INVITATIONS_0120_PREDECESSOR = 'dd73c7e02e81ad790f9c8c3ceb9f9ca988ad87a5-45820580791-1'
 GAME_INVITATIONS_0120_LEDGER = '70adb2cea831f5b5ad58a44c6fd0b18324dba914b3eab4a4fd3c7c723c9e70c6'
 GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256 = '9970fdafc12b7fbcf7b02869c63642db3a34e47d47defded3373a36a316a5104'
+WEB712_FRESH_SCHEMA = 'PHUB_TIMEWEB_WEB_712_FRESH_BACKUP_V1'
+WEB712_FRESH_RECEIPT = 'PHUB_TIMEWEB_WEB_712_FRESH_DUMP_V1'
+WEB712_FRESH_POLICY = 'WEB_712_INTEGRITY_ONLY_V1'
+WEB712_PREDECESSOR = '492937113c0f8a7a4c6a3ebf14a512f81f50d873-45892594868-1'
+WEB712_LEDGER = 'af52b6141e571b017cbae1b049897bbdaf8b1d41747539bf19b74466790a4872'
+WEB712_RESTORE_MESSAGE_SHA256 = 'b53e3f8ac6dc0dd2e415f7098e8948a40e6d4a62d3e1804ed5d255f391ad4a10'
+# This release has a smaller dump ceiling and keeps the full disk reserve.
+WEB712_DUMP_LIMIT = 4 * 1024 ** 3
 
 
 def is_cup_support_fresh(op):
@@ -208,8 +216,12 @@ def is_game_invitations_0120_fresh(op):
     return op.get('schema') == GAME_INVITATIONS_0120_FRESH_SCHEMA
 
 
+def is_web712_fresh(op):
+    return op.get('schema') == WEB712_FRESH_SCHEMA
+
+
 def is_integrity_only_fresh(op):
-    return is_cup_support_fresh(op) or is_game_invitations_0120_fresh(op)
+    return is_cup_support_fresh(op) or is_game_invitations_0120_fresh(op) or is_web712_fresh(op)
 
 
 def is_app_only_fresh(op):
@@ -230,12 +242,14 @@ def is_fresh_operation(op):
     return is_app_only_fresh(op) or op.get('schema') in (FRESH_SCHEMA,CANONICAL_FRESH_SCHEMA)
 
 def fresh_receipt_schema(op):
+    if is_web712_fresh(op): return WEB712_FRESH_RECEIPT
     if is_game_invitations_0120_fresh(op): return GAME_INVITATIONS_0120_FRESH_RECEIPT
     if is_cup_support_fresh(op): return CUP_SUPPORT_FRESH_RECEIPT
     if is_app_only_fresh(op): return APP_ONLY_FRESH_RECEIPT
     return CANONICAL_FRESH_RECEIPT if is_canonical_fresh(op) else FRESH_RECEIPT
 
 def fresh_policy(op):
+    if is_web712_fresh(op): return WEB712_FRESH_POLICY
     if is_game_invitations_0120_fresh(op): return GAME_INVITATIONS_0120_FRESH_POLICY
     if is_cup_support_fresh(op): return CUP_SUPPORT_FRESH_POLICY
     if is_app_only_fresh(op): return APP_ONLY_POLICY
@@ -3709,7 +3723,7 @@ def plan_mode(path):
             attest_app_only_source(op)
             if is_integrity_only_fresh(op): attest_integrity_only_restore_message(op)
             fresh_restore_reference(op)
-            need(disk_free()>=CUTOVER_DUMP_LIMIT+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
+            need(disk_free()>=fresh_dump_limit(op)+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
         else:
             size=int(source_query(SOURCE_SIZE,op['expectedPostgres']['id']))
             cutover_disk_sizing(size,disk_memory_available(),disk_free(),schedule=True)
@@ -4079,6 +4093,7 @@ def app_only_backup_confirmation(op):
     api = op['expectedApi']['releaseId'][:12].upper()
     web = op['expectedWeb']['releaseId'][:12].upper()
     suffix = ('_GAME_INVITATIONS_0120_NO_RESTORE' if is_game_invitations_0120_fresh(op)
+              else '_WEB_712_NO_RESTORE' if is_web712_fresh(op)
               else '_CUP_SUPPORT_NO_RESTORE' if is_cup_support_fresh(op) else '')
     return action + '_APP_ONLY_' + op['candidateSha'][:12].upper() + '_FROM_' + api + '_' + web + suffix
 
@@ -4182,14 +4197,16 @@ def attest_app_only_source(op):
     need(is_app_only_fresh(op),'APP_ONLY_OPERATION')
     source, tree=app_only_source_checkout(op['controllerSha'])
     need(tree==op['controllerTree'], 'APP_ONLY_CONTROLLER')
-    secure(source/'scripts/timeweb-api-web-upgrade.js',mode=0o644)
+    module, function = ('timeweb-critical-web.js', 'attestWeb712BackupScope') if is_web712_fresh(op) else (
+        'timeweb-api-web-upgrade.js', 'attestAppOnlyBackupScope')
+    secure(source/'scripts'/module,mode=0o644)
     config=read_secure(Path('/etc/phub/timeweb-beta-standard-delivery.json'))
     need(digest(config)==op['controllerConfigSha256'] and strict(config).get('enabled') is True
          and strict(config).get('controllerSha')==op['controllerSha'],'APP_ONLY_CONTROLLER')
     program=(
         "import{readFileSync}from'node:fs';"
-        "import{attestAppOnlyBackupScope}from'./scripts/timeweb-api-web-upgrade.js';"
-        "process.stdout.write(attestAppOnlyBackupScope(JSON.parse(readFileSync(0,'utf8'))));"
+        f"import{{{function}}}from'./scripts/{module}';"
+        f"process.stdout.write({function}(JSON.parse(readFileSync(0,'utf8'))));"
     )
     need(command(['/usr/bin/node','--input-type=module','-e',program], 'APP_ONLY_SCOPE',
                  input_data=encoded(op),cwd=str(source),timeout=60)==b'APP_ONLY_BACKUP_SCOPE_VERIFIED',
@@ -4239,6 +4256,8 @@ def validate_app_only_checkpoint(op, as_of=None):
 
 
 def integrity_only_restore_policy(op):
+    if is_web712_fresh(op):
+        return ('WEB_712', WEB712_RESTORE_MESSAGE_SHA256, WEB712_PREDECESSOR, 'web-712-restore-waiver.txt')
     if is_game_invitations_0120_fresh(op):
         return ('GAME_INVITATIONS_0120', GAME_INVITATIONS_0120_RESTORE_MESSAGE_SHA256,
                 GAME_INVITATIONS_0120_PREDECESSOR, 'game-invitations-0120-restore-waiver.txt')
@@ -4252,7 +4271,7 @@ def integrity_only_restore_reference(op):
     scoped = is_game_invitations_0120_fresh(op)
     time_field = 'receivedAt' if scoped else 'attestedAt'
     exact(decision, ['schema', 'authority', 'decision', 'messageSha256', 'reference', time_field]
-          + (['scopeSha256','openedAt'] if scoped else []))
+          + (['scopeSha256','openedAt'] if scoped else ['scopeSha256'] if is_web712_fresh(op) else []))
     need(decision['schema'] == 'PHUB_TIMEWEB_' + name + '_RESTORE_DECISION_V1'
          and decision['authority'] == 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1'
          and decision['decision'] == 'FRESH_DUMP_INTEGRITY_ONLY'
@@ -4262,7 +4281,9 @@ def integrity_only_restore_reference(op):
          and 0 < utc(op['expiresAt']) - utc(decision['openedAt'] if scoped else decision[time_field]) <= 60 * 60
          and op['expectedApi']['releaseId'] == op['expectedWeb']['releaseId'] == predecessor
          and (not scoped or (op['expectedLedgerSha256'] == GAME_INVITATIONS_0120_LEDGER
-                             and decision['scopeSha256'] == fresh_owner_scope(op))),
+                             and decision['scopeSha256'] == fresh_owner_scope(op)))
+         and (not is_web712_fresh(op) or (op['expectedLedgerSha256'] == WEB712_LEDGER
+                                         and decision['scopeSha256'] == fresh_owner_scope(op))),
          name + '_RESTORE_DECISION')
     return {'schema': 'PHUB_TIMEWEB_' + name + '_BACKUP_ADMISSION_V1',
             'candidateSha': op['candidateSha'], 'candidateTree': op['controllerTree'],
@@ -4319,7 +4340,7 @@ def fresh_policy_file(op):
 
 
 def prepare_app_only_backup(candidate, run, checkpoint):
-    integrity_only = checkpoint in ('cup-support-integrity-only', 'game-invitations-0120-integrity-only')
+    integrity_only = checkpoint in ('cup-support-integrity-only', 'game-invitations-0120-integrity-only', 'web-712-integrity-only')
     need(SHA.fullmatch(candidate) and re.fullmatch(r'[1-9][0-9]*',run)
          and (checkpoint=='-' or integrity_only or RELEASE.fullmatch(checkpoint)),
          'APP_ONLY_PREPARE_ARGUMENTS')
@@ -4344,6 +4365,7 @@ def prepare_app_only_backup(candidate, run, checkpoint):
     target=strict(source_query(SOURCE_CUTOVER_TARGET,pg['id']))
     need(target=={**LOCATION_PHOTO_DATABASE_TARGET,'inRecovery':False}, 'APP_ONLY_DATABASE_TARGET')
     op={'schema': (GAME_INVITATIONS_0120_FRESH_SCHEMA if checkpoint == 'game-invitations-0120-integrity-only' else
+                   WEB712_FRESH_SCHEMA if checkpoint == 'web-712-integrity-only' else
                    CUP_SUPPORT_FRESH_SCHEMA if integrity_only else
                    APP_ONLY_RESTORE_SCHEMA if checkpoint=='-' else APP_ONLY_FRESH_SCHEMA),
         'profile':'production','target':TARGET,'controllerSha':candidate,'toolCommit':candidate,
@@ -4380,6 +4402,8 @@ def prepare_app_only_backup(candidate, run, checkpoint):
     minutes = 115 if is_app_only_checkpoint(op) else 55
     op['expiresAt']=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=minutes)).isoformat(timespec='milliseconds').replace('+00:00','Z')
     op['confirmation']=app_only_backup_confirmation(op)
+    if is_web712_fresh(op):
+        op['ownerRestoreDecision']['scopeSha256']=fresh_owner_scope(op)
     if is_game_invitations_0120_fresh(op):
         window=game_invitations_0120_restore_window(op)
         op['expiresAt']=window['expiresAt']
@@ -4406,6 +4430,7 @@ def fresh_policy_record(op):
 
 
 def fresh_lineage_phase(op):
+    if is_web712_fresh(op): return 'WEB_712_OWNER_DECISION_SEALED'
     if is_game_invitations_0120_fresh(op): return 'GAME_INVITATIONS_0120_OWNER_DECISION_SEALED'
     if is_cup_support_fresh(op): return 'CUP_SUPPORT_OWNER_DECISION_SEALED'
     if is_app_only_fresh(op): return 'APP_ONLY_LINEAGE_SEALED'
@@ -4418,6 +4443,10 @@ def fresh_lineage_fields(op, prior_raw):
     return {'sha256':digest(prior_raw),check:True}
 
 
+def fresh_dump_limit(op):
+    return WEB712_DUMP_LIMIT if is_web712_fresh(op) else CUTOVER_DUMP_LIMIT
+
+
 def fresh_plan(op, raw, database_bytes):
     need(type(database_bytes) is int and 0<database_bytes<2**63,'FRESH_DATABASE_SIZE')
     sha=digest(raw);work=ROOT/'backups'/('.fresh-dump-'+sha)
@@ -4425,7 +4454,7 @@ def fresh_plan(op, raw, database_bytes):
             'canonical':str(ROOT/'backups'/(op['releaseId']+'-api-web')),
             'publication':str(work/'publication'),'pendingLock':str(ROOT/'standard'/('.fresh-lock-'+sha)),
             'expectedLedgerSha256':op['expectedLedgerSha256'],'databaseBytes':database_bytes,
-            'dumpLimitBytes':CUTOVER_DUMP_LIMIT,'diskReserveBytes':DISK_HEADROOM+CUTOVER_CONTROL_BYTES}
+            'dumpLimitBytes':fresh_dump_limit(op),'diskReserveBytes':DISK_HEADROOM+CUTOVER_CONTROL_BYTES}
 
 
 def fresh_files(op):
@@ -4476,8 +4505,8 @@ def validate_fresh_publication(op, raw, plan, directory):
          and r['freshDumpRestored'] is False and r['freshDumpIntegrityStatus']=='PG16_TOC_PARSE_VERIFIED'
          and r['restoreAdmissionPolicy']==fresh_policy(op) and r[reference_hash_key]==digest(prior_raw)
          and r[policy_hash_key]==digest(policy_raw) and r['snapshotWitnessSha256']==digest(witness_raw)
-         and type(r['dumpBytes']) is int and 0<r['dumpBytes']<=CUTOVER_DUMP_LIMIT
-         and r['dumpLimitBytes']==CUTOVER_DUMP_LIMIT and r['dumpCompression']=='zstd:3', 'FRESH_RECEIPT')
+         and type(r['dumpBytes']) is int and 0<r['dumpBytes']<=plan['dumpLimitBytes']
+         and r['dumpLimitBytes']==plan['dumpLimitBytes'] and r['dumpCompression']=='zstd:3', 'FRESH_RECEIPT')
     need(w['schema']=='PHUB_TIMEWEB_CUTOVER_SNAPSHOT_WITNESS_V1' and w['operationSha256']==digest(raw)
          and w['sourcePostgres']==op['expectedPostgres'] and HASH.fullmatch(w['snapshotIdSha256'] or '')
          and w['databaseTarget']==r['databaseTarget'] and w['ledgerSha256']==r['sourceLedgerSha256']
@@ -4550,7 +4579,7 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
         if is_integrity_only_fresh(op): attest_integrity_only_restore_message(op)
         prior=fresh_restore_reference(op)
         cutover_disk_reserve()
-        need(disk_free()>=CUTOVER_DUMP_LIMIT+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
+        need(disk_free()>=fresh_dump_limit(op)+DISK_HEADROOM+CUTOVER_CONTROL_BYTES,'FRESH_DUMP_CAPACITY')
         size=source_query(SOURCE_SIZE,op['expectedPostgres']['id']).decode().strip()
         need(re.fullmatch(r'[1-9][0-9]*',size) is not None,'DATABASE_SIZE')
         plan=fresh_plan(op,raw,int(size));canonical=Path(plan['canonical'])
@@ -4642,7 +4671,7 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
                 with cutover_source_snapshot(op,sha) as snapshot:
                     atomic_exclusive(work/'snapshot-witness.json',encoded(snapshot['witness']))
                     cutover_blocking_docker(['exec',op['expectedPostgres']['id'],'/bin/sh','-eu','-c',cutover_snapshot_dump_shell(sha,snapshot['token'],preserve_acl=app_only)],
-                                            'DUMP',stdout=stream,timeout=1230,file_limit=CUTOVER_DUMP_LIMIT)
+                                            'DUMP',stdout=stream,timeout=1230,file_limit=plan['dumpLimitBytes'])
                 stream.flush()
             os.fsync(fd)
         finally:os.close(fd)
@@ -4664,7 +4693,7 @@ def fresh_dump(op, raw, file_sha, reconcile=False, attest=False):
                  'predecessorAttestationSha256':op['predecessorAttestationSha256'],'databaseTarget':op['expectedDatabaseTarget'],
                  'sourceLedgerSha256':op['expectedLedgerSha256'],'sourceAccountsSha256':snapshot['accountsSha256'],
                  'snapshotWitnessSha256':digest(read_secure(work/'snapshot-witness.json')),
-                 'dumpBytes':secure(publication/'database.pgcustom',mode=0o600).st_size,'dumpLimitBytes':CUTOVER_DUMP_LIMIT,
+                 'dumpBytes':secure(publication/'database.pgcustom',mode=0o600).st_size,'dumpLimitBytes':plan['dumpLimitBytes'],
                  'dumpCompression':'zstd:3','postgresImage':PG_IMAGE,'freshDumpRestored':False,
                  'freshDumpIntegrityStatus':'PG16_TOC_PARSE_VERIFIED','restoreAdmissionPolicy':fresh_policy(op),
                  fresh_reference_hash_key(op):digest(encoded(prior)),

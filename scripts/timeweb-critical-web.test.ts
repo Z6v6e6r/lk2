@@ -237,25 +237,51 @@ const web712Fixture =
   fixture +
   `
   const {WEB712_SCHEMA,WEB712_COMPATIBILITY:current,assertCriticalWebMain,criticalWebDirectories,
-    validateCriticalWebPlanBinding,validateWeb712RestoreBinding,web712Backup}=await import('./scripts/timeweb-critical-web.js');
+    validateCriticalWebPlanBinding,validateWeb712RestoreBinding,web712Backup,attestWeb712BackupScope}=await import('./scripts/timeweb-critical-web.js');
   const {createHash}=await import('node:crypto');
   const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
   op.schema=WEB712_SCHEMA;
   op.expectedApi.releaseId=current.apiReleaseId;op.expectedApi.image=current.apiImage;
   op.expectedWeb.releaseId=current.webReleaseId;op.expectedWeb.image=current.webImage;
-  op.confirmation='UPGRADE_WEB_712_AAAAAAAAAAAA_FROM_'+current.webImage.slice(-12).toUpperCase()+'_KEEP_API_492937113C0F';
+  op.confirmation='UPGRADE_WEB_712_DIRECT_AAAAAAAAAAAA_FROM_'+current.webImage.slice(-12).toUpperCase()+'_KEEP_API_492937113C0F';
   const postgres={id:'6'.repeat(64),image:'postgres@sha256:'+'7'.repeat(64)};
-  const backup={schema:'PHUB_TIMEWEB_APP_ONLY_RESTORE_CHECKPOINT_V1',profile:'production',
+  const backup={schema:'PHUB_TIMEWEB_WEB_712_FRESH_BACKUP_V1',profile:'production',expiresAt:op.expiresAt,
     target:op.target,expectedApi:op.expectedApi,expectedWeb:op.expectedWeb,expectedPostgres:postgres,
     controllerSha:sha,controllerTree:op.candidateTree,toolCommit:sha,candidateSha:sha,
     publicationRunId:op.publicationRunId,releaseId:sha+'-22-1'};
   const bytes=Buffer.from(JSON.stringify(backup));
   op.backupOperationSha256=digest(bytes);
-  const receipt={schema:'PHUB_TIMEWEB_APP_ONLY_RESTORE_CHECKPOINT_RECEIPT_V1',
+  const evidenceNames=['snapshot-witness.json','restore-admission-reference.json','owner-restore-decision.json'];
+  const {backupDirectory}=criticalWebDirectories(op);
+  const dumpIdentity={dev:1,ino:2,size:345,mtimeMs:4,ctimeMs:5};
+  const receipt={schema:'PHUB_TIMEWEB_WEB_712_FRESH_DUMP_V1',
     operationSha256:op.backupOperationSha256,baselineReleaseId:op.expectedApi.releaseId,
-    restoreVerified:true,completedAt:new Date(now-1000).toISOString()};
+    freshDumpRestored:false,freshDumpIntegrityStatus:'PG16_TOC_PARSE_VERIFIED',
+    restoreAdmissionPolicy:'WEB_712_INTEGRITY_ONLY_V1',backupFile:backupDirectory+'/database.pgcustom',
+    backupSha256:'b'.repeat(64),dumpLimitBytes:4*1024**3,dumpBytes:dumpIdentity.size,
+    completedAt:new Date(now-1000).toISOString()};
 `;
 describe('closed Web rollout of #712', () => {
+  it('records direct checks without claiming provider monitoring or alert delivery', () =>
+    scenario(
+      web712Fixture +
+        `
+    const observation=Buffer.from('synthetic direct Web and API observation');
+    const h='a'.repeat(64);
+    const result={schema:'PHUB_TIMEWEB_CRITICAL_WEB_RECEIPT_V1',status:'SUCCESS',
+      planSha256:h,operationSha256:h,observedAt:new Date(now).toISOString(),
+      userOutcome:'requires-product-feedback',observationSha256:digest(observation),
+      providerMonitoringStatus:'NOT_COLLECTED_EXPLICIT_OVERRIDE',
+      alertTestStatus:'NOT_TESTED_EXPLICIT_OVERRIDE'};
+    const read=name=>{assert.equal(name,'observation.json');return observation;};
+    validateCriticalWebReceipt(result,h,h,read,true);
+    assert.throws(()=>validateCriticalWebReceipt(result,h,h,read),/RECEIPT/);
+    for (const bad of [{providerSha256:h},{alertSha256:h},{alertTestStatus:'PASSED'}])
+      assert.throws(()=>validateCriticalWebReceipt({...result,...bad},h,h,read,true),/RECEIPT/);
+    assert.throws(()=>validateCriticalWebReceipt(result,h,h,()=>Buffer.from('changed'),true),/SUCCESS_EVIDENCE/);
+  `,
+    ));
+
   it('binds activation to the exact previous Web, unchanged API and current main', () =>
     scenario(
       web712Fixture +
@@ -288,16 +314,25 @@ describe('closed Web rollout of #712', () => {
     const raw=real(['diff','--raw','--no-abbrev','--no-renames','-z',current.baselineSource,current.runtimeSource]);
     assert.equal(digest(raw),current.runtimeDeltaSha256);
     assert.equal(raw.split('\\0').filter(Boolean).length,12);
-    const paths=['scripts/timeweb-critical-web.js','scripts/timeweb-critical-web.test.ts','docs/runbooks/timeweb-standard-delivery.md'];
+    const paths=['scripts/timeweb-critical-web.js','scripts/timeweb-critical-web.test.ts','docs/runbooks/timeweb-standard-delivery.md',
+      'scripts/control-timeweb-database-backup.py','scripts/test-timeweb-database-backup.py'];
     const tail=paths.map(path=>'M\\0'+path+'\\0').join('');
     const runGit=args=>{
-      if(args[0]==='rev-parse') return args[1]===sha+'^{tree}'?op.candidateTree:real(args);
+      if(args[0]==='rev-parse') {
+        if(args[1]==='HEAD') return sha;
+        if([sha+'^{tree}','HEAD^{tree}'].includes(args[1])) return op.candidateTree;
+        return real(args);
+      }
+      if(args[0]==='status') return '';
       if(args[0]==='merge-base') return real(args.map(value=>value===sha?'HEAD':value));
       if(args[0]==='diff') return args.includes('--raw')?raw:tail;
       if(args[0]==='ls-tree') return '100644 blob '+'e'.repeat(40)+'\\t'+args.at(-1);
       throw Error('unexpected Git command');
     };
     validateCriticalWebSource(op,runGit);
+    assert.equal(attestWeb712BackupScope(backup,{runGit,readService:name=>name==='api'?op.expectedApi:op.expectedWeb}),
+      'APP_ONLY_BACKUP_SCOPE_VERIFIED');
+    assert.throws(()=>attestWeb712BackupScope(backup,{runGit,readService:()=>op.expectedApi}),/BACKUP_BASELINE/);
     assert.throws(()=>validateCriticalWebSource(op,args=>args.includes('--raw')?raw+'x':runGit(args)),/RUNTIME_PROOF/);
     for (const delta of [tail+'M\\0apps/web/src/App.tsx\\0',tail.replace('M','R'),tail.slice(2),'']) {
       assert.throws(()=>validateCriticalWebSource(op,args=>args.includes('--name-status')?delta:runGit(args)),/SOURCE_DELTA/);
@@ -306,29 +341,32 @@ describe('closed Web rollout of #712', () => {
   `,
     ));
 
-  it('requires a recent restored checkpoint for the same releases and running database', () =>
+  it('requires a recent integrity-checked dump for the same releases and running database', () =>
     scenario(
       web712Fixture +
         `
     const dirs=criticalWebDirectories(op);
-    assert.equal(dirs.backupDirectory,'/opt/phub/timeweb-beta/backups/'+sha+'-22-1-app-restore');
+    assert.equal(dirs.backupDirectory,'/opt/phub/timeweb-beta/backups/'+sha+'-22-1-api-web');
     const input={op,operationBytes:bytes,receipt,api:op.expectedApi,postgres,now};
     validateWeb712RestoreBinding(input);
     for (const overrides of [
       {operationBytes:Buffer.concat([bytes,Buffer.from(' ')])},
       {api:{...input.api,id:'0'.repeat(64)}},
       {postgres:{...postgres,id:'0'.repeat(64)}},
-      {receipt:{...receipt,restoreVerified:false}},
+      {receipt:{...receipt,freshDumpRestored:true}},
+      {receipt:{...receipt,freshDumpIntegrityStatus:'UNCHECKED'}},
+      {receipt:{...receipt,dumpLimitBytes:7*1024**3}},
       {receipt:{...receipt,operationSha256:'0'.repeat(64)}},
       {receipt:{...receipt,completedAt:new Date(now-3600001).toISOString()}},
       {receipt:{...receipt,completedAt:new Date(now+1).toISOString()}},
-    ]) assert.throws(()=>validateWeb712RestoreBinding({...input,...overrides}),/BACKUP_CHECKPOINT/);
+    ]) assert.throws(()=>validateWeb712RestoreBinding({...input,...overrides}),/BACKUP_INTEGRITY/);
     const h='9'.repeat(64);
     const plan={operationSha256:h,compatibility:current,backup:{
       path:dirs.backupDirectory+'/database-backup-receipt.json',
       operationPath:dirs.backupDirectory+'/backup-operation.json',
       operationSha256:op.backupOperationSha256,
-      terminalPath:dirs.backupDirectory+'/SUCCESS_CLEANUP_VERIFIED.json',terminalSha256:h,
+      terminalPath:dirs.backupDirectory+'/FRESH_DUMP_INTEGRITY_VERIFIED.json',terminalSha256:h,
+      dumpSha256:h,evidence:Object.fromEntries(evidenceNames.map(name=>[name,h])),
     }};
     validateCriticalWebPlanBinding(plan,op,h);
     assert.throws(()=>validateCriticalWebPlanBinding({...plan,backup:{...plan.backup,terminalPath:'elsewhere'}},op,h),/PLAN_BINDING/);
@@ -336,8 +374,8 @@ describe('closed Web rollout of #712', () => {
     ));
 });
 
-describe('closed Web checkpoint verification', () => {
-  it('verifies terminal custody and live database evidence before freezing the three input files', () =>
+describe('closed Web fresh backup verification', () => {
+  it('verifies terminal custody, sealed evidence and live database state', () =>
     scenario(
       web712Fixture +
         `
@@ -353,16 +391,17 @@ describe('closed Web checkpoint verification', () => {
       ...backup,expectedDatabaseTarget,expectedLedgerSha256:digest(ledger),toolFileSha256:'a'.repeat(64),
     }));
     op.backupOperationSha256=digest(restoreBytes);
-    const {backupDirectory}=criticalWebDirectories(op);
     const receiptPath=backupDirectory+'/database-backup-receipt.json';
     const operationPath=backupDirectory+'/backup-operation.json';
-    const terminalPath=backupDirectory+'/SUCCESS_CLEANUP_VERIFIED.json';
+    const terminalPath=backupDirectory+'/FRESH_DUMP_INTEGRITY_VERIFIED.json';
+    const supportPaths=evidenceNames.map(name=>backupDirectory+'/'+name);
     const files=new Map([
       [receiptPath,Buffer.from(JSON.stringify({...receipt,operationSha256:op.backupOperationSha256}))],
       [operationPath,restoreBytes],[terminalPath,Buffer.from('synthetic verified producer journal')],
+      ...supportPaths.map(path=>[path,Buffer.from('synthetic sealed evidence')]),
     ]);
-    const run=(failure, changedPath)=>web712Backup(backupDirectory,op.expectedApi,op,{
-      read:path=>files.get(path),readPostgres:()=>postgres,now:()=>now,
+    const run=(failure, changedPath, heldProof)=>web712Backup(backupDirectory,op.expectedApi,op,{
+      read:path=>files.get(path),readPostgres:()=>postgres,now:()=>now,readDumpIdentity:()=>dumpIdentity,heldProof,
       runPython:(file,args,options)=>{
         assert.equal(file,'/usr/bin/python3');
         assert.deepEqual(args.slice(0,-1),['-I','-S','-B','-c']);
@@ -384,7 +423,8 @@ describe('closed Web checkpoint verification', () => {
           'module=types.SimpleNamespace(strict=json.loads, digest=lambda value: hashlib.sha256(value).hexdigest(),',
           ' validate_operation=lambda op,*args,**kwargs: verify("operation",op),',
           ' tool_custody=lambda op:verify("tool",op),',
-          ' validate_cutover_disk_terminal=lambda op,raw:verify("terminal",op),',
+          ' attest_integrity_only_restore_message=lambda op:verify("decision",op),',
+          ' validate_fresh_terminal=lambda op,raw:verify("terminal",op),',
           ' SOURCE_CUTOVER_TARGET="target", SOURCE_LEDGER="ledger", source_query=read_only,',
           ' ledger_bytes=lambda text:text.encode("utf8"))',
           'importlib.util.spec_from_file_location=lambda *args:types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda m:None))',
@@ -400,10 +440,14 @@ describe('closed Web checkpoint verification', () => {
       path:receiptPath,sha256:digest(files.get(receiptPath)),
       operationPath,operationSha256:op.backupOperationSha256,
       terminalPath,terminalSha256:digest(files.get(terminalPath)),
+      dumpIdentity,dumpSha256:receipt.backupSha256,
+      evidence:Object.fromEntries(evidenceNames.map((name,i)=>[name,digest(files.get(supportPaths[i]))])),
     });
-    for(const failure of ['operation','tool','terminal','target','ledger','process','extra-output'])
-      assert.throws(()=>run(failure),/BACKUP_CHECKPOINT/);
-    for(const path of [receiptPath,operationPath,terminalPath]){
+    assert.deepEqual(run('terminal',undefined,proof),proof);
+    for(const failure of ['operation','tool','decision','terminal','target','ledger','process','extra-output'])
+      assert.throws(()=>run(failure),/BACKUP_INTEGRITY/);
+    assert.throws(()=>run('ledger',undefined,proof),/BACKUP_INTEGRITY/);
+    for(const path of [receiptPath,operationPath,terminalPath,...supportPaths]){
       const original=files.get(path);
       assert.throws(()=>run('',path),/BACKUP_DRIFT/);
       files.set(path,original);
