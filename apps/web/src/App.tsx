@@ -3171,8 +3171,16 @@ export function App({
           messages={conversationMessages}
           mode={protectedRoute.mode}
           stationSupport={stationSupportSource}
-          {...(import.meta.env.VITE_CUP_SUPPORT_REPLIES === '1' && gateway.loadCupSupportReplies
-            ? { cupSupport: gateway.loadCupSupportReplies }
+          {...(import.meta.env.VITE_CUP_SUPPORT_REPLIES === '1' &&
+          gateway.loadCupSupportReplies &&
+          gateway.sendCupSupportMessage
+            ? {
+                cupSupport: {
+                  load: gateway.loadCupSupportReplies,
+                  send: gateway.sendCupSupportMessage,
+                  createMessageId: createMessagingCommandId,
+                },
+              }
             : {})}
           communityChats={communityChatsSource}
           {...(requestedConversationId ? { selectedConversationId: requestedConversationId } : {})}

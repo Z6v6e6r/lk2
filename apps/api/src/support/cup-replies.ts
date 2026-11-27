@@ -11,6 +11,16 @@ export const cupReplyCursor = z
 const message = z
   .object({
     id: z.string().uuid(),
+    ticketId: z.string().uuid(),
+    status: z.enum([
+      'OPEN',
+      'IN_PROGRESS',
+      'WAITING_USER',
+      'WAITING_DEVELOPMENT',
+      'RESOLVED',
+      'CLOSED',
+    ]),
+    kind: z.enum(['CUSTOMER', 'STAFF_REPLY']),
     number: z.string().min(1).max(80),
     body: z.string().min(1).max(16_000),
     createdAt: z.string().datetime(),
@@ -25,10 +35,36 @@ export type CupReplyReader = (
   before?: z.infer<typeof cupReplyCursor>,
 ) => Promise<z.infer<typeof page>>;
 
-export function loadCupReplyReader(
+export const cupReplyCommand = z
+  .object({
+    ticketId: z.string().uuid(),
+    body: z
+      .string()
+      .trim()
+      .min(1)
+      .max(4000)
+      .refine((text) => !text.includes('\0')),
+  })
+  .strict();
+export const cupReplyCommandKey = z.string().uuid();
+const sentMessage = z.object({ id: z.string().uuid() }).strict();
+
+export type CupReplyWriter = (
+  recipient: string,
+  command: z.infer<typeof cupReplyCommand>,
+  idempotencyKey: string,
+) => Promise<z.infer<typeof sentMessage>>;
+
+export class CupReplyRejected extends Error {
+  constructor(readonly status: 404 | 409) {
+    super('CUP rejected the message');
+  }
+}
+
+export function loadCupConversation(
   environment: NodeJS.ProcessEnv,
   request = fetch,
-): CupReplyReader | undefined {
+): { read: CupReplyReader; write: CupReplyWriter } | undefined {
   if (environment.CUP_SUPPORT_STAGING_REPLIES_ENABLED !== 'true') return undefined;
   const endpoint = new URL(environment.CUP_SUPPORT_STAGING_REPLIES_URL ?? '');
   const tokenFile = environment.CUP_SUPPORT_STAGING_REPLIES_TOKEN_FILE;
@@ -57,15 +93,17 @@ export function loadCupReplyReader(
   ) {
     throw new Error('CUP replies require a dedicated service credential');
   }
-  return async (recipient, before) => {
-    const response = await request(endpoint, {
+  async function send(path: URL, payload: object) {
+    return request(path, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipient, before }),
+      body: JSON.stringify(payload),
       redirect: 'error',
       signal: AbortSignal.timeout(4_000),
       cache: 'no-store',
     });
+  }
+  async function readBody(response: Response, byteLimit: number): Promise<unknown> {
     if (!response.ok || !response.body) {
       await response.body?.cancel();
       throw new Error('CUP reply history unavailable');
@@ -78,12 +116,30 @@ export function loadCupReplyReader(
         const { value, done } = await reader.read();
         if (done) break;
         size += value.byteLength;
-        if (size > 1_048_576) throw new Error('CUP reply history too large');
+        if (size > byteLimit) throw new Error('CUP reply history too large');
         chunks.push(value);
       }
-      return page.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
     } finally {
       await reader.cancel();
     }
+  }
+  const read: CupReplyReader = async (recipient, before) =>
+    page.parse(await readBody(await send(endpoint, { recipient, before }), 1_048_576));
+  const write: CupReplyWriter = async (recipient, command, idempotencyKey) => {
+    const response = await send(new URL('messages', endpoint), {
+      recipient,
+      body: command.body,
+      ticketId: command.ticketId.toLowerCase(),
+      idempotencyKey: idempotencyKey.toLowerCase(),
+    });
+    if (response.status !== 201) {
+      await response.body?.cancel();
+      if (response.status === 404 || response.status === 409)
+        throw new CupReplyRejected(response.status);
+      throw new Error('CUP reply service unavailable');
+    }
+    return sentMessage.parse(await readBody(response, 1024));
   };
+  return { read, write };
 }

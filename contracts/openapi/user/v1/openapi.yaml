@@ -1183,8 +1183,8 @@ paths:
       - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
     get:
       operationId: listCupSupportReplies
-      summary: List replies from CUP Support STAGING for the current client
-      description: Optional local-padel integration. Only returns staff replies to intake tickets confirmed by the authenticated LK2 client. Requests with a continuation require both cursor parameters.
+      summary: List CUP Support STAGING conversation messages for the current client
+      description: Optional local-padel integration. Returns public messages on intake tickets confirmed by the authenticated LK2 client. Requests with a continuation require both cursor parameters.
       parameters:
         - name: beforeAt
           in: query
@@ -1209,10 +1209,18 @@ paths:
                     maxItems: 40
                     items:
                       type: object
-                      required: [id, number, body, createdAt]
+                      required: [id, ticketId, number, status, kind, body, createdAt]
                       properties:
                         id: { type: string, format: uuid }
+                        ticketId: { type: string, format: uuid }
                         number: { type: string }
+                        status:
+                          type: string
+                          enum:
+                            [OPEN, IN_PROGRESS, WAITING_USER, WAITING_DEVELOPMENT, RESOLVED, CLOSED]
+                        kind:
+                          type: string
+                          enum: [CUSTOMER, STAFF_REPLY]
                         body: { type: string }
                         createdAt: { type: string, format: date-time }
                   next:
@@ -1229,6 +1237,50 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Forbidden
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/cup-messages:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: sendCupSupportMessage
+      summary: Send a message to an existing CUP Support STAGING ticket
+      description: The ticket must belong to the authenticated LK2 client. Use the same UUID idempotency key when retrying the same message.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ticketId, body]
+              properties:
+                ticketId: { type: string, format: uuid }
+                body: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        '201':
+          description: Message stored in the ticket
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: { type: string, format: uuid }
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':

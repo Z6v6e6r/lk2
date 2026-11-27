@@ -7,7 +7,11 @@ import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from '../app.js';
-import type { CupReplyReader } from '../support/cup-replies.js';
+import {
+  CupReplyRejected,
+  type CupReplyReader,
+  type CupReplyWriter,
+} from '../support/cup-replies.js';
 import { loadCupSupportHandoffIssuer } from './cup-support-staging-handoff.js';
 
 const config = loadConfig({
@@ -43,6 +47,7 @@ async function fixture({
   });
   const accessSessionChecker = vi.fn(() => Promise.resolve(active));
   const cupReplyReader = vi.fn<CupReplyReader>().mockResolvedValue({ messages: [], next: null });
+  const cupReplyWriter = vi.fn<CupReplyWriter>().mockResolvedValue({ id: draft });
   const app = await buildApp({
     config: sharedAudience ? { ...config, JWT_ADMIN_AUDIENCE: config.JWT_AUDIENCE } : config,
     logger: createLogger('api-test', 'silent'),
@@ -51,10 +56,10 @@ async function fixture({
     } as unknown as Pool,
     accessSessionChecker,
     ...(issue ? { cupSupportHandoffIssuer: issue } : {}),
-    ...(replies ? { cupReplyReader } : {}),
+    ...(replies ? { cupReplyReader, cupReplyWriter } : {}),
   });
   apps.push(app);
-  return { app, accessSessionChecker, cupReplyReader };
+  return { app, accessSessionChecker, cupReplyReader, cupReplyWriter };
 }
 
 async function accessToken({
@@ -118,6 +123,53 @@ describe('CUP Support STAGING reply history', () => {
     );
     expect(cupReplyReader).not.toHaveBeenCalled();
     expect(stale.cupReplyReader).not.toHaveBeenCalled();
+  });
+});
+
+describe('CUP Support STAGING customer messages', () => {
+  const endpoint = '/user/api/v1/local-padel/support/cup-messages';
+  const payload = { ticketId: draft, body: 'Уточнение' };
+
+  it('writes through the authenticated client and passes the same idempotency key', async () => {
+    const { app, cupReplyWriter } = await fixture({ replies: true });
+    const auth = headers(await accessToken());
+    const send = (body: object) =>
+      app.inject({ method: 'POST', url: endpoint, headers: auth, payload: body });
+    expect((await send({ ...payload, recipient: draft })).statusCode).toBe(400);
+    const result = await send(payload);
+    expect(result.statusCode).toBe(201);
+    expect(result.headers['cache-control']).toBe('no-store');
+    expect(result.json()).toEqual({ id: draft });
+    expect(cupReplyWriter).toHaveBeenCalledExactlyOnceWith(
+      userId,
+      payload,
+      auth['idempotency-key'],
+    );
+  });
+
+  it('rejects staff, disabled integration and missing keys, and preserves closed ticket responses', async () => {
+    const { app, cupReplyWriter } = await fixture({ replies: true });
+    const send = (auth: Record<string, string>) =>
+      app.inject({ method: 'POST', url: endpoint, headers: auth, payload });
+    expect((await send(headers(await accessToken({ roles: ['staff'] })))).statusCode).toBe(403);
+    const token = await accessToken();
+    expect((await send({ authorization: `Bearer ${token}` })).statusCode).toBe(400);
+    expect(cupReplyWriter).not.toHaveBeenCalled();
+    cupReplyWriter.mockRejectedValueOnce(new CupReplyRejected(404));
+    expect((await send(headers(token))).statusCode).toBe(404);
+    cupReplyWriter.mockRejectedValueOnce(new CupReplyRejected(409));
+    expect((await send(headers(token))).statusCode).toBe(409);
+    const disabled = await fixture();
+    expect(
+      (
+        await disabled.app.inject({
+          method: 'POST',
+          url: endpoint,
+          headers: headers(token),
+          payload,
+        })
+      ).statusCode,
+    ).toBe(404);
   });
 });
 

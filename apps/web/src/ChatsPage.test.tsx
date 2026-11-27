@@ -35,30 +35,113 @@ it('opens the dedicated CUP chat and shows the ticket number and public reply', 
     .fn()
     .mockResolvedValueOnce({
       messages: [
-        { id: conversationId, number: 'PDH-41', body: 'Синтетический ответ CUP', createdAt: date },
+        {
+          id: conversationId,
+          ticketId: stationUuid,
+          kind: 'STAFF_REPLY',
+          status: 'OPEN',
+          number: 'PDH-41',
+          body: 'Синтетический ответ CUP',
+          createdAt: date,
+        },
       ],
       next: before,
     })
     .mockResolvedValueOnce({
       messages: [
-        { id: stationDialogId, number: 'PDH-40', body: 'Предыдущий ответ CUP', createdAt: date },
+        {
+          id: stationDialogId,
+          ticketId: otherStationUuid,
+          kind: 'STAFF_REPLY',
+          status: 'CLOSED',
+          number: 'PDH-40',
+          body: 'Предыдущий ответ CUP',
+          createdAt: date,
+        },
       ],
       next: null,
     });
   const user = userEvent.setup();
   render(
-    <ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} cupSupport={load} />,
+    <ChatsPage
+      {...defaultProps}
+      mode="list"
+      hasExplicitRecipient={false}
+      cupSupport={{ load, send: vi.fn(), createMessageId: () => conversationId }}
+    />,
   );
   expect(load).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button', { name: 'Поддержка CUP' }));
   const dialog = screen.getByRole('region', { name: 'Поддержка CUP' });
   expect(await within(dialog).findByText('Синтетический ответ CUP')).toBeVisible();
-  expect(within(dialog).getByText('PDH-41')).toBeVisible();
+  expect(within(dialog).getByText('PDH-41', { selector: 'strong' })).toBeVisible();
   await user.click(within(dialog).getByRole('button', { name: 'Загрузить более ранние' }));
   expect(await within(dialog).findByText('Предыдущий ответ CUP')).toBeVisible();
   expect(load).toHaveBeenLastCalledWith(before, expect.any(AbortSignal));
   await user.click(within(dialog).getByRole('button', { name: 'К списку чатов' }));
   expect(screen.queryByRole('region', { name: 'Поддержка CUP' })).not.toBeInTheDocument();
+});
+
+it('sends a message to the selected CUP ticket and reuses the command on retry', async () => {
+  const createdAt = '2026-11-26T14:00:00.000Z';
+  const original = {
+    id: conversationId,
+    ticketId: stationUuid,
+    number: 'PDH-41',
+    body: 'Исходное обращение',
+    status: 'WAITING_USER',
+    kind: 'CUSTOMER',
+    createdAt,
+  } as const;
+  const second = {
+    ...original,
+    id: unmappedDialogId,
+    ticketId: otherStationUuid,
+    number: 'PDH-42',
+  };
+  const reply = {
+    ...original,
+    id: stationDialogId,
+    body: 'Уточнение',
+    status: 'IN_PROGRESS',
+  } as const;
+  const load = vi
+    .fn()
+    .mockResolvedValueOnce({ messages: [original, second], next: null })
+    .mockResolvedValue({ messages: [reply, original, second], next: null });
+  const send = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('timeout'))
+    .mockResolvedValue({ id: reply.id });
+  const createMessageId = vi.fn(() => stationDialogId);
+  const user = userEvent.setup();
+  render(
+    <ChatsPage
+      {...defaultProps}
+      mode="list"
+      hasExplicitRecipient={false}
+      cupSupport={{ load, send, createMessageId }}
+    />,
+  );
+  await user.click(screen.getByRole('button', { name: 'Поддержка CUP' }));
+  await screen.findByRole('option', { name: 'PDH-42' });
+  const field = screen.getByRole('textbox', { name: 'Сообщение' });
+  expect(field).toBeDisabled();
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Обращение' }), stationUuid);
+  await user.type(field, 'Уточнение');
+  const sendButton = screen.getByRole('button', { name: 'Отправить' });
+  await user.click(sendButton);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Не удалось отправить');
+  expect(field).toHaveValue('Уточнение');
+  await user.click(sendButton);
+  expect(await screen.findByText('Сообщение отправлено.')).toBeVisible();
+  expect(await screen.findByText('Уточнение')).toBeVisible();
+  expect(send.mock.calls).toEqual([
+    [stationUuid, 'Уточнение', stationDialogId],
+    [stationUuid, 'Уточнение', stationDialogId],
+  ]);
+  expect(createMessageId).toHaveBeenCalledTimes(1);
+  expect(field).toHaveValue('');
 });
 
 /**

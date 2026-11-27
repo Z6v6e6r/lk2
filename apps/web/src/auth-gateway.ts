@@ -526,7 +526,8 @@ export interface AuthGateway {
   readonly getVivaAccessToken: () => string | undefined;
   readonly refreshVivaAccessToken: () => Promise<string>;
   readonly issueCupSupportStagingHandoff?: (draft: string) => Promise<{ readonly proof: string }>;
-  readonly loadCupSupportReplies?: CupReplySource;
+  readonly loadCupSupportReplies?: CupReplySource['load'];
+  readonly sendCupSupportMessage?: CupReplySource['send'];
   readonly issueRealtimeTicket: () => Promise<RealtimeTicket>;
   readonly getRoutingPlan: (forceRefresh?: boolean) => Promise<ClientRoutingPlan>;
   readonly getSelfProfile: () => Promise<UserProfile>;
@@ -2477,6 +2478,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         ? '?' + new URLSearchParams({ beforeAt: before.at, beforeId: before.id }).toString()
         : '';
       return client.request<CupReplyPage>(`/support/cup-replies${query}`, signal ? { signal } : {});
+    },
+
+    sendCupSupportMessage(ticketId, body, idempotencyKey) {
+      return client.request<{ id: string }>('/support/cup-messages', {
+        method: 'POST',
+        body: JSON.stringify({ ticketId, body }),
+        idempotencyKey,
+      });
     },
 
     async issueCupSupportStagingHandoff(draft) {

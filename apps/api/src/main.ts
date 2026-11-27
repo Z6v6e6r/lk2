@@ -29,7 +29,7 @@ import { createNotificationScenarioRepository } from '@phub/database/notificatio
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
 import { RedisPasswordLoginLimiter } from './auth/password-login-limiter.js';
 import { loadCupSupportHandoffIssuer } from './auth/cup-support-staging-handoff.js';
-import { loadCupReplyReader } from './support/cup-replies.js';
+import { loadCupConversation } from './support/cup-replies.js';
 import { loadConfig, runtimeContourTargetFingerprint } from '@phub/config';
 import {
   createAdminNotificationRepository,
@@ -182,7 +182,7 @@ import { SubscriptionRuntimeActorDelegationIssuer } from './subscriptions/subscr
 
 const config = loadConfig();
 const cupSupportHandoffIssuer = loadCupSupportHandoffIssuer(process.env);
-const cupReplyReader = loadCupReplyReader(process.env);
+const cupConversation = loadCupConversation(process.env);
 const runtimeContourAttestation = config.LOCAL_RUNTIME_CONTOUR_ATTESTATION
   ? {
       database: runtimeContourTargetFingerprint(config.DATABASE_URL),
@@ -1250,7 +1250,9 @@ const app = await buildApp({
   ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   authService,
   ...(cupSupportHandoffIssuer ? { cupSupportHandoffIssuer } : {}),
-  ...(cupReplyReader ? { cupReplyReader } : {}),
+  ...(cupConversation
+    ? { cupReplyReader: cupConversation.read, cupReplyWriter: cupConversation.write }
+    : {}),
   phoneSubjectLinkService,
   ...(subscriptionPolicyRegistryClient ? { subscriptionPolicyRegistryClient } : {}),
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
