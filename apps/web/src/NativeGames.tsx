@@ -54,7 +54,7 @@ export function NativeGames({ gateway }: { gateway: AuthGateway }) {
   return (
     <main aria-busy={busy}>
       <h1>Игры</h1>
-      <a href="/games/new?quarterCreate=1">Создать игру по подписке</a>
+      <a href="/games/new?new=1">Создать игру</a>
       {page?.items.map((game) => (
         <GameCard key={game.id} game={game} readOnly />
       ))}

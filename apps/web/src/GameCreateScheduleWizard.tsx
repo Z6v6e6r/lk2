@@ -276,6 +276,7 @@ export function GameCreateScheduleWizard({
   previewFriends,
   loadFriends,
   freeGameHref,
+  quarterHref,
   gamesHref = '/games',
   today = DAY.format(new Date()),
 }: {
@@ -287,6 +288,7 @@ export function GameCreateScheduleWizard({
   readonly previewFriends?: readonly ScheduleFriend[];
   readonly loadFriends?: () => Promise<readonly ScheduleFriend[]>;
   readonly freeGameHref?: string;
+  readonly quarterHref?: string;
   readonly gamesHref?: string;
   readonly today?: string;
 }) {
@@ -855,6 +857,11 @@ export function GameCreateScheduleWizard({
               Создать игру без бронирования
             </a>
           ) : null}
+          {quarterHref ? (
+            <a className="game-schedule-free-link" href={quarterHref}>
+              Создать игру по подписке
+            </a>
+          ) : null}
         </section>
       ) : null}
 
@@ -1415,38 +1422,44 @@ export function GameCreateScheduleWizard({
               </>
             )}
             {quoteMessage}
-            <button
-              type="button"
-              className="game-schedule-primary game-schedule-review-action"
-              disabled={showPreviewPayment ? !canPreviewPay : !canPay || checkout?.busy}
-              onClick={(event) => {
-                if (showPreviewPayment) {
-                  if (canPreviewPay && isPreviewQuoteCurrent()) {
-                    setPreviewConfirmed(false);
-                    setStep(3);
+            {quarterHref ? (
+              <a className="game-schedule-primary game-schedule-review-action" href={quarterHref}>
+                К созданию игры по подписке
+              </a>
+            ) : (
+              <button
+                type="button"
+                className="game-schedule-primary game-schedule-review-action"
+                disabled={showPreviewPayment ? !canPreviewPay : !canPay || checkout?.busy}
+                onClick={(event) => {
+                  if (showPreviewPayment) {
+                    if (canPreviewPay && isPreviewQuoteCurrent()) {
+                      setPreviewConfirmed(false);
+                      setStep(3);
+                    }
+                    return;
                   }
-                  return;
-                }
-                if (!checkout || !checkoutOffer || !canPay) return;
-                if (Date.parse(checkoutOffer.expiresAt) <= Date.now()) {
-                  setExpiredQuoteKey(quoteKey);
-                  return;
-                }
-                checkout.start(event, checkoutOffer.offer, {
-                  title: title.trim(),
-                  levelRange: { from: LEVELS[levels[0]]!, to: LEVELS[levels[1]]! },
-                  ...(loadFriends && selectedFriends.size
-                    ? { inviteeUserIds: [...selectedFriends] }
-                    : {}),
-                });
-              }}
-            >
-              {checkout?.busy
-                ? 'Открываем оплату…'
-                : reviewTotal === null
-                  ? 'Записаться'
-                  : `Записаться за ${price(reviewTotal)}`}
-            </button>
+                  if (!checkout || !checkoutOffer || !canPay) return;
+                  if (Date.parse(checkoutOffer.expiresAt) <= Date.now()) {
+                    setExpiredQuoteKey(quoteKey);
+                    return;
+                  }
+                  checkout.start(event, checkoutOffer.offer, {
+                    title: title.trim(),
+                    levelRange: { from: LEVELS[levels[0]]!, to: LEVELS[levels[1]]! },
+                    ...(loadFriends && selectedFriends.size
+                      ? { inviteeUserIds: [...selectedFriends] }
+                      : {}),
+                  });
+                }}
+              >
+                {checkout?.busy
+                  ? 'Открываем оплату…'
+                  : reviewTotal === null
+                    ? 'Записаться'
+                    : `Записаться за ${price(reviewTotal)}`}
+              </button>
+            )}
             {checkout && !canPay ? (
               <p className="game-schedule-empty" role="status">
                 Оплата выбранного слота сейчас недоступна.

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PadlHubApiClient } from '@phub/api-sdk';
 import { createNativeApiFetch, type AndroidSessionPlugin } from './native-api-fetch.js';
 
 const config = {
@@ -20,6 +21,33 @@ function plugin() {
 }
 
 describe('Android native bridge adapter', () => {
+  it('forwards schedule list and slot quote through the native HTTPS bridge', async () => {
+    const native = plugin();
+    const client = new PadlHubApiClient({
+      baseUrl: config.apiBaseUrl,
+      tenantKey: config.tenantKey,
+      platform: 'android',
+      appVersion: config.appVersion,
+      sessionMode: 'memory',
+      initialAccessToken: 'synthetic-process-token',
+      fetchImplementation: createNativeApiFetch(config, native),
+    });
+    const stationId = '11111111-1111-4111-8111-111111111111';
+    const slotId = 'a'.repeat(64);
+    const selection = { stationId, day: '2030-11-27', durationMinutes: 60 as const };
+    const path = `/user/api/v1/local-padel/games/create-schedule?stationId=${stationId}&day=2030-11-27&durationMinutes=60`;
+    await client.listGameCreateSlots(selection);
+    await client.getGameCreateScheduleQuote({ ...selection, slotId });
+    expect(native.request).toHaveBeenCalledTimes(2);
+    for (const [index, expected] of [path, `${path}&slotId=${slotId}`].entries()) {
+      const request = native.request.mock.calls[index]?.[0];
+      expect(request?.path).toBe(expected);
+      expect(request?.method).toBe('GET');
+      expect(request?.headers.authorization).toBe('Bearer synthetic-process-token');
+      expect(request).not.toHaveProperty('body');
+    }
+  });
+
   it('does not upload an attachment cancelled while Blob conversion was pending', async () => {
     const native = plugin();
     const controller = new AbortController();

@@ -4088,11 +4088,52 @@ describe('PadlHub web authentication', () => {
   });
 });
 
+it('opens native schedule with catalog slots and the existing subscription entry', async () => {
+  window.history.replaceState(null, '', '/games/new?new=1');
+  const stationId = 'a8df730b-6a67-41a5-8772-48bca84f73bc';
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    listLocations: vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: stationId,
+          title: 'Селигерская',
+          city: 'Москва',
+          courtCount: 4,
+          coverImageUrl: null,
+          route: `/locations/${stationId}`,
+        },
+      ],
+    }),
+    listGameCreateSlots: vi.fn().mockResolvedValue({ slots: [] }),
+    getGameCreateScheduleQuote: vi.fn(),
+    getQuarterCreateCapability: vi.fn(),
+    createPaidGame: vi.fn(),
+    advanceWholeCourtCheckout: vi.fn(),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+
+  await screen.findByRole('heading', { name: 'Выберите клуб' });
+  expect(screen.getByRole('link', { name: 'Создать игру по подписке' })).toHaveAttribute(
+    'href',
+    '/games/new?quarterCreate=1',
+  );
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Селигерская' }));
+  await screen.findByRole('heading', { name: 'Дата и время' });
+  expect(gateway.listGameCreateSlots).toHaveBeenCalledWith(expect.objectContaining({ stationId }));
+  expect(gateway.getQuarterCreateCapability).not.toHaveBeenCalled();
+  expect(gateway.createPaidGame).not.toHaveBeenCalled();
+  expect(gateway.advanceWholeCourtCheckout).not.toHaveBeenCalled();
+  expect(gateway.createGame).not.toHaveBeenCalled();
+});
+
 it('native quarter entry mounts only the bounded subscription form, not legacy CREATE', async () => {
   window.history.replaceState(null, '', '/games/new?commercialCreate=1');
   const gateway = createGateway({
     restoreSession: vi.fn().mockResolvedValue(session),
     quarterCreatePrincipal: () => `${session.context.tenant.id}:${session.context.user.id}:1`,
+    listGameCreateSlots: vi.fn(),
+    getGameCreateScheduleQuote: vi.fn(),
     getQuarterCreateCapability: vi.fn().mockResolvedValue({ contractVersion: 1, available: false }),
   });
   render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
@@ -4101,6 +4142,55 @@ it('native quarter entry mounts only the bounded subscription form, not legacy C
   expect(screen.queryByRole('button', { name: 'Создать игру' })).not.toBeInTheDocument();
   expect(gateway.createGame).not.toHaveBeenCalled();
 });
+
+it('resumes a saved native subscription operation before opening the default schedule', async () => {
+  window.history.replaceState(null, '', '/games/new');
+  const lockDescriptor = Object.getOwnPropertyDescriptor(navigator, 'locks');
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: (_name: string, _options: unknown, callback: () => unknown) =>
+        Promise.resolve().then(callback),
+    },
+  });
+  const { saveQuarterCustody } = await import('./quarter-create-attempt.js');
+  const principal = { tenantId: session.context.tenant.id, userId: session.context.user.id };
+  const key = 'synthetic-quarter-original';
+  const id = 'a8df730b-6a67-41a5-8772-48bca84f73bc';
+  saveQuarterCustody(localStorage, {
+    version: 1,
+    ...principal,
+    key,
+    request: {
+      stationId: id,
+      courtId: id,
+      startsAt: '2030-11-27T09:00:00.000Z',
+      subscriptionId: id,
+    },
+  });
+  const gateway = createGateway({
+    restoreSession: vi.fn().mockResolvedValue(session),
+    quarterCreatePrincipal: () => `${principal.tenantId}:${principal.userId}:1`,
+    listGameCreateSlots: vi.fn(),
+    getGameCreateScheduleQuote: vi.fn(),
+    getQuarterCreateOperation: vi.fn().mockRejectedValue(new Error('Synthetic offline')),
+    getQuarterCreateCapability: vi.fn(),
+    createQuarterGame: vi.fn(),
+  });
+  render(<App gateway={gateway} tenantKey="padlhub" clientPlatform="android" />);
+
+  try {
+    await screen.findByRole('heading', { name: 'Игра по подписке' });
+    await waitFor(() => expect(gateway.getQuarterCreateOperation).toHaveBeenCalledWith(key));
+    expect(gateway.getQuarterCreateCapability).not.toHaveBeenCalled();
+    expect(gateway.listGameCreateSlots).not.toHaveBeenCalled();
+    expect(gateway.createQuarterGame).not.toHaveBeenCalled();
+  } finally {
+    if (lockDescriptor) Object.defineProperty(navigator, 'locks', lockDescriptor);
+    else Reflect.deleteProperty(navigator, 'locks');
+  }
+});
+
 it('native game detail exposes only reviewed participation controls', async () => {
   const { game } = await import('../../mobile/src/ios/testing/cabinet-fixtures.js');
   window.history.replaceState(null, '', '/games/' + game.id);

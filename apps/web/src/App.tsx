@@ -10,7 +10,6 @@ import { NativeGameChat } from './NativeGameChat.js';
 import { TournamentChatPage } from './TournamentChatPage.js';
 import { communityChatsCacheKey } from './chats-ui/community-chats-cache.js';
 import { threadPageCacheKey } from './chats-ui/thread-page-cache.js';
-import { QuarterCreatePanel } from './QuarterCreatePanel.js';
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
 import { handleGameDetailBack } from './game-detail-navigation.js';
 import { normalizePhoneE164 } from '@phub/auth';
@@ -3455,46 +3454,35 @@ export function App({
         );
       }
       const query = new URLSearchParams(window.location.search);
+      const android = clientPlatform === 'android';
+      const scheduleByDefault =
+        typeof gateway.listGameCreateSlots === 'function' &&
+        typeof gateway.getGameCreateScheduleQuote === 'function' &&
+        query.get('view') !== 'legacy' &&
+        query.get('quarterCreate') !== '1' &&
+        query.get('commercialCreate') !== '1';
       const scheduleView =
         !query.has('paymentReturn') &&
-        (query.get('view') === 'schedule' ||
-          (clientPlatform === 'web' &&
-            gateway.listGameCreateSlots &&
-            gateway.getGameCreateScheduleQuote &&
-            query.get('view') !== 'legacy' &&
-            query.get('quarterCreate') !== '1' &&
-            query.get('commercialCreate') !== '1'));
+        (scheduleByDefault || (!android && query.get('view') === 'schedule'));
       const createGamePrincipal = {
         tenantId: state.session.context.tenant.id,
         userId: state.session.context.user.id,
       };
-      if (scheduleView) {
-        return (
-          <CreateGamePage
-            key={`${createGamePrincipal.tenantId}:${createGamePrincipal.userId}`}
-            gateway={gateway}
-            principal={createGamePrincipal}
-            useSchedule
-          />
-        );
-      }
-      if (clientPlatform === 'android')
-        return (
-          <QuarterCreatePanel
-            gamesHref="/"
-            gateway={gateway}
-            principal={createGamePrincipal}
-            navigate={(url) => {
-              window.history.pushState(null, '', url);
-              window.dispatchEvent(new PopStateEvent('popstate'));
-            }}
-          />
-        );
       return (
         <CreateGamePage
           key={`${createGamePrincipal.tenantId}:${createGamePrincipal.userId}`}
           gateway={gateway}
           principal={createGamePrincipal}
+          useSchedule={scheduleView}
+          {...(android
+            ? {
+                android: true,
+                navigate: (url: string) => {
+                  window.history.pushState(null, '', url);
+                  window.dispatchEvent(new PopStateEvent('popstate'));
+                },
+              }
+            : {})}
         />
       );
     }

@@ -7,13 +7,16 @@ import {
 } from './GameCreateScheduleWizard.js';
 
 const freeGameHref = '/games/new?view=legacy&new=1';
+const quarterHref = '/games/new?quarterCreate=1';
 
 export function GameCreateSchedulePage({
   gateway,
   checkout,
+  android = false,
 }: {
   readonly gateway: AuthGateway;
   readonly checkout?: GameCreateScheduleCheckout;
+  readonly android?: boolean;
 }) {
   const [locations, setLocations] = useState<
     Awaited<ReturnType<AuthGateway['listLocations']>>['items'] | null
@@ -57,7 +60,8 @@ export function GameCreateSchedulePage({
         <h1>Создать игру</h1>
         <p role="alert">Расписание ЛК1 недоступно.</p>
         {checkout ? <a href={freeGameHref}>Создать игру без бронирования</a> : null}
-        <a href="/games">К списку игр</a>
+        {android ? <a href={quarterHref}>Создать игру по подписке</a> : null}
+        <a href={android ? '/' : '/games'}>К списку игр</a>
       </main>
     );
   }
@@ -74,6 +78,7 @@ export function GameCreateSchedulePage({
       stations={locations}
       source={source}
       {...(checkout ? { checkout, loadFriends, freeGameHref } : {})}
+      {...(android ? { quarterHref, gamesHref: '/' } : {})}
     />
   );
 }

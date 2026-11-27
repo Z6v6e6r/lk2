@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
+import { installMobileNavigation } from './navigation.js';
 
 const createGateway = () =>
   createBrowserAuthGateway({
@@ -99,56 +100,119 @@ describe('shared LK2 Android UI', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(request).not.toHaveBeenCalled();
   });
-  it.each(['/giftcard', '/gift-certificates', '/games/new', '/communities'])(
-    'keeps browser-only commerce/provider/upload controls unavailable at %s',
-    async (path) => {
-      window.history.replaceState({}, '', path);
-      const gateway = createGateway();
-      const payment = vi.spyOn(gateway, 'getPublicGiftCertificateCatalog');
-      const legacyCreate = vi.spyOn(gateway, 'createGame');
-      const quarterCreate = vi.spyOn(gateway, 'createQuarterGame');
-      vi.spyOn(gateway, 'getQuarterCreateCapability').mockResolvedValue({
-        contractVersion: 1,
-        available: false,
-      });
-      const restore = vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
-        context: {
-          user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Тестовый игрок' },
-          tenant: {
-            id: '00000000-0000-4000-8000-000000000002',
-            key: 'local-padel',
-            name: 'ПадлХАБ',
-          },
-          roles: ['client'],
-          permissions: [],
+  it.each([
+    '/giftcard',
+    '/gift-certificates',
+    '/games/new',
+    '/games/new?quarterCreate=1',
+    '/communities',
+  ])('keeps browser-only commerce/provider/upload controls unavailable at %s', async (path) => {
+    window.history.replaceState({}, '', path);
+    const gateway = createGateway();
+    const payment = vi.spyOn(gateway, 'getPublicGiftCertificateCatalog');
+    const legacyCreate = vi.spyOn(gateway, 'createGame');
+    const quarterCreate = vi.spyOn(gateway, 'createQuarterGame');
+    const paidCreate = vi.spyOn(gateway, 'createPaidGame');
+    const wholeCourt = vi.spyOn(gateway, 'advanceWholeCourtCheckout');
+    vi.spyOn(gateway, 'listLocations').mockResolvedValue({ items: [] });
+    vi.spyOn(gateway, 'getQuarterCreateCapability').mockResolvedValue({
+      contractVersion: 1,
+      available: false,
+    });
+    const restore = vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
+      context: {
+        user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Тестовый игрок' },
+        tenant: {
+          id: '00000000-0000-4000-8000-000000000002',
+          key: 'local-padel',
+          name: 'ПадлХАБ',
         },
-      });
-      // Unread counters are independent of the selected section.
-      vi.spyOn(gateway, 'listConversations').mockResolvedValue({ items: [] });
-      render(<App gateway={gateway} tenantKey="local-padel" clientPlatform="android" />);
+        roles: ['client'],
+        permissions: [],
+      },
+    });
+    // Unread counters are independent of the selected section.
+    vi.spyOn(gateway, 'listConversations').mockResolvedValue({ items: [] });
+    render(<App gateway={gateway} tenantKey="local-padel" clientPlatform="android" />);
+    if (path === '/games/new') {
+      expect(await screen.findByRole('heading', { name: 'Выберите клуб' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Создать игру по подписке' })).toHaveAttribute(
+        'href',
+        '/games/new?quarterCreate=1',
+      );
+    } else if (path === '/games/new?quarterCreate=1') {
+      expect(await screen.findByRole('heading', { name: 'Игра по подписке' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'На главную' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Создать игру по подписке' })).toBeDisabled();
+      expect(screen.queryByRole('textbox', { name: 'Название игры' })).not.toBeInTheDocument();
+    } else {
       expect(
         await screen.findByRole('heading', {
-          name:
-            path === '/games/new'
-              ? 'Игра по подписке'
-              : 'Раздел появится в следующей версии приложения',
+          name: 'Раздел появится в следующей версии приложения',
         }),
       ).toBeInTheDocument();
-      expect(
-        screen.getByRole('link', {
-          name: path === '/games/new' ? 'На главную' : 'Вернуться на Главную',
-        }),
-      ).toBeInTheDocument();
-      if (path === '/games/new') {
-        expect(screen.getByRole('button', { name: 'Создать игру по подписке' })).toBeDisabled();
-        expect(screen.queryByRole('textbox', { name: 'Название игры' })).not.toBeInTheDocument();
-      }
-      expect(payment).not.toHaveBeenCalled();
-      expect(legacyCreate).not.toHaveBeenCalled();
-      expect(quarterCreate).not.toHaveBeenCalled();
-      expect(restore).toHaveBeenCalled();
-    },
-  );
+      expect(screen.getByRole('link', { name: 'Вернуться на Главную' })).toBeInTheDocument();
+    }
+    expect(payment).not.toHaveBeenCalled();
+    expect(legacyCreate).not.toHaveBeenCalled();
+    expect(quarterCreate).not.toHaveBeenCalled();
+    expect(paidCreate).not.toHaveBeenCalled();
+    expect(wholeCourt).not.toHaveBeenCalled();
+    expect(restore).toHaveBeenCalled();
+  });
+  it('opens the schedule from the Android create link and shows the catalogue court count', async () => {
+    window.history.replaceState({}, '', '/games');
+    const gateway = createGateway();
+    vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
+      context: {
+        user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Тестовый игрок' },
+        tenant: { id: '00000000-0000-4000-8000-000000000002', key: 'local-padel', name: 'ПадлХАБ' },
+        roles: ['client'],
+        permissions: [],
+      },
+    });
+    const listGames = vi.spyOn(gateway, 'listPublicGames').mockResolvedValue({ items: [] });
+    const stationId = '00000000-0000-4000-8000-000000000004';
+    const listLocations = vi.spyOn(gateway, 'listLocations').mockResolvedValue({
+      items: [
+        {
+          id: stationId,
+          title: 'Тестовый клуб',
+          city: 'Москва',
+          courtCount: 6,
+          coverImageUrl: null,
+          route: `/locations/${stationId}`,
+        },
+      ],
+    });
+    const quarterCapability = vi.spyOn(gateway, 'getQuarterCreateCapability');
+
+    render(<App gateway={gateway} tenantKey="local-padel" clientPlatform="android" />);
+
+    const create = await screen.findByRole('link', { name: 'Создать игру' });
+    expect(create).toHaveAttribute('href', '/games/new?new=1');
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    const dispose = installMobileNavigation(document, window);
+    try {
+      fireEvent.click(create);
+    } finally {
+      dispose();
+      scrollTo.mockRestore();
+    }
+
+    expect(await screen.findByRole('heading', { name: 'Выберите клуб' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Тестовый клуб' })).toHaveAccessibleDescription(
+      '6 кортов',
+    );
+    expect(screen.getByRole('link', { name: 'Создать игру по подписке' })).toHaveAttribute(
+      'href',
+      '/games/new?quarterCreate=1',
+    );
+    expect(listGames).toHaveBeenCalledOnce();
+    expect(listLocations).toHaveBeenCalledOnce();
+    expect(quarterCapability).not.toHaveBeenCalled();
+  });
+
   it('opens Android chats through the authenticated PadlHub gateway', async () => {
     window.history.replaceState({}, '', '/chats');
     const gateway = createGateway();
