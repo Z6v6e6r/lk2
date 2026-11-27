@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
+import { installMobileNavigation } from './navigation.js';
 
 const createGateway = () =>
   createBrowserAuthGateway({
@@ -159,7 +160,7 @@ describe('shared LK2 Android UI', () => {
     expect(wholeCourt).not.toHaveBeenCalled();
     expect(restore).toHaveBeenCalled();
   });
-  it('opens the schedule from the create link in the Android games list', async () => {
+  it('opens the schedule from the Android create link and shows the catalogue court count', async () => {
     window.history.replaceState({}, '', '/games');
     const gateway = createGateway();
     vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
@@ -171,20 +172,38 @@ describe('shared LK2 Android UI', () => {
       },
     });
     const listGames = vi.spyOn(gateway, 'listPublicGames').mockResolvedValue({ items: [] });
-    const listLocations = vi.spyOn(gateway, 'listLocations').mockResolvedValue({ items: [] });
+    const stationId = '00000000-0000-4000-8000-000000000004';
+    const listLocations = vi.spyOn(gateway, 'listLocations').mockResolvedValue({
+      items: [
+        {
+          id: stationId,
+          title: 'Тестовый клуб',
+          city: 'Москва',
+          courtCount: 6,
+          coverImageUrl: null,
+          route: `/locations/${stationId}`,
+        },
+      ],
+    });
     const quarterCapability = vi.spyOn(gateway, 'getQuarterCreateCapability');
 
     render(<App gateway={gateway} tenantKey="local-padel" clientPlatform="android" />);
 
     const create = await screen.findByRole('link', { name: 'Создать игру' });
-    const destination = create.getAttribute('href');
-    expect(destination).toBe('/games/new?new=1');
-    act(() => {
-      window.history.pushState({}, '', destination);
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    });
+    expect(create).toHaveAttribute('href', '/games/new?new=1');
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    const dispose = installMobileNavigation(document, window);
+    try {
+      fireEvent.click(create);
+    } finally {
+      dispose();
+      scrollTo.mockRestore();
+    }
 
     expect(await screen.findByRole('heading', { name: 'Выберите клуб' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Тестовый клуб' })).toHaveAccessibleDescription(
+      '6 кортов',
+    );
     expect(screen.getByRole('link', { name: 'Создать игру по подписке' })).toHaveAttribute(
       'href',
       '/games/new?quarterCreate=1',
