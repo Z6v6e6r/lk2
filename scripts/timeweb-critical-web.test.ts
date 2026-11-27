@@ -344,7 +344,8 @@ describe('closed Web checkpoint verification', () => {
     const {execFileSync}=await import('node:child_process');
     const {readFileSync,readdirSync}=await import('node:fs');
     const root='packages/database/migrations/';
-    const rows=readdirSync(root).filter(name=>name.endsWith('.sql')).sort()
+    const rows=readdirSync(root)
+      .filter(name=>/^\\d{4}_.*\\.sql$/.test(name)&&Number(name.slice(0,4))<=120).sort()
       .map(name=>[name,digest(readFileSync(root+name))]);
     const ledger=JSON.stringify(rows)+'\\n';
     const expectedDatabaseTarget={databaseName:'synthetic-postgres',systemIdentifier:'1234567890123456789'};
