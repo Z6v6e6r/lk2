@@ -233,6 +233,109 @@ const currentFixture =
   op.expectedWeb.image=current.webImage;op.expectedWeb.releaseId=current.webReleaseId;
   op.confirmation='UPGRADE_API8158_WEB_AAAAAAAAAAAA_FROM_'+current.webImage.slice(-12).toUpperCase()+'_KEEP_API_8158AC445C9F';
 `;
+const web712Fixture =
+  fixture +
+  `
+  const {WEB712_SCHEMA,WEB712_COMPATIBILITY:current,assertCriticalWebMain,criticalWebDirectories,
+    validateCriticalWebPlanBinding,validateWeb712RestoreBinding}=await import('./scripts/timeweb-critical-web.js');
+  const {createHash}=await import('node:crypto');
+  const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
+  op.schema=WEB712_SCHEMA;
+  op.expectedApi.releaseId=current.apiReleaseId;op.expectedApi.image=current.apiImage;
+  op.expectedWeb.releaseId=current.webReleaseId;op.expectedWeb.image=current.webImage;
+  op.confirmation='UPGRADE_WEB_712_AAAAAAAAAAAA_FROM_'+current.webImage.slice(-12).toUpperCase()+'_KEEP_API_492937113C0F';
+  const postgres={id:'6'.repeat(64),image:'postgres@sha256:'+'7'.repeat(64)};
+  const backup={schema:'PHUB_TIMEWEB_APP_ONLY_RESTORE_CHECKPOINT_V1',profile:'production',
+    target:op.target,expectedApi:op.expectedApi,expectedWeb:op.expectedWeb,expectedPostgres:postgres,
+    controllerSha:sha,controllerTree:op.candidateTree,toolCommit:sha,candidateSha:sha,
+    publicationRunId:op.publicationRunId,releaseId:sha+'-22-1'};
+  const bytes=Buffer.from(JSON.stringify(backup));
+  op.backupOperationSha256=digest(bytes);
+  const receipt={schema:'PHUB_TIMEWEB_APP_ONLY_RESTORE_CHECKPOINT_RECEIPT_V1',
+    operationSha256:op.backupOperationSha256,baselineReleaseId:op.expectedApi.releaseId,
+    restoreVerified:true,completedAt:new Date(now-1000).toISOString()};
+`;
+describe('closed Web rollout of #712', () => {
+  it('binds activation to the exact previous Web, unchanged API and current main', () =>
+    scenario(
+      web712Fixture +
+        `
+    validateCriticalWebOperation(op,now);
+    for (const overrides of [
+      {component:'api'}, {backupOperationSha256:'bad'}, {controllerSha:'d'.repeat(40)},
+      {expectedApi:{...op.expectedApi,image:op.expectedApi.image.replace(/.$/,'0')}},
+      {expectedWeb:{...op.expectedWeb,releaseId:current.baselineSource+'-99-1'}},
+      {confirmation:op.confirmation.replace('UPGRADE_WEB_712','UPGRADE_WEB')},
+    ]) assert.throws(()=>validateCriticalWebOperation({...op,...overrides},now));
+    assertCriticalWebMain(op,args=>{
+      assert.deepEqual(args,['-c','protocol.https.allow=always','-c','http.followRedirects=false','ls-remote',
+        'https://github.com/Z6v6e6r/lk2.git','refs/heads/main']);
+      return sha+'\\trefs/heads/main';
+    });
+    for (const bad of [sha+'\\trefs/heads/wrong',current.runtimeSource+'\\trefs/heads/main',
+      sha+'\\trefs/heads/main\\n'+sha+'\\trefs/heads/main']) {
+      assert.throws(()=>assertCriticalWebMain(op,()=>bad),/MAIN_DRIFT/);
+    }
+  `,
+    ));
+
+  it('requires the six-file application delta and exact controller-only tail', () =>
+    scenario(
+      web712Fixture +
+        `
+    const {execFileSync}=await import('node:child_process');
+    const real=args=>execFileSync('git',args,{encoding:'utf8'}).trim();
+    const raw=real(['diff','--raw','--no-abbrev','--no-renames','-z',current.baselineSource,current.runtimeSource]);
+    assert.equal(digest(raw),current.runtimeDeltaSha256);
+    assert.equal(raw.split('\\0').filter(Boolean).length,12);
+    const paths=['scripts/timeweb-critical-web.js','scripts/timeweb-critical-web.test.ts','docs/runbooks/timeweb-standard-delivery.md'];
+    const tail=paths.map(path=>'M\\0'+path+'\\0').join('');
+    const runGit=args=>{
+      if(args[0]==='rev-parse') return args[1]===sha+'^{tree}'?op.candidateTree:real(args);
+      if(args[0]==='merge-base') return real(args.map(value=>value===sha?'HEAD':value));
+      if(args[0]==='diff') return args.includes('--raw')?raw:tail;
+      if(args[0]==='ls-tree') return '100644 blob '+'e'.repeat(40)+'\\t'+args.at(-1);
+      throw Error('unexpected Git command');
+    };
+    validateCriticalWebSource(op,runGit);
+    assert.throws(()=>validateCriticalWebSource(op,args=>args.includes('--raw')?raw+'x':runGit(args)),/RUNTIME_PROOF/);
+    for (const delta of [tail+'M\\0apps/web/src/App.tsx\\0',tail.replace('M','R'),tail.slice(2),'']) {
+      assert.throws(()=>validateCriticalWebSource(op,args=>args.includes('--name-status')?delta:runGit(args)),/SOURCE_DELTA/);
+    }
+    assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='ls-tree'?runGit(args).replace('100644','100755'):runGit(args)),/CONTROLLER_FILE_MODE/);
+  `,
+    ));
+
+  it('requires a recent restored checkpoint for the same releases and running database', () =>
+    scenario(
+      web712Fixture +
+        `
+    const dirs=criticalWebDirectories(op);
+    assert.equal(dirs.backupDirectory,'/opt/phub/timeweb-beta/backups/'+sha+'-22-1-app-restore');
+    const input={op,operationBytes:bytes,receipt,api:op.expectedApi,postgres,now};
+    validateWeb712RestoreBinding(input);
+    for (const overrides of [
+      {operationBytes:Buffer.concat([bytes,Buffer.from(' ')])},
+      {api:{...input.api,id:'0'.repeat(64)}},
+      {postgres:{...postgres,id:'0'.repeat(64)}},
+      {receipt:{...receipt,restoreVerified:false}},
+      {receipt:{...receipt,operationSha256:'0'.repeat(64)}},
+      {receipt:{...receipt,completedAt:new Date(now-3600001).toISOString()}},
+      {receipt:{...receipt,completedAt:new Date(now+1).toISOString()}},
+    ]) assert.throws(()=>validateWeb712RestoreBinding({...input,...overrides}),/BACKUP_CHECKPOINT/);
+    const h='9'.repeat(64);
+    const plan={operationSha256:h,compatibility:current,backup:{
+      path:dirs.backupDirectory+'/database-backup-receipt.json',
+      operationPath:dirs.backupDirectory+'/backup-operation.json',
+      operationSha256:op.backupOperationSha256,
+      terminalPath:dirs.backupDirectory+'/SUCCESS_CLEANUP_VERIFIED.json',terminalSha256:h,
+    }};
+    validateCriticalWebPlanBinding(plan,op,h);
+    assert.throws(()=>validateCriticalWebPlanBinding({...plan,backup:{...plan.backup,terminalPath:'elsewhere'}},op,h),/PLAN_BINDING/);
+  `,
+    ));
+});
+
 describe('closed Web over installed API8158', () => {
   it('separates immutable API and rollback Web identities and operation authority', () =>
     scenario(

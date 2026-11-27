@@ -1,6 +1,7 @@
 // Closed, explicit Web-only mode of the enrolled controller. No publication, token, candidate code
 // execution, API activation, migration, secret provisioning or installed-backend descriptor write.
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import {
   constants,
   closeSync,
@@ -17,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { parseStrictJson } from './strict-json.js';
 import { verifySourceCi } from './verify-source-ci.js';
 import { standardWebComposeArgs } from './timeweb-standard-policy.js';
+import { GAME_INVITATIONS_0120 } from './timeweb-game-invitations-migration.js';
 import {
   secureUpgradePath,
   readUpgradeFile,
@@ -78,6 +80,22 @@ export const API8158_WEB_COMPATIBILITY = Object.freeze({
   runtimeDeltaSha256: 'dab37af6a0c7c7db4f9bb0a452cce57ecb4dcf14315978b5de08998f8d3a6e37',
 });
 export const API8158_WEB_SCHEMA = 'PHUB_TIMEWEB_CRITICAL_API8158_WEB_OPERATION_V1';
+export const WEB712_SCHEMA = 'PHUB_TIMEWEB_CRITICAL_WEB_712_OPERATION_V1';
+const WEB712_PREDECESSOR = '492937113c0f8a7a4c6a3ebf14a512f81f50d873';
+const WEB712_PREVIOUS_RELEASE = `${WEB712_PREDECESSOR}-45892594868-1`;
+export const WEB712_COMPATIBILITY = Object.freeze({
+  baselineSource: WEB712_PREDECESSOR,
+  baselineTree: '37a72be0e3b55e3057eaec3f87186e3769e17658',
+  apiReleaseId: WEB712_PREVIOUS_RELEASE,
+  webReleaseId: WEB712_PREVIOUS_RELEASE,
+  apiImage:
+    'ghcr.io/z6v6e6r/phub-api@sha256:a7204807e9d3c75f465f3dfe0eda4b823a77a36464c9a76423d5a3aee9c575c4',
+  webImage:
+    'ghcr.io/z6v6e6r/phub-web@sha256:8e85ff357aea88eb3ab739c1c2ffac720a882cc51f72fcd7365ad0da318c5e96',
+  runtimeSource: '323afc7c83cf43764940c7562c54c5ad21fc20c0',
+  runtimeTree: 'f4f6b975cea29fb1ca437235c2ee2bb34eeea9fd',
+  runtimeDeltaSha256: '8b8fac740725f2be32f3dd2d3e16d6276ec3741cac152006bd2463d401205a9d',
+});
 // The reviewed tail is only the compatibility re-anchor itself; the backup producer and its
 // tests belong to the reviewed runtime anchor and stay frozen.
 export const API8158_WEB_CONTROLLER_FILES = new Set([
@@ -88,6 +106,7 @@ export const API8158_WEB_CONTROLLER_FILES = new Set([
 function compatibilityFor(op) {
   if (op?.schema === 'PHUB_TIMEWEB_CRITICAL_WEB_OPERATION_V1') return WEB_COMPATIBILITY;
   if (op?.schema === API8158_WEB_SCHEMA) return API8158_WEB_COMPATIBILITY;
+  if (op?.schema === WEB712_SCHEMA) return WEB712_COMPATIBILITY;
   fail('IDENTITY');
 }
 export function criticalWebDirectories(op) {
@@ -98,7 +117,9 @@ export function criticalWebDirectories(op) {
     backupDirectory:
       compatibility === WEB_COMPATIBILITY
         ? transaction
-        : `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-web`,
+        : compatibility === WEB712_COMPATIBILITY
+          ? `${ROOT}/backups/${op.candidateSha}-${op.publicationRunId}-1-app-restore`
+          : `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-web`,
   };
 }
 export function validateCriticalWebPlanBinding(plan, op, operationSha256) {
@@ -110,9 +131,114 @@ export function validateCriticalWebPlanBinding(plan, op, operationSha256) {
       `${criticalWebDirectories(op).backupDirectory}/database-backup-receipt.json`
   )
     fail('PLAN_BINDING');
+  if (op.schema === WEB712_SCHEMA) {
+    const { backupDirectory } = criticalWebDirectories(op);
+    if (
+      plan.backup.operationPath !== `${backupDirectory}/backup-operation.json` ||
+      plan.backup.operationSha256 !== op.backupOperationSha256 ||
+      plan.backup.terminalPath !== `${backupDirectory}/SUCCESS_CLEANUP_VERIFIED.json` ||
+      !HASH.test(plan.backup.terminalSha256 ?? '')
+    )
+      fail('PLAN_BINDING');
+  }
 }
+export function validateWeb712RestoreBinding({ op, operationBytes, receipt, api, postgres, now }) {
+  const backup = parseStrictJson(operationBytes);
+  const completed = Date.parse(receipt?.completedAt);
+  if (
+    op.schema !== WEB712_SCHEMA ||
+    op.backupOperationSha256 !== hash(operationBytes) ||
+    backup.schema !== 'PHUB_TIMEWEB_APP_ONLY_RESTORE_CHECKPOINT_V1' ||
+    backup.profile !== 'production' ||
+    !equal(backup.target, op.target) ||
+    !equal(backup.expectedApi, api) ||
+    !equal(backup.expectedPostgres, postgres) ||
+    !['id', 'image', 'releaseId'].every(
+      (key) => backup.expectedWeb?.[key] === op.expectedWeb[key],
+    ) ||
+    backup.controllerSha !== op.controllerSha ||
+    backup.controllerTree !== op.candidateTree ||
+    backup.toolCommit !== op.controllerSha ||
+    backup.candidateSha !== op.candidateSha ||
+    backup.publicationRunId !== op.publicationRunId ||
+    backup.releaseId !== `${op.candidateSha}-${op.publicationRunId}-1` ||
+    receipt?.schema !== 'PHUB_TIMEWEB_APP_ONLY_RESTORE_CHECKPOINT_RECEIPT_V1' ||
+    receipt.operationSha256 !== op.backupOperationSha256 ||
+    receipt.baselineReleaseId !== op.expectedApi.releaseId ||
+    receipt.restoreVerified !== true ||
+    !Number.isFinite(completed) ||
+    completed > now ||
+    now - completed > 3600000
+  )
+    fail('BACKUP_CHECKPOINT');
+  return backup;
+}
+
+function web712Backup(directory, api, op) {
+  const path = `${directory}/database-backup-receipt.json`;
+  const operationPath = `${directory}/backup-operation.json`;
+  const terminalPath = `${directory}/SUCCESS_CLEANUP_VERIFIED.json`;
+  const receiptBytes = readUpgradeFile(path);
+  const operationBytes = readUpgradeFile(operationPath);
+  const terminalBytes = readUpgradeFile(terminalPath);
+  validateWeb712RestoreBinding({
+    op,
+    operationBytes,
+    receipt: parseStrictJson(receiptBytes),
+    api,
+    postgres: inspect('postgres', 'phub-timeweb-beta-dependencies'),
+    now: Date.now(),
+  });
+  // The backup producer verifies the dump hash, independent restore and terminal journal.
+  // Re-read the live ledger from the exact recorded Postgres instance.
+  const program = `import importlib.util,sys,time
+spec=importlib.util.spec_from_file_location('backup','${SOURCE}/scripts/control-timeweb-database-backup.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+raw=sys.stdin.buffer.read();op=m.strict(raw)
+m.validate_operation(op,time.time(),op['toolFileSha256'],allow_expired=True)
+m.tool_custody(op)
+m.validate_cutover_disk_terminal(op,raw)
+pg=op['expectedPostgres']['id']
+target=m.strict(m.source_query(m.SOURCE_CUTOVER_TARGET,pg))
+ledger=m.ledger_bytes(m.source_query(m.SOURCE_LEDGER,pg))
+rows=m.strict(ledger)
+versioned=''.join(name+'\\t'+checksum+'\\n' for name,checksum in rows).encode('utf8')
+if target!={**op['expectedDatabaseTarget'],'inRecovery':False} or m.digest(ledger)!=op['expectedLedgerSha256'] or m.digest(versioned)!='${GAME_INVITATIONS_0120.after}':
+ raise ValueError('WEB712_DATABASE_DRIFT')
+sys.stdout.write('WEB712_RESTORE_VERIFIED')`;
+  let checked;
+  try {
+    checked = execFileSync('/usr/bin/python3', ['-I', '-S', '-B', '-c', program], {
+      env: { PATH: '/usr/bin:/bin', HOME: '/root', LANG: 'C.UTF-8' },
+      input: operationBytes,
+      encoding: 'utf8',
+      timeout: 120000,
+      maxBuffer: 8192,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    fail('BACKUP_CHECKPOINT');
+  }
+  if (checked !== 'WEB712_RESTORE_VERIFIED') fail('BACKUP_CHECKPOINT');
+  if (
+    !readUpgradeFile(path).equals(receiptBytes) ||
+    !readUpgradeFile(operationPath).equals(operationBytes) ||
+    !readUpgradeFile(terminalPath).equals(terminalBytes)
+  )
+    fail('BACKUP_DRIFT');
+  return {
+    path,
+    sha256: hash(receiptBytes),
+    operationPath,
+    operationSha256: hash(operationBytes),
+    terminalPath,
+    terminalSha256: hash(terminalBytes),
+  };
+}
+
 // Keep the closed Web route strict even when shared helpers default to the beta profile.
 export function criticalWebBackup(directory, api, op) {
+  if (op.schema === WEB712_SCHEMA) return web712Backup(directory, api, op);
   const proof = backupProof(directory, api, 'production');
   if (compatibilityFor(op) === API8158_WEB_COMPATIBILITY) {
     const receipt = parseStrictJson(readUpgradeFile(proof.path));
@@ -203,6 +329,7 @@ export function validateCriticalWebOperation(op, now) {
     'expectedWeb',
     'expiresAt',
     'confirmation',
+    ...(op?.schema === WEB712_SCHEMA ? ['backupOperationSha256'] : []),
   ]);
   const compatibility = compatibilityFor(op);
   exact(op.target, ['hostname', 'serverId', 'projectId']);
@@ -218,7 +345,8 @@ export function validateCriticalWebOperation(op, now) {
       (v) => typeof v === 'string' && NUMBER.test(v),
     ) ||
     !DIGEST.test(op.artifactDigest ?? '') ||
-    !HASH.test(op.manifestSha256 ?? '')
+    !HASH.test(op.manifestSha256 ?? '') ||
+    (op.schema === WEB712_SCHEMA && !HASH.test(op.backupOperationSha256 ?? ''))
   )
     fail('IDENTITY');
   for (const service of ['api', 'web']) {
@@ -236,7 +364,7 @@ export function validateCriticalWebOperation(op, now) {
       fail('BASELINE');
   }
   if (
-    compatibility === API8158_WEB_COMPATIBILITY &&
+    compatibility !== WEB_COMPATIBILITY &&
     (op.expectedApi.releaseId !== compatibility.apiReleaseId ||
       op.expectedApi.image !== compatibility.apiImage ||
       op.expectedWeb.image !== compatibility.webImage ||
@@ -250,9 +378,15 @@ export function validateCriticalWebOperation(op, now) {
     (now !== undefined && (expiry - now < 1200000 || expiry - now > 3600000))
   )
     fail('EXPIRY');
+  const confirmationPrefix =
+    op.schema === WEB712_SCHEMA
+      ? 'UPGRADE_WEB_712'
+      : compatibility === WEB_COMPATIBILITY
+        ? 'UPGRADE_WEB'
+        : 'UPGRADE_API8158_WEB';
   if (
     op.confirmation !==
-    `${compatibility === WEB_COMPATIBILITY ? 'UPGRADE_WEB' : 'UPGRADE_API8158_WEB'}_${op.candidateSha.slice(0, 12).toUpperCase()}_FROM_${op.expectedWeb.image.split('@')[1].slice(-12).toUpperCase()}_KEEP_API_${(compatibility.apiSource ?? compatibility.baselineSource).slice(0, 12).toUpperCase()}`
+    `${confirmationPrefix}_${op.candidateSha.slice(0, 12).toUpperCase()}_FROM_${op.expectedWeb.image.split('@')[1].slice(-12).toUpperCase()}_KEEP_API_${(compatibility.apiSource ?? compatibility.baselineSource).slice(0, 12).toUpperCase()}`
   )
     fail('CONFIRMATION');
   return op;
@@ -261,7 +395,7 @@ export function validateWebControllerDelta(
   entries,
   op = { schema: 'PHUB_TIMEWEB_CRITICAL_WEB_OPERATION_V1' },
 ) {
-  if (compatibilityFor(op) === API8158_WEB_COMPATIBILITY) {
+  if (compatibilityFor(op) !== WEB_COMPATIBILITY) {
     if (
       entries.length !== API8158_WEB_CONTROLLER_FILES.size ||
       new Set(entries.map((v) => v.path)).size !== entries.length ||
@@ -365,6 +499,21 @@ async function ci(id, sha) {
   const jobs = await githubPublic(`actions/runs/${id}/attempts/1/jobs?per_page=100`);
   if (jobs.total_count !== jobs.jobs?.length) fail('SOURCE_JOBS');
   verifySourceCi(run, jobs.jobs, sha);
+}
+export function assertCriticalWebMain(op, runGit = git) {
+  const mainRef = 'refs/heads/main';
+  const remote = 'https://github.com/Z6v6e6r/lk2.git';
+  const args =
+    op.schema === WEB712_SCHEMA
+      ? ['-c', 'protocol.https.allow=always', '-c', 'http.followRedirects=false']
+      : [];
+  const response = runGit([...args, 'ls-remote', remote, mainRef]);
+  if (
+    op.schema === WEB712_SCHEMA
+      ? response !== `${op.candidateSha}\t${mainRef}`
+      : response.split(/\s/)[0] !== op.candidateSha
+  )
+    fail('MAIN_DRIFT');
 }
 export async function runCriticalWebTransition(ops, mode, phase) {
   if (mode === 'reconcile') {
@@ -641,11 +790,7 @@ export async function runCriticalWeb(mode, requestPath) {
   if (mode === 'deploy') {
     if (existsSync(LOCK) || existsSync(planPath) || existsSync(receiptPath)) fail('UNRECONCILED');
     await ci(op.sourceCiRunId, op.candidateSha);
-    if (
-      git(['ls-remote', 'https://github.com/Z6v6e6r/lk2.git', 'refs/heads/main']).split(/\s/)[0] !==
-      op.candidateSha
-    )
-      fail('MAIN_DRIFT');
+    assertCriticalWebMain(op);
     const manifest = await candidateAuthority(op, directory);
     const baseline = readInstalledApiBaseline(op.expectedApi.releaseId);
     const api = inspect('api'),
@@ -738,6 +883,8 @@ export async function runCriticalWeb(mode, requestPath) {
       hash(readUpgradeFile(plan.backup.path)) !== plan.backup.sha256 ||
       (plan.backup.operationPath &&
         hash(readUpgradeFile(plan.backup.operationPath)) !== plan.backup.operationSha256) ||
+      (op.schema === WEB712_SCHEMA &&
+        hash(readUpgradeFile(plan.backup.terminalPath)) !== plan.backup.terminalSha256) ||
       !readUpgradeFile(LOCK).equals(pointer) ||
       hash(readUpgradeFile(planPath)) !== planSha256 ||
       hash(readUpgradeFile(`${transaction}/operation.json`)) !== plan.operationSha256
@@ -824,11 +971,7 @@ export async function runCriticalWeb(mode, requestPath) {
     assertBackend();
     if (!equal(criticalWebBackup(backupDirectory, plan.previous.api, op), plan.backup))
       fail('BACKUP_DRIFT');
-    if (
-      git(['ls-remote', 'https://github.com/Z6v6e6r/lk2.git', 'refs/heads/main']).split(/\s/)[0] !==
-      op.candidateSha
-    )
-      fail('MAIN_DRIFT');
+    assertCriticalWebMain(op);
     monitoring();
     if (!equal(inspect('web'), plan.previous.web)) fail('PREVIOUS_WEB_DRIFT');
   };
@@ -840,12 +983,7 @@ export async function runCriticalWeb(mode, requestPath) {
           fail('BACKUP_DRIFT');
         assertBackend();
         monitoring();
-        if (
-          git(['ls-remote', 'https://github.com/Z6v6e6r/lk2.git', 'refs/heads/main']).split(
-            /\s/,
-          )[0] !== op.candidateSha
-        )
-          fail('MAIN_DRIFT');
+        assertCriticalWebMain(op);
         if (JSON.parse(compose(overlay, 'config')).services.web.image !== plan.candidate.image)
           fail('COMPOSE');
       },
@@ -870,6 +1008,8 @@ export async function runCriticalWeb(mode, requestPath) {
           sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
           probe,
           attest: async () => {
+            if (op.schema === WEB712_SCHEMA && Date.now() >= Date.parse(op.expiresAt))
+              fail('EXPIRY');
             assertBackend();
             if (!equal(attestWeb(plan.candidate), activatedWeb)) fail('WEB_RESTART');
             monitoring();

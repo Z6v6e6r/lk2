@@ -1326,6 +1326,36 @@ error brand distinguishes that rejection from generic errors, missing errors or 
 Both paths require the exact newly recreated owned running `sleep 60` fixture with `starting` or
 `unhealthy` health. Unexpected exit/status/identity/command/health fails with bounded diagnostics. A failed first-attempt main CI remains ineligible; rerunning it does not grant delivery.
 
+## Closed Web rollout for the game creation wizard in PR #712
+
+Use schema `PHUB_TIMEWEB_CRITICAL_WEB_712_OPERATION_V1` with the existing
+`--critical-web`, `--critical-web-recover`, and `--critical-web-reconcile` entry points.
+The request remains at `/opt/phub/timeweb-beta/operator/web-upgrade.json`. This profile
+binds the serving API and Web to the known `492937113c0f…-45892594868-1` release and
+its exact immutable image references. Read the current container IDs before minting the request.
+
+The application anchor is `323afc7c83cf43764940c7562c54c5ad21fc20c0` and only its six
+reviewed Web changes may differ from the installed source. The controller successor may
+modify only `scripts/timeweb-critical-web.js`, its test, and this runbook. It must be the
+exact current `main` with full first-attempt CI. Publish that same successor through the
+canonical V2 publisher so the controller, candidate, source CI, and manifest agree.
+
+Use the existing production backup tool's `--prepare-app-only <candidateSha> <publicationRunId> -`
+to prepare a release-bound restore checkpoint. Its normal plan, execution, and terminal
+reconciliation must prove a freshly restored dump from the current Postgres and the unchanged
+post-0120 ledger. Pass the resulting `backupOperationSha256` in addition to the existing Web
+request fields. The checkpoint receipt must be at most one hour old at preflight and activation.
+The Web controller revalidates the terminal backup journal, the dump hash, and the live ledger.
+It uses the freshly restored archive itself as backup evidence. The backup and Web transaction
+directories use the same release ID with suffixes `-app-restore` and `-web`, respectively.
+
+Set the confirmation to
+`UPGRADE_WEB_712_<CANDIDATE_FIRST_12_UPPERCASE>_FROM_<PREVIOUS_WEB_DIGEST_LAST_12_UPPERCASE>_KEEP_API_492937113C0F`.
+Retain fresh Timeweb monitoring and alert-test readbacks throughout the operation. The profile
+keeps the existing Web image smoke, 61 rounds of direct API and Web checks over 15 minutes,
+and rollback to the exact previous Web image on failure. The API, backend containers, runtime
+secrets, database schema, and ingress are outside the activation scope.
+
 ## Closed Web-only release over installed API 8158
 
 This source preparation does not enroll a controller/helper, publish images, produce a live backup,
