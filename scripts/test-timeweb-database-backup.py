@@ -2611,7 +2611,11 @@ class CutoverProcessTests(unittest.TestCase):
                 deadline=time.monotonic()+5
                 while time.monotonic()<deadline:
                     status=Path('/proc')/str(child)/'stat'
-                    if not status.exists() or status.read_text().split()[2]=='Z':break
+                    try:
+                        state=status.read_text().split()[2]
+                    except FileNotFoundError:
+                        break
+                    if state=='Z':break
                     time.sleep(.02)
                 else:self.fail('owned child survived controller death')
             finally:
