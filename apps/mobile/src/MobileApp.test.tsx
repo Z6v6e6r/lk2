@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
@@ -159,6 +159,41 @@ describe('shared LK2 Android UI', () => {
     expect(wholeCourt).not.toHaveBeenCalled();
     expect(restore).toHaveBeenCalled();
   });
+  it('opens the schedule from the create link in the Android games list', async () => {
+    window.history.replaceState({}, '', '/games');
+    const gateway = createGateway();
+    vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
+      context: {
+        user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Тестовый игрок' },
+        tenant: { id: '00000000-0000-4000-8000-000000000002', key: 'local-padel', name: 'ПадлХАБ' },
+        roles: ['client'],
+        permissions: [],
+      },
+    });
+    const listGames = vi.spyOn(gateway, 'listPublicGames').mockResolvedValue({ items: [] });
+    const listLocations = vi.spyOn(gateway, 'listLocations').mockResolvedValue({ items: [] });
+    const quarterCapability = vi.spyOn(gateway, 'getQuarterCreateCapability');
+
+    render(<App gateway={gateway} tenantKey="local-padel" clientPlatform="android" />);
+
+    const create = await screen.findByRole('link', { name: 'Создать игру' });
+    const destination = create.getAttribute('href');
+    expect(destination).toBe('/games/new?new=1');
+    act(() => {
+      window.history.pushState({}, '', destination);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Выберите клуб' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Создать игру по подписке' })).toHaveAttribute(
+      'href',
+      '/games/new?quarterCreate=1',
+    );
+    expect(listGames).toHaveBeenCalledOnce();
+    expect(listLocations).toHaveBeenCalledOnce();
+    expect(quarterCapability).not.toHaveBeenCalled();
+  });
+
   it('opens Android chats through the authenticated PadlHub gateway', async () => {
     window.history.replaceState({}, '', '/chats');
     const gateway = createGateway();
