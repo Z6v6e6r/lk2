@@ -799,7 +799,7 @@ function LegacyCreateGamePage({
                 Продолжить исходную попытку
               </button>
             ) : (
-              <a href="/games/new">К сохранённой попытке</a>
+              <a href="/games/new?view=legacy">К сохранённой попытке</a>
             )}
           </section>
         </main>
@@ -1158,17 +1158,20 @@ export function CreateGamePage(
 ): React.JSX.Element {
   const paymentReturnOperationId = checkoutReturnOperationId();
   let matchesSavedReturn = false;
-  if (paymentReturnOperationId) {
+  let resumeLegacyAttempt = false;
+  if (paymentReturnOperationId || props.useSchedule) {
     try {
       const storage = props.attemptStorage ?? browserAttemptStorage();
       const attempt = storage && loadCreateGameAttempt(props.principal, storage);
       matchesSavedReturn =
         isPendingConfirmationAttempt(attempt) && attempt.operationId === paymentReturnOperationId;
+      resumeLegacyAttempt =
+        attempt?.state === 'PENDING' && attempt.payload.paymentMode !== 'ORGANIZER_PAYS';
     } catch {
       // Keep the normal flow selection if the return cannot be matched to a saved operation.
     }
   }
-  if (matchesSavedReturn) return <LegacyCreateGamePage {...props} />;
+  if (matchesSavedReturn) return <LegacyCreateGamePage {...props} useSchedule={false} />;
   let quarter =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('quarterCreate') === '1';
@@ -1178,5 +1181,12 @@ export function CreateGamePage(
   } catch {
     quarter = true;
   }
-  return quarter ? <QuarterCreatePanel {...props} /> : <LegacyCreateGamePage {...props} />;
+  return quarter ? (
+    <QuarterCreatePanel {...props} />
+  ) : (
+    <LegacyCreateGamePage
+      {...props}
+      useSchedule={props.useSchedule === true && !resumeLegacyAttempt}
+    />
+  );
 }

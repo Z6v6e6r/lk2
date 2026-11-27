@@ -245,7 +245,9 @@ function stationCourtSummary(station: Station) {
     outdoorCourtsCount != null && `открытые: ${outdoorCourtsCount}`,
   ].filter(Boolean);
   if (courtTypes.length) return courtTypes.join(' · ');
-  return courtCount === undefined ? null : `${courtCount} ${locationCourtLabel(courtCount)}`;
+  return courtCount !== undefined && courtCount > 0
+    ? `${courtCount} ${locationCourtLabel(courtCount)}`
+    : null;
 }
 
 function slotTime(slot: GameCreateScheduleSlot) {
@@ -273,6 +275,7 @@ export function GameCreateScheduleWizard({
   previewPayment = false,
   previewFriends,
   loadFriends,
+  freeGameHref,
   gamesHref = '/games',
   today = DAY.format(new Date()),
 }: {
@@ -283,6 +286,7 @@ export function GameCreateScheduleWizard({
   readonly previewPayment?: boolean;
   readonly previewFriends?: readonly ScheduleFriend[];
   readonly loadFriends?: () => Promise<readonly ScheduleFriend[]>;
+  readonly freeGameHref?: string;
   readonly gamesHref?: string;
   readonly today?: string;
 }) {
@@ -846,6 +850,11 @@ export function GameCreateScheduleWizard({
               </p>
             ) : null}
           </div>
+          {freeGameHref ? (
+            <a className="game-schedule-free-link" href={freeGameHref}>
+              Создать игру без бронирования
+            </a>
+          ) : null}
         </section>
       ) : null}
 
@@ -989,7 +998,7 @@ export function GameCreateScheduleWizard({
               <h2 className="game-schedule-settings-heading">Корты</h2>
               {courts.size > 0 ? (
                 <span>
-                  {courts.size} {locationCourtLabel(courts.size)}
+                  Доступно: {courts.size} {locationCourtLabel(courts.size)}
                 </span>
               ) : null}
             </div>

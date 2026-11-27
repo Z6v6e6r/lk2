@@ -6,6 +6,8 @@ import {
   type GameCreateScheduleSource,
 } from './GameCreateScheduleWizard.js';
 
+const freeGameHref = '/games/new?view=legacy&new=1';
+
 export function GameCreateSchedulePage({
   gateway,
   checkout,
@@ -54,6 +56,7 @@ export function GameCreateSchedulePage({
       <main className="games-page games-page--create">
         <h1>Создать игру</h1>
         <p role="alert">Расписание ЛК1 недоступно.</p>
+        {checkout ? <a href={freeGameHref}>Создать игру без бронирования</a> : null}
         <a href="/games">К списку игр</a>
       </main>
     );
@@ -70,7 +73,7 @@ export function GameCreateSchedulePage({
     <GameCreateScheduleWizard
       stations={locations}
       source={source}
-      {...(checkout ? { checkout, loadFriends } : {})}
+      {...(checkout ? { checkout, loadFriends, freeGameHref } : {})}
     />
   );
 }
