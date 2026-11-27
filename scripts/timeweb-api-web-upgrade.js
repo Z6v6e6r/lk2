@@ -286,7 +286,7 @@ const CUP_REPLIES_FILES = '/etc/phub/timeweb-cup-replies';
 const CUP_REPLIES_MOUNT = '/run/phub/cup-replies';
 const CUP_REPLIES_COMPOSE = 'cup-replies.compose.json';
 const CUP_REPLIES_SOURCE_SHA256 =
-  '19f296f3d63886cfae20018022bed7fc6d33f3a4392ed1db1068e6253b76d708';
+  '14cd1ca70036af4cc2533ea85c519dca9b2e5acdb6839b1bae8676e8ac3713f8';
 const isCupRepliesPilot = (value) =>
   value?.schema === APP_ONLY_OPERATION && Object.hasOwn(value, 'cupReplies');
 const isCupSupportOperation = (value) => value?.schema === CUP_SUPPORT_OPERATION;

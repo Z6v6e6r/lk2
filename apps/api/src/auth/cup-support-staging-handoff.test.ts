@@ -132,13 +132,13 @@ describe('CUP Support STAGING reply history', () => {
     const context = '/user/api/v1/local-padel/context';
     const pilot = headers(await accessToken());
     const other = headers(await accessToken({ subject: randomUUID() }));
+    const capabilities = async (auth: ReturnType<typeof headers>) =>
+      (await app.inject({ url: context, headers: auth })).json<{
+        runtimeCapabilities?: Record<string, unknown>;
+      }>().runtimeCapabilities;
 
-    expect(
-      (await app.inject({ url: context, headers: pilot })).json().runtimeCapabilities,
-    ).toMatchObject({ cupSupport: true });
-    expect(
-      (await app.inject({ url: context, headers: other })).json().runtimeCapabilities,
-    ).not.toHaveProperty('cupSupport');
+    expect(await capabilities(pilot)).toMatchObject({ cupSupport: true });
+    expect(await capabilities(other)).not.toHaveProperty('cupSupport');
     expect((await app.inject({ url: history, headers: other })).statusCode).toBe(403);
     expect(
       (
