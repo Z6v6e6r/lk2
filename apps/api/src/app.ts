@@ -198,7 +198,14 @@ import { registerMessagingRoutes } from './messaging/messaging-routes.js';
 import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { registerStationSupportRoutes } from './support/station-support-routes.js';
-import { cupReplyCursor, type CupReplyReader } from './support/cup-replies.js';
+import {
+  CupReplyRejected,
+  cupReplyCommand,
+  cupReplyCommandKey,
+  cupReplyCursor,
+  type CupReplyReader,
+  type CupReplyWriter,
+} from './support/cup-replies.js';
 import { registerSupportTicketRoutes } from './support/support-ticket-routes.js';
 import type { StationSupportProvider } from './support/station-support-provider.js';
 import type { StationSupportMediaStore } from './support/station-support-media.js';
@@ -300,6 +307,7 @@ export interface BuildAppOptions {
   readonly phoneSubjectLinkService?: PhoneSubjectLinkService;
   readonly cupSupportHandoffIssuer?: CupSupportHandoffIssuer;
   readonly cupReplyReader?: CupReplyReader;
+  readonly cupReplyWriter?: CupReplyWriter;
   readonly accessSessionChecker?: (input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -1252,6 +1260,19 @@ export async function buildApp(options: BuildAppOptions) {
     );
   }
 
+  function cupConversationRecipient(request: FastifyRequest<{ Params: { tenantKey: string } }>) {
+    const claims = request.padlHubClaims;
+    if (
+      request.params.tenantKey === 'local-padel' &&
+      options.config.JWT_AUDIENCE !== options.config.JWT_ADMIN_AUDIENCE &&
+      claims?.aud === options.config.JWT_AUDIENCE &&
+      claims.roles.includes('client') &&
+      /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(claims.sub)
+    )
+      return claims.sub.toLowerCase();
+    return undefined;
+  }
+
   const readCupReplies = options.cupReplyReader;
   if (readCupReplies) {
     app.get<{
@@ -1265,14 +1286,8 @@ export async function buildApp(options: BuildAppOptions) {
       },
       async (request, reply) => {
         reply.header('Cache-Control', 'no-store');
-        const claims = request.padlHubClaims;
-        if (
-          request.params.tenantKey !== 'local-padel' ||
-          options.config.JWT_AUDIENCE === options.config.JWT_ADMIN_AUDIENCE ||
-          claims?.aud !== options.config.JWT_AUDIENCE ||
-          !claims.roles.includes('client') ||
-          !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(claims.sub)
-        ) {
+        const recipient = cupConversationRecipient(request);
+        if (!recipient) {
           return sendApiError(request, reply, 403, 'CUP_REPLY_FORBIDDEN', 'Нет доступа.');
         }
         const { beforeAt, beforeId } = request.query;
@@ -1287,7 +1302,7 @@ export async function buildApp(options: BuildAppOptions) {
           return sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная страница.');
         }
         try {
-          return await readCupReplies(claims.sub.toLowerCase(), cursor?.data);
+          return await readCupReplies(recipient, cursor?.data);
         } catch {
           return sendApiError(
             request,
@@ -1295,6 +1310,53 @@ export async function buildApp(options: BuildAppOptions) {
             503,
             'CUP_REPLY_UNAVAILABLE',
             'Ответы CUP временно недоступны.',
+          );
+        }
+      },
+    );
+  }
+
+  const writeCupReply = options.cupReplyWriter;
+  if (writeCupReply) {
+    app.post<{ Params: { tenantKey: string } }>(
+      '/user/api/v1/:tenantKey/support/cup-messages',
+      {
+        bodyLimit: 32_768,
+        preHandler: [authenticate, resolveTenant, requireIdempotencyKey],
+        config: { rateLimit: { max: 15, timeWindow: '1 minute' } },
+      },
+      async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const recipient = cupConversationRecipient(request);
+        if (!recipient)
+          return sendApiError(request, reply, 403, 'CUP_REPLY_FORBIDDEN', 'Нет доступа.');
+        const body = cupReplyCommand.safeParse(request.body);
+        const key = cupReplyCommandKey.safeParse(request.headers['idempotency-key']);
+        if (!body.success || !key.success) {
+          return sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректное сообщение.');
+        }
+        try {
+          const message = await writeCupReply(recipient, body.data, key.data);
+          request.log.info('CUP Support customer message accepted');
+          return reply.code(201).send(message);
+        } catch (error) {
+          if (error instanceof CupReplyRejected) {
+            return error.status === 404
+              ? sendApiError(request, reply, 404, 'CUP_TICKET_NOT_FOUND', 'Обращение недоступно.')
+              : sendApiError(
+                  request,
+                  reply,
+                  409,
+                  'CUP_REPLY_CONFLICT',
+                  'Проверьте статус обращения.',
+                );
+          }
+          return sendApiError(
+            request,
+            reply,
+            503,
+            'CUP_REPLY_UNAVAILABLE',
+            'Ответ временно недоступен.',
           );
         }
       },

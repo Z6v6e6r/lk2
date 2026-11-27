@@ -1553,7 +1553,7 @@ export function ChatsPage({
             onSetNotificationPolicy={onSetNotificationPolicy}
           />
         ) : cupSupport && cupOpen && filter === 'ALL' ? (
-          <CupSupportChat key={currentUserId} load={cupSupport} close={() => setCupOpen(false)} />
+          <CupSupportChat key={currentUserId} source={cupSupport} close={() => setCupOpen(false)} />
         ) : filter === 'STATION' && stationSource ? (
           stationSelectedDialog || stationState.pendingStationId ? (
             <StationThread

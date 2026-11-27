@@ -1833,3 +1833,37 @@
 .cupReplyList p {
   white-space: pre-wrap;
 }
+
+.cupComposer {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--comms-line);
+}
+
+.cupComposer label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.cupComposer textarea,
+.cupComposer select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.5rem;
+  color: inherit;
+  font: inherit;
+  border: 1px solid var(--comms-line);
+  border-radius: 0.5rem;
+  background: transparent;
+}
+
+.cupComposer button {
+  justify-self: start;
+}
+
+.cupComposer p,
+.cupSendStatus {
+  margin: 0;
+  padding: 0 1rem 0.5rem;
+}
