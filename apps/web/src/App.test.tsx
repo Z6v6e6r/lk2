@@ -1104,6 +1104,70 @@ describe('PadlHub web authentication', () => {
     expect(listLocations).toHaveBeenCalledOnce();
   });
 
+  it('opens the schedule from the default Web entry and displays the catalog counts', async () => {
+    window.history.replaceState({}, '', '/games/new?new=1');
+    const stationId = 'a8df730b-6a67-41a5-8772-48bca84f73bc';
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listLocations: vi.fn().mockResolvedValue({
+        items: [
+          {
+            id: stationId,
+            title: 'Селигерская',
+            city: 'Москва',
+            courtCount: 4,
+            coverImageUrl: null,
+            route: `/locations/${stationId}`,
+          },
+          {
+            id: '0676be2f-3581-4f80-8cdf-65cd82701945',
+            title: 'Клуб без опубликованного числа',
+            city: 'Москва',
+            courtCount: 0,
+            coverImageUrl: null,
+            route: '/locations/0676be2f-3581-4f80-8cdf-65cd82701945',
+          },
+        ],
+      }),
+      listGameCreateSlots: vi.fn(),
+      getGameCreateScheduleQuote: vi.fn(),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Выберите клуб' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Селигерская' })).toHaveAccessibleDescription(
+      '4 корта',
+    );
+    expect(
+      screen.getByRole('button', { name: 'Клуб без опубликованного числа' }),
+    ).not.toHaveAccessibleDescription();
+    expect(screen.getByRole('link', { name: 'Создать игру без бронирования' })).toHaveAttribute(
+      'href',
+      '/games/new?view=legacy&new=1',
+    );
+    expect(gateway.listGameCreateSlots).not.toHaveBeenCalled();
+    expect(gateway.createGame).not.toHaveBeenCalled();
+  });
+
+  it.each(['/games/new?view=legacy', '/games/new?view=schedule&paymentReturn=foreign'])(
+    'preserves the existing creation flow for %s',
+    async (route) => {
+      window.history.replaceState({}, '', route);
+      const gateway = createGateway({
+        restoreSession: vi.fn().mockResolvedValue(session),
+        listGameCreateSlots: vi.fn(),
+        getGameCreateScheduleQuote: vi.fn(),
+      });
+
+      render(<App gateway={gateway} tenantKey="padlhub" />);
+
+      expect(await screen.findByText('Стоимость: бесплатно')).toBeVisible();
+      expect(gateway.listGameCreateSlots).not.toHaveBeenCalled();
+      expect(gateway.createGame).not.toHaveBeenCalled();
+    },
+  );
+
   it('scopes the create recovery form to the restored tenant and actor', async () => {
     window.history.replaceState({}, '', '/games/new');
     const stationId = 'a8df730b-6a67-41a5-8772-48bca84f73bc';
@@ -1163,6 +1227,8 @@ describe('PadlHub web authentication', () => {
         gateway={createGateway({
           restoreSession: vi.fn().mockResolvedValue(session),
           listLocations,
+          listGameCreateSlots: vi.fn(),
+          getGameCreateScheduleQuote: vi.fn(),
         })}
         tenantKey="padlhub"
       />,

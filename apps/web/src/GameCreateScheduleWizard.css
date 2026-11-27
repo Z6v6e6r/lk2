@@ -768,6 +768,12 @@ html:has(.game-schedule-wizard--settings) {
   color: var(--schedule-muted);
 }
 
+.game-schedule-free-link {
+  justify-self: start;
+  padding-block: 8px;
+  color: var(--schedule-accent);
+}
+
 .game-schedule-wizard .game-schedule-summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
