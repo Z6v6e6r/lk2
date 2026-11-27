@@ -99,56 +99,66 @@ describe('shared LK2 Android UI', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(request).not.toHaveBeenCalled();
   });
-  it.each(['/giftcard', '/gift-certificates', '/games/new', '/communities'])(
-    'keeps browser-only commerce/provider/upload controls unavailable at %s',
-    async (path) => {
-      window.history.replaceState({}, '', path);
-      const gateway = createGateway();
-      const payment = vi.spyOn(gateway, 'getPublicGiftCertificateCatalog');
-      const legacyCreate = vi.spyOn(gateway, 'createGame');
-      const quarterCreate = vi.spyOn(gateway, 'createQuarterGame');
-      vi.spyOn(gateway, 'getQuarterCreateCapability').mockResolvedValue({
-        contractVersion: 1,
-        available: false,
-      });
-      const restore = vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
-        context: {
-          user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Тестовый игрок' },
-          tenant: {
-            id: '00000000-0000-4000-8000-000000000002',
-            key: 'local-padel',
-            name: 'ПадлХАБ',
-          },
-          roles: ['client'],
-          permissions: [],
+  it.each([
+    '/giftcard',
+    '/gift-certificates',
+    '/games/new',
+    '/games/new?quarterCreate=1',
+    '/communities',
+  ])('keeps browser-only commerce/provider/upload controls unavailable at %s', async (path) => {
+    window.history.replaceState({}, '', path);
+    const gateway = createGateway();
+    const payment = vi.spyOn(gateway, 'getPublicGiftCertificateCatalog');
+    const legacyCreate = vi.spyOn(gateway, 'createGame');
+    const quarterCreate = vi.spyOn(gateway, 'createQuarterGame');
+    const paidCreate = vi.spyOn(gateway, 'createPaidGame');
+    const wholeCourt = vi.spyOn(gateway, 'advanceWholeCourtCheckout');
+    vi.spyOn(gateway, 'listLocations').mockResolvedValue({ items: [] });
+    vi.spyOn(gateway, 'getQuarterCreateCapability').mockResolvedValue({
+      contractVersion: 1,
+      available: false,
+    });
+    const restore = vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
+      context: {
+        user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Тестовый игрок' },
+        tenant: {
+          id: '00000000-0000-4000-8000-000000000002',
+          key: 'local-padel',
+          name: 'ПадлХАБ',
         },
-      });
-      // Unread counters are independent of the selected section.
-      vi.spyOn(gateway, 'listConversations').mockResolvedValue({ items: [] });
-      render(<App gateway={gateway} tenantKey="local-padel" clientPlatform="android" />);
+        roles: ['client'],
+        permissions: [],
+      },
+    });
+    // Unread counters are independent of the selected section.
+    vi.spyOn(gateway, 'listConversations').mockResolvedValue({ items: [] });
+    render(<App gateway={gateway} tenantKey="local-padel" clientPlatform="android" />);
+    if (path === '/games/new') {
+      expect(await screen.findByRole('heading', { name: 'Выберите клуб' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Создать игру по подписке' })).toHaveAttribute(
+        'href',
+        '/games/new?quarterCreate=1',
+      );
+    } else if (path === '/games/new?quarterCreate=1') {
+      expect(await screen.findByRole('heading', { name: 'Игра по подписке' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'На главную' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Создать игру по подписке' })).toBeDisabled();
+      expect(screen.queryByRole('textbox', { name: 'Название игры' })).not.toBeInTheDocument();
+    } else {
       expect(
         await screen.findByRole('heading', {
-          name:
-            path === '/games/new'
-              ? 'Игра по подписке'
-              : 'Раздел появится в следующей версии приложения',
+          name: 'Раздел появится в следующей версии приложения',
         }),
       ).toBeInTheDocument();
-      expect(
-        screen.getByRole('link', {
-          name: path === '/games/new' ? 'На главную' : 'Вернуться на Главную',
-        }),
-      ).toBeInTheDocument();
-      if (path === '/games/new') {
-        expect(screen.getByRole('button', { name: 'Создать игру по подписке' })).toBeDisabled();
-        expect(screen.queryByRole('textbox', { name: 'Название игры' })).not.toBeInTheDocument();
-      }
-      expect(payment).not.toHaveBeenCalled();
-      expect(legacyCreate).not.toHaveBeenCalled();
-      expect(quarterCreate).not.toHaveBeenCalled();
-      expect(restore).toHaveBeenCalled();
-    },
-  );
+      expect(screen.getByRole('link', { name: 'Вернуться на Главную' })).toBeInTheDocument();
+    }
+    expect(payment).not.toHaveBeenCalled();
+    expect(legacyCreate).not.toHaveBeenCalled();
+    expect(quarterCreate).not.toHaveBeenCalled();
+    expect(paidCreate).not.toHaveBeenCalled();
+    expect(wholeCourt).not.toHaveBeenCalled();
+    expect(restore).toHaveBeenCalled();
+  });
   it('opens Android chats through the authenticated PadlHub gateway', async () => {
     window.history.replaceState({}, '', '/chats');
     const gateway = createGateway();
