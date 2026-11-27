@@ -120,6 +120,11 @@ async function readJson(response: Response) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
 }
 
+type ScheduleReadCounts = {
+  readonly lk1SlotCount: number;
+  readonly returnedSlotCount: number;
+};
+
 export function createGameCreateScheduleRead(input: {
   readonly baseUrl: string;
   readonly pool: Pool;
@@ -136,7 +141,11 @@ export function createGameCreateScheduleRead(input: {
   const actorLimits = new Map<string, { count: number; until: number }>();
   let failures = 0;
   let blockedUntil = 0;
-  return async (actor: Actor, query: z.infer<typeof querySchema>) => {
+  return async (
+    actor: Actor,
+    query: z.infer<typeof querySchema>,
+    reportScheduleCounts?: (counts: ScheduleReadCounts) => void,
+  ) => {
     if (endpoint.protocol === 'https:' && !input.issuer) throw unavailable();
     const key = `${actor.tenantId}:${actor.userId}`;
     if (Date.now() < blockedUntil || pending.has(key))
@@ -273,6 +282,10 @@ export function createGameCreateScheduleRead(input: {
           Date.parse(slot.endsAt) - Date.parse(slot.startsAt) ===
             Number(query.durationMinutes) * 60000,
       );
+      reportScheduleCounts?.({
+        lk1SlotCount: parsed.data.slots.length,
+        returnedSlotCount: slots.length,
+      });
       const checkout = slots.length
         ? await input.resolveCheckoutCourt?.(actor, query.stationId).catch(() => undefined)
         : undefined;
@@ -327,6 +340,7 @@ export function registerGameCreateScheduleRoutes(
       reply.raw.once('close', () => controller.abort());
       try {
         if (!options.read) throw unavailable();
+        let counts: ScheduleReadCounts | undefined;
         const result = await options.read(
           {
             tenantKey,
@@ -337,11 +351,15 @@ export function registerGameCreateScheduleRoutes(
             signal: controller.signal,
           },
           parsed.data,
+          (value) => {
+            counts = value;
+          },
         );
         request.log.info(
           {
             outcome: result.quote ? 'quote' : 'schedule',
             residency: result.quote?.residency.status,
+            ...counts,
           },
           'LK1 game create schedule',
         );

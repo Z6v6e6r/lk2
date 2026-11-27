@@ -116,6 +116,19 @@ describe('LK1-owned game creation schedule', () => {
       actor_token_sha256: createHash('sha256').update(token).digest('hex'),
     });
   });
+  it('reports counts separately when a successful LK1 response is filtered to zero', async () => {
+    const { read } = setup();
+    const reportScheduleCounts = vi.fn();
+
+    expect(await read(actor, { ...query, durationMinutes: '120' }, reportScheduleCounts)).toEqual({
+      slots: [],
+    });
+    expect(reportScheduleCounts).toHaveBeenCalledExactlyOnceWith({
+      lk1SlotCount: 1,
+      returnedSlotCount: 0,
+    });
+  });
+
   it('uses the verified actor and station mapping and drops the external room identifier', async () => {
     const { read, fetchImpl, issueVivaAccessToken } = setup();
     const result = await read(actor, query);

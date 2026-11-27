@@ -10133,6 +10133,9 @@ components:
         city:
           type: [string, 'null']
           maxLength: 120
+        address:
+          type: [string, 'null']
+          maxLength: 500
         courtCount:
           type: integer
           minimum: 0

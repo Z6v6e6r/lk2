@@ -292,6 +292,24 @@ describe('game creation schedule', () => {
     expect(summary().getByText('6 дек · 60 мин')).toBeVisible();
   });
 
+  it.each([
+    [[], 'На эту дату и длительность свободных слотов нет.'],
+    [
+      [{ ...slot, courtName: 'Корт №1 для игры 1 на 1' }],
+      'Для этого формата нет свободных кортов.',
+    ],
+  ])(
+    'distinguishes an empty schedule from slots for another format (%#)',
+    async (items, message) => {
+      const listSlots = vi.fn<GameCreateScheduleSource['listSlots']>().mockResolvedValue(items);
+      renderWizard({ listSlots, readQuote: vi.fn<GameCreateScheduleSource['readQuote']>() });
+
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Селигерская' }));
+
+      expect(await screen.findByText((text) => text.startsWith(message))).toBeVisible();
+    },
+  );
+
   it('filters courts and times by format and only quotes doubles', async () => {
     const singles = {
       ...slot,

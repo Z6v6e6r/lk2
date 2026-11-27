@@ -803,27 +803,36 @@ export function GameCreateScheduleWizard({
                         const openingSoon = item.isActive === false;
                         const details = openingSoon ? 'Скоро открытие' : stationCourtSummary(item);
                         const address = stationAddressWithoutCity(item);
-                        const detailsId =
-                          address || details ? `${stationDetailsPrefix}-${item.id}` : undefined;
+                        const addressId = address
+                          ? `${stationDetailsPrefix}-${item.id}-address`
+                          : undefined;
+                        const detailsId = details
+                          ? `${stationDetailsPrefix}-${item.id}-courts`
+                          : undefined;
+                        const describedBy =
+                          [addressId, detailsId].filter(Boolean).join(' ') || undefined;
                         return (
                           <button
                             type="button"
                             key={item.id}
                             className="game-schedule-card game-schedule-link game-schedule-station-card"
                             aria-label={item.title}
-                            aria-describedby={detailsId}
+                            aria-describedby={describedBy}
                             disabled={openingSoon}
                             onClick={() => chooseStation(item.id)}
                           >
                             <span>
                               <strong>{item.title}</strong>
-                              {detailsId ? (
-                                <span className="game-schedule-station-details" id={detailsId}>
+                              {describedBy ? (
+                                <span className="game-schedule-station-details">
                                   {address ? (
-                                    <small className="game-schedule-station-meta">{address}</small>
+                                    <small id={addressId} className="game-schedule-station-meta">
+                                      {address}
+                                    </small>
                                   ) : null}
                                   {details ? (
                                     <small
+                                      id={detailsId}
                                       className={
                                         openingSoon ? undefined : 'game-schedule-station-meta'
                                       }
@@ -958,7 +967,9 @@ export function GameCreateScheduleWizard({
             ) : null}
             {currentSchedule && 'value' in currentSchedule && !slots.length ? (
               <p className="game-schedule-empty" role="status">
-                Для этого формата нет свободных слотов. Выберите другую дату или длительность.
+                {currentSchedule.value.length
+                  ? 'Для этого формата нет свободных кортов. Выберите другой формат, дату или длительность.'
+                  : 'На эту дату и длительность свободных слотов нет. Выберите другую дату или длительность.'}
               </p>
             ) : null}
             {times.size ? (
