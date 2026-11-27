@@ -237,7 +237,7 @@ const web712Fixture =
   fixture +
   `
   const {WEB712_SCHEMA,WEB712_COMPATIBILITY:current,assertCriticalWebMain,criticalWebDirectories,
-    validateCriticalWebPlanBinding,validateWeb712RestoreBinding}=await import('./scripts/timeweb-critical-web.js');
+    validateCriticalWebPlanBinding,validateWeb712RestoreBinding,web712Backup}=await import('./scripts/timeweb-critical-web.js');
   const {createHash}=await import('node:crypto');
   const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
   op.schema=WEB712_SCHEMA;
@@ -268,7 +268,7 @@ describe('closed Web rollout of #712', () => {
       {confirmation:op.confirmation.replace('UPGRADE_WEB_712','UPGRADE_WEB')},
     ]) assert.throws(()=>validateCriticalWebOperation({...op,...overrides},now));
     assertCriticalWebMain(op,args=>{
-      assert.deepEqual(args,['-c','protocol.https.allow=always','-c','http.followRedirects=false','ls-remote',
+      assert.deepEqual(args,['-C','/','-c','protocol.https.allow=always','-c','http.followRedirects=false','ls-remote',
         'https://github.com/Z6v6e6r/lk2.git','refs/heads/main']);
       return sha+'\\trefs/heads/main';
     });
@@ -332,6 +332,81 @@ describe('closed Web rollout of #712', () => {
     }};
     validateCriticalWebPlanBinding(plan,op,h);
     assert.throws(()=>validateCriticalWebPlanBinding({...plan,backup:{...plan.backup,terminalPath:'elsewhere'}},op,h),/PLAN_BINDING/);
+  `,
+    ));
+});
+
+describe('closed Web checkpoint verification', () => {
+  it('verifies terminal custody and live database evidence before freezing the three input files', () =>
+    scenario(
+      web712Fixture +
+        `
+    const {execFileSync}=await import('node:child_process');
+    const {readFileSync,readdirSync}=await import('node:fs');
+    const root='packages/database/migrations/';
+    const rows=readdirSync(root).filter(name=>name.endsWith('.sql')).sort()
+      .map(name=>[name,digest(readFileSync(root+name))]);
+    const ledger=JSON.stringify(rows)+'\\n';
+    const expectedDatabaseTarget={databaseName:'synthetic-postgres',systemIdentifier:'1234567890123456789'};
+    const restoreBytes=Buffer.from(JSON.stringify({
+      ...backup,expectedDatabaseTarget,expectedLedgerSha256:digest(ledger),toolFileSha256:'a'.repeat(64),
+    }));
+    op.backupOperationSha256=digest(restoreBytes);
+    const {backupDirectory}=criticalWebDirectories(op);
+    const receiptPath=backupDirectory+'/database-backup-receipt.json';
+    const operationPath=backupDirectory+'/backup-operation.json';
+    const terminalPath=backupDirectory+'/SUCCESS_CLEANUP_VERIFIED.json';
+    const files=new Map([
+      [receiptPath,Buffer.from(JSON.stringify({...receipt,operationSha256:op.backupOperationSha256}))],
+      [operationPath,restoreBytes],[terminalPath,Buffer.from('synthetic verified producer journal')],
+    ]);
+    const run=(failure, changedPath)=>web712Backup(backupDirectory,op.expectedApi,op,{
+      read:path=>files.get(path),readPostgres:()=>postgres,now:()=>now,
+      runPython:(file,args,options)=>{
+        assert.equal(file,'/usr/bin/python3');
+        assert.deepEqual(args.slice(0,-1),['-I','-S','-B','-c']);
+        assert.equal(options.input,restoreBytes);
+        assert.deepEqual(Object.keys(options.env).sort(),['HOME','LANG','PATH']);
+        if(failure==='process') throw Error('synthetic process failure');
+        const stub=[
+          'import hashlib, importlib.util, json, types',
+          'failure='+JSON.stringify(failure),
+          'expected='+JSON.stringify(JSON.stringify({target:expectedDatabaseTarget,ledger})),
+          'fixture=json.loads(expected)',
+          'def verify(name, op):',
+          ' assert op["profile"]=="production" and failure!=name',
+          'def read_only(query, pg):',
+          ' assert pg=='+JSON.stringify(postgres.id),
+          ' if query=="target":',
+          '  return json.dumps({**fixture["target"],"inRecovery":failure=="target"})',
+          ' return fixture["ledger"] if failure!="ledger" else "[]"+chr(10)',
+          'module=types.SimpleNamespace(strict=json.loads, digest=lambda value: hashlib.sha256(value).hexdigest(),',
+          ' validate_operation=lambda op,*args,**kwargs: verify("operation",op),',
+          ' tool_custody=lambda op:verify("tool",op),',
+          ' validate_cutover_disk_terminal=lambda op,raw:verify("terminal",op),',
+          ' SOURCE_CUTOVER_TARGET="target", SOURCE_LEDGER="ledger", source_query=read_only,',
+          ' ledger_bytes=lambda text:text.encode("utf8"))',
+          'importlib.util.spec_from_file_location=lambda *args:types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda m:None))',
+          'importlib.util.module_from_spec=lambda _:module',
+        ].join('\\n');
+        const output=execFileSync(file,[...args.slice(0,-1),stub+'\\n'+args.at(-1)],options);
+        if (changedPath) files.set(changedPath,Buffer.from('changed after verification'));
+        return failure==='extra-output'?output+'extra':output;
+      }
+    });
+    const proof=run('');
+    assert.deepEqual(proof,{
+      path:receiptPath,sha256:digest(files.get(receiptPath)),
+      operationPath,operationSha256:op.backupOperationSha256,
+      terminalPath,terminalSha256:digest(files.get(terminalPath)),
+    });
+    for(const failure of ['operation','tool','terminal','target','ledger','process','extra-output'])
+      assert.throws(()=>run(failure),/BACKUP_CHECKPOINT/);
+    for(const path of [receiptPath,operationPath,terminalPath]){
+      const original=files.get(path);
+      assert.throws(()=>run('',path),/BACKUP_DRIFT/);
+      files.set(path,original);
+    }
   `,
     ));
 });

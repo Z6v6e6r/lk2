@@ -174,20 +174,30 @@ export function validateWeb712RestoreBinding({ op, operationBytes, receipt, api,
   return backup;
 }
 
-function web712Backup(directory, api, op) {
+export function web712Backup(
+  directory,
+  api,
+  op,
+  {
+    read = readUpgradeFile,
+    readPostgres = () => inspect('postgres', 'phub-timeweb-beta-dependencies'),
+    now = Date.now,
+    runPython = execFileSync,
+  } = {},
+) {
   const path = `${directory}/database-backup-receipt.json`;
   const operationPath = `${directory}/backup-operation.json`;
   const terminalPath = `${directory}/SUCCESS_CLEANUP_VERIFIED.json`;
-  const receiptBytes = readUpgradeFile(path);
-  const operationBytes = readUpgradeFile(operationPath);
-  const terminalBytes = readUpgradeFile(terminalPath);
+  const receiptBytes = read(path);
+  const operationBytes = read(operationPath);
+  const terminalBytes = read(terminalPath);
   validateWeb712RestoreBinding({
     op,
     operationBytes,
     receipt: parseStrictJson(receiptBytes),
     api,
-    postgres: inspect('postgres', 'phub-timeweb-beta-dependencies'),
-    now: Date.now(),
+    postgres: readPostgres(),
+    now: now(),
   });
   // The backup producer verifies the dump hash, independent restore and terminal journal.
   // Re-read the live ledger from the exact recorded Postgres instance.
@@ -208,7 +218,7 @@ if target!={**op['expectedDatabaseTarget'],'inRecovery':False} or m.digest(ledge
 sys.stdout.write('WEB712_RESTORE_VERIFIED')`;
   let checked;
   try {
-    checked = execFileSync('/usr/bin/python3', ['-I', '-S', '-B', '-c', program], {
+    checked = runPython('/usr/bin/python3', ['-I', '-S', '-B', '-c', program], {
       env: { PATH: '/usr/bin:/bin', HOME: '/root', LANG: 'C.UTF-8' },
       input: operationBytes,
       encoding: 'utf8',
@@ -221,9 +231,9 @@ sys.stdout.write('WEB712_RESTORE_VERIFIED')`;
   }
   if (checked !== 'WEB712_RESTORE_VERIFIED') fail('BACKUP_CHECKPOINT');
   if (
-    !readUpgradeFile(path).equals(receiptBytes) ||
-    !readUpgradeFile(operationPath).equals(operationBytes) ||
-    !readUpgradeFile(terminalPath).equals(terminalBytes)
+    !read(path).equals(receiptBytes) ||
+    !read(operationPath).equals(operationBytes) ||
+    !read(terminalPath).equals(terminalBytes)
   )
     fail('BACKUP_DRIFT');
   return {
@@ -505,7 +515,7 @@ export function assertCriticalWebMain(op, runGit = git) {
   const remote = 'https://github.com/Z6v6e6r/lk2.git';
   const args =
     op.schema === WEB712_SCHEMA
-      ? ['-c', 'protocol.https.allow=always', '-c', 'http.followRedirects=false']
+      ? ['-C', '/', '-c', 'protocol.https.allow=always', '-c', 'http.followRedirects=false']
       : [];
   const response = runGit([...args, 'ls-remote', remote, mainRef]);
   if (
