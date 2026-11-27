@@ -1164,6 +1164,13 @@ html:has(.game-schedule-wizard--settings) {
   font-weight: 600;
 }
 
+a.game-schedule-review-action {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  text-decoration: none;
+}
+
 .game-schedule-payment details {
   color: var(--schedule-muted);
   font-size: 13px;

@@ -589,8 +589,8 @@ describe('game creation schedule', () => {
     expect(screen.queryByText('Запись с подпиской')).not.toBeInTheDocument();
   });
 
-  it('displays a confirmed zero subscription price for the selected slot', async () => {
-    renderWizard({
+  it('displays a confirmed zero subscription price with the native subscription handoff', async () => {
+    const source: GameCreateScheduleSource = {
       listSlots: () => Promise.resolve([slot]),
       readQuote: () =>
         Promise.resolve({
@@ -600,7 +600,15 @@ describe('game creation schedule', () => {
           subscriptionMinor: 0,
           residency: { status: 'NOT_APPLICABLE' },
         }),
-    });
+    };
+    render(
+      <GameCreateScheduleWizard
+        stations={stations}
+        source={source}
+        today="2026-12-06"
+        quarterHref="/games/new?quarterCreate=1"
+      />,
+    );
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Селигерская' }));
     await user.click(await screen.findByRole('button', { name: 'Корт №1' }));
@@ -609,6 +617,11 @@ describe('game creation schedule', () => {
     expect(await screen.findByText('Запись с подпиской')).toBeVisible();
     expect(screen.getByText(/^0\s*₽$/)).toBeVisible();
     expect(screen.queryByText('С Резидентством')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Записаться/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'К созданию игры по подписке' })).toHaveAttribute(
+      'href',
+      '/games/new?quarterCreate=1',
+    );
   });
 
   it('keeps an in-flight quote on Continue and Back, then retries the same slot after a rate limit', async () => {

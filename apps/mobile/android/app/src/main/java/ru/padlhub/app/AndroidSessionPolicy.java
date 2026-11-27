@@ -187,7 +187,7 @@ final class AndroidSessionPolicy {
             "/bookings/upcoming", "/bookings/history", "/recommendations/bookings",
             "/home", "/home/base", "/locations", "/communities/mine", "/conversations",
             "/notifications", "/notifications/preferences", "/support/stations", "/support/dialogs",
-            "/notification-endpoints/android/config", "/games").contains(path)) return true;
+            "/notification-endpoints/android/config", "/games", "/games/create-schedule").contains(path)) return true;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
         if (path.equals("/trainings/catalog") || path.matches("/trainings/" + TRAINING_UUID + "/registration-operation")) return true;
         if (path.matches("/games/" + uuid + "(?:/join-conditions|/join-operation)?")) return true;
@@ -231,6 +231,11 @@ final class AndroidSessionPolicy {
     private boolean validQuery(String path, String method, String query) {
         if (!"GET".equals(method)) return query == null;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.equals("/games/create-schedule")) {
+            // The SDK uses this canonical order for the list and the exact-slot quote.
+            return query != null && query.matches("stationId=" + uuid
+                + "&day=[0-9]{4}-[0-9]{2}-[0-9]{2}&durationMinutes=(60|90|120)(&slotId=[a-f0-9]{64})?");
+        }
         if (path.equals("/trainings/catalog")) return validTrainingCatalogueQuery(query, TRAINING_UUID);
         if (path.matches("/trainings/" + TRAINING_UUID + "/registration-operation")) return query == null;
         if (path.equals("/games")) {

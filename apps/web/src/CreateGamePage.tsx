@@ -1154,12 +1154,12 @@ function LegacyCreateGamePage({
 }
 
 export function CreateGamePage(
-  props: Parameters<typeof LegacyCreateGamePage>[0],
+  props: Parameters<typeof LegacyCreateGamePage>[0] & { readonly android?: boolean },
 ): React.JSX.Element {
   const paymentReturnOperationId = checkoutReturnOperationId();
   let matchesSavedReturn = false;
   let resumeLegacyAttempt = false;
-  if (paymentReturnOperationId || props.useSchedule) {
+  if (!props.android && (paymentReturnOperationId || props.useSchedule)) {
     try {
       const storage = props.attemptStorage ?? browserAttemptStorage();
       const attempt = storage && loadCreateGameAttempt(props.principal, storage);
@@ -1173,17 +1173,22 @@ export function CreateGamePage(
   }
   if (matchesSavedReturn) return <LegacyCreateGamePage {...props} useSchedule={false} />;
   let quarter =
-    typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('quarterCreate') === '1';
+    Boolean(props.android && !props.useSchedule) ||
+    (typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('quarterCreate') === '1');
   try {
     const storage = props.attemptStorage ?? quarterBrowserStorage();
     quarter = quarter || Boolean(storage?.getItem(quarterStorageKey(props.principal)));
   } catch {
     quarter = true;
   }
-  return quarter ? (
-    <QuarterCreatePanel {...props} />
-  ) : (
+  if (quarter) {
+    return <QuarterCreatePanel {...props} {...(props.android ? { gamesHref: '/' } : {})} />;
+  }
+  if (props.android) {
+    return <GameCreateSchedulePage gateway={props.gateway} android />;
+  }
+  return (
     <LegacyCreateGamePage
       {...props}
       useSchedule={props.useSchedule === true && !resumeLegacyAttempt}
