@@ -19,7 +19,7 @@ function scenario(body: string) {
       '-e',
       `
     import assert from 'node:assert/strict';
-    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateAppOnlyRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade,validateScheduleRuntimeBridge,buildApiWebInstalledDescriptor,scheduleMonitoringScopeSha256,validateScheduleDirectObservation,validateScheduleSidecarArchiveReceipt} from './scripts/timeweb-api-web-upgrade.js';
+    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateAppOnlyRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade,validateScheduleRuntimeBridge,buildApiWebInstalledDescriptor,scheduleMonitoringScopeSha256,validateScheduleDirectObservation,validateScheduleSidecarArchiveReceipt,cupRepliesCompose} from './scripts/timeweb-api-web-upgrade.js';
     ${body}
   `,
     ],
@@ -97,6 +97,39 @@ const directOperation = {
 };
 
 describe('application-only prior restore policy', () => {
+  it('binds CUP reply activation, direct observation and rollback to the API/Web pilot', () => {
+    scenario(`const base=${JSON.stringify(operation)};
+      const op={...base,profile:'production',schema:'PHUB_TIMEWEB_API_WEB_APP_ONLY_OPERATION_V1',
+        controllerSha:base.candidateSha,backupOperationSha256:'b'.repeat(64),
+        expectedApi:{...base.expectedApi,releaseId:'492937113c0f8a7a4c6a3ebf14a512f81f50d873-45892594868-1'},
+        expectedWeb:{...base.expectedWeb,releaseId:'6acd50687cbf0c41afede860425cfe3703f97e67-45990361333-1'},
+        expiresAt:'2026-11-27T12:00:00.000Z',
+        confirmation:'DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_492937113C0F_6ACD50687CBF_CUP_REPLIES_FRESH_DUMP',
+        cupReplies:{pilotUserId:'49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+          tokenSha256:'1'.repeat(64),tlsSha256:'2'.repeat(64),ownerRestoreDecisionSha256:'3'.repeat(64)}};
+      assert.equal(validateApiWebOperation(op),op);
+      const config=JSON.parse(cupRepliesCompose(op));
+      assert.deepEqual(Object.keys(config.services),['api']);
+      assert.equal(config.services.api.environment.CUP_SUPPORT_STAGING_REPLIES_PILOT_USER_ID,op.cupReplies.pilotUserId);
+      assert(config.services.api.volumes.every(v=>v.read_only && !v.bind.create_host_path));
+      assert(config.services.api.environment.CUP_SUPPORT_STAGING_REPLIES_URL.includes(':19446/'));
+      assert(apiWebComposeArgs('/baseline','/transaction/candidate.env','up','api',false,true)
+        .includes('/transaction/cup-replies.compose.json'));
+      assert.throws(()=>apiWebComposeArgs('/baseline','/transaction/previous-api.env','up','api',false,true));
+      assert.throws(()=>apiWebComposeArgs('/baseline','/transaction/candidate.env','up','worker',true,true));
+      assert.throws(()=>validateApiWebOperation({...op,expectedWeb:base.expectedWeb}));
+      assert.throws(()=>validateApiWebOperation({...op,cupReplies:{...op.cupReplies,pilotUserId:'invalid'}}));
+      assert.throws(()=>validateApiWebOperation({...op,cupReplies:{...op.cupReplies,endpoint:'https://other.example'}}));
+      let t=Date.parse('2026-11-27T11:00:00.000Z');
+      const result=await observeDirectApiWeb({cupPilotOperation:op, inspectService(){},
+        probeService:()=>100,attest(){},now:()=>t,sleep:(ms)=>{t+=ms}});
+      assert.equal(result.candidateSha,op.candidateSha);
+      assert.equal(result.samples.api.privateMs.length,61);
+      assert.throws(()=>validateDirectObservation(result));
+      assert.throws(()=>validateDirectObservation({...result,candidateSha:'f'.repeat(40)},undefined,op));
+    `);
+  });
+
   it('requires its own bound backup and preserves provider monitoring requirements', () => {
     scenario(`const base=${JSON.stringify(operation)};
       const op={...base,profile:'production',schema:'PHUB_TIMEWEB_API_WEB_APP_ONLY_OPERATION_V1',

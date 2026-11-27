@@ -56,7 +56,7 @@ async function fixture({
     } as unknown as Pool,
     accessSessionChecker,
     ...(issue ? { cupSupportHandoffIssuer: issue } : {}),
-    ...(replies ? { cupReplyReader, cupReplyWriter } : {}),
+    ...(replies ? { cupReplyReader, cupReplyWriter, cupReplyPilotUserId: userId } : {}),
   });
   apps.push(app);
   return { app, accessSessionChecker, cupReplyReader, cupReplyWriter };
@@ -66,18 +66,20 @@ async function accessToken({
   audience = config.JWT_AUDIENCE,
   roles = ['client'],
   tenant = tenantId,
+  subject = userId,
   exp = Math.floor(Date.now() / 1000) + 300,
 }: {
   audience?: string | string[];
   roles?: string[];
   tenant?: string;
+  subject?: string;
   exp?: number;
 } = {}): Promise<string> {
   return new SignJWT({ tenants: [tenant], roles, permissions: [], sid: sessionId })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuer(config.JWT_ISSUER)
     .setAudience(audience)
-    .setSubject(userId)
+    .setSubject(subject)
     .setExpirationTime(exp)
     .sign(new TextEncoder().encode(config.JWT_ACCESS_SECRET));
 }
@@ -123,6 +125,32 @@ describe('CUP Support STAGING reply history', () => {
     );
     expect(cupReplyReader).not.toHaveBeenCalled();
     expect(stale.cupReplyReader).not.toHaveBeenCalled();
+  });
+
+  it('advertises CUP only to the pilot account and rejects other signed-in clients', async () => {
+    const { app, cupReplyReader } = await fixture({ replies: true });
+    const context = '/user/api/v1/local-padel/context';
+    const pilot = headers(await accessToken());
+    const other = headers(await accessToken({ subject: randomUUID() }));
+    const capabilities = async (auth: ReturnType<typeof headers>) =>
+      (await app.inject({ url: context, headers: auth })).json<{
+        runtimeCapabilities?: Record<string, unknown>;
+      }>().runtimeCapabilities;
+
+    expect(await capabilities(pilot)).toMatchObject({ cupSupport: true });
+    expect(await capabilities(other)).not.toHaveProperty('cupSupport');
+    expect((await app.inject({ url: history, headers: other })).statusCode).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/user/api/v1/local-padel/support/cup-messages',
+          headers: other,
+          payload: { ticketId: draft, body: 'Уточнение' },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(cupReplyReader).not.toHaveBeenCalled();
   });
 });
 

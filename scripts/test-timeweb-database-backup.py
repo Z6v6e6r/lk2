@@ -1898,6 +1898,39 @@ class AppOnlyBackupTests(unittest.TestCase):
                 self.assertTrue(all('--list' in args for args in scenario.calls if 'pg_restore' in args))
                 self.assertEqual(scenario.invoke(attest=True)['receiptSha256'],result['receiptSha256'])
 
+    def test_cup_replies_fresh_dump_uses_exact_distinct_predecessors_and_full_reserve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scenario = self.scenario(directory)
+            op = scenario.op
+            del op['priorRestore']
+            op['schema'] = m.CUP_REPLIES_FRESH_SCHEMA
+            for service, release in zip(('expectedApi', 'expectedWeb'), m.CUP_REPLIES_PREDECESSORS):
+                op[service]['releaseId'] = release
+                op[service]['revision'] = release[:40]
+            op['expectedLedgerSha256'] = m.WEB712_LEDGER
+            op['confirmation'] = m.app_only_backup_confirmation(op)
+            message_sha = m.CUP_REPLIES_RESTORE_MESSAGE_SHA256
+            op['ownerRestoreDecision'] = {
+                'schema': 'PHUB_TIMEWEB_CUP_REPLIES_RESTORE_DECISION_V1',
+                'authority': 'ROOT_OPERATOR_ATTESTED_OWNER_MESSAGE_V1',
+                'decision': 'FRESH_DUMP_INTEGRITY_ONLY',
+                'messageSha256': message_sha,
+                'reference': 'codex-user-message-sha256:' + message_sha,
+                'attestedAt': '2026-11-15T20:09:00.000Z',
+                'scopeSha256': m.fresh_owner_scope(op),
+            }
+            m.validate_operation(op, m.utc(scenario.clockAt), op['toolFileSha256'])
+            plan = m.fresh_plan(op, m.encoded(op), 24 * 1024**3)
+            self.assertEqual(plan['dumpLimitBytes'], 2 * 1024**3)
+            self.assertEqual(plan['diskReserveBytes'], m.DISK_HEADROOM + m.CUTOVER_CONTROL_BYTES)
+            self.assertIs(m.integrity_only_restore_reference(op)['restoreVerified'], False)
+            for change in ({'expectedWeb': op['expectedApi']},
+                           {'candidateSha': 'a'*40},
+                           {'expectedLedgerSha256': 'f'*64},
+                           {'ownerRestoreDecision': {**op['ownerRestoreDecision'], 'scopeSha256': 'f'*64}}):
+                with self.subTest(change=change), self.assertRaises(m.Stop):
+                    m.validate_operation({**op, **change}, m.utc(scenario.clockAt), op['toolFileSha256'])
+
     def test_web_712_fresh_dump_is_scoped_and_retains_the_full_reserve(self):
         with tempfile.TemporaryDirectory() as directory:
             scenario = self.scenario(directory)

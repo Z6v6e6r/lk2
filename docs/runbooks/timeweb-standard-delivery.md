@@ -495,6 +495,44 @@ request or write a dump.
   --prepare-app-only "$sha" "$publication_run" "$checkpoint_release_id"
 ```
 
+## LK2 CUP conversations pilot
+
+Use `PHUB_TIMEWEB_API_WEB_APP_ONLY_OPERATION_V1` only with the exact active
+API/Web predecessors pinned in the controller and the canonical publication of
+the reviewed controller source. Set the confirmation suffix to
+`_CUP_REPLIES_FRESH_DUMP` and add `cupReplies` with `pilotUserId`, `tokenSha256`,
+`tlsSha256`, and `ownerRestoreDecisionSha256`. The operator identifies the
+pilot from the signed-in owner's account. Keep the UUID and credential
+digests in the root-only request.
+
+Provision a separate CUP STAGING bearer and a single-host self-signed TLS
+leaf. On Amsterdam, accept connections from Timeweb's `103.88.243.171/32`
+to TCP 19446 only. Proxy exactly the two LK2 internal POST paths, preserve
+the bearer header, and reject requests with browser Origin or Cookie.
+Confirm MAX's separate listener on 19445, including its access rules,
+alongside the cross-port negative probes. The LK2 API is the only container
+with the alias and read-only mounts. Place the token under root-only
+`/etc/phub/timeweb-cup-replies` as `token` owned by UID 0 and GID 1001, mode
+`0440`. Place the public leaf there as `server.crt`, root-owned mode `0444`.
+The controller attests the bytes, mounts, environment and API connectivity.
+
+Keep the exact user decisions in the root-only operator files
+`cup-replies-restore-waiver.txt` and `cup-replies-direct-observation.txt`, in
+UTF-8 without trailing newlines. Use the current backup tool with
+`--prepare-app-only <candidateSha> <publicationRunId> cup-replies-integrity-only`.
+Keep the existing 5.25 GiB reserve and require 2 GiB additional space for the
+bounded dump before execution. The backup retains PostgreSQL source witnesses,
+the SHA-256 and the PG16 TOC verification. Its receipt records
+`freshDumpRestored: false`. Supply the hash of the sealed
+`owner-restore-decision.json` in the operation and preserve the full receipt set.
+
+Run the existing `--critical-api-web` and reconciliation commands. Automated
+direct observation makes 61 public and private probes for each service over
+at least 15 minutes. The receipt records the approved replacement of provider
+and alert evidence. A failed deployment restores the previous Web and API
+images using the base Compose definition. Verify the pilot from its real LK2
+session by exchanging a customer message and a staff reply in one ticket.
+
 ## One-time callback direct observation
 
 On 2026-10-03 the release owner explicitly approved replacing the unavailable automatic Timeweb

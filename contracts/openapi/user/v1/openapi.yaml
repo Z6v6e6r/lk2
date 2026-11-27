@@ -7933,6 +7933,9 @@ components:
           communityRealtime,
         ]
       properties:
+        cupSupport:
+          type: boolean
+          description: Available to the current account when CUP support conversations are enabled.
         phoneSubjectLink: { type: boolean }
         communityDirectory: { type: boolean }
         communityReadDetail: { type: boolean }
