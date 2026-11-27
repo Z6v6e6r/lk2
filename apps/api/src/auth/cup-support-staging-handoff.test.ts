@@ -7,6 +7,7 @@ import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from '../app.js';
+import type { CupReplyReader } from '../support/cup-replies.js';
 import { loadCupSupportHandoffIssuer } from './cup-support-staging-handoff.js';
 
 const config = loadConfig({
@@ -30,12 +31,18 @@ const url = '/user/api/v1/local-padel/auth/cup-support-staging-handoff';
 const key = randomBytes(32);
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 
-async function fixture({ enabled = true, active = true, sharedAudience = false } = {}) {
+async function fixture({
+  enabled = true,
+  active = true,
+  sharedAudience = false,
+  replies = false,
+} = {}) {
   const issue = loadCupSupportHandoffIssuer({
     CUP_SUPPORT_STAGING_HANDOFF_ENABLED: String(enabled),
     CUP_SUPPORT_STAGING_HANDOFF_SECRET: key.toString('base64url'),
   });
   const accessSessionChecker = vi.fn(() => Promise.resolve(active));
+  const cupReplyReader = vi.fn<CupReplyReader>().mockResolvedValue({ messages: [], next: null });
   const app = await buildApp({
     config: sharedAudience ? { ...config, JWT_ADMIN_AUDIENCE: config.JWT_AUDIENCE } : config,
     logger: createLogger('api-test', 'silent'),
@@ -44,9 +51,10 @@ async function fixture({ enabled = true, active = true, sharedAudience = false }
     } as unknown as Pool,
     accessSessionChecker,
     ...(issue ? { cupSupportHandoffIssuer: issue } : {}),
+    ...(replies ? { cupReplyReader } : {}),
   });
   apps.push(app);
-  return { app, accessSessionChecker };
+  return { app, accessSessionChecker, cupReplyReader };
 }
 
 async function accessToken({
@@ -79,6 +87,38 @@ function headers(token?: string, requestOrigin = origin) {
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
+});
+
+describe('CUP Support STAGING reply history', () => {
+  const history = '/user/api/v1/local-padel/support/cup-replies';
+  it('uses only the authenticated client principal and rejects recipient overrides', async () => {
+    const { app, cupReplyReader } = await fixture({ replies: true });
+    const token = await accessToken();
+    const result = await app.inject({ url: history, headers: headers(token) });
+    expect(result.statusCode).toBe(200);
+    expect(result.headers['cache-control']).toBe('no-store');
+    expect(cupReplyReader).toHaveBeenCalledExactlyOnceWith(userId, undefined);
+    const forged = await app.inject({
+      url: `${history}?recipient=${draft}`,
+      headers: headers(token),
+    });
+    expect(forged.statusCode).toBe(400);
+    expect(cupReplyReader).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects unauthenticated, revoked and non-client sessions', async () => {
+    const { app, cupReplyReader } = await fixture({ replies: true });
+    expect((await app.inject({ url: history })).statusCode).toBe(401);
+    const staff = await accessToken({ roles: ['staff'] });
+    expect((await app.inject({ url: history, headers: headers(staff) })).statusCode).toBe(403);
+    const stale = await fixture({ replies: true, active: false });
+    const token = await accessToken();
+    expect((await stale.app.inject({ url: history, headers: headers(token) })).statusCode).toBe(
+      401,
+    );
+    expect(cupReplyReader).not.toHaveBeenCalled();
+    expect(stale.cupReplyReader).not.toHaveBeenCalled();
+  });
 });
 
 describe('CUP Support STAGING handoff', () => {
