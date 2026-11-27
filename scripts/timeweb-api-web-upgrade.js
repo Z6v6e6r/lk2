@@ -11,7 +11,7 @@ import {
 import { isPreservedNotificationRollout } from './timeweb-notification-android-gates.js';
 // Explicit manual mode of the enrolled standard controller. Never execute candidate source.
 import { execFileSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, X509Certificate } from 'node:crypto';
 import {
   constants,
   closeSync,
@@ -29,6 +29,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { inflateRawSync } from 'node:zlib';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
 import { validateTimewebRuntimeSecretPaths } from './render-timeweb-beta-release-env.js';
@@ -261,6 +262,33 @@ const CUP_SUPPORT_NATIVE_EVIDENCE = 'PHUB_TIMEWEB_CUP_SUPPORT_NATIVE_MONITOR_EVI
 const CUP_SUPPORT_APPLICATION = '62da4b92e65a02488f893b7ebc53d8b86faca9c9';
 const CUP_SUPPORT_APPLICATION_TREE = '08e6eafb72c67065c78ccb1409c46e6d6358bb62';
 const CUP_SUPPORT_PREDECESSOR = 'b81a2ec93f384d3d40aeb9b39eabdeaa4929ff61-45606826648-1';
+const CUP_REPLIES_SUFFIX = '_CUP_REPLIES_FRESH_DUMP';
+const CUP_REPLIES_BACKUP = 'PHUB_TIMEWEB_CUP_REPLIES_FRESH_BACKUP_V1';
+const CUP_REPLIES_BACKUP_RECEIPT = 'PHUB_TIMEWEB_CUP_REPLIES_FRESH_DUMP_V1';
+const CUP_REPLIES_BACKUP_POLICY = 'CUP_REPLIES_FRESH_DUMP_INTEGRITY_ONLY_V1';
+const CUP_REPLIES_OBSERVATION_SHA256 =
+  'b5d837f9511ba6719fa6c38e0f715319aa0751f6b6a1ff2ed7a6a457df826933';
+const CUP_REPLIES_OBSERVATION_DECISION = {
+  cupRepliesDirectObservationSha256: CUP_REPLIES_OBSERVATION_SHA256,
+  providerMonitoringStatus: 'NOT_CHECKED_OWNER_APPROVED_DIRECT_HTTP',
+  alertTestStatus: 'REPLACED_BY_OWNER_APPROVED_DIRECT_HTTP',
+};
+const CUP_REPLIES_DIRECT_POLICY = 'CUP_REPLIES_DIRECT_OBSERVATION_V1';
+const CUP_REPLIES_ANCHOR = '6219818db0594387931bc3c8446e18cd4a2683e7';
+const CUP_REPLIES_PREDECESSORS = {
+  api: '492937113c0f8a7a4c6a3ebf14a512f81f50d873-45892594868-1', // gitleaks:allow public Git/OCI release identity
+  web: '6acd50687cbf0c41afede860425cfe3703f97e67-45990361333-1',
+};
+const CUP_REPLIES_HOST = 'cup-replies-private.tsup.space';
+const CUP_REPLIES_IP = '72.56.74.115';
+const CUP_REPLIES_URL = `https://${CUP_REPLIES_HOST}:19446/internal/cup/v1/lk2/replies`;
+const CUP_REPLIES_FILES = '/etc/phub/timeweb-cup-replies';
+const CUP_REPLIES_MOUNT = '/run/phub/cup-replies';
+const CUP_REPLIES_COMPOSE = 'cup-replies.compose.json';
+const CUP_REPLIES_SOURCE_SHA256 =
+  '19f296f3d63886cfae20018022bed7fc6d33f3a4392ed1db1068e6253b76d708';
+const isCupRepliesPilot = (value) =>
+  value?.schema === APP_ONLY_OPERATION && Object.hasOwn(value, 'cupReplies');
 const isCupSupportOperation = (value) => value?.schema === CUP_SUPPORT_OPERATION;
 const isGameInvitationsActivation = (value) => value?.schema === GAME_INVITATIONS_ACTIVATION.schema;
 const isAppOnlyOperation = (value) =>
@@ -593,6 +621,7 @@ export function validateApiWebOperation(value) {
   if (isAppOnlyOperation(value)) {
     const { backupOperationSha256, expiresAt, ...fields } = value;
     const cupSupport = isCupSupportOperation(value);
+    const cupPilot = isCupRepliesPilot(value);
     const invitations = isGameInvitationsActivation(value);
     const { migrationAttemptId, migrationReceiptSha256, ownerMessageSha256, ...activationBase } =
       fields;
@@ -604,12 +633,21 @@ export function validateApiWebOperation(value) {
       ownerProviderDecision,
       ...operation
     } = fields;
-    const base = invitations ? activationBase : cupSupport ? operation : fields;
+    const { cupReplies, ...pilotBase } = fields;
+    const base = invitations
+      ? activationBase
+      : cupSupport
+        ? operation
+        : cupPilot
+          ? pilotBase
+          : fields;
     const suffix = invitations
       ? GAME_INVITATIONS_ACTIVATION.suffix
       : cupSupport
         ? '_CUP_SUPPORT_STAGING'
-        : '_APP_ONLY_PRIOR_RESTORE';
+        : cupPilot
+          ? CUP_REPLIES_SUFFIX
+          : '_APP_ONLY_PRIOR_RESTORE';
     if (
       value.profile !== 'production' ||
       value.controllerSha !== value.candidateSha ||
@@ -640,6 +678,18 @@ export function validateApiWebOperation(value) {
       if (SECRET_NAMES.some((name) => !HASH.test(candidateSecretHashes[name] ?? '')))
         fail('cup_support_secret_hashes');
       validateCupSupportAlertDecision(value);
+    }
+    if (cupPilot) {
+      exact(cupReplies, ['pilotUserId', 'tokenSha256', 'tlsSha256', 'ownerRestoreDecisionSha256']);
+      if (
+        !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(cupReplies.pilotUserId ?? '') ||
+        !HASH.test(cupReplies.tokenSha256 ?? '') ||
+        !HASH.test(cupReplies.tlsSha256 ?? '') ||
+        !HASH.test(cupReplies.ownerRestoreDecisionSha256 ?? '') ||
+        value.expectedApi?.releaseId !== CUP_REPLIES_PREDECESSORS.api ||
+        value.expectedWeb?.releaseId !== CUP_REPLIES_PREDECESSORS.web
+      )
+        fail('cup_replies_operation');
     }
     validateApiWebOperation({
       ...base,
@@ -853,10 +903,18 @@ export function validateControllerDelta(entries) {
   )
     fail('candidate_controller_delta');
 }
-export function apiWebComposeArgs(baseline, overlay, action, service, roster = false) {
+export function apiWebComposeArgs(
+  baseline,
+  overlay,
+  action,
+  service,
+  roster = false,
+  cupReplies = false,
+) {
   if (
     !['api', 'web', ...(roster ? ['worker'] : [])].includes(service) ||
-    !['config', 'pull', 'up'].includes(action)
+    !['config', 'pull', 'up'].includes(action) ||
+    (cupReplies && (roster || basename(overlay) !== 'candidate.env'))
   )
     fail('invalid_stage');
   return [
@@ -867,6 +925,7 @@ export function apiWebComposeArgs(baseline, overlay, action, service, roster = f
     overlay,
     '-f',
     COMPOSE,
+    ...(cupReplies ? ['-f', `${dirname(overlay)}/${CUP_REPLIES_COMPOSE}`] : []),
     // Render dormant services for identity checks; activation never enables profiles.
     ...(action === 'config' ? ['--profile', '*'] : []),
     ...(service === 'worker' && action !== 'config' ? ['--profile', 'background'] : []),
@@ -1125,6 +1184,65 @@ function secure(path, mode) {
     fail('insecure_path');
   if (path !== '/') secure(dirname(path));
   return value;
+}
+
+export function cupRepliesCompose(op) {
+  if (!isCupRepliesPilot(op)) fail('cup_replies_operation');
+  validateApiWebOperation(op);
+  const binding = (name) => ({
+    type: 'bind',
+    source: `${CUP_REPLIES_FILES}/${name}`,
+    target: `${CUP_REPLIES_MOUNT}/${name}`,
+    read_only: true,
+    bind: { create_host_path: false },
+  });
+  const api = {
+    environment: {
+      CUP_SUPPORT_STAGING_REPLIES_ENABLED: 'true',
+      CUP_SUPPORT_STAGING_REPLIES_URL: CUP_REPLIES_URL,
+      CUP_SUPPORT_STAGING_REPLIES_PILOT_USER_ID: op.cupReplies.pilotUserId,
+      CUP_SUPPORT_STAGING_REPLIES_TOKEN_FILE: `${CUP_REPLIES_MOUNT}/token`,
+      NODE_EXTRA_CA_CERTS: `${CUP_REPLIES_MOUNT}/server.crt`,
+    },
+    volumes: [binding('token'), binding('server.crt')],
+    extra_hosts: { [CUP_REPLIES_HOST]: CUP_REPLIES_IP },
+  };
+  return Buffer.from(`${JSON.stringify({ services: { api } })}\n`);
+}
+
+function attestCupRepliesFiles(op) {
+  secure(CUP_REPLIES_FILES, 0o700);
+  const tokenPath = `${CUP_REPLIES_FILES}/token`;
+  const fd = openSync(tokenPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const token = fstatSync(fd);
+    if (
+      !token.isFile() ||
+      token.uid !== 0 ||
+      token.gid !== 1001 ||
+      token.nlink !== 1 ||
+      (token.mode & 0o7777) !== 0o440 ||
+      ![64, 65].includes(token.size)
+    )
+      fail('cup_replies_token_file');
+    const bytes = readFileSync(fd);
+    if (!/^[a-f0-9]{64}\n?$/.test(bytes.toString()) || hash(bytes) !== op.cupReplies.tokenSha256)
+      fail('cup_replies_token_identity');
+  } finally {
+    closeSync(fd);
+  }
+  const pem = read(`${CUP_REPLIES_FILES}/server.crt`, 0o444, 8192);
+  const certificate = new X509Certificate(pem);
+  if (
+    hash(pem) !== op.cupReplies.tlsSha256 ||
+    certificate.ca ||
+    certificate.subjectAltName !== `DNS:${CUP_REPLIES_HOST}` ||
+    !certificate.verify(certificate.publicKey) ||
+    certificate.toString().trim() !== pem.toString().trim() ||
+    Date.parse(certificate.validFrom) > Date.now() ||
+    Date.parse(certificate.validTo) <= Date.now()
+  )
+    fail('cup_replies_tls_identity');
 }
 // A power loss between link and unlink may preserve the writer's exact second name.
 // Normalize only that single secure inode twin, never an unrelated hardlink or a symlink.
@@ -1567,6 +1685,7 @@ export async function observeDirectApiWeb({
   inspectService,
   probeService,
   attest,
+  cupPilotOperation = undefined,
   now = () => Date.now(),
   sleep = delay,
 }) {
@@ -1596,16 +1715,16 @@ export async function observeDirectApiWeb({
   }
   const evidence = {
     schema: 'PHUB_TIMEWEB_API_WEB_DIRECT_OBSERVATION_V1',
-    evidencePolicy: CALLBACK_DIRECT_POLICY,
+    evidencePolicy: cupPilotOperation ? CUP_REPLIES_DIRECT_POLICY : CALLBACK_DIRECT_POLICY,
     authorization: 'NOT_COLLECTED_EXPLICIT_OVERRIDE',
     startedAt: new Date(started).toISOString(),
     completedAt: new Date(completed).toISOString(),
     elapsedSeconds: (completed - started) / 1000,
     samples,
     providerEvidence: 'NOT_COLLECTED_EXPLICIT_OVERRIDE',
-    candidateSha: CALLBACK_DIRECT_CANDIDATE.candidateSha,
+    candidateSha: cupPilotOperation?.candidateSha ?? CALLBACK_DIRECT_CANDIDATE.candidateSha,
   };
-  validateDirectObservation(evidence, evidence.completedAt);
+  validateDirectObservation(evidence, evidence.completedAt, cupPilotOperation);
   return evidence;
 }
 export async function observeStationRollout({
@@ -1947,9 +2066,11 @@ function attestBoundBackupFiles(backup) {
     fail('schedule_backup_drift');
   const receipt = parseStrictJson(receiptBytes);
   if (
-    [CUP_SUPPORT_BACKUP_RECEIPT, GAME_INVITATIONS_ACTIVATION.backupReceipt].includes(
-      receipt.schema,
-    ) &&
+    [
+      CUP_SUPPORT_BACKUP_RECEIPT,
+      CUP_REPLIES_BACKUP_RECEIPT,
+      GAME_INVITATIONS_ACTIVATION.backupReceipt,
+    ].includes(receipt.schema) &&
     (hash(read(`${dirname(backup.path)}/owner-restore-decision.json`)) !== receipt.policySha256 ||
       hash(read(`${dirname(backup.path)}/restore-admission-reference.json`)) !==
         receipt.admissionReferenceSha256)
@@ -1966,17 +2087,21 @@ function validateBoundApiWebBackupProof(directory, releaseId, op, api) {
   const disk = backup.schema === SCHEDULE_DISK_BACKUP_SCHEMA;
   const appOnly = isAppOnlyOperation(op);
   const cupSupport = isCupSupportOperation(op);
+  const cupPilot = isCupRepliesPilot(op);
   const invitations = isGameInvitationsActivation(op);
   const appOnlySchemas = [
     APP_ONLY_BACKUP,
     CUP_SUPPORT_BACKUP,
+    CUP_REPLIES_BACKUP,
     GAME_INVITATIONS_ACTIVATION.backupSchema,
   ];
   const requiredAppOnlySchema = invitations
     ? GAME_INVITATIONS_ACTIVATION.backupSchema
     : cupSupport
       ? CUP_SUPPORT_BACKUP
-      : APP_ONLY_BACKUP;
+      : cupPilot
+        ? CUP_REPLIES_BACKUP
+        : APP_ONLY_BACKUP;
   const fresh = [CANONICAL_FRESH_OPERATION, ...appOnlySchemas].includes(backup.schema);
   if (
     (appOnly && backup.schema !== requiredAppOnlySchema) ||
@@ -2007,18 +2132,27 @@ function validateBoundApiWebBackupProof(directory, releaseId, op, api) {
             ? GAME_INVITATIONS_ACTIVATION.backupReceipt
             : cupSupport
               ? CUP_SUPPORT_BACKUP_RECEIPT
-              : appOnly
-                ? APP_ONLY_BACKUP_RECEIPT
-                : CANONICAL_FRESH_RECEIPT) ||
+              : cupPilot
+                ? CUP_REPLIES_BACKUP_RECEIPT
+                : appOnly
+                  ? APP_ONLY_BACKUP_RECEIPT
+                  : CANONICAL_FRESH_RECEIPT) ||
         receipt.restoreAdmissionPolicy !==
           (invitations
             ? GAME_INVITATIONS_ACTIVATION.backupPolicy
             : cupSupport
               ? CUP_SUPPORT_BACKUP_POLICY
-              : appOnly
-                ? APP_ONLY_BACKUP_POLICY
-                : CANONICAL_PRIOR_RESTORE_POLICY) ||
+              : cupPilot
+                ? CUP_REPLIES_BACKUP_POLICY
+                : appOnly
+                  ? APP_ONLY_BACKUP_POLICY
+                  : CANONICAL_PRIOR_RESTORE_POLICY) ||
         (cupSupport && receipt.policySha256 !== op.ownerRestoreDecisionSha256) ||
+        (cupPilot &&
+          (receipt.policySha256 !== op.cupReplies.ownerRestoreDecisionSha256 ||
+            !Object.entries(op.expectedWeb).every(
+              ([key, value]) => backup.expectedWeb?.[key] === value,
+            ))) ||
         receipt.freshDumpRestored !== false ||
         receipt.freshDumpIntegrityStatus !== 'PG16_TOC_PARSE_VERIFIED' ||
         Date.parse(op.expiresAt) > Date.parse(backup.expiresAt))) ||
@@ -2881,11 +3015,34 @@ function attestAppOnlySourceDelta(from, to) {
   validateAppOnlyRuntimeDelta(inspectRuntimeDelta(from, to));
 }
 
+function attestCupRepliesSource(from, to) {
+  git(['merge-base', '--is-ancestor', from, CUP_REPLIES_ANCHOR]);
+  git(['merge-base', '--is-ancestor', CUP_REPLIES_ANCHOR, to]);
+  const controllerFiles = new Set([
+    'scripts/timeweb-api-web-upgrade.js',
+    'scripts/timeweb-api-web-upgrade.d.ts',
+    'scripts/timeweb-api-web-upgrade.test.ts',
+    'scripts/control-timeweb-database-backup.py',
+    'scripts/test-timeweb-database-backup.py',
+    'docs/runbooks/timeweb-standard-delivery.md',
+  ]);
+  const entries = inspectRuntimeDelta(CUP_REPLIES_ANCHOR, to);
+  const controller = entries.filter(({ path }) => controllerFiles.has(path));
+  const product = entries.filter(({ path }) => !controllerFiles.has(path));
+  if (
+    !controller.some(({ path }) => path === 'scripts/timeweb-api-web-upgrade.js') ||
+    controller.some((entry) => !regularModification(entry)) ||
+    hash(JSON.stringify(product)) !== CUP_REPLIES_SOURCE_SHA256
+  )
+    fail('cup_replies_source');
+}
+
 export function attestAppOnlyBackupScope(op) {
   const cupSupport = op?.schema === CUP_SUPPORT_BACKUP;
+  const cupPilot = op?.schema === CUP_REPLIES_BACKUP;
   const invitations0120 = op?.schema === 'PHUB_TIMEWEB_GAME_INVITATIONS_0120_FRESH_BACKUP_V1';
   if (
-    (!cupSupport && !invitations0120 && op?.schema !== APP_ONLY_BACKUP) ||
+    (!cupSupport && !cupPilot && !invitations0120 && op?.schema !== APP_ONLY_BACKUP) ||
     op.candidateSha !== op.controllerSha ||
     !SHA.test(op.candidateSha ?? '') ||
     git(['rev-parse', 'HEAD']) !== op.controllerSha ||
@@ -2893,6 +3050,12 @@ export function attestAppOnlyBackupScope(op) {
     git(['status', '--porcelain', '--untracked-files=all']) !== ''
   )
     fail('app_only_source');
+  if (
+    cupPilot &&
+    (op.expectedApi?.releaseId !== CUP_REPLIES_PREDECESSORS.api ||
+      op.expectedWeb?.releaseId !== CUP_REPLIES_PREDECESSORS.web)
+  )
+    fail('cup_replies_backup_predecessor');
   for (const svc of ['api', 'web']) {
     const actual = inspect(svc);
     const expected = svc === 'api' ? op.expectedApi : op.expectedWeb;
@@ -2904,6 +3067,7 @@ export function attestAppOnlyBackupScope(op) {
       )
         fail('game_invitations_0120_backup_predecessor');
     } else if (cupSupport) attestCupSupportSource(actual.releaseId.slice(0, 40), op.candidateSha);
+    else if (cupPilot) attestCupRepliesSource(actual.releaseId.slice(0, 40), op.candidateSha);
     else attestAppOnlySourceDelta(actual.releaseId.slice(0, 40), op.candidateSha);
   }
   if (invitations0120) {
@@ -2975,6 +3139,9 @@ export function validateUpgradeReceipt(
   const cupProviderWaived = cupSupport && Object.hasOwn(receipt, 'providerMonitoringStatus');
   const invitations = receipt.schema === GAME_INVITATIONS_ACTIVATION.rolloutReceipt;
   const appOnly = receipt.schema === APP_ONLY_RECEIPT || cupSupport || invitations;
+  const cupPilot =
+    receipt.schema === APP_ONLY_RECEIPT &&
+    Object.hasOwn(receipt, 'cupRepliesDirectObservationSha256');
   const station = receipt.schema === STATION_RECEIPT;
   const stationDirect = station && Object.hasOwn(receipt, 'providerMonitoringStatus');
   const scheduleWaived = schedule && Object.hasOwn(receipt, 'ownerProviderMonitoringWaiverSha256');
@@ -3001,6 +3168,7 @@ export function validateUpgradeReceipt(
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
   if (cupSupport) keys.push('alertTestStatus', 'ownerAlertDecisionSha256');
   if (invitations) keys.push(...Object.keys(GAME_INVITATIONS_MONITORING_STATUS));
+  if (cupPilot) keys.push(...Object.keys(CUP_REPLIES_OBSERVATION_DECISION));
   if (cupProviderWaived) keys.push('providerMonitoringStatus', 'ownerProviderDecisionSha256');
   if (scheduleWaived)
     keys.push(...Object.keys(SCHEDULE_MONITORING_STATUS), 'ownerProviderMonitoringWaiverSha256');
@@ -3030,7 +3198,7 @@ export function validateUpgradeReceipt(
             ]
           : direct
             ? ['ownerObservationSha256', 'evidencePolicySha256']
-            : scheduleWaived || stationDirect || cupProviderWaived || invitations
+            : scheduleWaived || stationDirect || cupProviderWaived || invitations || cupPilot
               ? []
               : [
                   'providerReadbackSha256',
@@ -3121,6 +3289,10 @@ export function validateUpgradeReceipt(
         Object.entries(SCHEDULE_MONITORING_STATUS).some(
           ([key, value]) => receipt[key] !== value,
         ))) ||
+    (cupPilot &&
+      Object.entries(CUP_REPLIES_OBSERVATION_DECISION).some(
+        ([key, value]) => receipt[key] !== value,
+      )) ||
     (keys.includes('installedBaselineSha256') &&
       [
         'installedBaselineSha256',
@@ -3135,7 +3307,7 @@ export function validateUpgradeReceipt(
               ]
             : direct
               ? ['ownerObservationSha256', 'evidencePolicySha256']
-              : scheduleWaived || stationDirect || cupProviderWaived || invitations
+              : scheduleWaived || stationDirect || cupProviderWaived || invitations || cupPilot
                 ? []
                 : [
                     'providerReadbackSha256',
@@ -3151,6 +3323,7 @@ export function validateUpgradeReceipt(
       isDirectOperation(op) !== direct ||
       isScheduleOperation(op) !== schedule ||
       isCupSupportOperation(op) !== cupSupport ||
+      isCupRepliesPilot(op) !== cupPilot ||
       (cupSupport && cupProviderWaived !== Object.hasOwn(op, 'ownerProviderDecision')) ||
       isAppOnlyOperation(op) !== appOnly ||
       isGameInvitationsActivation(op) !== invitations ||
@@ -3298,7 +3471,15 @@ function attestCupSupportDirectEvidence(transaction, op, plan, planSha256) {
       observation.completedAt,
     );
 }
-export function validateDirectObservation(value, completedAt = undefined) {
+export function validateDirectObservation(
+  value,
+  completedAt = undefined,
+  cupPilotOperation = undefined,
+) {
+  if (cupPilotOperation) {
+    if (!isCupRepliesPilot(cupPilotOperation)) fail('cup_replies_observation_identity');
+    validateApiWebOperation(cupPilotOperation);
+  }
   exact(value, [
     'schema',
     'evidencePolicy',
@@ -3312,16 +3493,19 @@ export function validateDirectObservation(value, completedAt = undefined) {
   ]);
   if (
     value.schema !== 'PHUB_TIMEWEB_API_WEB_DIRECT_OBSERVATION_V1' ||
-    value.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
+    value.evidencePolicy !==
+      (cupPilotOperation ? CUP_REPLIES_DIRECT_POLICY : CALLBACK_DIRECT_POLICY) ||
     value.authorization !== 'NOT_COLLECTED_EXPLICIT_OVERRIDE' ||
-    value.candidateSha !== CALLBACK_DIRECT_CANDIDATE.candidateSha ||
+    value.candidateSha !==
+      (cupPilotOperation?.candidateSha ?? CALLBACK_DIRECT_CANDIDATE.candidateSha) ||
     value.providerEvidence !== 'NOT_COLLECTED_EXPLICIT_OVERRIDE' ||
     !Number.isFinite(Date.parse(value.startedAt)) ||
     !Number.isFinite(Date.parse(value.completedAt)) ||
     !Number.isFinite(value.elapsedSeconds) ||
     value.elapsedSeconds < 900 ||
     (Date.parse(value.completedAt) - Date.parse(value.startedAt)) / 1000 !== value.elapsedSeconds ||
-    Date.parse(value.completedAt) > Date.parse(CALLBACK_DIRECT_EXPIRY) ||
+    Date.parse(value.completedAt) >
+      Date.parse(cupPilotOperation?.expiresAt ?? CALLBACK_DIRECT_EXPIRY) ||
     (completedAt && value.completedAt !== completedAt) ||
     !value.samples ||
     Object.keys(value.samples).sort().join(',') !== 'api,web'
@@ -4159,6 +4343,12 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
             plan,
             hash(planBytes),
           );
+        if (isCupRepliesPilot(op))
+          validateDirectObservation(
+            parseStrictJson(read(`${transaction}/observation.json`)),
+            undefined,
+            op,
+          );
         if (
           isCupSupportOperation(op) &&
           (plan.candidateSecrets.releaseId !== releaseId ||
@@ -4298,6 +4488,8 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
         receipt.ownerProviderMonitoringWaiverSha256) ||
       (receipt.schema === CUP_SUPPORT_RECEIPT &&
         receipt.providerMonitoringStatus === CUP_SUPPORT_PROVIDER_STATUS) ||
+      (receipt.schema === APP_ONLY_RECEIPT &&
+        receipt.cupRepliesDirectObservationSha256 === CUP_REPLIES_OBSERVATION_SHA256) ||
       [
         WAIVER_RECEIPT,
         OWNER_RECEIPT,
@@ -4516,6 +4708,15 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
   const join = isJoinOperation(op);
   const schedule = isScheduleOperation(op);
   const cupSupport = isCupSupportOperation(op);
+  const cupPilot = isCupRepliesPilot(op);
+  const cupPilotDecision = cupPilot ? CUP_REPLIES_OBSERVATION_DECISION : {};
+  const attestCupRepliesObservationOwner = () => {
+    if (
+      hash(read(`${ROOT}/operator/cup-replies-direct-observation.txt`)) !==
+      CUP_REPLIES_OBSERVATION_SHA256
+    )
+      fail('cup_replies_observation_owner');
+  };
   const invitations = isGameInvitationsActivation(op);
   const invitationDecision = invitations ? GAME_INVITATIONS_MONITORING_STATUS : {};
   const attestDatabase = (backup) => {
@@ -4582,6 +4783,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
   const profile = join ? 'production' : (op.profile ?? 'beta');
   if (mode === 'deploy' && (schedule || appOnly)) validateScheduleExpiry(op.expiresAt, 20 * 60_000);
   if (mode === 'deploy' && invitations) attestGameInvitationsOwnerDecision();
+  if (mode === 'deploy' && cupPilot) attestCupRepliesObservationOwner();
   if (
     mode === 'deploy' &&
     cupSupport &&
@@ -4893,6 +5095,8 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         );
       } else if (cupSupport) {
         attestCupSupportSource(previousSource, op.candidateSha);
+      } else if (cupPilot) {
+        attestCupRepliesSource(previousSource, op.candidateSha);
       } else if (invitations) {
         attestGameInvitationsSource(op.candidateSha);
       } else if (appOnly) {
@@ -4957,6 +5161,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         fail('cup_support_secret_preimage');
       validateTimewebCupSupportHandoffSecretDelta(RUNTIME, candidateDir);
     }
+    if (cupPilot) attestCupRepliesFiles(op);
     const manifest = await candidateAuthority(op, directory);
     const api = inspect('api'),
       web = inspect('web');
@@ -4991,7 +5196,12 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     if (invitations) attestGameInvitationsDatabase(op, backup, config.owner, { expectEmpty: true });
     let ownerBytes;
     const monitoring =
-      !direct && !scheduleWaiver && !stationDirect && !cupProviderWaived && !invitations
+      !direct &&
+      !scheduleWaiver &&
+      !stationDirect &&
+      !cupProviderWaived &&
+      !invitations &&
+      !cupPilot
         ? isOwnerDirectedCutover(op)
           ? createOwnerDirectedBinding(op, hash(opBytes))
           : isWaivedRosterCutover(op)
@@ -5131,10 +5341,11 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
     durable(planPath, `${JSON.stringify(plan)}\n`, true);
     for (const name of overlays)
       durable(`${transaction}/${name}.env`, overlayBytes(plan, name), true);
+    if (cupPilot) durable(`${transaction}/${CUP_REPLIES_COMPOSE}`, cupRepliesCompose(op), true);
     durable(`${transaction}/${admissionMarker}`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)), alertTestStatus: STATION_ALERT_STATUS, ...stationProviderDecision } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, ...cupAlert, ...invitationDecision, observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: receiptSchema, status: 'PREPARING', planSha256: hash(read(planPath)), ...(station ? { databaseAdmissionSha256: hash(JSON.stringify(plan.databaseAdmission)), alertTestStatus: STATION_ALERT_STATUS, ...stationProviderDecision } : {}), ...(cutover ? { [cutoverBaselineField(op)]: plan[cutoverBaselineField(op)] } : {}), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), ...scheduleWaiver, ...cupAlert, ...invitationDecision, ...cupPilotDecision, observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
@@ -5288,7 +5499,10 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       !secretAttest()
     )
       fail('compose_input_drift');
-    return docker(apiWebComposeArgs(baseline, path, action, service, roster));
+    const useCup = cupPilot && name === 'candidate';
+    if (useCup && !read(`${transaction}/${CUP_REPLIES_COMPOSE}`).equals(cupRepliesCompose(op)))
+      fail('cup_replies_compose_drift');
+    return docker(apiWebComposeArgs(baseline, path, action, service, roster, useCup));
   };
   const active = {};
   let stoppedWorkerId = null;
@@ -5306,6 +5520,10 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
   const attest = (recovering = false) => {
     if (station || invitations) assertOwned();
     if (!recovering) attestStationForward();
+    if (cupPilot && !recovering) {
+      attestCupRepliesFiles(op);
+      if (mode === 'deploy') attestCupRepliesObservationOwner();
+    }
     if ((schedule || appOnly) && !recovering) {
       if (schedule) attestScheduleSidecarArchive(op, plan.previousSecrets.files);
       if (appOnly && mode === 'deploy') validateScheduleExpiry(op.expiresAt);
@@ -5361,13 +5579,56 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       fail('excluded_or_configuration_drift');
   };
   const attestRunningEnv = (restored = false) => {
-    if (!swapsSecrets && !station) return;
+    if (!swapsSecrets && !station && !cupPilot) return;
     const parseDockerEnv = (values) => {
       const entries = values.map((v) => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)]);
       if (new Set(entries.map(([key]) => key)).size !== entries.length)
         fail('running_env_duplicates');
       return Object.fromEntries(entries);
     };
+    if (cupPilot) {
+      const api = inspect('api');
+      const actual = JSON.parse(docker(['inspect', api.id]))[0];
+      const defaults = JSON.parse(
+        docker(['image', 'inspect', '--format={{json .Config.Env}}', api.image]),
+      );
+      const expectedEnv = {
+        ...parseDockerEnv(defaults ?? []),
+        ...parseTimewebScheduleRuntimeEnvironment(read(`${RUNTIME}/api.env`)),
+      };
+      const extra = JSON.parse(cupRepliesCompose(op)).services.api;
+      if (!restored) Object.assign(expectedEnv, extra.environment);
+      const hosts = actual.HostConfig.ExtraHosts ?? [];
+      const mounts = actual.Mounts.map(({ Type, Source, Destination, RW }) => ({
+        Type,
+        Source,
+        Destination,
+        RW,
+      })).sort((a, b) => a.Destination.localeCompare(b.Destination));
+      const expectedMounts = restored
+        ? []
+        : extra.volumes
+            .map(({ source, target }) => ({
+              Type: 'bind',
+              Source: source,
+              Destination: target,
+              RW: false,
+            }))
+            .sort((a, b) => a.Destination.localeCompare(b.Destination));
+      if (
+        !isDeepStrictEqual(parseDockerEnv(actual.Config.Env), expectedEnv) ||
+        !isDeepStrictEqual(mounts, expectedMounts) ||
+        (restored
+          ? hosts.length !== 0
+          : hosts.length !== 1 ||
+            ![
+              `${CUP_REPLIES_HOST}:${CUP_REPLIES_IP}`,
+              `${CUP_REPLIES_HOST}=${CUP_REPLIES_IP}`,
+            ].includes(hosts[0]))
+      )
+        fail('cup_replies_running_api');
+      return;
+    }
     if (station) {
       const name = restored ? 'previous-api' : 'candidate';
       const rendered = JSON.parse(compose(name, 'config', 'api'));
@@ -5451,6 +5712,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         ...scheduleWaiver,
         ...cupAlert,
         ...invitationDecision,
+        ...cupPilotDecision,
         ...(status === 'SUCCESS'
           ? {
               installedBaselineSha256,
@@ -5464,7 +5726,11 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
                         ownerObservationSha256: plan.ownerObservationSha256,
                         evidencePolicySha256: plan.evidencePolicySha256,
                       }
-                    : scheduleWaiver || stationDirect || cupProviderWaived || invitations
+                    : scheduleWaiver ||
+                        stationDirect ||
+                        cupProviderWaived ||
+                        invitations ||
+                        cupPilot
                       ? {}
                       : {
                           providerReadbackSha256: hash(
@@ -5675,6 +5941,34 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       attest();
       attestJoinBackup();
       if (appOnly) attestDatabase(plan.backup);
+      if (cupPilot) {
+        const baseConfig = JSON.parse(
+          docker(apiWebComposeArgs(baseline, `${transaction}/candidate.env`, 'config', 'api')),
+        );
+        const candidateConfig = JSON.parse(compose('candidate', 'config', 'api'));
+        const { environment, volumes, extra_hosts } = JSON.parse(cupRepliesCompose(op)).services
+          .api;
+        const { api } = candidateConfig.services;
+        const hosts = Object.entries(extra_hosts).map(([host, ip]) => `${host}=${ip}`);
+        if (
+          baseConfig.services.api.volumes?.length ||
+          baseConfig.services.api.extra_hosts?.length ||
+          Object.keys(environment).some((key) =>
+            Object.hasOwn(baseConfig.services.api.environment, key),
+          ) ||
+          !isDeepStrictEqual(api.environment, {
+            ...baseConfig.services.api.environment,
+            ...environment,
+          }) ||
+          !isDeepStrictEqual(api.volumes, volumes) ||
+          !isDeepStrictEqual(api.extra_hosts, hosts)
+        )
+          fail('cup_replies_compose_scope');
+        delete api.volumes;
+        delete api.extra_hosts;
+        api.environment = baseConfig.services.api.environment;
+        if (!isDeepStrictEqual(candidateConfig, baseConfig)) fail('cup_replies_compose_scope');
+      }
       for (const s of targets) {
         if (!equal(inspect(s), plan.previous[s])) fail('baseline_drift');
         imagePresent(
@@ -5692,7 +5986,7 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         await probe(s);
         if (s !== 'worker') await probe(s, true);
       }
-      attestRunningEnv(station);
+      attestRunningEnv(station || cupPilot);
     },
     pullAndSmoke: async () => {
       for (const s of targets) {
@@ -5719,6 +6013,40 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
       compose('candidate', 'up', s);
       active[s] = await wait(s, plan.candidate[s]);
       if (s === 'api' || (station && s === 'worker')) attestRunningEnv();
+      if (s === 'api' && cupPilot) {
+        const result = docker(
+          [
+            'exec',
+            active.api.id,
+            'node',
+            '-e',
+            `
+          const {readFileSync} = require('node:fs');
+          const {randomUUID} = require('node:crypto');
+          const url = process.env.CUP_SUPPORT_STAGING_REPLIES_URL;
+          const token = readFileSync(process.env.CUP_SUPPORT_STAGING_REPLIES_TOKEN_FILE, 'utf8').trim();
+          const body = JSON.stringify({recipient: randomUUID()});
+          const post = (authorization) => fetch(url, {
+            method: 'POST', redirect: 'error', signal: AbortSignal.timeout(4000),
+            headers: { 'Content-Type': 'application/json', ...(authorization ? { Authorization: authorization } : {}) },
+            body,
+          });
+          (async () => {
+            const denied = await post();
+            await denied.body?.cancel();
+            if (![401, 403].includes(denied.status)) throw Error();
+            const response = await post('Bearer ' + token);
+            if (response.status !== 200) throw Error();
+            const history = await response.json();
+            if (!Array.isArray(history.messages) || history.messages.length || history.next !== null) throw Error();
+            process.stdout.write('CUP_REPLIES_CONNECTED');
+          })().catch(() => { process.exitCode = 1; });
+        `,
+          ],
+          { timeout: 12000, maxBuffer: 1024 },
+        );
+        if (result !== 'CUP_REPLIES_CONNECTED') fail('cup_replies_connectivity');
+      }
       attest();
       if (s === 'api' && !equal(inspect('web'), plan.previous.web))
         fail('web_changed_before_activation');
@@ -5750,21 +6078,27 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
         return;
       }
       if (schedule || appOnly) validateScheduleExpiry(op.expiresAt, 900_000);
-      if (isDirectOperation(op)) {
-        await callbackProbe();
+      if (isDirectOperation(op) || cupPilot) {
+        if (!cupPilot) await callbackProbe();
         const direct = await observeDirectApiWeb({
+          cupPilotOperation: cupPilot ? op : undefined,
           inspectService: (service) => {
             if (!equal(inspect(service), active[service])) fail('candidate_restarted');
           },
           probeService: probe,
           attest: async () => {
-            validateDirectApiWebOperation(op, true);
-            const owner = read(`${transaction}/release-owner-observation.json`);
-            if (
-              !owner.equals(directOwnerBytes(op, hash(opBytes))) ||
-              hash(owner) !== plan.ownerObservationSha256
-            )
-              fail('direct_owner_observation_drift');
+            if (cupPilot) {
+              validateScheduleExpiry(op.expiresAt);
+              attestRunningEnv();
+            } else {
+              validateDirectApiWebOperation(op, true);
+              const owner = read(`${transaction}/release-owner-observation.json`);
+              if (
+                !owner.equals(directOwnerBytes(op, hash(opBytes))) ||
+                hash(owner) !== plan.ownerObservationSha256
+              )
+                fail('direct_owner_observation_drift');
+            }
             attest();
           },
         });
@@ -5986,6 +6320,12 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
           )
             fail('installed_baseline_drift');
           if (appOnly || station) {
+            if (cupPilot)
+              validateDirectObservation(
+                parseStrictJson(read(`${transaction}/observation.json`)),
+                undefined,
+                op,
+              );
             if (invitations)
               validateGameInvitationsDirectObservation(
                 parseStrictJson(read(`${transaction}/observation.json`)),
@@ -6004,10 +6344,10 @@ async function runApiWebOperation({ mode, op, opBytes, config, terminalWithoutLo
             }
             for (const [file, key] of [
               ['observation.json', 'observationSha256'],
-              ...(!stationDirect && !invitations
+              ...(!stationDirect && !invitations && !cupPilot
                 ? [['timeweb-monitor-readback.json', 'providerReadbackSha256']]
                 : []),
-              ...(!station && !invitations
+              ...(!station && !invitations && !cupPilot
                 ? [['alert-test-readback.json', 'alertReadbackSha256']]
                 : []),
             ])

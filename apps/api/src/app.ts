@@ -308,6 +308,7 @@ export interface BuildAppOptions {
   readonly cupSupportHandoffIssuer?: CupSupportHandoffIssuer;
   readonly cupReplyReader?: CupReplyReader;
   readonly cupReplyWriter?: CupReplyWriter;
+  readonly cupReplyPilotUserId?: string;
   readonly accessSessionChecker?: (input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -1095,6 +1096,12 @@ export async function buildApp(options: BuildAppOptions) {
       Boolean(options.realtimeAuthorizationRepository) &&
       Boolean(options.realtimeTicketIssuer),
   } as const;
+  const cupSupportAvailable = (tenantKey: string, userId: string, roles: readonly string[]) =>
+    tenantKey === 'local-padel' &&
+    options.config.JWT_AUDIENCE !== options.config.JWT_ADMIN_AUDIENCE &&
+    Boolean(options.cupReplyReader && options.cupReplyWriter) &&
+    options.cupReplyPilotUserId === userId.toLowerCase() &&
+    roles.includes('client');
 
   app.decorate('config', options.config);
   const accessSessionChecker =
@@ -1199,7 +1206,12 @@ export async function buildApp(options: BuildAppOptions) {
               platform,
             })
         : undefined,
-      userRuntimeCapabilities,
+      (session, tenantKey) => ({
+        ...userRuntimeCapabilities,
+        ...(cupSupportAvailable(tenantKey, session.user.id, session.roles)
+          ? { cupSupport: true }
+          : {}),
+      }),
       options.profilePhotoMediaRepository?.getPhotoDeliveryState
         ? async (tenantId, userId) => {
             const state = await options.profilePhotoMediaRepository?.getPhotoDeliveryState?.(
@@ -1263,11 +1275,8 @@ export async function buildApp(options: BuildAppOptions) {
   function cupConversationRecipient(request: FastifyRequest<{ Params: { tenantKey: string } }>) {
     const claims = request.padlHubClaims;
     if (
-      request.params.tenantKey === 'local-padel' &&
-      options.config.JWT_AUDIENCE !== options.config.JWT_ADMIN_AUDIENCE &&
       claims?.aud === options.config.JWT_AUDIENCE &&
-      claims.roles.includes('client') &&
-      /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(claims.sub)
+      cupSupportAvailable(request.params.tenantKey, claims.sub, claims.roles)
     )
       return claims.sub.toLowerCase();
     return undefined;
@@ -2126,7 +2135,7 @@ export async function buildApp(options: BuildAppOptions) {
     },
   );
 
-  app.get(
+  app.get<{ Params: { tenantKey: string } }>(
     '/user/api/v1/:tenantKey/context',
     { preHandler: [authenticate, resolveTenant] },
     async (request, reply) => {
@@ -2149,7 +2158,10 @@ export async function buildApp(options: BuildAppOptions) {
         ...(user ? { displayName: user.displayName, phoneLast4: user.phoneLast4 } : {}),
         roles: request.padlHubClaims?.roles,
         permissions: request.padlHubClaims?.permissions,
-        runtimeCapabilities: userRuntimeCapabilities,
+        runtimeCapabilities: {
+          ...userRuntimeCapabilities,
+          ...(cupConversationRecipient(request) ? { cupSupport: true } : {}),
+        },
       };
     },
   );

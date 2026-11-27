@@ -175,6 +175,7 @@ function handleAuthError(
 }
 
 export interface UserRuntimeCapabilities {
+  readonly cupSupport?: boolean;
   readonly phoneSubjectLink: boolean;
   readonly communityDirectory: boolean;
   readonly communityReadDetail: boolean;
@@ -313,17 +314,25 @@ export function registerAuthRoutes(
   ) => Promise<boolean>,
   runtimeCapabilities:
     | Partial<UserRuntimeCapabilities>
-    | (() => Promise<Partial<UserRuntimeCapabilities>>) = disabledUserRuntimeCapabilities,
+    | ((
+        session: AuthSessionResult,
+        tenantKey: string,
+      ) =>
+        | Partial<UserRuntimeCapabilities>
+        | Promise<Partial<UserRuntimeCapabilities>>) = disabledUserRuntimeCapabilities,
   resolveProfilePhotoState?: (
     tenantId: string,
     userId: string,
   ) => Promise<{ readonly avatarUrl: string; readonly syncedAt: string } | undefined>,
   phoneSubjectLinkService?: PhoneSubjectLinkService,
 ): void {
-  const resolveRuntimeCapabilities = async (): Promise<UserRuntimeCapabilities> => ({
+  const resolveRuntimeCapabilities = async (
+    session: AuthSessionResult,
+    tenantKey: string,
+  ): Promise<UserRuntimeCapabilities> => ({
     ...disabledUserRuntimeCapabilities,
     ...(typeof runtimeCapabilities === 'function'
-      ? await runtimeCapabilities()
+      ? await runtimeCapabilities(session, tenantKey)
       : runtimeCapabilities),
   });
   for (const operation of ['start', 'exchange'] as const) {
@@ -372,7 +381,7 @@ export function registerAuthRoutes(
             idempotencyKey: idempotencyKey(request),
             correlationId: request.id,
           });
-          const capabilities = await resolveRuntimeCapabilities();
+          const capabilities = await resolveRuntimeCapabilities(session, tenantKey);
           setRefreshCookie(reply, config, tenantKey, session);
           reply.header('X-Android-OAuth-State', body.clientState);
           request.log.info(
@@ -767,7 +776,9 @@ export function registerAuthRoutes(
           idempotencyKey: idempotencyKey(request),
         });
         setRefreshCookie(reply, config, tenantKey, session);
-        return reply.send(publicSession(session, await resolveRuntimeCapabilities()));
+        return reply.send(
+          publicSession(session, await resolveRuntimeCapabilities(session, tenantKey)),
+        );
       } catch (error) {
         return handleAuthError(error, request, reply);
       }
@@ -833,7 +844,9 @@ export function registerAuthRoutes(
         });
         setRefreshCookie(reply, config, tenantKey, session);
         preventCredentialCaching(reply);
-        return reply.send(publicSession(session, await resolveRuntimeCapabilities()));
+        return reply.send(
+          publicSession(session, await resolveRuntimeCapabilities(session, tenantKey)),
+        );
       } catch (error) {
         return handleAuthError(error, request, reply);
       }
@@ -875,7 +888,9 @@ export function registerAuthRoutes(
         );
         setRefreshCookie(reply, config, tenantKey, session);
         preventCredentialCaching(reply);
-        return reply.send(publicSession(session, await resolveRuntimeCapabilities()));
+        return reply.send(
+          publicSession(session, await resolveRuntimeCapabilities(session, tenantKey)),
+        );
       } catch (error) {
         if (
           !(error instanceof AuthServiceError) ||

@@ -1251,7 +1251,11 @@ const app = await buildApp({
   authService,
   ...(cupSupportHandoffIssuer ? { cupSupportHandoffIssuer } : {}),
   ...(cupConversation
-    ? { cupReplyReader: cupConversation.read, cupReplyWriter: cupConversation.write }
+    ? {
+        cupReplyReader: cupConversation.read,
+        cupReplyWriter: cupConversation.write,
+        cupReplyPilotUserId: cupConversation.pilotUserId,
+      }
     : {}),
   phoneSubjectLinkService,
   ...(subscriptionPolicyRegistryClient ? { subscriptionPolicyRegistryClient } : {}),

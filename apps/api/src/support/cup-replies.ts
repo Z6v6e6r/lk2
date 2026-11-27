@@ -64,18 +64,20 @@ export class CupReplyRejected extends Error {
 export function loadCupConversation(
   environment: NodeJS.ProcessEnv,
   request = fetch,
-): { read: CupReplyReader; write: CupReplyWriter } | undefined {
+): { read: CupReplyReader; write: CupReplyWriter; pilotUserId: string } | undefined {
   if (environment.CUP_SUPPORT_STAGING_REPLIES_ENABLED !== 'true') return undefined;
   const endpoint = new URL(environment.CUP_SUPPORT_STAGING_REPLIES_URL ?? '');
   const tokenFile = environment.CUP_SUPPORT_STAGING_REPLIES_TOKEN_FILE;
+  const pilot = z.string().uuid().safeParse(environment.CUP_SUPPORT_STAGING_REPLIES_PILOT_USER_ID);
   if (
-    endpoint.origin !== 'https://cup-replies-private.tsup.space:19445' ||
+    endpoint.origin !== 'https://cup-replies-private.tsup.space:19446' ||
     endpoint.username ||
     endpoint.password ||
     endpoint.search ||
     endpoint.hash ||
     endpoint.pathname !== '/internal/cup/v1/lk2/replies' ||
-    !tokenFile
+    !tokenFile ||
+    !pilot.success
   ) {
     throw new Error('Invalid CUP replies service configuration');
   }
@@ -141,5 +143,5 @@ export function loadCupConversation(
     }
     return sentMessage.parse(await readBody(response, 1024));
   };
-  return { read, write };
+  return { read, write, pilotUserId: pilot.data.toLowerCase() };
 }

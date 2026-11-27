@@ -220,6 +220,7 @@ export interface UserContext {
   readonly roles: readonly string[];
   readonly permissions: readonly string[];
   readonly runtimeCapabilities?: {
+    readonly cupSupport?: boolean;
     readonly phoneSubjectLink: boolean;
     readonly communityDirectory: boolean;
     readonly communityReadDetail: boolean;
@@ -947,6 +948,7 @@ function normalizeContext(payload: ApiUserContext, tenantKey: string): UserConte
     roles: payload.roles,
     permissions: payload.permissions,
     runtimeCapabilities: {
+      ...(payload.runtimeCapabilities?.cupSupport === true ? { cupSupport: true } : {}),
       phoneSubjectLink: payload.runtimeCapabilities?.phoneSubjectLink === true,
       communityDirectory: payload.runtimeCapabilities?.communityDirectory !== false,
       communityReadDetail: payload.runtimeCapabilities?.communityReadDetail === true,
