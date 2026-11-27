@@ -4,12 +4,21 @@ import {
   buildLocationSummary,
   locationDetailSchema,
   locationListSchema,
+  locationSummarySchema,
 } from '@phub/locations';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const LOCATION_LIMIT = 100;
+const locationDirectorySchema = locationListSchema.extend({
+  items: locationSummarySchema
+    .extend({ address: locationDetailSchema.shape.address })
+    .array()
+    .max(LOCATION_LIMIT),
+});
 
 function tenantId(request: FastifyRequest): string | undefined {
   return request.tenantId;
@@ -41,9 +50,16 @@ export function registerLocationRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.repository) return unavailable(request, reply);
-      const locations = await options.repository.listPublished(currentTenantId, { limit: 100 });
+      const locations = await options.repository.listPublished(currentTenantId, {
+        limit: LOCATION_LIMIT,
+      });
       reply.header('Cache-Control', 'private, max-age=30, stale-while-revalidate=60');
-      return locationListSchema.parse({ items: locations.map(buildLocationSummary) });
+      return locationDirectorySchema.parse({
+        items: locations.map((location) => ({
+          ...buildLocationSummary(location),
+          address: location.address,
+        })),
+      });
     },
   );
 

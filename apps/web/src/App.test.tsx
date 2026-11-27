@@ -1115,6 +1115,7 @@ describe('PadlHub web authentication', () => {
             id: stationId,
             title: 'Селигерская',
             city: 'Москва',
+            address: 'г. Москва, ул Ивана Сусанина, д 1',
             courtCount: 4,
             coverImageUrl: null,
             route: `/locations/${stationId}`,
@@ -1137,7 +1138,7 @@ describe('PadlHub web authentication', () => {
 
     expect(await screen.findByRole('heading', { name: 'Выберите клуб' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Селигерская' })).toHaveAccessibleDescription(
-      '4 корта',
+      'ул Ивана Сусанина, д 1 4 корта',
     );
     expect(
       screen.getByRole('button', { name: 'Клуб без опубликованного числа' }),

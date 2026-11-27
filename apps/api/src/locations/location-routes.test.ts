@@ -98,12 +98,16 @@ afterEach(async () => {
 
 describe('user location routes', () => {
   it.each([
-    'https://cdn.padlhub.test/nagatinskaya.webp',
-    '/public/api/v1/local-padel/location-media/22222222-2222-4222-8222-222222222222',
-    null,
-  ])('lists a station with cover %s and keeps its detail view', async (coverImageUrl) => {
+    ['https://cdn.padlhub.test/nagatinskaya.webp', profile.address],
+    [
+      '/public/api/v1/local-padel/location-media/22222222-2222-4222-8222-222222222222',
+      profile.address,
+    ],
+    [null, null],
+  ])('lists a station with cover %s and address %s', async (coverImageUrl, address) => {
     const record: LocationAdminView = {
       ...location,
+      address,
       gallery: coverImageUrl ? [{ url: coverImageUrl, alt: '', isCover: true, sortOrder: 0 }] : [],
     };
     const repository: LocationRepository = {
@@ -129,7 +133,7 @@ describe('user location routes', () => {
     });
     expect(list.statusCode).toBe(200);
     expect(list.json()).toMatchObject({
-      items: [{ id: locationId, title: 'Нагатинская', coverImageUrl }],
+      items: [{ id: locationId, title: 'Нагатинская', address, courtCount: 6, coverImageUrl }],
     });
 
     const detail = await app.inject({
